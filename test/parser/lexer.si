@@ -1,0 +1,45 @@
+// RUN: silc %s --dump-tokens | FileCheck %s
+
+// CHECK: IDENT: `asdf`
+   /* multi
+    line comments */ asdf
+
+// CHECK: LCURLY
+// CHECK: RCURLY
+// CHECK: LPAREN
+// CHECK: RPAREN
+// CHECK: LBRACK
+// CHECK: RBRACK
+{ }
+( )
+[ ]
+
+// CHECK: DOT
+// CHECK: COMMA
+// CHECK: COLON
+// CHECK: SEMICOLON
+. , : ;
+
+// CHECK: EQ
+// CHECK: NE
+// CHECK: LT
+// CHECK: GT
+// CHECK: LE
+// CHECK: GE
+== != < > <= >=
+
+// CHECK: ASSIGN
+=
+
+// CHECK: ELSE
+// CHECK: FOR
+// CHECK: IF
+// CHECK: LET
+// CHECK: RETURN
+// CHECK: WHILE
+else
+for
+if
+let
+return
+while

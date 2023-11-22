@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from silicon.opt import main
+
+main()

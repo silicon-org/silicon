@@ -1,0 +1,3 @@
+// RUN: silc -h | FileCheck %s
+
+// CHECK: An experimental hardware compiler.
