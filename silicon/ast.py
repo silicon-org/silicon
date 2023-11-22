@@ -6,22 +6,22 @@ from silicon.lexer import Token
 from silicon.source import Loc
 
 
-@dataclass(kw_only=True)
+@dataclass
 class AstNode:
     loc: Loc
 
 
-@dataclass(kw_only=True)
+@dataclass
 class Root(AstNode):
     items: List[Item]
 
 
-@dataclass(kw_only=True)
+@dataclass
 class Item(AstNode):
     pass
 
 
-@dataclass(kw_only=True)
+@dataclass
 class ModItem(Item):
     full_loc: Loc
     name: Token

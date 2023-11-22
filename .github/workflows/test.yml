@@ -1,0 +1,79 @@
+name: Build and Test
+on: [push, pull_request]
+
+jobs:
+  sanity-check:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/circt/images/circt-ci-build:20230126201226
+    steps:
+      - name: Configure environment
+        run: |
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      # Clone the repository and its submodules.
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+          submodules: "false"
+
+      - name: Set git safe
+        run: |
+          git config --global --add safe.directory $PWD
+
+      # Choose the git commit to diff against for the purposes of linting.
+      # Since this workflow is triggered on both pushes and pull requests, we
+      # have to determine if the pull request target branch is set (which it
+      # will only be on the PR triggered flow). If it's not, then compare
+      # against the last commit.
+      #
+      # Since we did a shallow fetch for this repo, we must fetch the commit
+      # upon which we be diff'ing. The last step set the ref name in the
+      # $DIFF_COMMIT_NAME environment variable. When running the fetch, resolve
+      # it to the commit hash and pass that hash along to subsequent steps.
+      - name: Fetch base commit
+        continue-on-error: true
+        env:
+          # Base ref is the target branch, in text form (not hash)
+          PR_BASE: ${{ github.base_ref }}
+        run: |
+          if [ -z "$PR_BASE" ]; then
+            DIFF_COMMIT_NAME="HEAD^"
+          else
+            DIFF_COMMIT_NAME="$PR_BASE"
+          fi
+          if echo "$DIFF_COMMIT_NAME" | grep -q HEAD; then
+            DIFF_COMMIT_SHA=$( git rev-parse $DIFF_COMMIT_NAME )
+          else
+            git fetch --recurse-submodules=no origin $DIFF_COMMIT_NAME
+            DIFF_COMMIT_SHA=$( git rev-parse origin/$DIFF_COMMIT_NAME )
+          fi
+          echo "DIFF_COMMIT_NAME=$DIFF_COMMIT_NAME" >> $GITHUB_ENV
+          echo "DIFF_COMMIT=$DIFF_COMMIT_SHA" >> $GITHUB_ENV
+
+      # Install Python dependencies.
+      - name: Install Python dependencies
+        run: |
+          pip3 install --user mypy termcolor
+
+      # Run yapf to check Python formatting.
+      - name: Python formatting
+        shell: bash
+        run: |
+          files=$(git diff --name-only --diff-filter=d $DIFF_COMMIT | grep -e '\.py$' || echo -n)
+          if [[ ! -z $files ]]; then
+            yapf --diff $files
+          fi
+
+      # Run mypy to check Python typing.
+      - name: Python typing
+        run: |
+          mypy -p silicon
+
+      # Run tests.
+      # TODO: Enable this once we have an installation of `llvm-lit` somewhere.
+      # - name: Run tests
+      #   run: |
+      #     llvm-lit test -v
