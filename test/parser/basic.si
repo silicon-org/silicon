@@ -1,0 +1,21 @@
+// RUN: silc %s --dump-ast | FileCheck %s
+
+// CHECK: Root
+// CHECK: ModItem "Foo"
+// CHECK: ModItem "Bar"
+
+mod Foo {}
+mod Bar {}
+
+// CHECK-LABEL: ModItem "InputsOutputs"
+mod InputsOutputs {
+    // CHECK: InputStmt "a"
+    // CHECK: ty: UIntType size=32
+    input a: uint<32>;
+    // CHECK: OutputStmt "b"
+    // CHECK: ty: UIntType size=19
+    // CHECK: expr: IntLitExpr value=42 width=9001
+    output b: uint<19> = 42u9001;
+
+    output c: uint<16> = 1u16 + 2u16 + 3u16 - 4u16;
+}

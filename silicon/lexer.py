@@ -16,6 +16,7 @@ __all__ = [
 
 class TokenKind(Enum):
     IDENT = auto()
+    NUM_LIT = auto()
 
     LCURLY = auto()
     RCURLY = auto()
@@ -36,13 +37,18 @@ class TokenKind(Enum):
     LE = auto()
     GE = auto()
 
+    ADD = auto()
+    SUB = auto()
+
     ASSIGN = auto()
 
     KW_ELSE = auto()
     KW_FOR = auto()
     KW_IF = auto()
+    KW_INPUT = auto()
     KW_LET = auto()
     KW_MOD = auto()
+    KW_OUTPUT = auto()
     KW_RETURN = auto()
     KW_WHILE = auto()
 
@@ -72,6 +78,8 @@ SYMBOLS1: Dict[str, TokenKind] = {
     "<": TokenKind.LT,
     ">": TokenKind.GT,
     "=": TokenKind.ASSIGN,
+    "+": TokenKind.ADD,
+    "-": TokenKind.SUB,
 }
 
 SYMBOLS2: Dict[str, TokenKind] = {
@@ -85,8 +93,10 @@ KEYWORDS: Dict[str, TokenKind] = {
     "else": TokenKind.KW_ELSE,
     "for": TokenKind.KW_FOR,
     "if": TokenKind.KW_IF,
+    "input": TokenKind.KW_INPUT,
     "let": TokenKind.KW_LET,
     "mod": TokenKind.KW_MOD,
+    "output": TokenKind.KW_OUTPUT,
     "return": TokenKind.KW_RETURN,
     "while": TokenKind.KW_WHILE,
 }
@@ -196,6 +206,15 @@ def tokenize_next(lex: Lexer):
         lex.consume_while(is_ident)
         kind = KEYWORDS.get(lex.get_loc().spelling()) or TokenKind.IDENT
         lex.emit(kind)
+        return
+
+    # Parse number literals.
+    if is_digit(lex.text[0]):
+        lex.consume_while(is_digit)
+        if lex.text[0] == "u":
+            lex.consume(1)
+            lex.consume_while(is_digit)
+        lex.emit(TokenKind.NUM_LIT)
         return
 
     # If we get here, this character is not supported.

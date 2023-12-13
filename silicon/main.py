@@ -25,14 +25,15 @@ def main():
 
     args = parser.parse_args()
 
-    # Compile the file.
+    # Tokenize the input.
     tokens = tokenize_file(args.input)
     if args.dump_tokens:
         for token in tokens:
             print(f"- {token.kind.name}: `{token.loc.spelling()}`")
         return
 
+    # Parse the tokens into an AST.
     root = parse_tokens(tokens)
     if args.dump_ast:
-        dump_ast(root, stdout)
+        print(dump_ast(root))
         return

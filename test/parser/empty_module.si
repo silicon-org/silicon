@@ -1,8 +1,0 @@
-// RUN: silc %s --dump-ast | FileCheck %s
-
-// CHECK: Root
-// CHECK: ModItem "Foo"
-// CHECK: ModItem "Bar"
-
-mod Foo {}
-mod Bar {}
