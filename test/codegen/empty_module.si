@@ -1,0 +1,7 @@
+// RUN: silc %s | FileCheck %s
+
+// CHECK-LABEL: hw.module @Foo()
+mod Foo {}
+
+// CHECK-LABEL: hw.module @Bar()
+mod Bar {}

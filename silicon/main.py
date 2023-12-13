@@ -3,6 +3,7 @@ from silicon.lexer import tokenize_file
 from silicon.parser import parse_tokens
 from silicon import ast
 from silicon.ast import dump_ast
+from silicon.codegen import codegen
 from sys import stdout
 
 
@@ -37,3 +38,6 @@ def main():
     if args.dump_ast:
         print(dump_ast(root))
         return
+
+    # Emit CIRCT code.
+    codegen(root)
