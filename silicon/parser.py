@@ -149,4 +149,8 @@ def parse_primary_expr(p: Parser) -> ast.Expr:
                        f"expected number literal of the form `<V>u<N>`")
         return ast.IntLitExpr(loc=lit.loc, value=int(m[1]), width=int(m[2]))
 
+    # Parse identifiers.
+    if token := p.consume_if(TokenKind.IDENT):
+        return ast.IdentExpr(loc=token.loc, name=token)
+
     emit_error(p.loc(), f"expected expression, found {p.tokens[0].kind.name}")

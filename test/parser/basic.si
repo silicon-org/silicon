@@ -17,5 +17,10 @@ mod InputsOutputs {
     // CHECK: expr: IntLitExpr value=42 width=9001
     output b: uint<19> = 42u9001;
 
+    // CHECK: OutputStmt "c"
     output c: uint<16> = 1u16 + 2u16 + 3u16 - 4u16;
+
+    // CHECK: OutputStmt "d"
+    // CHECK: expr: IdentExpr "a"
+    output d: uint<32> = a;
 }

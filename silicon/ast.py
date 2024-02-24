@@ -1,21 +1,73 @@
 from __future__ import annotations
 
 from enum import Enum, auto
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import *
 from silicon.lexer import Token, TokenKind
 from silicon.source import Loc
-from enum import IntEnum, auto
+from enum import Enum, IntEnum, auto
+
+
+class WalkOrder(Enum):
+    PreOrder = auto()
+    PostOrder = auto()
 
 
 @dataclass
 class AstNode:
     loc: Loc
 
+    # Walk over this `AstNode` and all its children. If order is `PreOrder`,
+    # parent nodes are visited before their child nodes. If order is
+    # `PostOrder`, parent nodes are visited after their child nodes.
+    def walk(
+        self,
+        order: WalkOrder = WalkOrder.PreOrder
+    ) -> Generator[AstNode, None, None]:
+        if order == WalkOrder.PreOrder:
+            yield self
+        for child in self.children():
+            yield from child.walk(order)
+        if order == WalkOrder.PostOrder:
+            yield self
+
+    # Get child `AstNode`s of this node. This visits all fields of the current
+    # node, looking into nested lists, sets, and dictionaries, and produces all
+    # `AstNode`s it finds.
+    def children(self) -> Generator[AstNode, None, None]:
+        for value in self.__dict__.values():
+            yield from walk_nodes(value)
+
+
+# Walk the `AstNode`s contained in a nested set of lists, sets, and
+# dictionaries.
+def walk_nodes(value) -> Generator[AstNode, None, None]:
+    if isinstance(value, AstNode):
+        yield value
+    elif isinstance(value, list) or isinstance(value, set):
+        for v in value:
+            yield from walk_nodes(v)
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from walk_nodes(v)
+
 
 @dataclass
 class Root(AstNode):
     items: List[Item]
+
+
+# A binding from something like an identifier expression to the the declaration
+# of that name.
+@dataclass
+class Binding:
+    target: Optional[AstNode] = None
+
+    # Get the target node of the binding, asserting that the binding has been
+    # resolved.
+    def get(self) -> AstNode:
+        assert self.target is not None
+        return self.target
 
 
 #===------------------------------------------------------------------------===#
@@ -85,6 +137,12 @@ class Expr(AstNode):
 
 
 @dataclass
+class IdentExpr(Expr):
+    name: Token
+    binding: Binding = field(default_factory=Binding)
+
+
+@dataclass
 class IntLitExpr(Expr):
     value: int
     width: int
@@ -132,6 +190,12 @@ BINARY_PRECEDENCE: Dict[BinaryOp, Precedence] = {
 
 
 def dump_ast(node: AstNode) -> str:
+    ids: Dict[int, int] = {}
+
+    def get_id(node: AstNode) -> int:
+        if id(node) not in ids:
+            ids[id(node)] = len(ids)
+        return ids[id(node)]
 
     def dump_field(name: str, value) -> List[str]:
         if isinstance(value, AstNode):
@@ -157,6 +221,9 @@ def dump_ast(node: AstNode) -> str:
                 line += f" \"{value.spelling()}\""
             elif isinstance(value, BinaryOp):
                 line += f" {value.name}"
+            elif isinstance(value, Binding) and value.target is not None:
+                line += f" {name}={value.target.__class__.__name__}(@{get_id(value.get())})"
+        line += f" @{get_id(node)}"
         fields = []
         for name, value in node.__dict__.items():
             fields += dump_field(name, value)

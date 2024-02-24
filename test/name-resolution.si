@@ -1,0 +1,21 @@
+// RUN: silc %s --dump-resolved | FileCheck %s
+
+// CHECK-LABEL: ModItem "Foo"
+// CHECK-SAME: [[FOO_ID:@.+]]
+mod Foo {
+    // CHECK: InputStmt "a" {{.*}}[[INPUT_ID:@.+]]
+    input a: uint<32>;
+
+    // CHECK: IdentExpr "a" binding=InputStmt([[INPUT_ID]])
+    output b: uint<32> = a;
+
+    // CHECK: IdentExpr "Bar" binding=ModItem([[BAR_ID:@.+]])
+    output c: uint<42> = Bar;
+}
+
+// CHECK-LABEL: ModItem "Bar"
+// CHECK-SAME: [[BAR_ID]]
+mod Bar {
+    // CHECK: IdentExpr "Foo" binding=ModItem([[FOO_ID]])
+    output a: uint<42> = Foo;
+}
