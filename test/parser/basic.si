@@ -24,27 +24,27 @@ mod Statements {
     // CHECK: ty: UIntType size=42
     // CHECK: expr: IdentExpr "a"
     let v1: uint<42> = a;
+
+    // CHECK: ExprStmt
+    // CHECK: expr: IdentExpr "a"
+    a;
 }
 
 // CHECK-LABEL: ModItem "Expressions"
 mod Expressions {
-    // CHECK: OutputStmt "a"
-    // CHECK: expr: IntLitExpr value=9001 width=42
-    output a: uint<42> = 9001u42;
+    // CHECK: IntLitExpr value=9001 width=42
+    9001u42;
 
-    // CHECK: OutputStmt "b"
-    // CHECK: expr: BinaryExpr ADD
+    // CHECK: IdentExpr "a"
+    a;
+
+    // CHECK: BinaryExpr ADD
     // CHECK:   lhs: IntLitExpr value=1
     // CHECK:   rhs: IntLitExpr value=2
-    output b: uint<16> = 1u16 + 2u16;
+    1u16 + 2u16;
 
-    // CHECK: OutputStmt "c"
-    // CHECK: expr: BinaryExpr SUB
+    // CHECK: BinaryExpr SUB
     // CHECK:   lhs: IntLitExpr value=4
     // CHECK:   rhs: IntLitExpr value=3
-    output c: uint<16> = 4u16 - 3u16;
-
-    // CHECK: OutputStmt "d"
-    // CHECK: expr: IdentExpr "a"
-    output d: uint<32> = a;
+    4u16 - 3u16;
 }

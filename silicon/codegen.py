@@ -110,6 +110,9 @@ def codegen_mod(mod: ast.ModItem):
                     value = codegen_expr(stmt.expr, cx)
                     cx.assignable_wires[id(stmt)].operands[0] = value
                 continue
+            if isinstance(stmt, ast.ExprStmt):
+                codegen_expr(stmt.expr, cx)
+                continue
             emit_error(stmt.loc, f"statement not supported for codegen")
 
     # Delete all placeholders. A placeholder that still has users is an

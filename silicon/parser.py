@@ -73,6 +73,7 @@ def parse_item(p: Parser) -> ast.Item:
 
 
 def parse_stmt(p: Parser) -> ast.Stmt:
+    # Parse input port declarations.
     if kw := p.consume_if(TokenKind.KW_INPUT):
         name = p.require(TokenKind.IDENT, "input name")
         p.require(TokenKind.COLON)
@@ -83,6 +84,7 @@ def parse_stmt(p: Parser) -> ast.Stmt:
                              name=name,
                              ty=ty)
 
+    # Parse output port declarations.
     if kw := p.consume_if(TokenKind.KW_OUTPUT):
         name = p.require(TokenKind.IDENT, "output name")
         p.require(TokenKind.COLON)
@@ -111,7 +113,10 @@ def parse_stmt(p: Parser) -> ast.Stmt:
                            ty=ty,
                            expr=maybeExpr)
 
-    emit_error(p.loc(), f"expected statement, found {p.tokens[0].kind.name}")
+    # Otherwise this is a statement that starts with an expression.
+    expr = parse_expr(p)
+    p.require(TokenKind.SEMICOLON)
+    return ast.ExprStmt(loc=expr.loc, full_loc=expr.loc, expr=expr)
 
 
 def parse_type(p: Parser) -> ast.AstType:

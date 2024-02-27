@@ -17,14 +17,12 @@ mod InputsOutputs {
 
 // CHECK-LABEL: hw.module @Expressions
 mod Expressions {
-    // CHECK: [[A:%.+]] = hw.constant 9001 : i42
-    output a: uint<42> = 9001u42;
-    // CHECK: [[B:%.+]] = comb.add
-    output b: uint<16> = 1u16 + 2u16;
-    // CHECK: [[C:%.+]] = comb.sub
-    output c: uint<16> = 4u16 - 3u16;
-
-    // CHECK: hw.output [[A]], [[B]], [[C]]
+    // CHECK: hw.constant 9001 : i42
+    9001u42;
+    // CHECK: comb.add
+    1u16 + 2u16;
+    // CHECK: comb.sub
+    4u16 - 3u16;
 }
 
 // CHECK-LABEL: hw.module @Identifiers
