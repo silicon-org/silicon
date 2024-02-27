@@ -73,6 +73,8 @@ def parse_item(p: Parser) -> ast.Item:
 
 
 def parse_stmt(p: Parser) -> ast.Stmt:
+    loc = p.loc()
+
     # Parse input port declarations.
     if kw := p.consume_if(TokenKind.KW_INPUT):
         name = p.require(TokenKind.IDENT, "input name")
@@ -80,7 +82,7 @@ def parse_stmt(p: Parser) -> ast.Stmt:
         ty = parse_type(p)
         p.require(TokenKind.SEMICOLON)
         return ast.InputStmt(loc=name.loc,
-                             full_loc=kw.loc | p.last_loc,
+                             full_loc=loc | p.last_loc,
                              name=name,
                              ty=ty)
 
@@ -93,7 +95,7 @@ def parse_stmt(p: Parser) -> ast.Stmt:
         expr = parse_expr(p)
         p.require(TokenKind.SEMICOLON)
         return ast.OutputStmt(loc=name.loc,
-                              full_loc=kw.loc | p.last_loc,
+                              full_loc=loc | p.last_loc,
                               name=name,
                               ty=ty,
                               expr=expr)
@@ -108,15 +110,25 @@ def parse_stmt(p: Parser) -> ast.Stmt:
             maybeExpr = parse_expr(p)
         p.require(TokenKind.SEMICOLON)
         return ast.LetStmt(loc=name.loc,
-                           full_loc=kw.loc | p.last_loc,
+                           full_loc=loc | p.last_loc,
                            name=name,
                            ty=ty,
                            expr=maybeExpr)
 
     # Otherwise this is a statement that starts with an expression.
     expr = parse_expr(p)
+
+    # Parse assignments.
+    if assign := p.consume_if(TokenKind.ASSIGN):
+        rhs = parse_expr(p)
+        p.require(TokenKind.SEMICOLON)
+        return ast.AssignStmt(loc=assign.loc,
+                              full_loc=loc | p.last_loc,
+                              lhs=expr,
+                              rhs=rhs)
+
     p.require(TokenKind.SEMICOLON)
-    return ast.ExprStmt(loc=expr.loc, full_loc=expr.loc, expr=expr)
+    return ast.ExprStmt(loc=expr.loc, full_loc=loc | p.last_loc, expr=expr)
 
 
 def parse_type(p: Parser) -> ast.AstType:

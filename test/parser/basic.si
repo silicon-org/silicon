@@ -28,6 +28,11 @@ mod Statements {
     // CHECK: ExprStmt
     // CHECK: expr: IdentExpr "a"
     a;
+
+    // CHECK: AssignStmt
+    // CHECK: lhs: IdentExpr "v0"
+    // CHECK: rhs: IdentExpr "a"
+    v0 = a;
 }
 
 // CHECK-LABEL: ModItem "Expressions"

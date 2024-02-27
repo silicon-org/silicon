@@ -146,6 +146,30 @@ def codegen_stmt(stmt: ast.Stmt, cx: CodegenContext) -> IRValue:
         codegen_expr(stmt.expr, cx)
         return
 
+    if isinstance(stmt, ast.AssignStmt):
+        if not isinstance(stmt.lhs, ast.IdentExpr):
+            emit_error(
+                stmt.lhs.loc,
+                f"expression `{stmt.lhs.loc.spelling()}` cannot appear on left-hand side of `=`"
+            )
+
+        lhs = stmt.lhs.binding.get()
+        if not isinstance(lhs, ast.OutputStmt) and not isinstance(
+                lhs, ast.LetStmt):
+            emit_info(lhs.loc,
+                      f"name `{stmt.lhs.name.spelling()}` defined here")
+            emit_error(
+                stmt.lhs.loc,
+                f"expression `{stmt.lhs.loc.spelling()}` cannot be assigned")
+
+        if wire := cx.assignable_wires.get(id(lhs)):
+            rhs = codegen_expr(stmt.rhs, cx)
+            wire.operands[0] = rhs
+            return
+
+        emit_error(stmt.loc,
+                   f"name `{stmt.lhs.name.spelling()}` is not assignable")
+
     emit_error(stmt.loc, f"statement not supported for codegen")
 
 

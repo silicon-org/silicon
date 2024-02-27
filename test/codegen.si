@@ -15,6 +15,18 @@ mod InputsOutputs {
     // CHECK: hw.output %c9001_i42 : i42
 }
 
+// CHECK-LABEL: hw.module @Statements
+mod Statements {
+    // CHECK: %v0 = hw.wire %c2_i32
+    // CHECK: %v1 = hw.wire %v0
+    // CHECK: %v2 = hw.wire %v0
+    let v0: uint<32>;
+    let v1: uint<32> = v0;
+    v0 = 1u32;
+    let v2: uint<32> = v0;
+    v0 = 2u32;
+}
+
 // CHECK-LABEL: hw.module @Expressions
 mod Expressions {
     // CHECK: hw.constant 9001 : i42
