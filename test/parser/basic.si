@@ -7,18 +7,42 @@
 mod Foo {}
 mod Bar {}
 
-// CHECK-LABEL: ModItem "InputsOutputs"
-mod InputsOutputs {
+// CHECK-LABEL: ModItem "Statements"
+mod Statements {
     // CHECK: InputStmt "a"
     // CHECK: ty: UIntType size=32
     input a: uint<32>;
     // CHECK: OutputStmt "b"
     // CHECK: ty: UIntType size=19
-    // CHECK: expr: IntLitExpr value=42 width=9001
-    output b: uint<19> = 42u9001;
+    // CHECK: expr: IdentExpr "a"
+    output b: uint<19> = a;
+
+    // CHECK: LetStmt "v0"
+    // CHECK: ty: UIntType size=42
+    let v0: uint<42>;
+    // CHECK: LetStmt "v1"
+    // CHECK: ty: UIntType size=42
+    // CHECK: expr: IdentExpr "a"
+    let v1: uint<42> = a;
+}
+
+// CHECK-LABEL: ModItem "Expressions"
+mod Expressions {
+    // CHECK: OutputStmt "a"
+    // CHECK: expr: IntLitExpr value=9001 width=42
+    output a: uint<42> = 9001u42;
+
+    // CHECK: OutputStmt "b"
+    // CHECK: expr: BinaryExpr ADD
+    // CHECK:   lhs: IntLitExpr value=1
+    // CHECK:   rhs: IntLitExpr value=2
+    output b: uint<16> = 1u16 + 2u16;
 
     // CHECK: OutputStmt "c"
-    output c: uint<16> = 1u16 + 2u16 + 3u16 - 4u16;
+    // CHECK: expr: BinaryExpr SUB
+    // CHECK:   lhs: IntLitExpr value=4
+    // CHECK:   rhs: IntLitExpr value=3
+    output c: uint<16> = 4u16 - 3u16;
 
     // CHECK: OutputStmt "d"
     // CHECK: expr: IdentExpr "a"

@@ -16,6 +16,7 @@ __all__ = ["codegen"]
 class CodegenContext:
     named_values: Dict[int, IRValue] = field(default_factory=dict)
     named_decls: Dict[int, IROperation] = field(default_factory=dict)
+    assignable_wires: Dict[int, hw.WireOp] = field(default_factory=dict)
 
 
 def codegen(root: ast.Root):
@@ -42,6 +43,7 @@ def codegen_mod(mod: ast.ModItem):
     output_indices: Dict[int, int] = dict()
     input_ports: List[Tuple[str, IRType]] = []
     output_ports: List[Tuple[str, IRType]] = []
+    let_stmts: List[ast.LetStmt] = []
 
     for stmt in mod.stmts:
         if isinstance(stmt, ast.InputStmt):
@@ -54,6 +56,8 @@ def codegen_mod(mod: ast.ModItem):
             output_indices[id(stmt)] = len(output_ports)
             output_ports.append(
                 (stmt.name.spelling(), codegen_type(stmt.ty, cx)))
+        elif isinstance(stmt, ast.LetStmt):
+            let_stmts.append(stmt)
 
     # Create the module and entry block.
     hwmod = hw.HWModuleOp(name=mod.name.spelling(),
@@ -66,18 +70,32 @@ def codegen_mod(mod: ast.ModItem):
     for stmt, arg in zip(input_stmts, block.arguments):
         cx.named_values[id(stmt)] = arg
 
-    # Create placeholder values for the module outputs.
+    placeholders: List[Tuple[ast.AstNode, IROperation]] = []
+
     with InsertionPoint(block):
-        output_placeholders = [
-            IROperation.create("builtin.unrealized_conversion_cast", [ty])
-            for _, ty in output_ports
-        ]
+        # Create placeholder values for the module outputs.
+        output_values = []
+        for stmt in output_stmts:
+            ty = codegen_type(stmt.ty, cx)
+            placeholder = IROperation.create(
+                "builtin.unrealized_conversion_cast", [ty])
+            placeholders.append((stmt, placeholder))
+            wire = hw.WireOp(placeholder)
+            cx.named_values[id(stmt)] = wire.result
+            cx.assignable_wires[id(stmt)] = wire
+            output_values.append(wire.result)
 
-        for stmt, op in zip(output_stmts, output_placeholders):
-            cx.named_values[id(stmt)] = op.result
-            cx.named_decls[id(stmt)] = op
+        # Create placeholder values for let bindings.
+        for stmt in let_stmts:
+            ty = codegen_type(stmt.ty, cx)
+            placeholder = IROperation.create(
+                "builtin.unrealized_conversion_cast", [ty])
+            placeholders.append((stmt, placeholder))
+            wire = hw.WireOp(placeholder, name=stmt.name.spelling())
+            cx.named_values[id(stmt)] = wire.result
+            cx.assignable_wires[id(stmt)] = wire
 
-        output_op = hw.OutputOp([op.result for op in output_placeholders])
+        output_op = hw.OutputOp(output_values)
 
     with InsertionPoint(output_op):
         for stmt in mod.stmts:
@@ -85,12 +103,31 @@ def codegen_mod(mod: ast.ModItem):
                 continue
             if isinstance(stmt, ast.OutputStmt):
                 value = codegen_expr(stmt.expr, cx)
-                cx.named_values[id(stmt)] = value
-                if op := cx.named_decls.get(id(stmt)):
-                    op.result.replace_all_uses_with(value)
-                    op.erase()
+                cx.assignable_wires[id(stmt)].operands[0] = value
+                continue
+            if isinstance(stmt, ast.LetStmt):
+                if stmt.expr:
+                    value = codegen_expr(stmt.expr, cx)
+                    cx.assignable_wires[id(stmt)].operands[0] = value
                 continue
             emit_error(stmt.loc, f"statement not supported for codegen")
+
+    # Delete all placeholders. A placeholder that still has users is an
+    # indication that a something is missing an assignment.
+    for node, placeholder in placeholders:
+        if list(placeholder.result.uses):
+            if isinstance(node, ast.LetStmt):
+                emit_error(
+                    node.loc,
+                    f"binding `{node.name.spelling()}` has not been assigned")
+            emit_error(node.loc, f"declaration has not been assigned")
+        placeholder.erase()
+
+    # Canonicalize unnamed assignable wires away.
+    for wire in cx.assignable_wires.values():
+        if not wire.name:
+            wire.result.replace_all_uses_with(wire.input)
+            wire.erase()
 
 
 def codegen_type(ty: ast.AstType, cx: CodegenContext) -> IRType:
@@ -109,15 +146,6 @@ def codegen_expr(expr: ast.Expr, cx: CodegenContext) -> IRValue:
         target = expr.binding.get()
         if value := cx.named_values.get(id(target)):
             return value
-
-        if isinstance(target, ast.InputStmt) or isinstance(
-                target, ast.OutputStmt):
-            ty = codegen_type(target.ty, cx)
-            edge = IROperation.create("builtin.unrealized_conversion_cast",
-                                      [ty])
-            cx.named_decls[id(target)] = edge
-            cx.named_values[id(target)] = edge.result
-            return edge.result
 
         emit_error(
             expr.loc,

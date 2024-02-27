@@ -1,0 +1,6 @@
+// RUN: ! silc %s --split-input-file 2>&1 | FileCheck %s
+
+mod UnassignedIdent {
+    // CHECK: error: binding `a` has not been assigned
+    let a: uint<32>;
+}

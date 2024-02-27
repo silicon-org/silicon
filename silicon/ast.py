@@ -110,6 +110,13 @@ class OutputStmt(Stmt):
     expr: Expr
 
 
+@dataclass
+class LetStmt(Stmt):
+    name: Token
+    ty: AstType
+    expr: Optional[Expr]
+
+
 #===------------------------------------------------------------------------===#
 # Types
 #===------------------------------------------------------------------------===#

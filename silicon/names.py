@@ -12,6 +12,7 @@ __all__ = ["resolve_names"]
 @dataclass
 class Scope:
     parent: Optional[Scope]
+    cannot_shadow: bool = False
     names: Dict[str, ast.AstNode] = field(default_factory=dict)
 
     # Resolve a `name` to an AST node in this scope or one of its parents.
@@ -27,7 +28,7 @@ class Scope:
     # Declare a name in this scope.
     def declare(self, name: str, node: ast.AstNode):
         if existing_node := self.names.get(name):
-            if cannot_be_shadowed(existing_node):
+            if cannot_be_shadowed(existing_node) or self.cannot_shadow:
                 emit_info(existing_node.loc,
                           f"previous definition of `{name}` was here")
                 emit_error(node.loc, f"name `{name}` already defined")
@@ -62,7 +63,7 @@ def resolve_node(node: ast.AstNode, scope: Scope):
     # declared before they can be used. We therefore declare all names upfront
     # before we resolve them.
     if isinstance(node, ast.Root) or isinstance(node, ast.ModItem):
-        subscope = Scope(parent=scope)
+        subscope = Scope(cannot_shadow=True, parent=scope)
         for child in node.children():
             declare_node(child, subscope)
         for child in node.children():
@@ -83,6 +84,7 @@ def declare_node(node: ast.AstNode, scope: Scope):
     if isinstance(node, ast.ModItem):
         scope.declare(node.name.spelling(), node)
         return
-    if isinstance(node, ast.InputStmt) or isinstance(node, ast.OutputStmt):
+    if isinstance(node, ast.InputStmt) or isinstance(
+            node, ast.OutputStmt) or isinstance(node, ast.LetStmt):
         scope.declare(node.name.spelling(), node)
         return
