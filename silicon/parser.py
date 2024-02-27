@@ -6,6 +6,7 @@ from typing import *
 from silicon.lexer import Token, TokenKind
 from silicon import ast
 from silicon.diagnostics import *
+from silicon.source import *
 
 
 def parse_tokens(tokens: List[Token]) -> ast.Root:

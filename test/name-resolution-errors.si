@@ -1,0 +1,17 @@
+// RUN: ! silc %s --dump-resolved --split-input-file 2>&1 | FileCheck %s
+
+mod Foo {
+    // CHECK: info: previous definition of `a` was here
+    input a: uint<32>;
+    // CHECK: error: name `a` already defined
+    input a: uint<32>;
+}
+
+// -----
+
+mod Foo {
+    // CHECK: info: previous definition of `x` was here
+    output x: uint<42> = 0u42;
+    // CHECK: error: name `x` already defined
+    output x: uint<42> = 0u42;
+}

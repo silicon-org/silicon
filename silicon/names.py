@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import *
 from silicon import ast
 from silicon.diagnostics import *
+from silicon.source import *
 from dataclasses import dataclass, field
 
 __all__ = ["resolve_names"]
