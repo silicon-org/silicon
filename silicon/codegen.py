@@ -95,25 +95,12 @@ def codegen_mod(mod: ast.ModItem):
             cx.named_values[id(stmt)] = wire.result
             cx.assignable_wires[id(stmt)] = wire
 
-        output_op = hw.OutputOp(output_values)
-
-    with InsertionPoint(output_op):
+        # Emit the statements in the module body.
         for stmt in mod.stmts:
-            if isinstance(stmt, ast.InputStmt):
-                continue
-            if isinstance(stmt, ast.OutputStmt):
-                value = codegen_expr(stmt.expr, cx)
-                cx.assignable_wires[id(stmt)].operands[0] = value
-                continue
-            if isinstance(stmt, ast.LetStmt):
-                if stmt.expr:
-                    value = codegen_expr(stmt.expr, cx)
-                    cx.assignable_wires[id(stmt)].operands[0] = value
-                continue
-            if isinstance(stmt, ast.ExprStmt):
-                codegen_expr(stmt.expr, cx)
-                continue
-            emit_error(stmt.loc, f"statement not supported for codegen")
+            codegen_stmt(stmt, cx)
+
+        # Create the termiantor.
+        hw.OutputOp(output_values)
 
     # Delete all placeholders. A placeholder that still has users is an
     # indication that a something is missing an assignment.
@@ -138,6 +125,28 @@ def codegen_type(ty: ast.AstType, cx: CodegenContext) -> IRType:
         return IntegerType.get_signless(ty.size)
 
     emit_error(ty.loc, f"type `{ty.loc.spelling()}` not supported for codegen")
+
+
+def codegen_stmt(stmt: ast.Stmt, cx: CodegenContext) -> IRValue:
+    if isinstance(stmt, ast.InputStmt):
+        return
+
+    if isinstance(stmt, ast.OutputStmt):
+        value = codegen_expr(stmt.expr, cx)
+        cx.assignable_wires[id(stmt)].operands[0] = value
+        return
+
+    if isinstance(stmt, ast.LetStmt):
+        if stmt.expr:
+            value = codegen_expr(stmt.expr, cx)
+            cx.assignable_wires[id(stmt)].operands[0] = value
+        return
+
+    if isinstance(stmt, ast.ExprStmt):
+        codegen_expr(stmt.expr, cx)
+        return
+
+    emit_error(stmt.loc, f"statement not supported for codegen")
 
 
 def codegen_expr(expr: ast.Expr, cx: CodegenContext) -> IRValue:
