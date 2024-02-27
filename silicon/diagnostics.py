@@ -1,12 +1,18 @@
 from typing import NoReturn
-from sys import exit, stderr
+from sys import stderr
 from silicon.source import *
 from termcolor import colored
+
+__all__ = [
+    "emit_error",
+    "emit_info",
+    "emit_diagnostic",
+]
 
 
 def emit_error(loc: Loc, msg: str) -> NoReturn:
     emit_diagnostic("error", "red", loc, msg)
-    exit(1)
+    raise DiagnosticException()
 
 
 def emit_info(loc: Loc, msg: str):
@@ -32,3 +38,7 @@ def emit_diagnostic(severity: str, color: str, loc: Loc, msg: str):
     text = "  | " + " " * len(src_before)
     text += colored("^" * max(len(src_within), 1), color, attrs=["bold"])
     print(text, file=stderr)
+
+
+class DiagnosticException(Exception):
+    pass
