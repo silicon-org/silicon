@@ -12,10 +12,12 @@ mod Foo {
     // CHECK: IdentExpr "Bar" binding=ModItem([[BAR_ID:@.+]])
     output c: uint<42> = Bar;
 
-    // CHECK: IdentExpr "e" binding=LetStmt([[LET_ID:@.+]])
-    let d: uint<32> = e;
-    // CHECK: LetStmt "e" {{.*}}[[LET_ID]]
-    let e: uint<32>;
+    // CHECK: LetStmt "d" {{.*}}[[LET_ID:@.+]]
+    // CHECK: IdentExpr "a" binding=InputStmt([[INPUT_ID]])
+    let d: uint<32> = a;
+
+    // CHECK: IdentExpr "d" binding=LetStmt([[LET_ID]])
+    let e: uint<32> = d;
 }
 
 // CHECK-LABEL: ModItem "Bar"

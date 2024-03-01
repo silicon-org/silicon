@@ -107,7 +107,7 @@ class InputStmt(Stmt):
 class OutputStmt(Stmt):
     name: Token
     ty: AstType
-    expr: Expr
+    expr: Optional[Expr]
 
 
 @dataclass

@@ -7,6 +7,13 @@ mod UnassignedIdent {
 
 // -----
 
+mod UnassignedOutput {
+    // CHECK: error: output `a` has not been assigned
+    output a: uint<32>;
+}
+
+// -----
+
 mod BadAssignLHS {
     // CHECK: error: expression `1u32` cannot appear on left-hand side of `=`
     1u32 = 2u32;
@@ -18,4 +25,31 @@ mod BadAssignLHS {
 mod UnassignableLHS {
     // CHECK: error: expression `UnassignableLHS` cannot be assigned
     UnassignableLHS = 2u32;
+}
+
+// -----
+
+mod Foo {
+    // CHECK: info: previous definition of port `x` was here
+    input x: uint<32>;
+    // CHECK: error: port `x` already defined
+    input x: uint<32>;
+}
+
+// -----
+
+mod Foo {
+    // CHECK: info: previous definition of port `x` was here
+    output x: uint<42>;
+    // CHECK: error: port `x` already defined
+    output x: uint<42>;
+}
+
+// -----
+
+mod Foo {
+    // CHECK: info: previous definition of port `x` was here
+    input x: uint<42>;
+    // CHECK: error: port `x` already defined
+    output x: uint<42>;
 }

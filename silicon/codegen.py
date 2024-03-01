@@ -45,13 +45,24 @@ def codegen_mod(mod: ast.ModItem):
     output_ports: List[Tuple[str, IRType]] = []
     let_stmts: List[ast.LetStmt] = []
 
+    used_names: Dict[str, ast.AstNode] = dict()
+
+    def check_port_name(name: str, node: ast.AstNode):
+        if existing := used_names.get(name):
+            emit_info(existing.loc,
+                      f"previous definition of port `{name}` was here")
+            emit_error(node.loc, f"port `{name}` already defined")
+        used_names[name] = node
+
     for stmt in mod.stmts:
         if isinstance(stmt, ast.InputStmt):
+            check_port_name(stmt.name.spelling(), stmt)
             input_stmts.append(stmt)
             input_indices[id(stmt)] = len(input_ports)
             input_ports.append(
                 (stmt.name.spelling(), codegen_type(stmt.ty, cx)))
         elif isinstance(stmt, ast.OutputStmt):
+            check_port_name(stmt.name.spelling(), stmt)
             output_stmts.append(stmt)
             output_indices[id(stmt)] = len(output_ports)
             output_ports.append(
@@ -110,6 +121,10 @@ def codegen_mod(mod: ast.ModItem):
                 emit_error(
                     node.loc,
                     f"binding `{node.name.spelling()}` has not been assigned")
+            if isinstance(node, ast.OutputStmt):
+                emit_error(
+                    node.loc,
+                    f"output `{node.name.spelling()}` has not been assigned")
             emit_error(node.loc, f"declaration has not been assigned")
         placeholder.erase()
 
@@ -132,8 +147,9 @@ def codegen_stmt(stmt: ast.Stmt, cx: CodegenContext) -> IRValue:
         return
 
     if isinstance(stmt, ast.OutputStmt):
-        value = codegen_expr(stmt.expr, cx)
-        cx.assignable_wires[id(stmt)].operands[0] = value
+        if stmt.expr:
+            value = codegen_expr(stmt.expr, cx)
+            cx.assignable_wires[id(stmt)].operands[0] = value
         return
 
     if isinstance(stmt, ast.LetStmt):

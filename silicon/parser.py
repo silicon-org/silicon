@@ -91,21 +91,22 @@ def parse_stmt(p: Parser) -> ast.Stmt:
         name = p.require(TokenKind.IDENT, "output name")
         p.require(TokenKind.COLON)
         ty = parse_type(p)
-        p.require(TokenKind.ASSIGN)
-        expr = parse_expr(p)
+        maybeExpr: Optional[ast.Expr] = None
+        if assign := p.consume_if(TokenKind.ASSIGN):
+            maybeExpr = parse_expr(p)
         p.require(TokenKind.SEMICOLON)
         return ast.OutputStmt(loc=name.loc,
                               full_loc=loc | p.last_loc,
                               name=name,
                               ty=ty,
-                              expr=expr)
+                              expr=maybeExpr)
 
     # Parse let bindings.
     if kw := p.consume_if(TokenKind.KW_LET):
         name = p.require(TokenKind.IDENT, "output name")
         p.require(TokenKind.COLON)
         ty = parse_type(p)
-        maybeExpr: Optional[ast.Expr] = None
+        maybeExpr = None
         if assign := p.consume_if(TokenKind.ASSIGN):
             maybeExpr = parse_expr(p)
         p.require(TokenKind.SEMICOLON)

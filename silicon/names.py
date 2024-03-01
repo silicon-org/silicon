@@ -38,8 +38,6 @@ class Scope:
 # Returns true if the given node's name cannot be shadowed in a scope, and a
 # "name already defined" error should be thrown.
 def cannot_be_shadowed(node: ast.AstNode) -> bool:
-    if isinstance(node, ast.InputStmt) or isinstance(node, ast.OutputStmt):
-        return True
     if isinstance(node, ast.ModItem):
         return True
     return False
@@ -59,15 +57,22 @@ def resolve_names(root: ast.Root):
 
 # Resolve the names within the given node.
 def resolve_node(node: ast.AstNode, scope: Scope):
-    # Root items in the AST and declarations in a module do not have to be
-    # declared before they can be used. We therefore declare all names upfront
-    # before we resolve them.
-    if isinstance(node, ast.Root) or isinstance(node, ast.ModItem):
+    # Root items in the AST do not have to be declared before they can be used.
+    # We therefore declare all names upfront before we resolve them.
+    if isinstance(node, ast.Root):
         subscope = Scope(cannot_shadow=True, parent=scope)
         for child in node.children():
             declare_node(child, subscope)
         for child in node.children():
             resolve_node(child, subscope)
+        return
+
+    # Handle module declarations.
+    if isinstance(node, ast.ModItem):
+        subscope = Scope(parent=scope)
+        for child in node.children():
+            resolve_node(child, subscope)
+            declare_node(child, subscope)
         return
 
     # Resolve children.

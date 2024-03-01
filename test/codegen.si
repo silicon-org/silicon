@@ -42,10 +42,12 @@ mod Expressions {
 // CHECK-SAME: out x : i42
 // CHECK-SAME: out y : i42
 mod Identifiers {
-    output x: uint<42> = y;
-    output y: uint<42> = z;
-    let z: uint<42> = a;
     input a: uint<42>;
+    output x: uint<42>;
+    output y: uint<42>;
+    let z: uint<42> = a;
+    y = z;
+    x = y;
     // CHECK: %z = hw.wire %a
     // CHECK: hw.output %z, %z
 }

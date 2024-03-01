@@ -13,9 +13,13 @@ mod Statements {
     // CHECK: ty: UIntType size=32
     input a: uint<32>;
     // CHECK: OutputStmt "b"
+    // CHECK: ty: UIntType size=11
+    // CHECK-NOT: expr:
+    output b: uint<11>;
+    // CHECK: OutputStmt "c"
     // CHECK: ty: UIntType size=19
     // CHECK: expr: IdentExpr "a"
-    output b: uint<19> = a;
+    output c: uint<19> = a;
 
     // CHECK: LetStmt "v0"
     // CHECK: ty: UIntType size=42

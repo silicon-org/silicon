@@ -1,26 +1,13 @@
 // RUN: ! silc %s --dump-resolved --split-input-file 2>&1 | FileCheck %s
 
 mod Foo {
-    // CHECK: info: previous definition of `a` was here
-    input a: uint<32>;
-    // CHECK: error: name `a` already defined
-    input a: uint<32>;
+    // CHECK: error: unknown name `x`
+    let a: uint<42> = x;
 }
 
 // -----
 
-mod Foo {
-    // CHECK: info: previous definition of `x` was here
-    output x: uint<42> = 0u42;
-    // CHECK: error: name `x` already defined
-    output x: uint<42> = 0u42;
-}
-
-// -----
-
-mod Foo {
-    // CHECK: info: previous definition of `b` was here
-    let b: uint<42>;
-    // CHECK: error: name `b` already defined
-    let b: uint<42>;
-}
+// CHECK: info: previous definition of `Foo` was here
+mod Foo {}
+// CHECK: error: name `Foo` already defined
+mod Foo {}
