@@ -85,3 +85,11 @@ mod Foo {
     // CHECK: error: slice out of bounds
     a.slice(3, 7);
 }
+
+// -----
+
+mod Foo {
+    input a: uint<1>;
+    // CHECK: error: mux requires both arguments to have the same type, but got i5 and i6 instead
+    a.mux(0u5, 1u6);
+}

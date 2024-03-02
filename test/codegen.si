@@ -31,6 +31,7 @@ mod Statements {
 mod Expressions {
     input a: uint<16>;
     input b: uint<16>;
+    input c: uint<1>;
 
     // CHECK: hw.constant 9001 : i42
     9001u42;
@@ -49,6 +50,8 @@ mod Expressions {
     a.bit(5);
     // CHECK: comb.extract %a from 9 : (i16) -> i4
     a.slice(9, 4);
+    // CHECK: comb.mux %c, %a, %b : i16
+    c.mux(a, b);
 }
 
 // CHECK-LABEL: hw.module @Identifiers

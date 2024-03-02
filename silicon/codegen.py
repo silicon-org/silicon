@@ -293,4 +293,21 @@ def codegen_field_call_expr(
         return comb.ExtractOp(IntegerType.get_signless(width), arg,
                               offset).result
 
+    if name == "mux":
+        require_num_args(2)
+        target = codegen_expr(expr.target, cx)
+        if target.type != IntegerType.get_signless(1):
+            emit_error(expr.target.loc,
+                       "mux requires select signal to be a single bit")
+
+        lhs = codegen_expr(expr.args[0], cx)
+        rhs = codegen_expr(expr.args[1], cx)
+        if lhs.type != rhs.type:
+            emit_error(
+                expr.args[0].loc | expr.args[1].loc,
+                f"mux requires both arguments to have the same type, but got {lhs.type} and {rhs.type} instead"
+            )
+
+        return comb.MuxOp(target, lhs, rhs).result
+
     emit_error(expr.name.loc, f"unknown function `{name}`")
