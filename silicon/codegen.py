@@ -241,4 +241,56 @@ def codegen_field_call_expr(
     cx: CodegenContext,
 ) -> IRValue:
     name = expr.name.spelling()
+
+    def require_num_args(num: int):
+        if len(expr.args) == num: return
+        emit_error(
+            expr.loc,
+            f"argument mismatch: `{name}` takes {num} arguments, but got {len(expr.args)} instead"
+        )
+
+    def require_int_lit(
+        idx: int,
+        min: int | None = None,
+        max: int | None = None,
+    ) -> int:
+        arg = expr.args[idx]
+        if not isinstance(arg, ast.IntLitExpr):
+            emit_error(
+                arg.loc,
+                f"invalid argument: `{name}` requires argument {idx} be an integer literal"
+            )
+        if min is not None and arg.value < min:
+            emit_error(
+                arg.loc,
+                f"invalid argument: `{name}` requires argument {idx} to have a minimum value of {min}, but got {arg.value} instead"
+            )
+        if max is not None and arg.value > max:
+            emit_error(
+                arg.loc,
+                f"invalid argument: `{name}` requires argument {idx} to have a maximum value of {max}, but got {arg.value} instead"
+            )
+        return arg.value
+
+    if name == "bit":
+        require_num_args(1)
+        arg = codegen_expr(expr.target, cx)
+        offset = require_int_lit(0, min=0, max=IntegerType(arg.type).width - 1)
+        return comb.ExtractOp(IntegerType.get_signless(1), arg, offset).result
+
+    if name == "slice":
+        require_num_args(2)
+        offset = require_int_lit(0, min=0)
+        width = require_int_lit(1, min=0)
+        arg = codegen_expr(expr.target, cx)
+        arg_width = IntegerType(arg.type).width
+        if offset + width > arg_width:
+            emit_info(expr.target.loc,
+                      f"sliced value is {arg_width} bits wide")
+            emit_info(expr.args[0].loc | expr.args[1].loc,
+                      f"but slice accesses bits {offset}..{offset+width}")
+            emit_error(expr.loc, f"slice out of bounds")
+        return comb.ExtractOp(IntegerType.get_signless(width), arg,
+                              offset).result
+
     emit_error(expr.name.loc, f"unknown function `{name}`")

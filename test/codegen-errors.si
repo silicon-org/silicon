@@ -67,3 +67,21 @@ mod UnknownFunction {
     // CHECK: error: unknown function `foo`
     0.foo();
 }
+
+// -----
+
+mod Foo {
+    input a: uint<8>;
+    // CHECK: error: invalid argument: `bit` requires argument 0 to have a maximum value of 7, but got 9 instead
+    a.bit(9);
+}
+
+// -----
+
+mod Foo {
+    input a: uint<8>;
+    // CHECK: info: sliced value is 8 bits wide
+    // CHECK: info: but slice accesses bits 3..10
+    // CHECK: error: slice out of bounds
+    a.slice(3, 7);
+}
