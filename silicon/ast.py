@@ -220,6 +220,14 @@ BINARY_PRECEDENCE: Dict[BinaryOp, Precedence] = {
     BinaryOp.SUB: Precedence.ADD_SUB,
 }
 
+
+@dataclass
+class FieldCallExpr(Expr):
+    target: Expr
+    name: Token
+    args: List[Expr]
+
+
 #===------------------------------------------------------------------------===#
 # Dumping
 #===------------------------------------------------------------------------===#

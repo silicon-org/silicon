@@ -60,3 +60,10 @@ mod BadIntLiteral {
     // CHECK: error: integer literal `1337` requires a width
     1337;
 }
+
+// -----
+
+mod UnknownFunction {
+    // CHECK: error: unknown function `foo`
+    0.foo();
+}

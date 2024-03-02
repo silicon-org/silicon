@@ -199,6 +199,21 @@ def parse_prefix_expr(p: Parser) -> ast.Expr:
 
 
 def parse_suffix_expr(p: Parser, expr: ast.Expr) -> Optional[ast.Expr]:
+    # Parse field calls, such as `a.b(c)`.
+    if dot := p.consume_if(TokenKind.DOT):
+        name = p.require(TokenKind.IDENT, "field name")
+        p.require(TokenKind.LPAREN)
+        args: List[ast.Expr] = []
+        while p.not_delim(TokenKind.RPAREN):
+            args.append(parse_expr(p))
+            if not p.consume_if(TokenKind.COMMA):
+                break
+        p.require(TokenKind.RPAREN)
+        return ast.FieldCallExpr(loc=expr.loc | p.last_loc,
+                                 target=expr,
+                                 name=name,
+                                 args=args)
+
     return None
 
 

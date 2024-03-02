@@ -228,6 +228,17 @@ def codegen_expr(expr: ast.Expr, cx: CodegenContext) -> IRValue:
             return comb.SubOp(codegen_expr(expr.lhs, cx),
                               codegen_expr(expr.rhs, cx)).result
 
+    if isinstance(expr, ast.FieldCallExpr):
+        return codegen_field_call_expr(expr, cx)
+
     emit_error(
         expr.loc,
         f"expression `{expr.loc.spelling()}` not supported for codegen")
+
+
+def codegen_field_call_expr(
+    expr: ast.FieldCallExpr,
+    cx: CodegenContext,
+) -> IRValue:
+    name = expr.name.spelling()
+    emit_error(expr.name.loc, f"unknown function `{name}`")

@@ -68,4 +68,17 @@ mod Expressions {
     // CHECK:   lhs: IntLitExpr value=4
     // CHECK:   rhs: IntLitExpr value=3
     4u16 - 3u16;
+
+    // CHECK: FieldCallExpr "b"
+    // CHECK:   target: IdentExpr "a"
+    a.b();
+    // CHECK: FieldCallExpr "b"
+    // CHECK:   target: IdentExpr "a"
+    // CHECK:   args[0]: IdentExpr "c"
+    // CHECK:   args[1]: IdentExpr "d"
+    a.b(c, d);
+    // CHECK: FieldCallExpr "c"
+    // CHECK:   target: FieldCallExpr "b"
+    // CHECK:     target: IdentExpr "a"
+    a.b().c();
 }
