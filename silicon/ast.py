@@ -167,6 +167,23 @@ class IntLitExpr(Expr):
 
 
 @dataclass
+class UnaryExpr(Expr):
+    op: UnaryOp
+    arg: Expr
+
+
+class UnaryOp(Enum):
+    NEG = auto()
+    NOT = auto()
+
+
+UNARY_OPS: Dict[TokenKind, UnaryOp] = {
+    TokenKind.SUB: UnaryOp.NEG,
+    TokenKind.NOT: UnaryOp.NOT,
+}
+
+
+@dataclass
 class BinaryExpr(Expr):
     op: BinaryOp
     lhs: Expr
@@ -176,6 +193,12 @@ class BinaryExpr(Expr):
 class BinaryOp(Enum):
     ADD = auto()
     SUB = auto()
+
+
+BINARY_OPS: Dict[TokenKind, BinaryOp] = {
+    TokenKind.ADD: BinaryOp.ADD,
+    TokenKind.SUB: BinaryOp.SUB,
+}
 
 
 # https://en.cppreference.com/w/c/language/operator_precedence
@@ -191,11 +214,6 @@ class Precedence(IntEnum):
     PRIMARY = auto()
     MAX = auto()
 
-
-BINARY_OPS: Dict[TokenKind, BinaryOp] = {
-    TokenKind.ADD: BinaryOp.ADD,
-    TokenKind.SUB: BinaryOp.SUB,
-}
 
 BINARY_PRECEDENCE: Dict[BinaryOp, Precedence] = {
     BinaryOp.ADD: Precedence.ADD_SUB,
@@ -237,7 +255,7 @@ def dump_ast(node: AstNode) -> str:
                 line += f" {name}={value}"
             elif isinstance(value, Token):
                 line += f" \"{value.spelling()}\""
-            elif isinstance(value, BinaryOp):
+            elif isinstance(value, Enum):
                 line += f" {value.name}"
             elif isinstance(value, Binding) and value.target is not None:
                 line += f" {name}={value.target.__class__.__name__}(@{get_id(value.get())})"

@@ -29,6 +29,7 @@ class TokenKind(Enum):
     COMMA = auto()
     COLON = auto()
     SEMICOLON = auto()
+    NOT = auto()
 
     EQ = auto()
     NE = auto()
@@ -75,6 +76,7 @@ SYMBOLS1: Dict[str, TokenKind] = {
     ",": TokenKind.COMMA,
     ":": TokenKind.COLON,
     ";": TokenKind.SEMICOLON,
+    "!": TokenKind.NOT,
     "<": TokenKind.LT,
     ">": TokenKind.GT,
     "=": TokenKind.ASSIGN,

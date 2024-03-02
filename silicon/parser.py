@@ -153,25 +153,53 @@ def parse_type(p: Parser) -> ast.AstType:
     emit_error(p.loc(), f"expected type, found {p.tokens[0].kind.name}")
 
 
-def parse_expr(p: Parser,
-               min_prec: ast.Precedence = ast.Precedence.MIN) -> ast.Expr:
-    expr = parse_primary_expr(p)
-
-    # Parse infix operators.
-    while True:
-        if op := ast.BINARY_OPS.get(p.tokens[0].kind):
-            prec = ast.BINARY_PRECEDENCE[op]
-            if prec > min_prec:
-                p.consume()
-                rhs = parse_expr(p, prec)
-                expr = ast.BinaryExpr(loc=expr.loc | rhs.loc,
-                                      op=op,
-                                      lhs=expr,
-                                      rhs=rhs)
-                continue
-        break
-
+def parse_expr(
+    p: Parser,
+    min_prec: ast.Precedence = ast.Precedence.MIN,
+) -> ast.Expr:
+    expr = parse_prefix_expr(p)
+    while infix := parse_infix_expr(p, expr, min_prec):
+        expr = infix
     return expr
+
+
+def parse_infix_expr(
+    p: Parser,
+    lhs: ast.Expr,
+    min_prec: ast.Precedence,
+) -> Optional[ast.Expr]:
+    # Parse binary operators.
+    if op := ast.BINARY_OPS.get(p.tokens[0].kind):
+        prec = ast.BINARY_PRECEDENCE[op]
+        if prec > min_prec:
+            p.consume()
+            rhs = parse_expr(p, prec)
+            return ast.BinaryExpr(loc=lhs.loc | rhs.loc,
+                                  op=op,
+                                  lhs=lhs,
+                                  rhs=rhs)
+
+    return None
+
+
+def parse_prefix_expr(p: Parser) -> ast.Expr:
+    loc = p.loc()
+
+    # Parse unary operators.
+    if op := ast.UNARY_OPS.get(p.tokens[0].kind):
+        p.consume()
+        arg = parse_prefix_expr(p)
+        return ast.UnaryExpr(loc=loc | arg.loc, op=op, arg=arg)
+
+    # Otherwise parse a primary expression and optional suffix expressions.
+    expr = parse_primary_expr(p)
+    while suffix := parse_suffix_expr(p, expr):
+        expr = suffix
+    return expr
+
+
+def parse_suffix_expr(p: Parser, expr: ast.Expr) -> Optional[ast.Expr]:
+    return None
 
 
 def parse_primary_expr(p: Parser) -> ast.Expr:

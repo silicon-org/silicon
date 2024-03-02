@@ -29,12 +29,21 @@ mod Statements {
 
 // CHECK-LABEL: hw.module @Expressions
 mod Expressions {
+    input a: uint<16>;
+    input b: uint<16>;
+
     // CHECK: hw.constant 9001 : i42
     9001u42;
-    // CHECK: comb.add
-    1u16 + 2u16;
-    // CHECK: comb.sub
-    4u16 - 3u16;
+
+    // CHECK: comb.sub %c0_i16, %a : i16
+    -a;
+    // CHECK: comb.xor %c-1_i16, %a : i16
+    !a;
+
+    // CHECK: comb.add %a, %b : i16
+    a + b;
+    // CHECK: comb.sub %a, %b : i16
+    a - b;
 }
 
 // CHECK-LABEL: hw.module @Identifiers

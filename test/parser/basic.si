@@ -43,15 +43,24 @@ mod Statements {
 mod Expressions {
     // CHECK: IntLitExpr value=9001 width=42
     9001u42;
-
     // CHECK: IdentExpr "a"
     a;
+
+    // CHECK: UnaryExpr NEG
+    // CHECK:   arg: IdentExpr "a"
+    -a;
+    // CHECK: UnaryExpr NOT
+    // CHECK:   arg: IdentExpr "a"
+    !a;
+    // CHECK: UnaryExpr NOT
+    // CHECK:   arg: UnaryExpr NEG
+    // CHECK:     arg: IdentExpr "a"
+    !-a;
 
     // CHECK: BinaryExpr ADD
     // CHECK:   lhs: IntLitExpr value=1
     // CHECK:   rhs: IntLitExpr value=2
     1u16 + 2u16;
-
     // CHECK: BinaryExpr SUB
     // CHECK:   lhs: IntLitExpr value=4
     // CHECK:   rhs: IntLitExpr value=3

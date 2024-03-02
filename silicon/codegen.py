@@ -203,11 +203,23 @@ def codegen_expr(expr: ast.Expr, cx: CodegenContext) -> IRValue:
             expr.loc,
             f"name `{expr.name.spelling()}` cannot be used in an expression")
 
+    if isinstance(expr, ast.UnaryExpr):
+        if expr.op == ast.UnaryOp.NEG:
+            arg = codegen_expr(expr.arg, cx)
+            zero = hw.ConstantOp.create(arg.type, 0)
+            return comb.SubOp(zero, arg).result
+
+        if expr.op == ast.UnaryOp.NOT:
+            arg = codegen_expr(expr.arg, cx)
+            ones = hw.ConstantOp.create(arg.type, -1)
+            return comb.XorOp([ones, arg]).result
+
     if isinstance(expr, ast.BinaryExpr):
         if expr.op == ast.BinaryOp.ADD:
             return comb.AddOp(
                 [codegen_expr(expr.lhs, cx),
                  codegen_expr(expr.rhs, cx)]).result
+
         if expr.op == ast.BinaryOp.SUB:
             return comb.SubOp(codegen_expr(expr.lhs, cx),
                               codegen_expr(expr.rhs, cx)).result

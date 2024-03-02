@@ -18,7 +18,8 @@
 // CHECK: COMMA
 // CHECK: COLON
 // CHECK: SEMICOLON
-. , : ;
+// CHECK: NOT
+. , : ; !
 
 // CHECK: EQ
 // CHECK: NE
@@ -28,8 +29,10 @@
 // CHECK: GE
 == != < > <= >=
 
+// CHECK: ADD
+// CHECK: SUB
 // CHECK: ASSIGN
-=
++ - =
 
 // CHECK: ELSE
 // CHECK: FOR
