@@ -41,6 +41,9 @@ mod Statements {
 
 // CHECK-LABEL: ModItem "Expressions"
 mod Expressions {
+    // CHECK: IntLitExpr value=1337
+    // CHECK-NOT: width=
+    1337;
     // CHECK: IntLitExpr value=9001 width=42
     9001u42;
     // CHECK: IdentExpr "a"

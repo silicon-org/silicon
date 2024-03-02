@@ -191,6 +191,10 @@ def codegen_stmt(stmt: ast.Stmt, cx: CodegenContext) -> IRValue:
 
 def codegen_expr(expr: ast.Expr, cx: CodegenContext) -> IRValue:
     if isinstance(expr, ast.IntLitExpr):
+        if expr.width is None:
+            emit_error(
+                expr.loc,
+                f"integer literal `{expr.loc.spelling()}` requires a width")
         return hw.ConstantOp.create(IntegerType.get_signless(expr.width),
                                     expr.value).result
 

@@ -163,7 +163,7 @@ class IdentExpr(Expr):
 @dataclass
 class IntLitExpr(Expr):
     value: int
-    width: int
+    width: Optional[int]
 
 
 @dataclass

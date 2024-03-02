@@ -205,11 +205,16 @@ def parse_suffix_expr(p: Parser, expr: ast.Expr) -> Optional[ast.Expr]:
 def parse_primary_expr(p: Parser) -> ast.Expr:
     # Parse number literals.
     if lit := p.consume_if(TokenKind.NUM_LIT):
-        m = re.match(r'(\d+)u(\d+)', lit.spelling())
+        m = re.match(r'(\d+)(u(\d+))?', lit.spelling())
         if not m:
-            emit_error(lit.loc,
-                       f"expected number literal of the form `<V>u<N>`")
-        return ast.IntLitExpr(loc=lit.loc, value=int(m[1]), width=int(m[2]))
+            emit_error(
+                lit.loc,
+                f"expected number literal of the form `<V>` or `<V>u<N>`")
+        return ast.IntLitExpr(
+            loc=lit.loc,
+            value=int(m[1]),
+            width=int(m[3]) if m[2] else None,
+        )
 
     # Parse identifiers.
     if token := p.consume_if(TokenKind.IDENT):

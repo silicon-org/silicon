@@ -53,3 +53,10 @@ mod Foo {
     // CHECK: error: port `x` already defined
     output x: uint<42>;
 }
+
+// -----
+
+mod BadIntLiteral {
+    // CHECK: error: integer literal `1337` requires a width
+    1337;
+}
