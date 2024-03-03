@@ -69,6 +69,7 @@ mod Identifiers {
     // CHECK: hw.output %a, %a
 }
 
+// CHECK-LABEL: hw.module @LetUpdates
 mod LetUpdates {
     input a: uint<3>;
     input b: uint<3>;
@@ -89,4 +90,18 @@ mod LetUpdates {
     let y: uint<3> = y + a;
     let y: uint<3> = y + b;
     let y: uint<3> = y + c;
+}
+
+// CHECK-LABEL: hw.module @WiresAndRegisters
+mod WiresAndRegisters {
+    input clock: uint<1>;
+    // CHECK: [[WIRE:%.+]] = hw.wire %c1337_i42
+    // CHECK: [[CLOCK:%.+]] = seq.to_clock %clock
+    // CHECK: [[REG:%.+]] = seq.compreg [[WIRE]], [[CLOCK]]
+    // CHECK: hw.output [[REG]]
+    let x: uint<42> = wire(0u42);
+    let y: uint<42> = reg(clock, 0u42);
+    output z: uint<42> = y;
+    y.next(x);
+    x.set(1337u42);
 }

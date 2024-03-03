@@ -93,3 +93,33 @@ mod Foo {
     // CHECK: error: mux requires both arguments to have the same type, but got i5 and i6 instead
     a.mux(0u5, 1u6);
 }
+
+// -----
+
+mod Foo {
+    input a: uint<1>;
+    // CHECK: error: invalid receiver: `set` must be called on a wire
+    a.set(a);
+}
+
+// -----
+
+mod Foo {
+    input a: uint<1>;
+    // CHECK: error: invalid receiver: `next` must be called on a register
+    a.next(a);
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: type mismatch: wire is i19 but set value is i42
+    wire(0u19).set(0u42);
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: type mismatch: register is i19 but next value is i42
+    reg(0u1, 0u19).next(0u42);
+}

@@ -6,7 +6,7 @@ from silicon.diagnostics import *
 import circt
 from circt.ir import Context, InsertionPoint, IntegerType, Location, Module
 from circt.ir import Type as IRType, Value as IRValue, Operation as IROperation
-from circt.dialects import hw, comb
+from circt.dialects import hw, comb, seq
 from circt.support import BackedgeBuilder, connect
 
 __all__ = ["codegen"]
@@ -233,6 +233,18 @@ def codegen_call_expr(
         args = [codegen_expr(arg, cx) for arg in expr.args]
         return comb.ConcatOp(args).result
 
+    if name == "wire":
+        require_num_args(expr, 1)
+        init = codegen_expr(expr.args[0], cx)
+        return hw.WireOp(init).result
+
+    if name == "reg":
+        require_num_args(expr, 2)
+        clock = codegen_expr(expr.args[0], cx)
+        init = codegen_expr(expr.args[1], cx)
+        return seq.CompRegOp(init.type, init,
+                             seq.ToClockOp(clock).result).result
+
     emit_error(expr.name.loc, f"unknown function `{name}`")
 
 
@@ -282,5 +294,44 @@ def codegen_field_call_expr(
             )
 
         return comb.MuxOp(target, lhs, rhs).result
+
+    if name == "set":
+        require_num_args(expr, 1)
+        target = codegen_expr(expr.target, cx)
+        if not isinstance(target.owner,
+                          IROperation) or target.owner.name != "hw.wire":
+            emit_error(expr.target.loc,
+                       "invalid receiver: `set` must be called on a wire")
+
+        arg = codegen_expr(expr.args[0], cx)
+        if target.type != arg.type:
+            emit_error(
+                expr.name.loc,
+                f"type mismatch: wire is {target.type} but set value is {arg.type}"
+            )
+
+        # Update the input operand of the wire.
+        target.owner.operands[0] = arg
+        return target
+
+    if name == "next":
+        require_num_args(expr, 1)
+        target = codegen_expr(expr.target, cx)
+        if not isinstance(target.owner,
+                          IROperation) or target.owner.name != "seq.compreg":
+            emit_error(
+                expr.target.loc,
+                "invalid receiver: `next` must be called on a register")
+
+        arg = codegen_expr(expr.args[0], cx)
+        if target.type != arg.type:
+            emit_error(
+                expr.name.loc,
+                f"type mismatch: register is {target.type} but next value is {arg.type}"
+            )
+
+        # Update the input operand of the register.
+        target.owner.operands[0] = arg
+        return target
 
     emit_error(expr.name.loc, f"unknown function `{name}`")
