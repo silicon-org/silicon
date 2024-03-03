@@ -15,8 +15,7 @@ __all__ = ["codegen"]
 @dataclass
 class CodegenContext:
     named_values: Dict[int, IRValue] = field(default_factory=dict)
-    named_decls: Dict[int, IROperation] = field(default_factory=dict)
-    assignable_wires: Dict[int, hw.WireOp] = field(default_factory=dict)
+    assigned_values: Dict[int, IRValue] = field(default_factory=dict)
 
 
 def codegen(root: ast.Root):
@@ -39,12 +38,6 @@ def codegen_mod(mod: ast.ModItem):
     # Collect the input and output ports.
     input_stmts: List[ast.InputStmt] = []
     output_stmts: List[ast.OutputStmt] = []
-    input_indices: Dict[int, int] = dict()
-    output_indices: Dict[int, int] = dict()
-    input_ports: List[Tuple[str, IRType]] = []
-    output_ports: List[Tuple[str, IRType]] = []
-    let_stmts: List[ast.LetStmt] = []
-
     used_names: Dict[str, ast.AstNode] = dict()
 
     def check_port_name(name: str, node: ast.AstNode):
@@ -58,22 +51,18 @@ def codegen_mod(mod: ast.ModItem):
         if isinstance(stmt, ast.InputStmt):
             check_port_name(stmt.name.spelling(), stmt)
             input_stmts.append(stmt)
-            input_indices[id(stmt)] = len(input_ports)
-            input_ports.append(
-                (stmt.name.spelling(), codegen_type(stmt.ty, cx)))
         elif isinstance(stmt, ast.OutputStmt):
             check_port_name(stmt.name.spelling(), stmt)
             output_stmts.append(stmt)
-            output_indices[id(stmt)] = len(output_ports)
-            output_ports.append(
-                (stmt.name.spelling(), codegen_type(stmt.ty, cx)))
-        elif isinstance(stmt, ast.LetStmt):
-            let_stmts.append(stmt)
 
     # Create the module and entry block.
-    hwmod = hw.HWModuleOp(name=mod.name.spelling(),
-                          input_ports=input_ports,
-                          output_ports=output_ports)
+    hwmod = hw.HWModuleOp(
+        name=mod.name.spelling(),
+        input_ports=[(stmt.name.spelling(), codegen_type(stmt.ty, cx))
+                     for stmt in input_stmts],
+        output_ports=[(stmt.name.spelling(), codegen_type(stmt.ty, cx))
+                      for stmt in output_stmts],
+    )
     block = hwmod.add_entry_block()
 
     # Add the module inputs to the codegen context. This allows identifier
@@ -81,58 +70,23 @@ def codegen_mod(mod: ast.ModItem):
     for stmt, arg in zip(input_stmts, block.arguments):
         cx.named_values[id(stmt)] = arg
 
-    placeholders: List[Tuple[ast.AstNode, IROperation]] = []
-
     with InsertionPoint(block):
-        # Create placeholder values for the module outputs.
-        output_values = []
-        for stmt in output_stmts:
-            ty = codegen_type(stmt.ty, cx)
-            placeholder = IROperation.create(
-                "builtin.unrealized_conversion_cast", [ty])
-            placeholders.append((stmt, placeholder))
-            wire = hw.WireOp(placeholder)
-            cx.named_values[id(stmt)] = wire.result
-            cx.assignable_wires[id(stmt)] = wire
-            output_values.append(wire.result)
-
-        # Create placeholder values for let bindings.
-        for stmt in let_stmts:
-            ty = codegen_type(stmt.ty, cx)
-            placeholder = IROperation.create(
-                "builtin.unrealized_conversion_cast", [ty])
-            placeholders.append((stmt, placeholder))
-            wire = hw.WireOp(placeholder, name=stmt.name.spelling())
-            cx.named_values[id(stmt)] = wire.result
-            cx.assignable_wires[id(stmt)] = wire
-
         # Emit the statements in the module body.
         for stmt in mod.stmts:
             codegen_stmt(stmt, cx)
 
+        # Collect the output port assignments to build the terminator.
+        output_values = []
+        for stmt in output_stmts:
+            value = cx.assigned_values.get(id(stmt))
+            if not value:
+                emit_error(
+                    stmt.loc,
+                    f"output `{stmt.name.spelling()}` has not been assigned")
+            output_values.append(value)
+
         # Create the termiantor.
         hw.OutputOp(output_values)
-
-    # Delete all placeholders. A placeholder that still has users is an
-    # indication that a something is missing an assignment.
-    for node, placeholder in placeholders:
-        if list(placeholder.result.uses):
-            if isinstance(node, ast.LetStmt):
-                emit_error(
-                    node.loc,
-                    f"binding `{node.name.spelling()}` has not been assigned")
-            if isinstance(node, ast.OutputStmt):
-                emit_error(
-                    node.loc,
-                    f"output `{node.name.spelling()}` has not been assigned")
-            emit_error(node.loc, f"declaration has not been assigned")
-        placeholder.erase()
-
-    # Canonicalize unnamed assignable wires away.
-    for wire in cx.assignable_wires.values():
-        if not wire.name:
-            wire.result.replace_all_uses_with(wire.input)
-            wire.erase()
 
 
 def codegen_type(ty: ast.AstType, cx: CodegenContext) -> IRType:
@@ -148,14 +102,12 @@ def codegen_stmt(stmt: ast.Stmt, cx: CodegenContext) -> IRValue:
 
     if isinstance(stmt, ast.OutputStmt):
         if stmt.expr:
-            value = codegen_expr(stmt.expr, cx)
-            cx.assignable_wires[id(stmt)].operands[0] = value
+            cx.assigned_values[id(stmt)] = codegen_expr(stmt.expr, cx)
         return
 
     if isinstance(stmt, ast.LetStmt):
         if stmt.expr:
-            value = codegen_expr(stmt.expr, cx)
-            cx.assignable_wires[id(stmt)].operands[0] = value
+            cx.assigned_values[id(stmt)] = codegen_expr(stmt.expr, cx)
         return
 
     if isinstance(stmt, ast.ExprStmt):
@@ -178,13 +130,8 @@ def codegen_stmt(stmt: ast.Stmt, cx: CodegenContext) -> IRValue:
                 stmt.lhs.loc,
                 f"expression `{stmt.lhs.loc.spelling()}` cannot be assigned")
 
-        if wire := cx.assignable_wires.get(id(lhs)):
-            rhs = codegen_expr(stmt.rhs, cx)
-            wire.operands[0] = rhs
-            return
-
-        emit_error(stmt.loc,
-                   f"name `{stmt.lhs.name.spelling()}` is not assignable")
+        cx.assigned_values[id(lhs)] = codegen_expr(stmt.rhs, cx)
+        return
 
     emit_error(stmt.loc, f"statement not supported for codegen")
 
@@ -200,12 +147,14 @@ def codegen_expr(expr: ast.Expr, cx: CodegenContext) -> IRValue:
 
     if isinstance(expr, ast.IdentExpr):
         target = expr.binding.get()
+
         if value := cx.named_values.get(id(target)):
             return value
+        if value := cx.assigned_values.get(id(target)):
+            return value
 
-        emit_error(
-            expr.loc,
-            f"name `{expr.name.spelling()}` cannot be used in an expression")
+        emit_error(expr.loc,
+                   f"`{expr.name.spelling()}` is unassigned at this point")
 
     if isinstance(expr, ast.UnaryExpr):
         if expr.op == ast.UnaryOp.NEG:

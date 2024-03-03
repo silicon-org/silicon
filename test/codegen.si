@@ -17,14 +17,12 @@ mod InputsOutputs {
 
 // CHECK-LABEL: hw.module @Statements
 mod Statements {
-    // CHECK: %v0 = hw.wire %c2_i32
-    // CHECK: %v1 = hw.wire %v0
-    // CHECK: %v2 = hw.wire %v0
     let v0: uint<32>;
-    let v1: uint<32> = v0;
-    v0 = 1u32;
-    let v2: uint<32> = v0;
-    v0 = 2u32;
+    let v1: uint<32>;
+    let v2: uint<32> = 2u32;
+    v1 = v2;
+    // CHECK: hw.output %c2_i32
+    output a: uint<32> = v1;
 }
 
 // CHECK-LABEL: hw.module @Expressions
@@ -65,6 +63,27 @@ mod Identifiers {
     let z: uint<42> = a;
     y = z;
     x = y;
-    // CHECK: %z = hw.wire %a
-    // CHECK: hw.output %z, %z
+    // CHECK: hw.output %a, %a
+}
+
+mod LetUpdates {
+    input a: uint<3>;
+    input b: uint<3>;
+    input c: uint<3>;
+
+    // CHECK: [[X0:%.+]] = comb.add %c0_i3, %a
+    // CHECK: [[X1:%.+]] = comb.add [[X0]], %b
+    // CHECK: [[X2:%.+]] = comb.add [[X1]], %c
+    let x: uint<3> = 0u3;
+    x = x + a;
+    x = x + b;
+    x = x + c;
+
+    // CHECK: [[Y0:%.+]] = comb.add %c1_i3, %a
+    // CHECK: [[Y1:%.+]] = comb.add [[Y0]], %b
+    // CHECK: [[Y2:%.+]] = comb.add [[Y1]], %c
+    let y: uint<3> = 1u3;
+    let y: uint<3> = y + a;
+    let y: uint<3> = y + b;
+    let y: uint<3> = y + c;
 }
