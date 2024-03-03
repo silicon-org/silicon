@@ -177,6 +177,9 @@ def codegen_expr(expr: ast.Expr, cx: CodegenContext) -> IRValue:
             return comb.SubOp(codegen_expr(expr.lhs, cx),
                               codegen_expr(expr.rhs, cx)).result
 
+    if isinstance(expr, ast.CallExpr):
+        return codegen_call_expr(expr, cx)
+
     if isinstance(expr, ast.FieldCallExpr):
         return codegen_field_call_expr(expr, cx)
 
@@ -185,52 +188,73 @@ def codegen_expr(expr: ast.Expr, cx: CodegenContext) -> IRValue:
         f"expression `{expr.loc.spelling()}` not supported for codegen")
 
 
+def require_num_args(expr, num: int):
+    if len(expr.args) == num: return
+    name = expr.name.spelling()
+    emit_error(
+        expr.loc,
+        f"argument mismatch: `{name}` takes {num} arguments, but got {len(expr.args)} instead"
+    )
+
+
+def require_int_lit(
+    expr,
+    idx: int,
+    min: int | None = None,
+    max: int | None = None,
+) -> int:
+    name = expr.name.spelling()
+    arg = expr.args[idx]
+    if not isinstance(arg, ast.IntLitExpr):
+        emit_error(
+            arg.loc,
+            f"invalid argument: `{name}` requires argument {idx} be an integer literal"
+        )
+    if min is not None and arg.value < min:
+        emit_error(
+            arg.loc,
+            f"invalid argument: `{name}` requires argument {idx} to have a minimum value of {min}, but got {arg.value} instead"
+        )
+    if max is not None and arg.value > max:
+        emit_error(
+            arg.loc,
+            f"invalid argument: `{name}` requires argument {idx} to have a maximum value of {max}, but got {arg.value} instead"
+        )
+    return arg.value
+
+
+def codegen_call_expr(
+    expr: ast.CallExpr,
+    cx: CodegenContext,
+) -> IRValue:
+    name = expr.name.spelling()
+
+    if name == "concat":
+        args = [codegen_expr(arg, cx) for arg in expr.args]
+        return comb.ConcatOp(args).result
+
+    emit_error(expr.name.loc, f"unknown function `{name}`")
+
+
 def codegen_field_call_expr(
     expr: ast.FieldCallExpr,
     cx: CodegenContext,
 ) -> IRValue:
     name = expr.name.spelling()
 
-    def require_num_args(num: int):
-        if len(expr.args) == num: return
-        emit_error(
-            expr.loc,
-            f"argument mismatch: `{name}` takes {num} arguments, but got {len(expr.args)} instead"
-        )
-
-    def require_int_lit(
-        idx: int,
-        min: int | None = None,
-        max: int | None = None,
-    ) -> int:
-        arg = expr.args[idx]
-        if not isinstance(arg, ast.IntLitExpr):
-            emit_error(
-                arg.loc,
-                f"invalid argument: `{name}` requires argument {idx} be an integer literal"
-            )
-        if min is not None and arg.value < min:
-            emit_error(
-                arg.loc,
-                f"invalid argument: `{name}` requires argument {idx} to have a minimum value of {min}, but got {arg.value} instead"
-            )
-        if max is not None and arg.value > max:
-            emit_error(
-                arg.loc,
-                f"invalid argument: `{name}` requires argument {idx} to have a maximum value of {max}, but got {arg.value} instead"
-            )
-        return arg.value
-
     if name == "bit":
-        require_num_args(1)
+        require_num_args(expr, 1)
         arg = codegen_expr(expr.target, cx)
-        offset = require_int_lit(0, min=0, max=IntegerType(arg.type).width - 1)
+        offset = require_int_lit(expr,
+                                 0,
+                                 min=0,
+                                 max=IntegerType(arg.type).width - 1)
         return comb.ExtractOp(IntegerType.get_signless(1), arg, offset).result
 
     if name == "slice":
-        require_num_args(2)
-        offset = require_int_lit(0, min=0)
-        width = require_int_lit(1, min=0)
+        require_num_args(expr, 2)
+        offset = require_int_lit(expr, 0, min=0)
+        width = require_int_lit(expr, 1, min=0)
         arg = codegen_expr(expr.target, cx)
         arg_width = IntegerType(arg.type).width
         if offset + width > arg_width:
@@ -243,7 +267,7 @@ def codegen_field_call_expr(
                               offset).result
 
     if name == "mux":
-        require_num_args(2)
+        require_num_args(expr, 2)
         target = codegen_expr(expr.target, cx)
         if target.type != IntegerType.get_signless(1):
             emit_error(expr.target.loc,

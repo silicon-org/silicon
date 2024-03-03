@@ -58,6 +58,13 @@ mod BadIntLiteral {
 
 mod UnknownFunction {
     // CHECK: error: unknown function `foo`
+    foo();
+}
+
+// -----
+
+mod UnknownFunction {
+    // CHECK: error: unknown function `foo`
     0.foo();
 }
 

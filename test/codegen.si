@@ -44,6 +44,9 @@ mod Expressions {
     // CHECK: comb.sub %a, %b : i16
     a - b;
 
+    // CHECK: comb.concat %a, %b : i16, i16
+    concat(a, b);
+
     // CHECK: comb.extract %a from 5 : (i16) -> i1
     a.bit(5);
     // CHECK: comb.extract %a from 9 : (i16) -> i4

@@ -231,8 +231,17 @@ def parse_primary_expr(p: Parser) -> ast.Expr:
             width=int(m[3]) if m[2] else None,
         )
 
-    # Parse identifiers.
+    # Parse identifiers and calls.
     if token := p.consume_if(TokenKind.IDENT):
+        if paren := p.consume_if(TokenKind.LPAREN):
+            args: List[ast.Expr] = []
+            while p.not_delim(TokenKind.RPAREN):
+                args.append(parse_expr(p))
+                if not p.consume_if(TokenKind.COMMA):
+                    break
+            p.require(TokenKind.RPAREN)
+            return ast.CallExpr(loc=token.loc, name=token, args=args)
+
         return ast.IdentExpr(loc=token.loc, name=token)
 
     emit_error(p.loc(), f"expected expression, found {p.tokens[0].kind.name}")

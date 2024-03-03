@@ -222,6 +222,12 @@ BINARY_PRECEDENCE: Dict[BinaryOp, Precedence] = {
 
 
 @dataclass
+class CallExpr(Expr):
+    name: Token
+    args: List[Expr]
+
+
+@dataclass
 class FieldCallExpr(Expr):
     target: Expr
     name: Token
