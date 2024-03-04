@@ -8,6 +8,7 @@ from silicon.names import resolve_names
 from silicon.parser import parse_tokens
 from silicon.source import SourceFile
 from silicon.diagnostics import DiagnosticException
+from silicon.ir import convert_ast_to_ir
 from sys import exit, stdout
 
 
@@ -31,6 +32,10 @@ def main():
     parser.add_argument("--dump-resolved",
                         action="store_true",
                         help="Dump syntax after name resolution and exit")
+
+    parser.add_argument("--dump-ir",
+                        action="store_true",
+                        help="Dump IR and exit")
 
     parser.add_argument("--split-input-file",
                         action="store_true",
@@ -84,6 +89,11 @@ def process_input(args: argparse.Namespace, input: SourceFile):
     resolve_names(root)
     if args.dump_resolved:
         print(dump_ast(root))
+        return
+
+    # Convert the AST to our IR.
+    if args.dump_ir:
+        convert_ast_to_ir(root)
         return
 
     # Emit CIRCT code.

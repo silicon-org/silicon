@@ -1,0 +1,8 @@
+// RUN: silc %s --dump-ir | FileCheck %s
+
+mod Foo {
+    // CHECK: [[TMP1:%.+]] = si.constant 1 : i4
+    // CHECK: [[TMP2:%.+]] = si.constant 2 : i4
+    // CHECK: si.add [[TMP1]], [[TMP2]] : i4
+    1u4 + 2u4;
+}
