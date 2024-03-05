@@ -1,0 +1,36 @@
+fn round_robin_arbiter<N: uint, T: type>(
+    in_valid: [dyn bool; N],
+    in_ready: [&dyn bool; N],
+    in_data: [dyn T; N],
+    out_valid: &dyn bool,
+    out_ready: dyn bool,
+    out_data: &dyn T
+) {
+    let picked_idx: dyn index<N> = 0;
+    for i in 0..N {
+        if in_valid[i] {
+            picked_idx = i;
+        }
+    }
+    *out_valid = in_valid[picked_idx];
+    *out_data = in_data[picked_idx];
+    for i in 0..N {
+        *in_ready[i] = (i == picked_idx && out_ready[i]);
+    }
+}
+
+fn find_highest_one<N: uint>(value: uint<N>) -> option<index<N>> {
+    let idx: option<index<N>> = none;
+    for i in 0..N {
+        if value[i] {
+            idx = some(i);
+        }
+    }
+    idx
+}
+
+mod find_highest_one_test {
+    input value: uint<16>;
+    output idxA: option<index<16>> = find_highest_one<16>(value);
+    output idxB: option<index<16>> = find_highest_one<16>(42u16);
+}

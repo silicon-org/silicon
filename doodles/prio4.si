@@ -1,0 +1,17 @@
+mod PriorityEncoder4 {
+    input value: uint<4>;
+    output index: uint<2>;
+    output none: uint<1>;
+    let x = 0;
+    x = value.bit(3).mux(3, x);
+    x = value.bit(2).mux(2, x);
+    x = value.bit(1).mux(1, x);
+    x = value.bit(0).mux(0, x);
+    index = x;
+    let y = 1;
+    y = value.bit(0).mux(0, y);
+    y = value.bit(1).mux(0, y);
+    y = value.bit(2).mux(0, y);
+    y = value.bit(3).mux(0, y);
+    none = y;
+}

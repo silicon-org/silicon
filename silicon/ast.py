@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from enum import Enum, auto
 from dataclasses import dataclass, field
-from typing import *
+from typing import Generator, List, Optional, Dict
 from silicon.lexer import Token, TokenKind
 from silicon.source import Loc
+from silicon.ty import Type
 from enum import Enum, IntEnum, auto
 
 
@@ -101,6 +102,7 @@ class Stmt(AstNode):
 class InputStmt(Stmt):
     name: Token
     ty: AstType
+    fty: Optional[Type] = None
 
 
 @dataclass
@@ -108,13 +110,15 @@ class OutputStmt(Stmt):
     name: Token
     ty: AstType
     expr: Optional[Expr]
+    fty: Optional[Type] = None
 
 
 @dataclass
 class LetStmt(Stmt):
     name: Token
-    ty: AstType
+    ty: Optional[AstType]
     expr: Optional[Expr]
+    fty: Optional[Type] = None
 
 
 @dataclass
@@ -149,9 +153,10 @@ class UIntType(AstType):
 #===------------------------------------------------------------------------===#
 
 
-@dataclass
+@dataclass(kw_only=True)
 class Expr(AstNode):
-    pass
+    full_loc: Loc
+    fty: Type | None = None
 
 
 @dataclass
@@ -273,6 +278,8 @@ def dump_ast(node: AstNode) -> str:
                 line += f" {value.name}"
             elif isinstance(value, Binding) and value.target is not None:
                 line += f" {name}={value.target.__class__.__name__}(@{get_id(value.get())})"
+            elif isinstance(value, Type):
+                line += f" {name}={value}"
         line += f" @{get_id(node)}"
         fields = []
         for name, value in node.__dict__.items():

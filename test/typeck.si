@@ -1,0 +1,90 @@
+// RUN: silc %s --dump-types | FileCheck %s
+
+// CHECK-LABEL: ModItem "Foo"
+mod Foo {
+    // CHECK: InputStmt "someInput" fty=uint<16>
+    input someInput: uint<16>;
+    // CHECK: OutputStmt "someOutput" fty=uint<42>
+    output someOutput: uint<42>;
+    // CHECK: LetStmt "someLet" fty=uint<19>
+    let someLet: uint<19>;
+
+    // CHECK: IntLitExpr fty=uint<0> value=0
+    0;
+    // CHECK: IntLitExpr fty=uint<1> value=1
+    1;
+    // CHECK: IntLitExpr fty=uint<2> value=2
+    2;
+    // CHECK: IntLitExpr fty=uint<11> value=1337
+    1337;
+
+    // CHECK: IntLitExpr fty=uint<42> value=9001
+    9001u42;
+
+    let a: uint<9>;
+    let b: uint<9>;
+
+    // CHECK: IdentExpr fty=uint<9>
+    a;
+    // CHECK: UnaryExpr fty=uint<9>
+    -a;
+    // CHECK: UnaryExpr fty=uint<9>
+    !a;
+
+    // CHECK: BinaryExpr fty=uint<9>
+    a + b;
+    // CHECK: BinaryExpr fty=uint<9>
+    a - b;
+
+    let c: uint<1>;
+    let d: uint<5>;
+
+    // CHECK: CallExpr fty=uint<24> "concat"
+    concat(a, b, c, d);
+
+    // CHECK: FieldCallExpr fty=uint<1>
+    a.bit(5);
+    // CHECK: FieldCallExpr fty=uint<4>
+    a.slice(3, 4);
+    // CHECK: FieldCallExpr fty=uint<9>
+    c.mux(a, b);
+
+    // Minimum literal sizes should infer through let bindings.
+    // CHECK: LetStmt "a" fty=uint<4>
+    // CHECK:   IntLitExpr fty=uint<4> value=8
+    // CHECK: LetStmt "b" fty=uint<4>
+    // CHECK:   BinaryExpr fty=uint<4> ADD
+    // CHECK:     IntLitExpr fty=uint<4> value=9
+    // CHECK:     IntLitExpr fty=uint<4> value=2
+    // CHECK: LetStmt "c" fty=uint<4>
+    let a = 8;
+    let b = 9 + 2;
+    a = b;
+    let c = b;
+
+    // Concrete sizes should infer through let bindings to literals.
+    // CHECK: LetStmt "a" fty=uint<16>
+    // CHECK:   IntLitExpr fty=uint<16> value=8
+    // CHECK: LetStmt "b" fty=uint<16>
+    // CHECK:   BinaryExpr fty=uint<16> ADD
+    // CHECK:     IntLitExpr fty=uint<16> value=9
+    // CHECK:     IntLitExpr fty=uint<16> value=2
+    // CHECK: LetStmt "c" fty=uint<16>
+    let a = 8;
+    let b = 9 + 2;
+    a = b;
+    let c = b;
+    b = someInput;
+
+    // Should infer through wires.
+    // CHECK: LetStmt "a" fty=uint<42>
+    let a;
+    let b = wire(a);
+    b.set(0u42);
+
+    // Should infer through registers.
+    // CHECK: LetStmt "a" fty=uint<42>
+    let a;
+    let b = reg(0, a);
+    b.next(0u42);
+}

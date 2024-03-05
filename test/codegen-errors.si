@@ -14,14 +14,6 @@ mod BadAssignLHS {
 
 // -----
 
-// CHECK: info: name `UnassignableLHS` defined here
-mod UnassignableLHS {
-    // CHECK: error: expression `UnassignableLHS` cannot be assigned
-    UnassignableLHS = 2u32;
-}
-
-// -----
-
 mod Foo {
     // CHECK: info: previous definition of port `x` was here
     input x: uint<32>;
@@ -49,13 +41,6 @@ mod Foo {
 
 // -----
 
-mod BadIntLiteral {
-    // CHECK: error: integer literal `1337` requires a width
-    1337;
-}
-
-// -----
-
 mod UnknownFunction {
     // CHECK: error: unknown function `foo`
     foo();
@@ -66,32 +51,6 @@ mod UnknownFunction {
 mod UnknownFunction {
     // CHECK: error: unknown function `foo`
     0.foo();
-}
-
-// -----
-
-mod Foo {
-    input a: uint<8>;
-    // CHECK: error: invalid argument: `bit` requires argument 0 to have a maximum value of 7, but got 9 instead
-    a.bit(9);
-}
-
-// -----
-
-mod Foo {
-    input a: uint<8>;
-    // CHECK: info: sliced value is 8 bits wide
-    // CHECK: info: but slice accesses bits 3..10
-    // CHECK: error: slice out of bounds
-    a.slice(3, 7);
-}
-
-// -----
-
-mod Foo {
-    input a: uint<1>;
-    // CHECK: error: mux requires both arguments to have the same type, but got i5 and i6 instead
-    a.mux(0u5, 1u6);
 }
 
 // -----
@@ -108,18 +67,4 @@ mod Foo {
     input a: uint<1>;
     // CHECK: error: invalid receiver: `next` must be called on a register
     a.next(a);
-}
-
-// -----
-
-mod Foo {
-    // CHECK: error: type mismatch: wire is i19 but set value is i42
-    wire(0u19).set(0u42);
-}
-
-// -----
-
-mod Foo {
-    // CHECK: error: type mismatch: register is i19 but next value is i42
-    reg(0u1, 0u19).next(0u42);
 }

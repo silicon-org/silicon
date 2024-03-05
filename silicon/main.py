@@ -9,6 +9,7 @@ from silicon.parser import parse_tokens
 from silicon.source import SourceFile
 from silicon.diagnostics import DiagnosticException
 from silicon.ir import convert_ast_to_ir
+from silicon.ty import typeck
 from sys import exit, stdout
 
 
@@ -32,6 +33,10 @@ def main():
     parser.add_argument("--dump-resolved",
                         action="store_true",
                         help="Dump syntax after name resolution and exit")
+
+    parser.add_argument("--dump-types",
+                        action="store_true",
+                        help="Dump syntax after type checking and exit")
 
     parser.add_argument("--dump-ir",
                         action="store_true",
@@ -88,6 +93,12 @@ def process_input(args: argparse.Namespace, input: SourceFile):
     # Resolve the names in the AST.
     resolve_names(root)
     if args.dump_resolved:
+        print(dump_ast(root))
+        return
+
+    # Infer and check types.
+    typeck(root)
+    if args.dump_types:
         print(dump_ast(root))
         return
 

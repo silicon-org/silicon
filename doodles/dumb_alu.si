@@ -1,0 +1,16 @@
+mod DumbAlu {
+    input clock: uint<1>;
+    input lhs: uint<32>;
+    input rhs: uint<32>;
+    input op: uint<2>;
+
+    let add = reg(clock, lhs + rhs);
+    let sub = reg(clock, lhs - rhs);
+    let shl = reg(clock, concat(lhs.slice(0, 31), 0u1));
+    let shr = reg(clock, concat(0u1, lhs.slice(1, 31)));
+
+    output result: uint<32>;
+    let add_or_sub = op.bit(0).mux(add, sub);
+    let shl_or_shr = op.bit(0).mux(shl, shr);
+    result = op.bit(1).mux(add_or_sub, shl_or_shr);
+}

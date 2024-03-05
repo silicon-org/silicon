@@ -1,0 +1,76 @@
+let in1_data = ...
+let in2_data = ...
+let in3_data = ...
+let in4_data = ...
+
+let x = mux(..., in1_data, in2_data)
+let y = mux(..., in3_data, in4_data)
+let out_data = mux(..., x, y)
+
+let out_result = wire();
+*in1_result = *out_result;
+*in2_result = *out_result;
+*in3_result = *out_result;
+*in4_result = *out_result;
+
+
+fn pick(
+    in1_data: u32,
+    in2_data: u32,
+    in3_data: u32,
+    in4_data: u32,
+    in1_result: &u32,
+    in2_result: &u32,
+    in3_result: &u32,
+    in4_result: &u32,
+) -> (
+    out_data: u32,
+    out_result: &u32,
+) {
+
+}
+
+struct Wire {
+    value: u32;
+}
+
+impl Wire {
+    set() { self.value = ...; }
+    get() { &self.value }
+}
+
+
+struct Arbiter {
+    inputs: [&u32],
+    outp: u32,
+}
+
+
+let arb_module: Arbiter = pick();
+*arb_module.inputs[0] = 42;
+*arb_module.inputs[1] = 512;
+
+let arb2 = pick();
+*arb2.inputs[0] = arb_module.outp;
+
+struct Bus {
+    data: u32,
+    error: &u4,
+}
+
+fn pick2(select: u1, in1: Bus, in2: Bus) -> (out: Bus) {
+    out.data = mux(select, in1.data, in2.data);
+    out.error = wire();
+    *in1.error = *out.error;
+    *in2.error = *out.error;
+}
+
+let p = pick2();
+*p.error = 6;
+
+
+let x: &const u32 = param_N;
+let y: &dyn u32 = input_a;
+
+*x1 = *x2;  *&const u32 = const u32
+*y1 = *y1;  *&dyn u32 = dyn u32

@@ -104,8 +104,9 @@ def parse_stmt(p: Parser) -> ast.Stmt:
     # Parse let bindings.
     if kw := p.consume_if(TokenKind.KW_LET):
         name = p.require(TokenKind.IDENT, "output name")
-        p.require(TokenKind.COLON)
-        ty = parse_type(p)
+        maybeTy = None
+        if colon := p.consume_if(TokenKind.COLON):
+            maybeTy = parse_type(p)
         maybeExpr = None
         if assign := p.consume_if(TokenKind.ASSIGN):
             maybeExpr = parse_expr(p)
@@ -113,7 +114,7 @@ def parse_stmt(p: Parser) -> ast.Stmt:
         return ast.LetStmt(loc=name.loc,
                            full_loc=loc | p.last_loc,
                            name=name,
-                           ty=ty,
+                           ty=maybeTy,
                            expr=maybeExpr)
 
     # Otherwise this is a statement that starts with an expression.
@@ -172,12 +173,15 @@ def parse_infix_expr(
     if op := ast.BINARY_OPS.get(p.tokens[0].kind):
         prec = ast.BINARY_PRECEDENCE[op]
         if prec > min_prec:
-            p.consume()
+            op_loc = p.consume().loc
             rhs = parse_expr(p, prec)
-            return ast.BinaryExpr(loc=lhs.loc | rhs.loc,
-                                  op=op,
-                                  lhs=lhs,
-                                  rhs=rhs)
+            return ast.BinaryExpr(
+                loc=op_loc,
+                full_loc=lhs.loc | rhs.loc,
+                op=op,
+                lhs=lhs,
+                rhs=rhs,
+            )
 
     return None
 
@@ -187,9 +191,14 @@ def parse_prefix_expr(p: Parser) -> ast.Expr:
 
     # Parse unary operators.
     if op := ast.UNARY_OPS.get(p.tokens[0].kind):
-        p.consume()
+        op_loc = p.consume().loc
         arg = parse_prefix_expr(p)
-        return ast.UnaryExpr(loc=loc | arg.loc, op=op, arg=arg)
+        return ast.UnaryExpr(
+            loc=op_loc,
+            full_loc=loc | arg.loc,
+            op=op,
+            arg=arg,
+        )
 
     # Otherwise parse a primary expression and optional suffix expressions.
     expr = parse_primary_expr(p)
@@ -209,10 +218,13 @@ def parse_suffix_expr(p: Parser, expr: ast.Expr) -> Optional[ast.Expr]:
             if not p.consume_if(TokenKind.COMMA):
                 break
         p.require(TokenKind.RPAREN)
-        return ast.FieldCallExpr(loc=expr.loc | p.last_loc,
-                                 target=expr,
-                                 name=name,
-                                 args=args)
+        return ast.FieldCallExpr(
+            loc=name.loc,
+            full_loc=expr.loc | p.last_loc,
+            target=expr,
+            name=name,
+            args=args,
+        )
 
     return None
 
@@ -227,6 +239,7 @@ def parse_primary_expr(p: Parser) -> ast.Expr:
                 f"expected number literal of the form `<V>` or `<V>u<N>`")
         return ast.IntLitExpr(
             loc=lit.loc,
+            full_loc=lit.loc,
             value=int(m[1]),
             width=int(m[3]) if m[2] else None,
         )
@@ -240,8 +253,13 @@ def parse_primary_expr(p: Parser) -> ast.Expr:
                 if not p.consume_if(TokenKind.COMMA):
                     break
             p.require(TokenKind.RPAREN)
-            return ast.CallExpr(loc=token.loc, name=token, args=args)
+            return ast.CallExpr(
+                loc=token.loc,
+                full_loc=token.loc | p.last_loc,
+                name=token,
+                args=args,
+            )
 
-        return ast.IdentExpr(loc=token.loc, name=token)
+        return ast.IdentExpr(loc=token.loc, full_loc=token.loc, name=token)
 
     emit_error(p.loc(), f"expected expression, found {p.tokens[0].kind.name}")

@@ -1,0 +1,111 @@
+// RUN: ! silc %s --dump-types --split-input-file 2>&1 | FileCheck %s
+
+// CHECK: info: name `UnassignableLHS` defined here
+mod UnassignableLHS {
+    // CHECK: error: `UnassignableLHS` has no known type
+    UnassignableLHS = 2u32;
+}
+
+// -----
+
+mod Foo {
+    input a: uint<8>;
+    // CHECK: info: the bit index `9` is outside the type `uint<8>` whose bit range is `0..8`
+    // CHECK: error: bit index out of bounds for `uint<8>`
+    a.bit(9);
+}
+
+// -----
+
+mod Foo {
+    input a: uint<8>;
+    // CHECK: info: the slice `3..10` is outside the type `uint<8>` whose bit range is `0..8`
+    // CHECK: error: slice out of bounds for `uint<8>`
+    a.slice(3, 7);
+}
+
+// -----
+
+mod Foo {
+    input a: uint<1>;
+    // CHECK: error: incompatible types: `uint<5>` and `uint<6>`
+    a.mux(0u5, 1u6);
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: incompatible types: `uint<19>` and `uint<42>`
+    wire(0u19).set(0u42);
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: incompatible types: `uint<19>` and `uint<42>`
+    reg(0u1, 0u19).next(0u42);
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: cannot negate `
+    let a;
+    -a;
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: cannot invert `
+    let a;
+    !a;
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: cannot add `
+    let a;
+    a + a;
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: cannot subtract `
+    let a;
+    a - a;
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: cannot concatenate `
+    let a;
+    concat(a);
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: cannot access bits in `
+    let a;
+    a.bit(0);
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: cannot slice `
+    let a;
+    a.slice(0, 1);
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: incompatible types: `uint<1>` and `uint<2>
+    let a: uint<2>;
+    a.mux(42, 43);
+}

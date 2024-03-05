@@ -1,8 +1,13 @@
 from __future__ import annotations
-from typing import *
+
+from typing import Dict, List, Optional
 from dataclasses import dataclass, field
+
 from silicon import ast
 from silicon.diagnostics import *
+from silicon.source import Loc
+from silicon.ty import Type, UIntType
+
 import circt
 from circt.ir import Context, InsertionPoint, IntegerType, Location, Module
 from circt.ir import Type as IRType, Value as IRValue, Operation as IROperation
@@ -58,9 +63,11 @@ def codegen_mod(mod: ast.ModItem):
     # Create the module and entry block.
     hwmod = hw.HWModuleOp(
         name=mod.name.spelling(),
-        input_ports=[(stmt.name.spelling(), codegen_type(stmt.ty, cx))
+        input_ports=[(stmt.name.spelling(),
+                      codegen_type(stmt.fty, cx, stmt.loc))
                      for stmt in input_stmts],
-        output_ports=[(stmt.name.spelling(), codegen_type(stmt.ty, cx))
+        output_ports=[(stmt.name.spelling(),
+                       codegen_type(stmt.fty, cx, stmt.loc))
                       for stmt in output_stmts],
     )
     block = hwmod.add_entry_block()
@@ -89,11 +96,13 @@ def codegen_mod(mod: ast.ModItem):
         hw.OutputOp(output_values)
 
 
-def codegen_type(ty: ast.AstType, cx: CodegenContext) -> IRType:
-    if isinstance(ty, ast.UIntType):
-        return IntegerType.get_signless(ty.size)
+def codegen_type(ty: Optional[Type], cx: CodegenContext, loc: Loc) -> IRType:
+    assert ty is not None, "type checking should have assigned types"
 
-    emit_error(ty.loc, f"type `{ty.loc.spelling()}` not supported for codegen")
+    if isinstance(ty, UIntType):
+        return IntegerType.get_signless(ty.width)
+
+    emit_error(loc, f"type `{ty}` not supported for codegen")
 
 
 def codegen_stmt(stmt: ast.Stmt, cx: CodegenContext) -> IRValue:
@@ -138,11 +147,8 @@ def codegen_stmt(stmt: ast.Stmt, cx: CodegenContext) -> IRValue:
 
 def codegen_expr(expr: ast.Expr, cx: CodegenContext) -> IRValue:
     if isinstance(expr, ast.IntLitExpr):
-        if expr.width is None:
-            emit_error(
-                expr.loc,
-                f"integer literal `{expr.loc.spelling()}` requires a width")
-        return hw.ConstantOp.create(IntegerType.get_signless(expr.width),
+        assert isinstance(expr.fty, UIntType)
+        return hw.ConstantOp.create(IntegerType.get_signless(expr.fty.width),
                                     expr.value).result
 
     if isinstance(expr, ast.IdentExpr):
@@ -189,37 +195,13 @@ def codegen_expr(expr: ast.Expr, cx: CodegenContext) -> IRValue:
 
 
 def require_num_args(expr, num: int):
-    if len(expr.args) == num: return
-    name = expr.name.spelling()
-    emit_error(
-        expr.loc,
-        f"argument mismatch: `{name}` takes {num} arguments, but got {len(expr.args)} instead"
-    )
+    if len(expr.args) != num:
+        emit_error(expr.loc, "typeck should have checked arg count")
 
 
-def require_int_lit(
-    expr,
-    idx: int,
-    min: int | None = None,
-    max: int | None = None,
-) -> int:
-    name = expr.name.spelling()
-    arg = expr.args[idx]
+def require_int_lit(arg: ast.Expr) -> int:
     if not isinstance(arg, ast.IntLitExpr):
-        emit_error(
-            arg.loc,
-            f"invalid argument: `{name}` requires argument {idx} be an integer literal"
-        )
-    if min is not None and arg.value < min:
-        emit_error(
-            arg.loc,
-            f"invalid argument: `{name}` requires argument {idx} to have a minimum value of {min}, but got {arg.value} instead"
-        )
-    if max is not None and arg.value > max:
-        emit_error(
-            arg.loc,
-            f"invalid argument: `{name}` requires argument {idx} to have a maximum value of {max}, but got {arg.value} instead"
-        )
+        emit_error(arg.loc, "typeck should have checked arg is int literal")
     return arg.value
 
 
@@ -257,42 +239,22 @@ def codegen_field_call_expr(
     if name == "bit":
         require_num_args(expr, 1)
         arg = codegen_expr(expr.target, cx)
-        offset = require_int_lit(expr,
-                                 0,
-                                 min=0,
-                                 max=IntegerType(arg.type).width - 1)
+        offset = require_int_lit(expr.args[0])
         return comb.ExtractOp(IntegerType.get_signless(1), arg, offset).result
 
     if name == "slice":
         require_num_args(expr, 2)
-        offset = require_int_lit(expr, 0, min=0)
-        width = require_int_lit(expr, 1, min=0)
+        offset = require_int_lit(expr.args[0])
+        width = require_int_lit(expr.args[1])
         arg = codegen_expr(expr.target, cx)
-        arg_width = IntegerType(arg.type).width
-        if offset + width > arg_width:
-            emit_info(expr.target.loc,
-                      f"sliced value is {arg_width} bits wide")
-            emit_info(expr.args[0].loc | expr.args[1].loc,
-                      f"but slice accesses bits {offset}..{offset+width}")
-            emit_error(expr.loc, f"slice out of bounds")
         return comb.ExtractOp(IntegerType.get_signless(width), arg,
                               offset).result
 
     if name == "mux":
         require_num_args(expr, 2)
         target = codegen_expr(expr.target, cx)
-        if target.type != IntegerType.get_signless(1):
-            emit_error(expr.target.loc,
-                       "mux requires select signal to be a single bit")
-
         lhs = codegen_expr(expr.args[0], cx)
         rhs = codegen_expr(expr.args[1], cx)
-        if lhs.type != rhs.type:
-            emit_error(
-                expr.args[0].loc | expr.args[1].loc,
-                f"mux requires both arguments to have the same type, but got {lhs.type} and {rhs.type} instead"
-            )
-
         return comb.MuxOp(target, lhs, rhs).result
 
     if name == "set":
@@ -304,11 +266,6 @@ def codegen_field_call_expr(
                        "invalid receiver: `set` must be called on a wire")
 
         arg = codegen_expr(expr.args[0], cx)
-        if target.type != arg.type:
-            emit_error(
-                expr.name.loc,
-                f"type mismatch: wire is {target.type} but set value is {arg.type}"
-            )
 
         # Update the input operand of the wire.
         target.owner.operands[0] = arg
@@ -324,11 +281,6 @@ def codegen_field_call_expr(
                 "invalid receiver: `next` must be called on a register")
 
         arg = codegen_expr(expr.args[0], cx)
-        if target.type != arg.type:
-            emit_error(
-                expr.name.loc,
-                f"type mismatch: register is {target.type} but next value is {arg.type}"
-            )
 
         # Update the input operand of the register.
         target.owner.operands[0] = arg
