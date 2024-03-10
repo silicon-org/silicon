@@ -151,6 +151,20 @@ def parse_type(p: Parser) -> ast.AstType:
                                 size=size_value,
                                 size_loc=size.loc)
 
+        if name == "Wire":
+            token = p.consume()
+            p.require(TokenKind.LT)
+            inner = parse_type(p)
+            p.require(TokenKind.GT)
+            return ast.WireType(loc=loc | p.last_loc, inner=inner)
+
+        if name == "Reg":
+            token = p.consume()
+            p.require(TokenKind.LT)
+            inner = parse_type(p)
+            p.require(TokenKind.GT)
+            return ast.RegType(loc=loc | p.last_loc, inner=inner)
+
     emit_error(p.loc(), f"expected type, found {p.tokens[0].kind.name}")
 
 

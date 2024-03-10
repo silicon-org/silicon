@@ -43,6 +43,22 @@ class UIntType(Type):
 
 
 @dataclass
+class WireType(Type):
+    inner: Type
+
+    def __str__(self) -> str:
+        return f"Wire<{self.inner}>"
+
+
+@dataclass
+class RegType(Type):
+    inner: Type
+
+    def __str__(self) -> str:
+        return f"Reg<{self.inner}>"
+
+
+@dataclass
 class InferrableType(Type):
     # A unique integer identifier.
     num: int = field(default_factory=count().__next__)
@@ -123,6 +139,10 @@ class Typeck:
     def convert_ast_type(self, ty: ast.AstType) -> Type:
         if isinstance(ty, ast.UIntType):
             return UIntType(ty.size)
+        if isinstance(ty, ast.WireType):
+            return WireType(self.convert_ast_type(ty.inner))
+        if isinstance(ty, ast.RegType):
+            return RegType(self.convert_ast_type(ty.inner))
         emit_error(ty.loc, f"unsupported type: `{ty.loc.spelling()}`")
 
     def typeck_mod(self, mod: ast.ModItem):
@@ -238,7 +258,7 @@ class Typeck:
 
         if name == "wire":
             require_num_args(expr, 1)
-            return self.typeck_expr(expr.args[0])
+            return WireType(self.typeck_expr(expr.args[0]))
 
         if name == "reg":
             require_num_args(expr, 2)
@@ -247,7 +267,7 @@ class Typeck:
                              clock,
                              expr.loc,
                              rhs_loc=expr.args[0].full_loc)
-            return self.typeck_expr(expr.args[1])
+            return RegType(self.typeck_expr(expr.args[1]))
 
         emit_error(expr.name.loc, f"unknown function `{name}`")
 
@@ -308,26 +328,54 @@ class Typeck:
         if name == "set":
             require_num_args(expr, 1)
             target = self.typeck_expr(expr.target)
-            # TODO: Check that target is a wire type.
-            arg = self.typeck_expr(expr.args[0])
+            inner = InferrableType()
             self.unify_types(target,
+                             WireType(inner),
+                             expr.loc,
+                             lhs_loc=expr.target.full_loc)
+            arg = self.typeck_expr(expr.args[0])
+            self.unify_types(inner,
                              arg,
                              expr.loc,
                              lhs_loc=expr.target.full_loc,
                              rhs_loc=expr.args[0].full_loc)
             return target
 
+        if name == "get":
+            require_num_args(expr, 0)
+            target = self.typeck_expr(expr.target)
+            inner = InferrableType()
+            self.unify_types(target,
+                             WireType(inner),
+                             expr.loc,
+                             lhs_loc=expr.target.full_loc)
+            return inner
+
         if name == "next":
             require_num_args(expr, 1)
             target = self.typeck_expr(expr.target)
-            # TODO: Check that target is a register type.
-            arg = self.typeck_expr(expr.args[0])
+            inner = InferrableType()
             self.unify_types(target,
+                             RegType(inner),
+                             expr.loc,
+                             lhs_loc=expr.target.full_loc)
+            arg = self.typeck_expr(expr.args[0])
+            self.unify_types(inner,
                              arg,
                              expr.loc,
                              lhs_loc=expr.target.full_loc,
                              rhs_loc=expr.args[0].full_loc)
             return target
+
+        if name == "current":
+            require_num_args(expr, 0)
+            target = self.typeck_expr(expr.target)
+            inner = InferrableType()
+            self.unify_types(target,
+                             RegType(inner),
+                             expr.loc,
+                             lhs_loc=expr.target.full_loc)
+            return inner
 
         emit_error(expr.name.loc, f"unknown function `{name}`")
 
@@ -364,6 +412,16 @@ class Typeck:
         lhs = self.simplify_type(lhs)
         rhs = self.simplify_type(rhs)
         if lhs == rhs:
+            return
+
+        # unify(Wire<?A>, Wire<?B>) -> Wire<unify(?A, ?B)>
+        if isinstance(lhs, WireType) and isinstance(rhs, WireType):
+            self.unify_types(lhs.inner, rhs.inner, loc, lhs_loc, rhs_loc)
+            return
+
+        # unify(Reg<?A>, Reg<?B>) -> Reg<unify(?A, ?B)>
+        if isinstance(lhs, RegType) and isinstance(rhs, RegType):
+            self.unify_types(lhs.inner, rhs.inner, loc, lhs_loc, rhs_loc)
             return
 
         # unify(uint<?A>, uint<?B>) -> uint<?A>

@@ -7,6 +7,18 @@
 mod Foo {}
 mod Bar {}
 
+// CHECK-LABEL: ModItem "Types"
+mod Types {
+    // CHECK: UIntType size=32
+    let t0: uint<32>;
+    // CHECK: WireType
+    // CHECK:   inner: UIntType size=33
+    let t1: Wire<uint<33>>;
+    // CHECK: RegType
+    // CHECK:   inner: UIntType size=34
+    let t2: Reg<uint<34>>;
+}
+
 // CHECK-LABEL: ModItem "Statements"
 mod Statements {
     // CHECK: InputStmt "a"

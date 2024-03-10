@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from silicon import ast
 from silicon.diagnostics import *
 from silicon.source import Loc
-from silicon.ty import Type, UIntType
+from silicon.ty import Type, UIntType, WireType, RegType
 
 import circt
 from circt.ir import Context, InsertionPoint, IntegerType, Location, Module
@@ -101,6 +101,8 @@ def codegen_type(ty: Optional[Type], cx: CodegenContext, loc: Loc) -> IRType:
 
     if isinstance(ty, UIntType):
         return IntegerType.get_signless(ty.width)
+    if isinstance(ty, WireType) or isinstance(ty, RegType):
+        return codegen_type(ty.inner, cx, loc)
 
     emit_error(loc, f"type `{ty}` not supported for codegen")
 
@@ -216,12 +218,10 @@ def codegen_call_expr(
         return comb.ConcatOp(args).result
 
     if name == "wire":
-        require_num_args(expr, 1)
         init = codegen_expr(expr.args[0], cx)
         return hw.WireOp(init).result
 
     if name == "reg":
-        require_num_args(expr, 2)
         clock = codegen_expr(expr.args[0], cx)
         init = codegen_expr(expr.args[1], cx)
         return seq.CompRegOp(init.type, init,
@@ -237,13 +237,11 @@ def codegen_field_call_expr(
     name = expr.name.spelling()
 
     if name == "bit":
-        require_num_args(expr, 1)
         arg = codegen_expr(expr.target, cx)
         offset = require_int_lit(expr.args[0])
         return comb.ExtractOp(IntegerType.get_signless(1), arg, offset).result
 
     if name == "slice":
-        require_num_args(expr, 2)
         offset = require_int_lit(expr.args[0])
         width = require_int_lit(expr.args[1])
         arg = codegen_expr(expr.target, cx)
@@ -251,39 +249,29 @@ def codegen_field_call_expr(
                               offset).result
 
     if name == "mux":
-        require_num_args(expr, 2)
         target = codegen_expr(expr.target, cx)
         lhs = codegen_expr(expr.args[0], cx)
         rhs = codegen_expr(expr.args[1], cx)
         return comb.MuxOp(target, lhs, rhs).result
 
     if name == "set":
-        require_num_args(expr, 1)
         target = codegen_expr(expr.target, cx)
-        if not isinstance(target.owner,
-                          IROperation) or target.owner.name != "hw.wire":
-            emit_error(expr.target.loc,
-                       "invalid receiver: `set` must be called on a wire")
-
         arg = codegen_expr(expr.args[0], cx)
-
         # Update the input operand of the wire.
         target.owner.operands[0] = arg
         return target
 
+    if name == "get":
+        return codegen_expr(expr.target, cx)
+
     if name == "next":
-        require_num_args(expr, 1)
         target = codegen_expr(expr.target, cx)
-        if not isinstance(target.owner,
-                          IROperation) or target.owner.name != "seq.compreg":
-            emit_error(
-                expr.target.loc,
-                "invalid receiver: `next` must be called on a register")
-
         arg = codegen_expr(expr.args[0], cx)
-
         # Update the input operand of the register.
         target.owner.operands[0] = arg
         return target
+
+    if name == "current":
+        return codegen_expr(expr.target, cx)
 
     emit_error(expr.name.loc, f"unknown function `{name}`")

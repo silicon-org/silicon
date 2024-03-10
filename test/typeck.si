@@ -78,13 +78,17 @@ mod Foo {
 
     // Should infer through wires.
     // CHECK: LetStmt "a" fty=uint<42>
+    // CHECK: LetStmt "c" fty=uint<42>
     let a;
     let b = wire(a);
+    let c = b.get();
     b.set(0u42);
 
     // Should infer through registers.
     // CHECK: LetStmt "a" fty=uint<42>
+    // CHECK: LetStmt "c" fty=uint<42>
     let a;
     let b = reg(0, a);
+    let c = b.current();
     b.next(0u42);
 }

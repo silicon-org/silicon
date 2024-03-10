@@ -148,6 +148,16 @@ class UIntType(AstType):
     size_loc: Loc
 
 
+@dataclass
+class WireType(AstType):
+    inner: AstType
+
+
+@dataclass
+class RegType(AstType):
+    inner: AstType
+
+
 #===------------------------------------------------------------------------===#
 # Expressions
 #===------------------------------------------------------------------------===#

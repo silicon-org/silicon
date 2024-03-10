@@ -57,7 +57,7 @@ mod UnknownFunction {
 
 mod Foo {
     input a: uint<1>;
-    // CHECK: error: invalid receiver: `set` must be called on a wire
+    // CHECK: error: incompatible types: `uint<1>` and `Wire<{{.+}}>`
     a.set(a);
 }
 
@@ -65,6 +65,6 @@ mod Foo {
 
 mod Foo {
     input a: uint<1>;
-    // CHECK: error: invalid receiver: `next` must be called on a register
+    // CHECK: error: incompatible types: `uint<1>` and `Reg<{{.+}}>`
     a.next(a);
 }
