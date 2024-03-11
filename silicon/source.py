@@ -37,3 +37,7 @@ class Loc:
         offset = min(self.offset, other.offset)
         end = max(self.offset + self.length, other.offset + other.length)
         return Loc(file=self.file, offset=offset, length=end - offset)
+
+    @staticmethod
+    def unknown() -> Loc:
+        return Loc(SourceFile("unknown", ""), 0, 0)

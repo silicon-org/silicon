@@ -14,7 +14,7 @@ class WalkOrder(Enum):
     PostOrder = auto()
 
 
-@dataclass
+@dataclass(eq=False)
 class AstNode:
     loc: Loc
 
@@ -53,14 +53,14 @@ def walk_nodes(value) -> Generator[AstNode, None, None]:
             yield from walk_nodes(v)
 
 
-@dataclass
+@dataclass(eq=False)
 class Root(AstNode):
     items: List[Item]
 
 
 # A binding from something like an identifier expression to the the declaration
 # of that name.
-@dataclass
+@dataclass(eq=False)
 class Binding:
     target: Optional[AstNode] = None
 
@@ -76,12 +76,12 @@ class Binding:
 #===------------------------------------------------------------------------===#
 
 
-@dataclass
+@dataclass(eq=False)
 class Item(AstNode):
     pass
 
 
-@dataclass
+@dataclass(eq=False)
 class ModItem(Item):
     full_loc: Loc
     name: Token
@@ -93,19 +93,19 @@ class ModItem(Item):
 #===------------------------------------------------------------------------===#
 
 
-@dataclass
+@dataclass(eq=False)
 class Stmt(AstNode):
     full_loc: Loc
 
 
-@dataclass
+@dataclass(eq=False)
 class InputStmt(Stmt):
     name: Token
     ty: AstType
     fty: Optional[Type] = None
 
 
-@dataclass
+@dataclass(eq=False)
 class OutputStmt(Stmt):
     name: Token
     ty: AstType
@@ -113,7 +113,7 @@ class OutputStmt(Stmt):
     fty: Optional[Type] = None
 
 
-@dataclass
+@dataclass(eq=False)
 class LetStmt(Stmt):
     name: Token
     ty: Optional[AstType]
@@ -121,12 +121,12 @@ class LetStmt(Stmt):
     fty: Optional[Type] = None
 
 
-@dataclass
+@dataclass(eq=False)
 class ExprStmt(Stmt):
     expr: Expr
 
 
-@dataclass
+@dataclass(eq=False)
 class AssignStmt(Stmt):
     lhs: Expr
     rhs: Expr
@@ -137,23 +137,23 @@ class AssignStmt(Stmt):
 #===------------------------------------------------------------------------===#
 
 
-@dataclass
+@dataclass(eq=False)
 class AstType(AstNode):
     pass
 
 
-@dataclass
+@dataclass(eq=False)
 class UIntType(AstType):
     size: int
     size_loc: Loc
 
 
-@dataclass
+@dataclass(eq=False)
 class WireType(AstType):
     inner: AstType
 
 
-@dataclass
+@dataclass(eq=False)
 class RegType(AstType):
     inner: AstType
 
@@ -163,25 +163,25 @@ class RegType(AstType):
 #===------------------------------------------------------------------------===#
 
 
-@dataclass(kw_only=True)
+@dataclass(eq=False, kw_only=True)
 class Expr(AstNode):
     full_loc: Loc
     fty: Type | None = None
 
 
-@dataclass
+@dataclass(eq=False)
 class IdentExpr(Expr):
     name: Token
     binding: Binding = field(default_factory=Binding)
 
 
-@dataclass
+@dataclass(eq=False)
 class IntLitExpr(Expr):
     value: int
     width: Optional[int]
 
 
-@dataclass
+@dataclass(eq=False)
 class UnaryExpr(Expr):
     op: UnaryOp
     arg: Expr
@@ -198,7 +198,7 @@ UNARY_OPS: Dict[TokenKind, UnaryOp] = {
 }
 
 
-@dataclass
+@dataclass(eq=False)
 class BinaryExpr(Expr):
     op: BinaryOp
     lhs: Expr
@@ -236,13 +236,13 @@ BINARY_PRECEDENCE: Dict[BinaryOp, Precedence] = {
 }
 
 
-@dataclass
+@dataclass(eq=False)
 class CallExpr(Expr):
     name: Token
     args: List[Expr]
 
 
-@dataclass
+@dataclass(eq=False)
 class FieldCallExpr(Expr):
     target: Expr
     name: Token

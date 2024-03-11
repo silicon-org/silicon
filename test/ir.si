@@ -1,8 +1,59 @@
 // RUN: silc %s --dump-ir | FileCheck %s
 
-mod Foo {
-    // CHECK: [[TMP1:%.+]] = si.constant 1 : i4
-    // CHECK: [[TMP2:%.+]] = si.constant 2 : i4
-    // CHECK: si.add [[TMP1]], [[TMP2]] : i4
-    1u4 + 2u4;
+// CHECK-LABEL: si.module @Foo
+mod Foo {}
+// CHECK-LABEL: si.module @Bar
+mod Bar {}
+
+// CHECK-LABEL: si.module @Statements
+mod Statements {
+    // CHECK: [[A:%.+]] = si.input_decl "a" : i42
+    input a: uint<42>;
+    // CHECK: [[B:%.+]] = si.output_decl "b" : i42
+    output b: uint<42>;
+    // CHECK: [[C:%.+]] = si.output_decl "c" : i42
+    // CHECK: si.assign [[C]], [[A]] : i42
+    output c: uint<42> = a;
+    // CHECK: [[U:%.+]] = si.var_decl "u" : i42
+    let u: uint<42>;
+    // CHECK: [[V:%.+]] = si.var_decl "v" : i42
+    // CHECK: si.assign [[V]], [[A]] : i42
+    let v: uint<42> = a;
+    // CHECK: si.assign [[B]], [[A]] : i42
+    b = a;
+    // CHECK: si.assign [[U]], [[A]] : i42
+    u = a;
+}
+
+// CHECK-LABEL: si.module @Expressions
+mod Expressions {
+    // CHECK: [[A:%.+]] = si.var_decl "a" : i19
+    // CHECK: [[B:%.+]] = si.var_decl "b" : i19
+    // CHECK: [[C:%.+]] = si.var_decl "c" : i1
+    let a: uint<19>;
+    let b: uint<19>;
+    let c: uint<1>;
+
+    // CHECK: si.constant 9001 : i42
+    9001u42;
+
+    // CHECK: si.neg [[A]] : i19
+    -a;
+    // CHECK: si.not [[A]] : i19
+    !a;
+
+    // CHECK: si.add [[A]], [[B]] : i19
+    a + b;
+    // CHECK: si.sub [[A]], [[B]] : i19
+    a - b;
+
+    // CHECK: si.concat [[A]], [[B]], [[C]] : (i19, i19, i1) -> i39
+    concat(a, b, c);
+
+    // CHECK: si.extract [[A]], #builtin.int<5> : i19 -> i1
+    a.bit(5);
+    // CHECK: si.extract [[A]], #builtin.int<9> : i19 -> i4
+    a.slice(9, 4);
+    // CHECK: si.mux [[C]], [[A]], [[B]] : i19
+    c.mux(a, b);
 }
