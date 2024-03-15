@@ -57,3 +57,76 @@ mod Expressions {
     // CHECK: si.mux [[C]], [[A]], [[B]] : i19
     c.mux(a, b);
 }
+
+// CHECK-LABEL: si.module @LetUpdates
+mod LetUpdates {
+    // CHECK: [[A:%.+]] = si.input_decl "a"
+    // CHECK: [[B:%.+]] = si.input_decl "b"
+    // CHECK: [[C:%.+]] = si.input_decl "c"
+    input a: uint<3>;
+    input b: uint<3>;
+    input c: uint<3>;
+
+    // CHECK: [[X:%.+]] = si.var_decl "x"
+    // CHECK: [[CONST:%.+]] = si.constant 0 : i3
+    // CHECK: si.assign [[X]], [[CONST]]
+    // CHECK: [[TMP:%.+]] = si.add [[X]], [[A]]
+    // CHECK: si.assign [[X]], [[TMP]]
+    // CHECK: [[TMP:%.+]] = si.add [[X]], [[B]]
+    // CHECK: si.assign [[X]], [[TMP]]
+    // CHECK: [[TMP:%.+]] = si.add [[X]], [[C]]
+    // CHECK: si.assign [[X]], [[TMP]]
+    let x: uint<3> = 0u3;
+    x = x + a;
+    x = x + b;
+    x = x + c;
+
+    // CHECK: [[Y0:%.+]] = si.var_decl "y"
+    // CHECK: [[CONST:%.+]] = si.constant 1 : i3
+    // CHECK: si.assign [[Y0]], [[CONST]]
+    // CHECK: [[Y1:%.+]] = si.var_decl "y"
+    // CHECK: [[TMP:%.+]] = si.add [[Y0]], [[A]]
+    // CHECK: si.assign [[Y1]], [[TMP]]
+    // CHECK: [[Y2:%.+]] = si.var_decl "y"
+    // CHECK: [[TMP:%.+]] = si.add [[Y1]], [[B]]
+    // CHECK: si.assign [[Y2]], [[TMP]]
+    // CHECK: [[Y3:%.+]] = si.var_decl "y"
+    // CHECK: [[TMP:%.+]] = si.add [[Y2]], [[C]]
+    // CHECK: si.assign [[Y3]], [[TMP]]
+    let y: uint<3> = 1u3;
+    let y: uint<3> = y + a;
+    let y: uint<3> = y + b;
+    let y: uint<3> = y + c;
+}
+
+// CHECK-LABEL: si.module @WiresAndRegisters
+mod WiresAndRegisters {
+    // CHECK: [[CLOCK:%.+]] = si.input_decl "clock" : i1
+    input clock: uint<1>;
+
+    // CHECK: [[X:%.+]] = si.var_decl "x" : !si.wire<i42>
+    // CHECK: [[WIRE:%.+]] = si.wire : !si.wire<i42>
+    // CHECK: [[TMP:%.+]] = si.constant 0 : i42
+    // CHECK: si.wire_set [[WIRE]], [[TMP]] : !si.wire<i42>
+    // CHECK: si.assign [[X]], [[WIRE]] : !si.wire<i42>
+    let x: Wire<uint<42>> = wire(0u42);
+
+    // CHECK: [[Y:%.+]] = si.var_decl "y" : !si.reg<i42>
+    // CHECK: [[REG:%.+]] = si.reg [[CLOCK]] : !si.reg<i42>
+    // CHECK: [[TMP:%.+]] = si.constant 0 : i42
+    // CHECK: si.reg_next [[REG]], [[TMP]] : !si.reg<i42>
+    // CHECK: si.assign [[Y]], [[REG]] : !si.reg<i42>
+    let y: Reg<uint<42>> = reg(clock, 0u42);
+
+    // CHECK: si.reg_current [[Y]] : !si.reg<i42>
+    y.current();
+
+    // CHECK: [[TMP:%.+]] = si.wire_get [[X]] : !si.wire<i42>
+    // CHECK: si.reg_next [[Y]], [[TMP]] : !si.reg<i42>
+    y.next(x.get());
+
+    // CHECK: [[TMP:%.+]] = si.constant 1337 : i42
+    // CHECK: si.wire_set [[X]], [[TMP]] : !si.wire<i42>
+    x.set(1337u42);
+}
+

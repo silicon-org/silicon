@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from typing import Annotated, Dict, TypeVar, List
+from typing import Annotated, Dict, TypeVar, List, Generic
 from dataclasses import dataclass
 
 from silicon import ast
 from silicon.diagnostics import *
 from silicon.source import Loc, SourceFile
-from silicon.ty import Type, UIntType
+from silicon.ty import (
+    Type,
+    UIntType,
+    WireType as TyWireType,
+    RegType as TyRegType,
+)
 
 import xdsl
 from xdsl.builder import Builder
@@ -18,11 +23,13 @@ from xdsl.dialects.builtin import (
     StringAttr,
 )
 from xdsl.ir import (
+    Attribute,
+    Block,
     Dialect,
     OpResult,
     Operation,
+    ParametrizedAttribute,
     Region,
-    Block,
     SSAValue,
     TypeAttribute,
 )
@@ -31,12 +38,14 @@ from xdsl.irdl import (
     IRDLOperation,
     Operand,
     ParamAttrConstraint,
+    ParameterDef,
     VarOperand,
     attr_def,
-    region_def,
-    prop_def,
+    irdl_attr_definition,
     irdl_op_definition,
     operand_def,
+    prop_def,
+    region_def,
     result_def,
     var_operand_def,
 )
@@ -60,6 +69,32 @@ def get_loc(value: SSAValue) -> Loc:
         assert isinstance(value.owner.loc, Loc)
         return value.owner.loc
     return Loc.unknown()
+
+
+#===------------------------------------------------------------------------===#
+# Types
+#===------------------------------------------------------------------------===#
+
+_WireInnerT = TypeVar("_WireInnerT", bound=Attribute)
+_RegInnerT = TypeVar("_RegInnerT", bound=Attribute)
+
+
+@irdl_attr_definition
+class WireType(Generic[_WireInnerT], ParametrizedAttribute, TypeAttribute):
+    name = "si.wire"
+    inner: ParameterDef[_WireInnerT]
+
+    def __init__(self, inner: _WireInnerT):
+        super().__init__([inner])
+
+
+@irdl_attr_definition
+class RegType(Generic[_RegInnerT], ParametrizedAttribute, TypeAttribute):
+    name = "si.reg"
+    inner: ParameterDef[_RegInnerT]
+
+    def __init__(self, inner: _RegInnerT):
+        super().__init__([inner])
 
 
 #===------------------------------------------------------------------------===#
@@ -153,6 +188,83 @@ class AssignOp(IRDLOperation):
 
     def __init__(self, dst: SSAValue, src: SSAValue, loc: Loc):
         super().__init__(operands=[dst, src])
+        self.loc = loc
+
+
+@irdl_op_definition
+class WireOp(IRDLOperation):
+    name = "si.wire"
+    result: OpResult = result_def()
+    assembly_format = "`:` type($result) attr-dict"
+
+    def __init__(self, ty: TypeAttribute, loc: Loc):
+        super().__init__(result_types=[WireType(ty)])
+        self.loc = loc
+
+
+@irdl_op_definition
+class RegOp(IRDLOperation):
+    name = "si.reg"
+    clock: Operand = operand_def(IntegerType(1))
+    result: OpResult = result_def()
+    assembly_format = "$clock `:` type($result) attr-dict"
+
+    def __init__(self, ty: TypeAttribute, clock: SSAValue, loc: Loc):
+        super().__init__(result_types=[RegType(ty)], operands=[clock])
+        self.loc = loc
+
+
+@irdl_op_definition
+class WireSetOp(IRDLOperation):
+    name = "si.wire_set"
+    T = Annotated[TypeAttribute, ConstraintVar("T")]
+    wire: Operand = operand_def(WireType[T])
+    value: Operand = operand_def(T)
+    assembly_format = "$wire `,` $value `:` type($wire) attr-dict"
+
+    def __init__(self, wire: SSAValue, value: SSAValue, loc: Loc):
+        super().__init__(operands=[wire, value])
+        self.loc = loc
+
+
+@irdl_op_definition
+class WireGetOp(IRDLOperation):
+    name = "si.wire_get"
+    T = Annotated[TypeAttribute, ConstraintVar("T")]
+    wire: Operand = operand_def(WireType[T])
+    result: OpResult = result_def(T)
+    assembly_format = "$wire `:` type($wire) attr-dict"
+
+    def __init__(self, wire: SSAValue, loc: Loc):
+        assert isinstance(wire.type, WireType)
+        super().__init__(result_types=[wire.type.inner], operands=[wire])
+        self.loc = loc
+
+
+@irdl_op_definition
+class RegNextOp(IRDLOperation):
+    name = "si.reg_next"
+    T = Annotated[TypeAttribute, ConstraintVar("T")]
+    reg: Operand = operand_def(RegType[T])
+    value: Operand = operand_def(T)
+    assembly_format = "$reg `,` $value `:` type($reg) attr-dict"
+
+    def __init__(self, reg: SSAValue, value: SSAValue, loc: Loc):
+        super().__init__(operands=[reg, value])
+        self.loc = loc
+
+
+@irdl_op_definition
+class RegCurrentOp(IRDLOperation):
+    name = "si.reg_current"
+    T = Annotated[TypeAttribute, ConstraintVar("T")]
+    reg: Operand = operand_def(RegType[T])
+    result: OpResult = result_def(T)
+    assembly_format = "$reg `:` type($reg) attr-dict"
+
+    def __init__(self, reg: SSAValue, loc: Loc):
+        assert isinstance(reg.type, RegType)
+        super().__init__(result_types=[reg.type.inner], operands=[reg])
         self.loc = loc
 
 
@@ -313,6 +425,10 @@ class Converter:
 
         if isinstance(ty, UIntType):
             return IntegerType(ty.width)
+        if isinstance(ty, TyWireType):
+            return WireType(self.convert_type(ty.inner, loc))
+        if isinstance(ty, TyRegType):
+            return RegType(self.convert_type(ty.inner, loc))
 
         emit_error(loc,
                    f"unsupported in IR conversion: {ty.__class__.__name__}")
@@ -439,15 +555,20 @@ class Converter:
             args = [self.convert_expr(arg) for arg in expr.args]
             return self.builder.insert(ConcatOp(args, expr.loc)).result
 
-        # if name == "wire":
-        #     init = codegen_expr(expr.args[0], cx)
-        #     return hw.WireOp(init).result
+        if name == "wire":
+            ty = self.convert_type(expr.args[0].fty, expr.args[0].loc)
+            wire = self.builder.insert(WireOp(ty, expr.loc)).result
+            init = self.convert_expr(expr.args[0])
+            self.builder.insert(WireSetOp(wire, init, expr.loc))
+            return wire
 
-        # if name == "reg":
-        #     clock = codegen_expr(expr.args[0], cx)
-        #     init = codegen_expr(expr.args[1], cx)
-        #     return seq.CompRegOp(init.type, init,
-        #                          seq.ToClockOp(clock).result).result
+        if name == "reg":
+            ty = self.convert_type(expr.args[1].fty, expr.args[1].loc)
+            clock = self.convert_expr(expr.args[0])
+            reg = self.builder.insert(RegOp(ty, clock, expr.loc)).result
+            init = self.convert_expr(expr.args[1])
+            self.builder.insert(RegNextOp(reg, init, expr.loc))
+            return reg
 
         emit_error(expr.name.loc, f"unknown function `{name}`")
 
@@ -474,25 +595,25 @@ class Converter:
             return self.builder.insert(MuxOp(cond, true, false,
                                              expr.loc)).result
 
-        # if name == "set":
-        #     target = codegen_expr(expr.target, cx)
-        #     arg = codegen_expr(expr.args[0], cx)
-        #     # Update the input operand of the wire.
-        #     target.owner.operands[0] = arg
-        #     return target
+        if name == "set":
+            target = self.convert_expr(expr.target)
+            arg = self.convert_expr(expr.args[0])
+            self.builder.insert(WireSetOp(target, arg, expr.loc))
+            return target
 
-        # if name == "get":
-        #     return codegen_expr(expr.target, cx)
+        if name == "get":
+            target = self.convert_expr(expr.target)
+            return self.builder.insert(WireGetOp(target, expr.loc)).result
 
-        # if name == "next":
-        #     target = codegen_expr(expr.target, cx)
-        #     arg = codegen_expr(expr.args[0], cx)
-        #     # Update the input operand of the register.
-        #     target.owner.operands[0] = arg
-        #     return target
+        if name == "next":
+            target = self.convert_expr(expr.target)
+            arg = self.convert_expr(expr.args[0])
+            self.builder.insert(RegNextOp(target, arg, expr.loc))
+            return target
 
-        # if name == "current":
-        #     return codegen_expr(expr.target, cx)
+        if name == "current":
+            target = self.convert_expr(expr.target)
+            return self.builder.insert(RegCurrentOp(target, expr.loc)).result
 
         emit_error(expr.name.loc, f"unknown function `{name}`")
 
