@@ -58,7 +58,7 @@ from xdsl.traits import (
 )
 from xdsl.utils.exceptions import VerifyException
 
-__all__ = ["convert_ast_to_ir", "SiliconDialect"]
+__all__ = ["convert_ast_to_ir"]
 
 
 def get_loc(value: SSAValue) -> Loc:
@@ -134,6 +134,8 @@ class SiModuleOp(IRDLOperation):
         name = parser.parse_symbol_name().data
         attrs = parser.parse_optional_attr_dict_with_keyword()
         region = parser.parse_region()
+        if not region.blocks:
+            region.add_block(Block())
         op = SiModuleOp(properties={"sym_name": StringAttr(name)},
                         attributes=attrs,
                         regions=[region],
@@ -192,8 +194,8 @@ class AssignOp(IRDLOperation):
 
 
 @irdl_op_definition
-class WireOp(IRDLOperation):
-    name = "si.wire"
+class WireDeclOp(IRDLOperation):
+    name = "si.wire_decl"
     result: OpResult = result_def()
     assembly_format = "`:` type($result) attr-dict"
 
@@ -203,8 +205,8 @@ class WireOp(IRDLOperation):
 
 
 @irdl_op_definition
-class RegOp(IRDLOperation):
-    name = "si.reg"
+class RegDeclOp(IRDLOperation):
+    name = "si.reg_decl"
     clock: Operand = operand_def(IntegerType(1))
     result: OpResult = result_def()
     assembly_format = "$clock `:` type($result) attr-dict"
@@ -405,6 +407,36 @@ class MuxOp(IRDLOperation):
 
 
 #===------------------------------------------------------------------------===#
+# Dialect
+#===------------------------------------------------------------------------===#
+
+SiliconDialect = Dialect("silicon", [
+    AddOp,
+    AssignOp,
+    ConcatOp,
+    ConstantOp,
+    ExtractOp,
+    InputDeclOp,
+    MuxOp,
+    NegOp,
+    NotOp,
+    OutputDeclOp,
+    RegCurrentOp,
+    RegDeclOp,
+    RegNextOp,
+    RegOp,
+    SiModuleOp,
+    SubOp,
+    VarDeclOp,
+    WireDeclOp,
+    WireGetOp,
+    WireSetOp,
+], [
+    WireType,
+    RegType,
+])
+
+#===------------------------------------------------------------------------===#
 # Conversion from AST to IR
 #===------------------------------------------------------------------------===#
 
@@ -557,7 +589,7 @@ class Converter:
 
         if name == "wire":
             ty = self.convert_type(expr.args[0].fty, expr.args[0].loc)
-            wire = self.builder.insert(WireOp(ty, expr.loc)).result
+            wire = self.builder.insert(WireDeclOp(ty, expr.loc)).result
             init = self.convert_expr(expr.args[0])
             self.builder.insert(WireSetOp(wire, init, expr.loc))
             return wire
@@ -565,7 +597,7 @@ class Converter:
         if name == "reg":
             ty = self.convert_type(expr.args[1].fty, expr.args[1].loc)
             clock = self.convert_expr(expr.args[0])
-            reg = self.builder.insert(RegOp(ty, clock, expr.loc)).result
+            reg = self.builder.insert(RegDeclOp(ty, clock, expr.loc)).result
             init = self.convert_expr(expr.args[1])
             self.builder.insert(RegNextOp(reg, init, expr.loc))
             return reg

@@ -105,14 +105,14 @@ mod WiresAndRegisters {
     input clock: uint<1>;
 
     // CHECK: [[X:%.+]] = si.var_decl "x" : !si.wire<i42>
-    // CHECK: [[WIRE:%.+]] = si.wire : !si.wire<i42>
+    // CHECK: [[WIRE:%.+]] = si.wire_decl : !si.wire<i42>
     // CHECK: [[TMP:%.+]] = si.constant 0 : i42
     // CHECK: si.wire_set [[WIRE]], [[TMP]] : !si.wire<i42>
     // CHECK: si.assign [[X]], [[WIRE]] : !si.wire<i42>
     let x: Wire<uint<42>> = wire(0u42);
 
     // CHECK: [[Y:%.+]] = si.var_decl "y" : !si.reg<i42>
-    // CHECK: [[REG:%.+]] = si.reg [[CLOCK]] : !si.reg<i42>
+    // CHECK: [[REG:%.+]] = si.reg_decl [[CLOCK]] : !si.reg<i42>
     // CHECK: [[TMP:%.+]] = si.constant 0 : i42
     // CHECK: si.reg_next [[REG]], [[TMP]] : !si.reg<i42>
     // CHECK: si.assign [[Y]], [[REG]] : !si.reg<i42>
