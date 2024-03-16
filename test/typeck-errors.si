@@ -109,3 +109,33 @@ mod Foo {
     let a: uint<2>;
     a.mux(42, 43);
 }
+
+// -----
+
+mod UnknownFunction {
+    // CHECK: error: unknown function `foo`
+    foo();
+}
+
+// -----
+
+mod UnknownFunction {
+    // CHECK: error: unknown function `foo`
+    0.foo();
+}
+
+// -----
+
+mod Foo {
+    input a: uint<1>;
+    // CHECK: error: incompatible types: `uint<1>` and `Wire<{{.+}}>`
+    a.set(a);
+}
+
+// -----
+
+mod Foo {
+    input a: uint<1>;
+    // CHECK: error: incompatible types: `uint<1>` and `Reg<{{.+}}>`
+    a.next(a);
+}
