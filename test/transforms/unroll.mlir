@@ -4,6 +4,25 @@
 si.module @Empty {
 }
 
+// CHECK-LABEL: si.module @Outputs
+si.module @Outputs {
+  // CHECK-NOT: si.output_decl
+  // CHECK: si.output "x", [[Y:%.+]] : i32
+  %x = si.output_decl "x" : i32
+  // CHECK: [[C0:%.+]] = si.constant 0 :
+  %c0_i32 = si.constant 0 : i32 : i32
+  // CHECK-NOT: si.assign
+  // CHECK: si.not %c0_i32
+  si.assign %x, %c0_i32 : i32
+  si.not %x : i32
+  // CHECK: [[Y]] = si.input "y" : i32
+  %y = si.input "y" : i32
+  // CHECK-NOT: si.assign
+  // CHECK: si.not [[Y]]
+  si.assign %x, %y : i32
+  si.not %x : i32
+}
+
 // CHECK-LABEL: si.module @Vars
 si.module @Vars {
   // CHECK: [[C0:%.+]] = si.constant 0 :
@@ -54,8 +73,8 @@ si.module @Wires {
 
 // CHECK-LABEL: si.module @Regs
 si.module @Regs {
-  // CHECK: [[CLOCK:%.+]] = si.input_decl "clock"
-  %clock = si.input_decl "clock" : i1
+  // CHECK: [[CLOCK:%.+]] = si.input "clock"
+  %clock = si.input "clock" : i1
 
   // CHECK-NOT: si.reg_decl
   %unused = si.reg_decl %clock : !si.reg<i32>

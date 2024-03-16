@@ -26,7 +26,6 @@ class UnrollPass(ModulePass):
     assignments: Dict[SSAValue, SSAValue]
 
     def apply(self, ctx: MLContext, module: ModuleOp):
-        print("Running the unroll pass!")
         for op in module.ops:
             if not isinstance(op, ir.SiModuleOp):
                 continue
@@ -48,6 +47,22 @@ class UnrollPass(ModulePass):
                 reg = builder.insert(
                     ir.RegOp(decl.clock, value, ir.get_loc(decl))).current
                 self.assignments[decl.result] = reg
+
+            # Replace all `OutputDeclOp`s with a corresponding `OutputOp` that
+            # has the final value assigned to the port as its operand.
+            for decl in self.decls:
+                if not isinstance(decl, ir.OutputDeclOp):
+                    continue
+                assignment = self.assignments.get(decl.result)
+                if not assignment:
+                    emit_error(
+                        ir.get_loc(decl),
+                        f"output `{decl.decl_name.data}` has not been assigned"
+                    )
+                builder = Builder.before(decl)
+                builder.insert(
+                    ir.OutputPortOp(decl.decl_name, assignment,
+                                    ir.get_loc(decl)))
 
             # Replace all `WireGetOp`s and `RegCurrentOp`s with the final
             # assigned value.
@@ -71,18 +86,21 @@ class UnrollPass(ModulePass):
             if idx == 0 and isinstance(op, ir.AssignOp):
                 continue
             operand = op.operands[idx]
-            if not isinstance(operand.owner, ir.VarDeclOp):
+            if not isinstance(operand.owner, ir.VarDeclOp) and not isinstance(
+                    operand.owner, ir.OutputDeclOp):
                 continue
             assignment = self.assignments.get(operand)
             if not assignment:
                 emit_error(
                     ir.get_loc(op),
-                    f"`{operand.owner.decl_name}` is unassigned at this point")
+                    f"`{operand.owner.decl_name.data}` is unassigned at this point"
+                )
             op.operands[idx] = assignment
 
         # Keep track of the declarations for later post-processing.
         if isinstance(op, ir.VarDeclOp) or isinstance(
-                op, ir.WireDeclOp) or isinstance(op, ir.RegDeclOp):
+                op, ir.WireDeclOp) or isinstance(
+                    op, ir.RegDeclOp) or isinstance(op, ir.OutputDeclOp):
             self.decls.append(op)
 
         # Handle assignments.

@@ -7,7 +7,7 @@ mod Bar {}
 
 // CHECK-LABEL: si.module @Statements
 mod Statements {
-    // CHECK: [[A:%.+]] = si.input_decl "a" : i42
+    // CHECK: [[A:%.+]] = si.input "a" : i42
     input a: uint<42>;
     // CHECK: [[B:%.+]] = si.output_decl "b" : i42
     output b: uint<42>;
@@ -60,9 +60,9 @@ mod Expressions {
 
 // CHECK-LABEL: si.module @LetUpdates
 mod LetUpdates {
-    // CHECK: [[A:%.+]] = si.input_decl "a"
-    // CHECK: [[B:%.+]] = si.input_decl "b"
-    // CHECK: [[C:%.+]] = si.input_decl "c"
+    // CHECK: [[A:%.+]] = si.input "a"
+    // CHECK: [[B:%.+]] = si.input "b"
+    // CHECK: [[C:%.+]] = si.input "c"
     input a: uint<3>;
     input b: uint<3>;
     input c: uint<3>;
@@ -101,7 +101,7 @@ mod LetUpdates {
 
 // CHECK-LABEL: si.module @WiresAndRegisters
 mod WiresAndRegisters {
-    // CHECK: [[CLOCK:%.+]] = si.input_decl "clock" : i1
+    // CHECK: [[CLOCK:%.+]] = si.input "clock" : i1
     input clock: uint<1>;
 
     // CHECK: [[X:%.+]] = si.var_decl "x" : !si.wire<i42>

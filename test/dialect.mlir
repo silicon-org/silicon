@@ -2,8 +2,10 @@
 
 // CHECK-LABEL: si.module @Foo
 si.module @Foo {
-  // CHECK: [[X:%.+]] = si.input_decl "x" : i42
-  %x = si.input_decl "x" : i42
+  // CHECK: [[X:%.+]] = si.input "x" : i42
+  %x = si.input "x" : i42
+  // CHECK: si.output "u", [[X]] : i42
+  si.output "u", %x : i42
   // CHECK: [[Y:%.+]] = si.output_decl "y" : i42
   %y = si.output_decl "y" : i42
   // CHECK: [[Z:%.+]] = si.var_decl "z" : i42

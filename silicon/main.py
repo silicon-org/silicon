@@ -66,8 +66,10 @@ def main():
                               flags=re.MULTILINE)
         any_failed = False
         padding = ""
-        for split in splits:
+        for i, split in enumerate(splits):
             try:
+                if i > 0:
+                    print("// -----")
                 file = SourceFile(args.input, padding + split)
                 process_input(args, file)
             except DiagnosticException:

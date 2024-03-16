@@ -154,6 +154,33 @@ class SiModuleOp(IRDLOperation):
 #===------------------------------------------------------------------------===#
 
 
+@irdl_op_definition
+class InputPortOp(IRDLOperation):
+    name = "si.input"
+    port_name: StringAttr = attr_def(StringAttr)
+    value: OpResult = result_def()
+    assembly_format = "$port_name `:` type($value) attr-dict"
+
+    def __init__(self, name: str, ty: TypeAttribute, loc: Loc):
+        super().__init__(result_types=[ty],
+                         attributes={"port_name": StringAttr(name)})
+        self.loc = loc
+
+
+@irdl_op_definition
+class OutputPortOp(IRDLOperation):
+    name = "si.output"
+    port_name: StringAttr = attr_def(StringAttr)
+    value: Operand = operand_def()
+    assembly_format = "$port_name `,` $value `:` type($value) attr-dict"
+
+    def __init__(self, name: str | StringAttr, value: SSAValue, loc: Loc):
+        if isinstance(name, str):
+            name = StringAttr(name)
+        super().__init__(operands=[value], attributes={"port_name": name})
+        self.loc = loc
+
+
 class DeclOpBase(IRDLOperation):
     decl_name: StringAttr = attr_def(StringAttr)
     result: OpResult = result_def()
@@ -163,11 +190,6 @@ class DeclOpBase(IRDLOperation):
         super().__init__(result_types=[ty],
                          attributes={"decl_name": StringAttr(name)})
         self.loc = loc
-
-
-@irdl_op_definition
-class InputDeclOp(DeclOpBase):
-    name = "si.input_decl"
 
 
 @irdl_op_definition
@@ -430,11 +452,12 @@ SiliconDialect = Dialect("silicon", [
     ConcatOp,
     ConstantOp,
     ExtractOp,
-    InputDeclOp,
+    InputPortOp,
     MuxOp,
     NegOp,
     NotOp,
     OutputDeclOp,
+    OutputPortOp,
     RegCurrentOp,
     RegDeclOp,
     RegNextOp,
@@ -509,7 +532,7 @@ class Converter:
         if isinstance(stmt, ast.InputStmt):
             ty = self.convert_type(stmt.fty, stmt.loc)
             value = self.builder.insert(
-                InputDeclOp(stmt.name.spelling(), ty, stmt.loc)).result
+                InputPortOp(stmt.name.spelling(), ty, stmt.loc)).value
             self.named_values[stmt] = value
             return
 

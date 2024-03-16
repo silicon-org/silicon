@@ -25,9 +25,9 @@ mod Foo {
 
 mod Foo {
     // CHECK: info: previous definition of port `x` was here
-    output x: uint<42>;
+    output x: uint<42> = 0;
     // CHECK: error: port `x` already defined
-    output x: uint<42>;
+    output x: uint<42> = 0;
 }
 
 // -----
@@ -36,7 +36,7 @@ mod Foo {
     // CHECK: info: previous definition of port `x` was here
     input x: uint<42>;
     // CHECK: error: port `x` already defined
-    output x: uint<42>;
+    output x: uint<42> = 0;
 }
 
 // -----
