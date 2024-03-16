@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Dict, TypeVar, List, Generic
+from typing import Annotated, Dict, TypeVar, List, Generic, Union
 from dataclasses import dataclass
 
 from silicon import ast
@@ -61,11 +61,11 @@ from xdsl.utils.exceptions import VerifyException
 __all__ = ["convert_ast_to_ir"]
 
 
-def get_loc(value: SSAValue) -> Loc:
-    if hasattr(value, "loc"):
+def get_loc(value: Union[SSAValue, Operation]) -> Loc:
+    if isinstance(value, Operation) and hasattr(value, "loc"):
         assert isinstance(value.loc, Loc)
         return value.loc
-    if hasattr(value.owner, "loc"):
+    if isinstance(value, SSAValue) and hasattr(value.owner, "loc"):
         assert isinstance(value.owner.loc, Loc)
         return value.owner.loc
     return Loc.unknown()
@@ -267,6 +267,20 @@ class RegCurrentOp(IRDLOperation):
     def __init__(self, reg: SSAValue, loc: Loc):
         assert isinstance(reg.type, RegType)
         super().__init__(result_types=[reg.type.inner], operands=[reg])
+        self.loc = loc
+
+
+@irdl_op_definition
+class RegOp(IRDLOperation):
+    name = "si.reg"
+    T = Annotated[TypeAttribute, ConstraintVar("T")]
+    clock: Operand = operand_def(IntegerType(1))
+    next: Operand = operand_def(T)
+    current: OpResult = result_def(T)
+    assembly_format = "$clock `,` $next `:` type($current) attr-dict"
+
+    def __init__(self, clock: SSAValue, next: SSAValue, loc: Loc):
+        super().__init__(result_types=[next.type], operands=[clock, next])
         self.loc = loc
 
 
@@ -655,6 +669,5 @@ def require_int_lit(arg) -> int:
     return arg.value
 
 
-def convert_ast_to_ir(root: ast.Root):
-    ir = Converter().convert_root(root)
-    print(ir)
+def convert_ast_to_ir(root: ast.Root) -> ModuleOp:
+    return Converter().convert_root(root)

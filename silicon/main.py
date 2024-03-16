@@ -1,6 +1,9 @@
 import argparse
 import re
+from sys import exit, stdout
+
 from silicon import ast
+from silicon.transforms.unroll import UnrollPass
 from silicon.ast import dump_ast
 from silicon.codegen import codegen
 from silicon.lexer import tokenize
@@ -10,7 +13,8 @@ from silicon.source import SourceFile
 from silicon.diagnostics import DiagnosticException
 from silicon.ir import convert_ast_to_ir
 from silicon.ty import typeck
-from sys import exit, stdout
+
+from xdsl.ir import MLContext
 
 
 def main():
@@ -41,6 +45,10 @@ def main():
     parser.add_argument("--dump-ir",
                         action="store_true",
                         help="Dump IR and exit")
+
+    parser.add_argument("--dump-final-ir",
+                        action="store_true",
+                        help="Dump IR before codegeneration and exit")
 
     parser.add_argument("--split-input-file",
                         action="store_true",
@@ -103,8 +111,16 @@ def process_input(args: argparse.Namespace, input: SourceFile):
         return
 
     # Convert the AST to our IR.
+    ir = convert_ast_to_ir(root)
     if args.dump_ir:
-        convert_ast_to_ir(root)
+        print(ir)
+        return
+
+    # Run the lowering pipeline.
+    ctx = MLContext()
+    UnrollPass().apply(ctx, ir)
+    if args.dump_final_ir:
+        print(ir)
         return
 
     # Emit CIRCT code.
