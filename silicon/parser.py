@@ -69,6 +69,44 @@ def parse_item(p: Parser) -> ast.Item:
                            name=name,
                            stmts=stmts)
 
+    # Parse function definitions.
+    if kw := p.consume_if(TokenKind.KW_FN):
+        name = p.require(TokenKind.IDENT, "function name")
+
+        # Parse arguments.
+        p.require(TokenKind.LPAREN)
+        args: List[ast.FnArg] = []
+        while p.not_delim(TokenKind.RPAREN):
+            arg_name = p.require(TokenKind.IDENT, "argument name")
+            p.require(TokenKind.COLON)
+            arg_type = parse_type(p)
+            args.append(
+                ast.FnArg(loc=arg_name.loc,
+                          full_loc=arg_name.loc | p.last_loc,
+                          name=arg_name,
+                          ty=arg_type))
+            if not p.consume_if(TokenKind.COMMA):
+                break
+        p.require(TokenKind.RPAREN)
+
+        # Parse return type.
+        return_ty: Optional[ast.AstType] = None
+        if p.consume_if(TokenKind.ARROW):
+            return_ty = parse_type(p)
+
+        # Parse body.
+        p.require(TokenKind.LCURLY)
+        stmts = []
+        while p.not_delim(TokenKind.RCURLY):
+            stmts.append(parse_stmt(p))
+        p.require(TokenKind.RCURLY)
+        return ast.FnItem(loc=name.loc,
+                          full_loc=kw.loc | p.last_loc,
+                          name=name,
+                          args=args,
+                          return_ty=return_ty,
+                          stmts=stmts)
+
     emit_error(p.loc(), f"expected item, found {p.tokens[0].kind.name}")
 
 
@@ -116,6 +154,16 @@ def parse_stmt(p: Parser) -> ast.Stmt:
                            name=name,
                            ty=maybeTy,
                            expr=maybeExpr)
+
+    # Parse return statements.
+    if kw := p.consume_if(TokenKind.KW_RETURN):
+        maybeExpr = None
+        if not p.isa(TokenKind.SEMICOLON):
+            maybeExpr = parse_expr(p)
+        p.require(TokenKind.SEMICOLON)
+        return ast.ReturnStmt(loc=kw.loc,
+                              full_loc=loc | p.last_loc,
+                              expr=maybeExpr)
 
     # Otherwise this is a statement that starts with an expression.
     expr = parse_expr(p)

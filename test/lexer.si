@@ -19,7 +19,8 @@
 // CHECK: COLON
 // CHECK: SEMICOLON
 // CHECK: NOT
-. , : ; !
+// CHECK: ARROW
+. , : ; ! ->
 
 // CHECK: EQ
 // CHECK: NE
@@ -35,12 +36,14 @@
 + - =
 
 // CHECK: ELSE
+// CHECK: FN
 // CHECK: FOR
 // CHECK: IF
 // CHECK: LET
 // CHECK: RETURN
 // CHECK: WHILE
 else
+fn
 for
 if
 let

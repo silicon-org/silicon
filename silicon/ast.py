@@ -88,6 +88,24 @@ class ModItem(Item):
     stmts: List[Stmt]
 
 
+@dataclass(eq=False)
+class FnItem(Item):
+    full_loc: Loc
+    name: Token
+    args: List[FnArg]
+    return_ty: Optional[AstType]
+    stmts: List[Stmt]
+    return_fty: Optional[Type] = None
+
+
+@dataclass(eq=False)
+class FnArg(AstNode):
+    full_loc: Loc
+    name: Token
+    ty: AstType
+    fty: Optional[Type] = None
+
+
 #===------------------------------------------------------------------------===#
 # Statements
 #===------------------------------------------------------------------------===#
@@ -119,6 +137,11 @@ class LetStmt(Stmt):
     ty: Optional[AstType]
     expr: Optional[Expr]
     fty: Optional[Type] = None
+
+
+@dataclass(eq=False)
+class ReturnStmt(Stmt):
+    expr: Optional[Expr]
 
 
 @dataclass(eq=False)

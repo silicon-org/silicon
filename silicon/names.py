@@ -67,8 +67,8 @@ def resolve_node(node: ast.AstNode, scope: Scope):
             resolve_node(child, subscope)
         return
 
-    # Handle module declarations.
-    if isinstance(node, ast.ModItem):
+    # Handle module and function declarations.
+    if isinstance(node, ast.ModItem) or isinstance(node, ast.FnItem):
         subscope = Scope(parent=scope)
         for child in node.children():
             resolve_node(child, subscope)
@@ -86,10 +86,13 @@ def resolve_node(node: ast.AstNode, scope: Scope):
 
 # Declare the names of a given node.
 def declare_node(node: ast.AstNode, scope: Scope):
-    if isinstance(node, ast.ModItem):
-        scope.declare(node.name.spelling(), node)
-        return
-    if isinstance(node, ast.InputStmt) or isinstance(
-            node, ast.OutputStmt) or isinstance(node, ast.LetStmt):
+    if isinstance(node, (
+            ast.ModItem,
+            ast.FnItem,
+            ast.FnArg,
+            ast.InputStmt,
+            ast.OutputStmt,
+            ast.LetStmt,
+    )):
         scope.declare(node.name.spelling(), node)
         return

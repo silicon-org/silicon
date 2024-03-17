@@ -1,4 +1,4 @@
-// RUN: silc %s --dump-resolved | FileCheck %s
+// RUN: silc --dump-resolved %s | FileCheck %s
 
 // CHECK-LABEL: ModItem "Foo"
 // CHECK-SAME: [[FOO_ID:@.+]]
@@ -25,4 +25,18 @@ mod Foo {
 mod Bar {
     // CHECK: IdentExpr "Foo" binding=ModItem([[FOO_ID]])
     output a: uint<42> = Foo;
+}
+
+// CHECK-LABEL: FnItem "f1"
+fn f1() {
+    // CHECK: IdentExpr "f2" binding=FnItem([[F2_ID:@.+]])
+    f2;
+}
+
+// CHECK-LABEL: FnItem "f2"
+// CHECK-SAME: [[F2_ID]]
+// CHECK: FnArg "x" {{.*}}[[ARG_ID:@.+]]
+fn f2(x: uint<32>) {
+    // CHECK: IdentExpr "x" binding=FnArg([[ARG_ID]])
+    x;
 }

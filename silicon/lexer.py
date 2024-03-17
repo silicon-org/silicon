@@ -30,6 +30,7 @@ class TokenKind(Enum):
     COLON = auto()
     SEMICOLON = auto()
     NOT = auto()
+    ARROW = auto()
 
     EQ = auto()
     NE = auto()
@@ -44,6 +45,7 @@ class TokenKind(Enum):
     ASSIGN = auto()
 
     KW_ELSE = auto()
+    KW_FN = auto()
     KW_FOR = auto()
     KW_IF = auto()
     KW_INPUT = auto()
@@ -85,6 +87,7 @@ SYMBOLS1: Dict[str, TokenKind] = {
 }
 
 SYMBOLS2: Dict[str, TokenKind] = {
+    "->": TokenKind.ARROW,
     "==": TokenKind.EQ,
     "!=": TokenKind.NE,
     "<=": TokenKind.LE,
@@ -93,6 +96,7 @@ SYMBOLS2: Dict[str, TokenKind] = {
 
 KEYWORDS: Dict[str, TokenKind] = {
     "else": TokenKind.KW_ELSE,
+    "fn": TokenKind.KW_FN,
     "for": TokenKind.KW_FOR,
     "if": TokenKind.KW_IF,
     "input": TokenKind.KW_INPUT,

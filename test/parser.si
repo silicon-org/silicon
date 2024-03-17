@@ -1,4 +1,4 @@
-// RUN: silc %s --dump-ast | FileCheck %s
+// RUN: silc --dump-ast %s | FileCheck %s
 
 // CHECK: Root
 // CHECK: ModItem "Foo"
@@ -104,3 +104,29 @@ mod Expressions {
     // CHECK:     target: IdentExpr "a"
     a.b().c();
 }
+
+// CHECK-LABEL: FnItem "f1"
+fn f1() {
+    // CHECK: ReturnStmt
+    return;
+    // CHECK: ReturnStmt
+    // CHECK:   IntLitExpr value=42
+    return 42;
+}
+
+// CHECK-LABEL: FnItem "f2"
+// CHECK: return_ty: UIntType size=42
+fn f2() -> uint<42> {}
+
+// CHECK-LABEL: FnItem "f3"
+// CHECK: args[0]: FnArg "x"
+// CHECK:   ty: UIntType size=43
+fn f3(x: uint<43>) {}
+
+// CHECK-LABEL: FnItem "f4"
+// CHECK: args[0]: FnArg "x"
+// CHECK:   ty: UIntType size=44
+// CHECK: args[1]: FnArg "y"
+// CHECK:   ty: UIntType size=45
+// CHECK: return_ty: UIntType size=46
+fn f4(x: uint<44>, y: uint<45>) -> uint<46> {}
