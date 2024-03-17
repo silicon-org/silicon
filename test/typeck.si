@@ -92,3 +92,20 @@ mod Foo {
     let c = b.current();
     b.next(0u42);
 }
+
+// CHECK-LABEL: FnItem "f0"
+fn f0() {}
+
+// CHECK-LABEL: FnItem "f1"
+// CHECK: FnArg "x" fty=uint<42>
+fn f1(x: uint<42>) -> uint<13> {
+    // CHECK: LetStmt "a" fty=uint<42>
+    let a = x;
+
+    // CHECK: LetStmt "b" fty=uint<13>
+    // CHECK:   IntLitExpr fty=uint<13> value=1337
+    // CHECK: ReturnStmt
+    // CHECK:   IdentExpr fty=uint<13>
+    let b = 1337;
+    return b;
+}

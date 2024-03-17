@@ -139,3 +139,31 @@ mod Foo {
     // CHECK: error: incompatible types: `uint<1>` and `Reg<{{.+}}>`
     a.next(a);
 }
+
+// -----
+
+mod Foo {
+    // CHECK: error: can only return from functions
+    return;
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: can only return from functions
+    return 42;
+}
+
+// -----
+
+fn f1() {
+    // CHECK: error: incompatible types: `()` and `uint<8>`
+    return 42u8;
+}
+
+// -----
+
+fn f1() -> uint<42> {
+    // CHECK: error: incompatible types: `uint<42>` and `()`
+    return;
+}

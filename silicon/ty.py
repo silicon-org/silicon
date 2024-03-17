@@ -134,6 +134,7 @@ def require_int_lit(
 
 @dataclass
 class Typeck:
+    root: ast.ModItem | ast.FnItem
 
     # Convert an AST type node into an actual type.
     def convert_ast_type(self, ty: ast.AstType) -> Type:
@@ -145,13 +146,23 @@ class Typeck:
             return RegType(self.convert_ast_type(ty.inner))
         emit_error(ty.loc, f"unsupported type: `{ty.loc.spelling()}`")
 
-    def typeck_mod(self, mod: ast.ModItem):
-        for stmt in mod.stmts:
+    # Type-check the entire AST starting at the `root` node.
+    def typeck(self):
+        if isinstance(self.root, ast.FnItem):
+            for arg in self.root.args:
+                arg.fty = self.convert_ast_type(arg.ty)
+            self.root.return_fty = self.convert_ast_type(
+                self.root.return_ty) if self.root.return_ty else UnitType()
+
+        for stmt in self.root.stmts:
             self.typeck_stmt(stmt)
 
-        # Finalize the types in the AST. This replaces all type variables with
-        # the actual type that was inferred.
-        for node in mod.walk(ast.WalkOrder.PostOrder):
+        self.finalize(self.root)
+
+    # Finalize the types in the AST. This replaces all type variables with the
+    # actual type that was inferred.
+    def finalize(self, root: ast.AstNode):
+        for node in root.walk(ast.WalkOrder.PostOrder):
             if hasattr(node, "fty"):
                 if node.fty is None:
                     emit_error(node.loc,
@@ -190,6 +201,17 @@ class Typeck:
             if stmt.expr:
                 self.unify_types(stmt.fty, self.typeck_expr(stmt.expr),
                                  stmt.loc)
+            return
+
+        if isinstance(stmt, ast.ReturnStmt):
+            if not isinstance(self.root, ast.FnItem):
+                emit_error(stmt.loc, "can only return from functions")
+            ty = self.typeck_expr(stmt.expr) if stmt.expr else UnitType()
+            assert self.root.return_fty is not None
+            lhs_loc = self.root.return_ty.loc if self.root.return_ty else self.root.loc
+            rhs_loc = stmt.expr.full_loc if stmt.expr else stmt.loc
+            self.unify_types(self.root.return_fty, ty, stmt.loc, lhs_loc,
+                             rhs_loc)
             return
 
         if isinstance(stmt, ast.AssignStmt):
@@ -474,8 +496,8 @@ class Typeck:
 
 def typeck(root: ast.Root):
     for item in root.items:
-        if isinstance(item, ast.ModItem):
-            Typeck().typeck_mod(item)
+        if isinstance(item, (ast.ModItem, ast.FnItem)):
+            Typeck(item).typeck()
         else:
             emit_error(item.loc,
                        f"unsupported in typeck: {item.__class__.__name__}")
