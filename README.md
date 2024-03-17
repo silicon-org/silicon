@@ -12,10 +12,11 @@ Rough roadmap:
 - [x] Basic Intermediate Representation
 - [ ] Canonicalize IR
 - [ ] Functions and calls
+- [ ] Reference types and operations (`&T`, `*x = 4`, `4 + *x`)
 - [ ] Parametric functions
 - [ ] Unit tests and execution
 - [ ] Assertions
-- [ ] If statements and loops
+- [ ] If expressions and loop statements
 - [ ] Clock domain associations for values
 - [ ] Tuple types
 - [ ] Array types
