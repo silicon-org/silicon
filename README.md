@@ -9,7 +9,7 @@ Rough roadmap:
 - [x] Port declarations
 - [x] Let bindings
 - [x] Type inference
-- [ ] Basic Intermediate Representation
+- [x] Basic Intermediate Representation
 - [ ] Canonicalize IR
 - [ ] Functions and calls
 - [ ] Parametric functions

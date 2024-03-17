@@ -126,4 +126,5 @@ def process_input(args: argparse.Namespace, input: SourceFile):
         return
 
     # Emit CIRCT code.
-    codegen(root)
+    mlir = codegen(ir)
+    print(mlir)

@@ -105,6 +105,12 @@ class UnrollPass(ModulePass):
 
         # Handle assignments.
         if isinstance(op, ir.AssignOp):
+            if not isinstance(op.dst.owner, ir.VarDeclOp) and not isinstance(
+                    op.dst.owner, ir.OutputDeclOp):
+                emit_error(
+                    ir.get_loc(op),
+                    f"expression `{ir.get_loc(op.dst).spelling()}` cannot appear on left-hand side of `=`"
+                )
             self.assignments[op.dst] = op.src
             op.detach()
             op.erase()

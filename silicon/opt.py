@@ -1,7 +1,8 @@
 from __future__ import annotations
-from typing import Type
+from typing import Type, IO
 
 from silicon.ir import SiliconDialect
+from silicon.codegen import codegen
 from silicon.transforms.unroll import UnrollPass
 from silicon.diagnostics import DiagnosticException
 
@@ -30,6 +31,21 @@ class SiliconOptMain(xDSLOptMain):
 
     def register_module_pass(self, p: Type[ModulePass]):
         self.register_pass(p.name, lambda: p)
+
+    def register_all_targets(self):
+
+        def _output_codegen(prog: ModuleOp, output: IO[str]):
+            try:
+                mlir_module = codegen(prog)
+                print(mlir_module, file=output)
+            except DiagnosticException:
+                self.any_failed = True
+
+        super().register_all_targets()
+        self.available_targets = {
+            "mlir": self.available_targets["mlir"],
+            "codegen": _output_codegen,
+        }
 
     def run(self):
         super().run()

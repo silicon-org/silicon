@@ -10,7 +10,7 @@ mod DumbAlu {
     let shr = reg(clock, concat(0u1, lhs.slice(1, 31)));
 
     output result: uint<32>;
-    let add_or_sub = op.bit(0).mux(add, sub);
-    let shl_or_shr = op.bit(0).mux(shl, shr);
+    let add_or_sub = op.bit(0).mux(add.current(), sub.current());
+    let shl_or_shr = op.bit(0).mux(shl.current(), shr.current());
     result = op.bit(1).mux(add_or_sub, shl_or_shr);
 }
