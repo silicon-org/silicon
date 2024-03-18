@@ -1,0 +1,13 @@
+// RUN: ! silc --dump-ir --split-input-file %s 2>&1 | FileCheck %s
+
+// CHECK: error: missing return at end of `no_return`
+fn no_return() -> uint<42> {}
+
+// -----
+
+fn unreachable_stmt() {
+    // CHECK: info: any code following this expression is unreachable
+    return;
+    // CHECK: warning: unreachable statement
+    let x;
+}

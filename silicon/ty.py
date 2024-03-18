@@ -269,6 +269,31 @@ class Typeck:
     ) -> Type:
         name = expr.name.spelling()
 
+        if target := expr.binding.target:
+            # Make sure the name refers to a function.
+            if not isinstance(target, ast.FnItem):
+                emit_info(target.loc, f"`{name}` defined here")
+                emit_error(expr.loc, f"cannot call `{name}`")
+
+            # Make sure the arguments match.
+            if len(expr.args) != len(target.args):
+                emit_error(
+                    expr.loc,
+                    f"argument mismatch: `{name}` takes {len(target.args)} arguments, but got {len(expr.args)} instead"
+                )
+            for call_arg, func_arg in zip(expr.args, target.args):
+                call_ty = self.typeck_expr(call_arg)
+                func_ty = self.convert_ast_type(func_arg.ty)
+                self.unify_types(func_ty,
+                                 call_ty,
+                                 call_arg.loc,
+                                 lhs_loc=func_arg.loc)
+
+            # Propagate the return type.
+            return self.convert_ast_type(
+                target.return_ty) if target.return_ty else UnitType()
+
+        # Handle builtin functions.
         if name == "concat":
             width = 0
             for arg in expr.args:

@@ -130,30 +130,53 @@ mod WiresAndRegisters {
     x.set(1337u42);
 }
 
-// CHECK-LABEL: si.func @f1
+// CHECK-LABEL: si.func @empty_func
 // CHECK-SAME: () {
-fn f1() {
+fn empty_func() {
+    // CHEfCK: si.return
+}
+
+// CHECK-LABEL: si.func @simple_func
+// CHECK-SAME: () {
+fn simple_func() {
     // CHECK: si.return
     return;
 }
 
-// CHECK-LABEL: si.func @f2
+// CHECK-LABEL: si.func @only_outputs
 // CHECK-SAME: () -> i42 {
-fn f2() -> uint<42> {
+fn only_outputs() -> uint<42> {
     // CHECK: [[TMP:%.+]] = si.constant 0 : i42
     // CHECK: si.return [[TMP]] : i42
     return 0;
 }
 
-// CHECK-LABEL: si.func @f3
+// CHECK-LABEL: si.func @only_inputs
 // CHECK-SAME: ([[ARG0:%.+]]: i43) {
-fn f3(x: uint<43>) {
+fn only_inputs(x: uint<43>) {
 }
 
-// CHECK-LABEL: si.func @f4
+// CHECK-LABEL: si.func @inputs_and_outputs
 // CHECK-SAME: ([[ARG0:%.+]] : i44, [[ARG1:%.+]] : i44) -> i44 {
-fn f4(x: uint<44>, y: uint<44>) -> uint<44> {
+fn inputs_and_outputs(x: uint<44>, y: uint<44>) -> uint<44> {
     // CHECK: [[TMP:%.+]] = si.add [[ARG0]], [[ARG1]] : i44
     // CHECK: si.return [[TMP]] : i44
     return x + y;
+}
+
+// CHECK-LABEL: si.func @calls
+// CHECK-SAME: ([[A:%.+]] : i43, [[B:%.+]] : i44) {
+fn calls(a: uint<43>, b: uint<44>) {
+    // CHECK: si.call @simple_func() : () -> ()
+    simple_func();
+    // CHECK: [[X:%.+]] = si.var_decl "x"
+    // CHECK: [[TMP:%.+]] = si.call @only_outputs() : () -> i42
+    // CHECK: si.assign [[X]], [[TMP]]
+    let x = only_outputs();
+    // CHECK: si.call @only_inputs([[A]]) : (i43) -> ()
+    only_inputs(a);
+    // CHECK: [[Y:%.+]] = si.var_decl "y"
+    // CHECK: [[TMP:%.+]] = si.call @inputs_and_outputs([[B]], [[B]]) : (i44, i44) -> i44
+    // CHECK: si.assign [[Y]], [[TMP]]
+    let y = inputs_and_outputs(b, b);
 }

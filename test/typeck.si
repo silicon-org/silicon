@@ -109,3 +109,11 @@ fn f1(x: uint<42>) -> uint<13> {
     let b = 1337;
     return b;
 }
+
+// CHECK-LABEL: FnItem "f2"
+fn f2() {
+    // CHECK: LetStmt "a" fty=uint<42>
+    let a = 9001;
+    // CHECK: LetStmt "b" fty=uint<13>
+    let b = f1(a);
+}

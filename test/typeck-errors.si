@@ -113,7 +113,7 @@ mod Foo {
 // -----
 
 mod UnknownFunction {
-    // CHECK: error: unknown function `foo`
+    // CHECK: error: unknown name `foo`
     foo();
 }
 
@@ -166,4 +166,35 @@ fn f1() {
 fn f1() -> uint<42> {
     // CHECK: error: incompatible types: `uint<42>` and `()`
     return;
+}
+
+// -----
+
+mod Foo {
+    // CHECK: error: cannot call `Foo`
+    Foo();
+}
+
+// -----
+
+fn f1(x: uint<42>) {}
+fn f2() {
+    // CHECK: error: argument mismatch: `f1` takes 1 arguments, but got 0 instead
+    f1();
+}
+
+// -----
+
+fn f1(x: uint<42>) {}
+fn f2() {
+    // CHECK: error: argument mismatch: `f1` takes 1 arguments, but got 2 instead
+    f1(1, 2);
+}
+
+// -----
+
+fn f1(x: uint<42>) {}
+fn f2(x: uint<43>) {
+    // CHECK: error: incompatible types: `uint<42>` and `uint<43>`
+    f1(x);
 }

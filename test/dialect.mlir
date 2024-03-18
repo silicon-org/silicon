@@ -16,6 +16,8 @@ si.module @Foo {
 
   // CHECK: [[C0:%.+]] = si.constant false
   %c0_i1 = si.constant false : i1
+  // CHECK: si.constant_unit : !si.unit
+  %unit = si.constant_unit : !si.unit
 
   // CHECK: [[A:%.+]] = si.wire_decl : !si.wire<i42>
   %a = si.wire_decl : !si.wire<i42>
@@ -50,6 +52,15 @@ si.module @Foo {
   si.extract %z, #builtin.int<9> : i42 -> i3
   // CHECK: si.mux [[C0]], [[X]], [[Z]] : i42
   si.mux %c0_i1, %x, %z : i42
+
+  // CHECK: si.call @f1() : () -> ()
+  si.call @f1() : () -> ()
+  // CHECK: si.call @f2() : () -> i42
+  si.call @f2() : () -> i42
+  // CHECK: si.call @f3([[X]]) : (i42) -> ()
+  si.call @f3(%x) : (i42) -> ()
+  // CHECK: si.call @f4([[X]], [[Y]]) : (i42, i42) -> i42
+  si.call @f4(%x, %y) : (i42, i42) -> i42
 }
 
 // CHECK-LABEL: si.func @f1
@@ -68,13 +79,15 @@ si.func @f2() -> i42 {
 }
 
 // CHECK-LABEL: si.func @f3
-// CHECK: ({{%.+}} : i43) {
-si.func @f3(%x : i43) {
+// CHECK: ({{%.+}} : i42) {
+si.func @f3(%x : i42) {
+  // CHECK: si.return
+  si.return
 }
 
 // CHECK-LABEL: si.func @f4
-// CHECK: ([[TMP:%.+]] : i44, {{%.+}} : i44) -> i44 {
-si.func @f4(%0 : i44, %1 : i44) -> i44 {
-  // CHECK: si.return [[TMP]] : i44
-  si.return %0 : i44
+// CHECK: ([[TMP:%.+]] : i42, {{%.+}} : i42) -> i42 {
+si.func @f4(%0 : i42, %1 : i42) -> i42 {
+  // CHECK: si.return [[TMP]] : i42
+  si.return %0 : i42
 }

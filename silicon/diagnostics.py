@@ -5,6 +5,7 @@ from termcolor import colored
 
 __all__ = [
     "emit_error",
+    "emit_warning",
     "emit_info",
     "emit_diagnostic",
 ]
@@ -13,6 +14,10 @@ __all__ = [
 def emit_error(loc: Loc, msg: str) -> NoReturn:
     emit_diagnostic("error", "red", loc, msg)
     raise DiagnosticException()
+
+
+def emit_warning(loc: Loc, msg: str):
+    emit_diagnostic("warning", "yellow", loc, msg)
 
 
 def emit_info(loc: Loc, msg: str):

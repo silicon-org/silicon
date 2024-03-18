@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 
 __all__ = ["resolve_names"]
 
+BUILTIN_FUNCS = ("concat", "wire", "reg")
+
 
 @dataclass
 class Scope:
@@ -49,6 +51,9 @@ def resolve_names(root: ast.Root):
 
     # Ensure that no unresolved names remain in the AST.
     for child in root.walk():
+        if isinstance(child,
+                      ast.CallExpr) and child.name.spelling() in BUILTIN_FUNCS:
+            continue
         for name, value in child.__dict__.items():
             if isinstance(value, ast.Binding) and value.target is None:
                 emit_error(child.loc,
@@ -82,6 +87,11 @@ def resolve_node(node: ast.AstNode, scope: Scope):
     # Handle specific nodes.
     if isinstance(node, ast.IdentExpr):
         node.binding.target = scope.resolve(node.name.spelling(), node.loc)
+
+    if isinstance(node, ast.CallExpr):
+        name = node.name.spelling()
+        if name not in BUILTIN_FUNCS:
+            node.binding.target = scope.resolve(name, node.name.loc)
 
 
 # Declare the names of a given node.

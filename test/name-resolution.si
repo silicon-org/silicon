@@ -31,6 +31,8 @@ mod Bar {
 fn f1() {
     // CHECK: IdentExpr "f2" binding=FnItem([[F2_ID:@.+]])
     f2;
+    // CHECK: CallExpr "f2" binding=FnItem([[F2_ID:@.+]])
+    f2();
 }
 
 // CHECK-LABEL: FnItem "f2"

@@ -263,6 +263,7 @@ BINARY_PRECEDENCE: Dict[BinaryOp, Precedence] = {
 class CallExpr(Expr):
     name: Token
     args: List[Expr]
+    binding: Binding = field(default_factory=Binding)
 
 
 @dataclass(eq=False)

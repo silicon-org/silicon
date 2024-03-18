@@ -9,7 +9,7 @@ from silicon.source import Loc, SourceFile
 from silicon.ty import (
     Type,
     UIntType,
-    UnitType,
+    UnitType as TyUnitType,
     WireType as TyWireType,
     RegType as TyRegType,
 )
@@ -18,12 +18,14 @@ import xdsl
 import xdsl.dialects.utils
 from xdsl.builder import (Builder, InsertPoint)
 from xdsl.dialects.builtin import (
+    FlatSymbolRefAttr,
     FunctionType,
-    IntegerAttr,
     IntAttr,
+    IntegerAttr,
     IntegerType,
     ModuleOp,
     StringAttr,
+    SymbolRefAttr,
 )
 from xdsl.ir import (
     Attribute,
@@ -42,6 +44,7 @@ from xdsl.irdl import (
     Operand,
     ParamAttrConstraint,
     ParameterDef,
+    VarOpResult,
     VarOperand,
     attr_def,
     irdl_attr_definition,
@@ -51,6 +54,7 @@ from xdsl.irdl import (
     region_def,
     result_def,
     var_operand_def,
+    var_result_def,
 )
 from xdsl.parser import Parser
 from xdsl.printer import Printer
@@ -59,6 +63,7 @@ from xdsl.traits import (
     IsolatedFromAbove,
     NoTerminator,
     SymbolOpInterface,
+    SymbolTable,
 )
 from xdsl.utils.exceptions import VerifyException
 
@@ -78,6 +83,12 @@ def get_loc(value: Union[SSAValue, Operation]) -> Loc:
 #===------------------------------------------------------------------------===#
 # Types
 #===------------------------------------------------------------------------===#
+
+
+@irdl_attr_definition
+class UnitType(ParametrizedAttribute, TypeAttribute):
+    name = "si.unit"
+
 
 _WireInnerT = TypeVar("_WireInnerT", bound=Attribute)
 _RegInnerT = TypeVar("_RegInnerT", bound=Attribute)
@@ -162,7 +173,6 @@ class FuncOp(IRDLOperation):
     traits = frozenset([
         IsolatedFromAbove(),
         SymbolOpInterface(),
-        NoTerminator(),
     ])
 
     def __init__(
@@ -445,6 +455,18 @@ class ConstantOp(IRDLOperation):
         return ConstantOp(IntegerAttr(value, IntegerType(width)), loc)
 
 
+# The unit constant `()`, similar to `void` in C, but being an actual value.
+@irdl_op_definition
+class ConstantUnitOp(IRDLOperation):
+    name = "si.constant_unit"
+    result: OpResult = result_def(UnitType)
+    assembly_format = "`:` type($result) attr-dict"
+
+    def __init__(self, loc: Loc):
+        super().__init__(result_types=[UnitType()])
+        self.loc = loc
+
+
 class UnaryOpBase(IRDLOperation):
     T = Annotated[IntegerType, ConstraintVar("T")]
     arg: Operand = operand_def(T)
@@ -556,6 +578,64 @@ class MuxOp(IRDLOperation):
         self.loc = loc
 
 
+# A call to a function.
+@irdl_op_definition
+class CallOp(IRDLOperation):
+    name = "si.call"
+    args: VarOperand = var_operand_def()
+    callee: FlatSymbolRefAttr = prop_def(FlatSymbolRefAttr)
+    res: VarOpResult = var_result_def()
+
+    def __init__(
+        self,
+        callee: str | SymbolRefAttr,
+        args: Sequence[SSAValue | Operation],
+        result_types: Sequence[Attribute],
+        loc: Loc,
+    ):
+        if isinstance(callee, str):
+            callee = SymbolRefAttr(callee)
+        super().__init__(
+            operands=[args],
+            result_types=[result_types],
+            properties={"callee": callee},
+        )
+        self.loc = loc
+
+    def verify_(self) -> None:
+        callee = SymbolTable.lookup_symbol(self, self.callee)
+        if not callee:
+            raise VerifyException(f"{self.callee} does not exist")
+        if not isinstance(callee, FuncOp):
+            raise VerifyException(f"{self.callee} cannot be called")
+
+        function_type = FunctionType.from_lists(
+            [arg.type for arg in self.args], [res.type for res in self.res])
+        if function_type != callee.function_type:
+            raise VerifyException(
+                f"call type {function_type} differs from callee type {callee.function_type}"
+            )
+
+    @classmethod
+    def parse(cls, parser: Parser) -> CallOp:
+        callee, args, res, attrs = xdsl.dialects.utils.parse_call_op_like(
+            parser, reserved_attr_names=["callee"])
+        op = CallOp(callee, args, res, Loc.unknown())
+        if attrs is not None:
+            op.attributes |= attrs.data
+        return op
+
+    def print(self, printer: Printer):
+        xdsl.dialects.utils.print_call_op_like(
+            printer,
+            self,
+            self.callee,
+            self.args,
+            self.attributes,
+            reserved_attr_names=["callee"],
+        )
+
+
 #===------------------------------------------------------------------------===#
 # Dialect
 #===------------------------------------------------------------------------===#
@@ -563,8 +643,10 @@ class MuxOp(IRDLOperation):
 SiliconDialect = Dialect("silicon", [
     AddOp,
     AssignOp,
+    CallOp,
     ConcatOp,
     ConstantOp,
+    ConstantUnitOp,
     ExtractOp,
     FuncOp,
     InputPortOp,
@@ -586,6 +668,7 @@ SiliconDialect = Dialect("silicon", [
     WireSetOp,
 ], [
     RegType,
+    UnitType,
     WireType,
 ])
 
@@ -599,15 +682,21 @@ class Converter:
     module: ModuleOp
     builder: Builder
     named_values: Dict[ast.AstNode, SSAValue]
+    is_terminated_at: Loc | None
+    warned_about_terminator_at: Loc | None
 
     def __init__(self):
         self.module = ModuleOp([])
         self.builder = Builder.at_end(self.module.body.blocks[0])
         self.named_values = dict()
+        self.is_terminated_at = None
+        self.warned_about_terminator_at = None
 
     def convert_type(self, ty: Type | None, loc: Loc) -> TypeAttribute:
         assert ty is not None, "type checking should have assigned types"
 
+        if isinstance(ty, TyUnitType):
+            return UnitType()
         if isinstance(ty, UIntType):
             return IntegerType(ty.width)
         if isinstance(ty, TyWireType):
@@ -638,6 +727,7 @@ class Converter:
             SiModuleOp.with_empty_body(mod.name.spelling(), mod.loc))
         ip = self.builder.insertion_point
         self.builder.create_block_at_end(op.body)
+        self.is_terminated_at = None
         for stmt in mod.stmts:
             self.convert_stmt(stmt)
         self.builder.insertion_point = ip
@@ -648,7 +738,7 @@ class Converter:
             self.convert_type(arg.fty, arg.ty.loc) for arg in fn.args
         ]
         output_types = []
-        if not isinstance(fn.return_fty, UnitType):
+        if not isinstance(fn.return_fty, TyUnitType):
             assert fn.return_ty is not None
             output_types.append(
                 self.convert_type(fn.return_fty, fn.return_ty.loc))
@@ -664,11 +754,31 @@ class Converter:
         # Convert the body statements.
         ip = self.builder.insertion_point
         self.builder.insertion_point = InsertPoint.at_end(op.body.blocks[0])
+        self.is_terminated_at = None
         for stmt in fn.stmts:
             self.convert_stmt(stmt)
+
+        # Insert a missing return for functions without results, or complain
+        # about a missing return.
+        if not self.is_terminated_at:
+            if not output_types:
+                self.builder.insert(ReturnOp([], fn.loc))
+            else:
+                emit_error(fn.loc,
+                           f"missing return at end of `{fn.name.spelling()}`")
         self.builder.insertion_point = ip
 
     def convert_stmt(self, stmt: ast.Stmt):
+        # Ignore statements after we have already returned and emit a warning.
+        if self.is_terminated_at:
+            if not self.warned_about_terminator_at:
+                emit_info(
+                    self.is_terminated_at,
+                    f"any code following this expression is unreachable")
+                emit_warning(stmt.full_loc, "unreachable statement")
+                self.warned_about_terminator_at = self.is_terminated_at
+            return
+
         if isinstance(stmt, ast.ExprStmt):
             self.convert_expr(stmt.expr)
             return
@@ -701,6 +811,7 @@ class Converter:
             return
 
         if isinstance(stmt, ast.ReturnStmt):
+            self.is_terminated_at = stmt.loc
             if not stmt.expr:
                 self.builder.insert(ReturnOp([], stmt.loc))
                 return
@@ -770,6 +881,20 @@ class Converter:
                    f"unsupported in IR conversion: {expr.__class__.__name__}")
 
     def convert_call_expr(self, expr: ast.CallExpr) -> SSAValue:
+        if target := expr.binding.target:
+            assert isinstance(target, ast.FnItem)
+            args = [self.convert_expr(arg) for arg in expr.args]
+            if isinstance(expr.fty, TyUnitType):
+                self.builder.insert(
+                    CallOp(target.name.spelling(), args, [], expr.loc))
+                return self.builder.insert(ConstantUnitOp(expr.loc)).result
+            else:
+                results = [self.convert_type(expr.fty, expr.loc)]
+                op = self.builder.insert(
+                    CallOp(target.name.spelling(), args, results, expr.loc))
+                return op.results[0]
+
+        # Handle builtin functions.
         name = expr.name.spelling()
 
         if name == "concat":
