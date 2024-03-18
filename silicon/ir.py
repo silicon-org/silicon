@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Dict, TypeVar, List, Generic, Union
+from typing import Annotated, Dict, TypeVar, List, Generic, Union, Sequence
 from dataclasses import dataclass
 
 from silicon import ast
@@ -9,13 +9,16 @@ from silicon.source import Loc, SourceFile
 from silicon.ty import (
     Type,
     UIntType,
+    UnitType,
     WireType as TyWireType,
     RegType as TyRegType,
 )
 
 import xdsl
-from xdsl.builder import Builder
+import xdsl.dialects.utils
+from xdsl.builder import (Builder, InsertPoint)
 from xdsl.dialects.builtin import (
+    FunctionType,
     IntegerAttr,
     IntAttr,
     IntegerType,
@@ -52,9 +55,10 @@ from xdsl.irdl import (
 from xdsl.parser import Parser
 from xdsl.printer import Printer
 from xdsl.traits import (
+    IsTerminator,
     IsolatedFromAbove,
-    SymbolOpInterface,
     NoTerminator,
+    SymbolOpInterface,
 )
 from xdsl.utils.exceptions import VerifyException
 
@@ -147,6 +151,77 @@ class SiModuleOp(IRDLOperation):
         printer.print_op_attributes(self.attributes, print_keyword=True)
         printer.print(" ")
         printer.print_region(self.body, False, False)
+
+
+@irdl_op_definition
+class FuncOp(IRDLOperation):
+    name = "si.func"
+    sym_name: StringAttr = prop_def(StringAttr)
+    function_type: FunctionType = prop_def(FunctionType)
+    body: Region = region_def("single_block")
+    traits = frozenset([
+        IsolatedFromAbove(),
+        SymbolOpInterface(),
+        NoTerminator(),
+    ])
+
+    def __init__(
+        self,
+        name: str,
+        function_type: FunctionType,
+        loc: Loc,
+        region: Region | type[Region.DEFAULT] = Region.DEFAULT,
+    ):
+        if not isinstance(region, Region):
+            region = Region(Block(arg_types=function_type.inputs))
+        props = {
+            "sym_name": StringAttr(name),
+            "function_type": function_type,
+        }
+        super().__init__(properties=props, regions=[region])
+        self.loc = loc
+
+    def verify_(self) -> None:
+        # Check that the argument types in the function type match the types of
+        # the block arguments.
+        types_func = self.function_type.inputs.data
+        types_block = tuple(arg.type for arg in self.body.blocks[0].args)
+        if types_func != types_block:
+            raise VerifyException(
+                "entry block argument types must match function input types")
+
+    @classmethod
+    def parse(cls, parser: Parser) -> FuncOp:
+        (
+            name,
+            input_types,
+            output_types,
+            region,
+            attributes,
+            arg_attrs,
+        ) = xdsl.dialects.utils.parse_func_op_like(
+            parser,
+            reserved_attr_names=("sym_name", "function_type"),
+        )
+        op = FuncOp(
+            name=name,
+            function_type=FunctionType.from_lists(input_types, output_types),
+            loc=Loc.unknown(),
+            region=region,
+        )
+        if attributes is not None:
+            op.attributes |= attributes.data
+        return op
+
+    def print(self, printer: Printer):
+        xdsl.dialects.utils.print_func_op_like(
+            printer,
+            self.sym_name,
+            self.function_type,
+            self.body,
+            self.attributes,
+            reserved_attr_names=("sym_name", "function_type"),
+        )
 
 
 #===------------------------------------------------------------------------===#
@@ -306,6 +381,45 @@ class RegOp(IRDLOperation):
         self.loc = loc
 
 
+@irdl_op_definition
+class ReturnOp(IRDLOperation):
+    name = "si.return"
+    args: VarOperand = var_operand_def()
+    traits = frozenset([IsTerminator()])
+
+    def __init__(self, args: Sequence[SSAValue], loc: Loc):
+        super().__init__(operands=[args])
+        self.loc = loc
+
+    def verify_(self) -> None:
+        # Ensure we're nested within a function.
+        func_op = self.parent_op()
+        while func_op and not isinstance(func_op, FuncOp):
+            func_op = func_op.parent_op()
+        if not func_op:
+            raise VerifyException(
+                f"'{self.name}' must be nested within '{FuncOp.name}'")
+        assert isinstance(func_op, FuncOp)
+
+        # Ensure the values we return match the function type's output.
+        types_func = func_op.function_type.outputs.data
+        types_return = tuple(arg.type for arg in self.args)
+        if types_func != types_return:
+            raise VerifyException(
+                "return argument types must match function output types")
+
+    @classmethod
+    def parse(cls, parser: Parser) -> ReturnOp:
+        attrs, args = xdsl.dialects.utils.parse_return_op_like(parser)
+        op = ReturnOp(args, Loc.unknown())
+        op.attributes |= attrs
+        return op
+
+    def print(self, printer: Printer):
+        xdsl.dialects.utils.print_return_op_like(printer, self.attributes,
+                                                 self.args)
+
+
 #===------------------------------------------------------------------------===#
 # Expressions
 #===------------------------------------------------------------------------===#
@@ -452,6 +566,7 @@ SiliconDialect = Dialect("silicon", [
     ConcatOp,
     ConstantOp,
     ExtractOp,
+    FuncOp,
     InputPortOp,
     MuxOp,
     NegOp,
@@ -462,6 +577,7 @@ SiliconDialect = Dialect("silicon", [
     RegDeclOp,
     RegNextOp,
     RegOp,
+    ReturnOp,
     SiModuleOp,
     SubOp,
     VarDeclOp,
@@ -469,8 +585,8 @@ SiliconDialect = Dialect("silicon", [
     WireGetOp,
     WireSetOp,
 ], [
-    WireType,
     RegType,
+    WireType,
 ])
 
 #===------------------------------------------------------------------------===#
@@ -506,6 +622,8 @@ class Converter:
         for item in root.items:
             if isinstance(item, ast.ModItem):
                 self.convert_mod(item)
+            elif isinstance(item, ast.FnItem):
+                self.convert_fn(item)
             else:
                 emit_error(
                     item.loc,
@@ -521,6 +639,32 @@ class Converter:
         ip = self.builder.insertion_point
         self.builder.create_block_at_end(op.body)
         for stmt in mod.stmts:
+            self.convert_stmt(stmt)
+        self.builder.insertion_point = ip
+
+    def convert_fn(self, fn: ast.FnItem):
+        # Determine the input and output types for the function.
+        input_types = [
+            self.convert_type(arg.fty, arg.ty.loc) for arg in fn.args
+        ]
+        output_types = []
+        if not isinstance(fn.return_fty, UnitType):
+            assert fn.return_ty is not None
+            output_types.append(
+                self.convert_type(fn.return_fty, fn.return_ty.loc))
+        function_type = FunctionType.from_lists(input_types, output_types)
+
+        # Build the function itself, and apply some name hints to the arguments.
+        op = self.builder.insert(
+            FuncOp(fn.name.spelling(), function_type, fn.loc))
+        for block_arg, ast_arg in zip(op.body.blocks[0].args, fn.args):
+            block_arg.name_hint = ast_arg.name.spelling()
+            self.named_values[ast_arg] = block_arg
+
+        # Convert the body statements.
+        ip = self.builder.insertion_point
+        self.builder.insertion_point = InsertPoint.at_end(op.body.blocks[0])
+        for stmt in fn.stmts:
             self.convert_stmt(stmt)
         self.builder.insertion_point = ip
 
@@ -554,6 +698,14 @@ class Converter:
             if stmt.expr:
                 expr = self.convert_expr(stmt.expr)
                 self.builder.insert(AssignOp(value, expr, stmt.expr.loc))
+            return
+
+        if isinstance(stmt, ast.ReturnStmt):
+            if not stmt.expr:
+                self.builder.insert(ReturnOp([], stmt.loc))
+                return
+            expr = self.convert_expr(stmt.expr)
+            self.builder.insert(ReturnOp([expr], stmt.loc))
             return
 
         if isinstance(stmt, ast.AssignStmt):

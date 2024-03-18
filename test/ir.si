@@ -1,4 +1,4 @@
-// RUN: silc %s --dump-ir | FileCheck %s
+// RUN: silc --dump-ir %s | FileCheck %s
 
 // CHECK-LABEL: si.module @Foo
 mod Foo {}
@@ -130,3 +130,30 @@ mod WiresAndRegisters {
     x.set(1337u42);
 }
 
+// CHECK-LABEL: si.func @f1
+// CHECK-SAME: () {
+fn f1() {
+    // CHECK: si.return
+    return;
+}
+
+// CHECK-LABEL: si.func @f2
+// CHECK-SAME: () -> i42 {
+fn f2() -> uint<42> {
+    // CHECK: [[TMP:%.+]] = si.constant 0 : i42
+    // CHECK: si.return [[TMP]] : i42
+    return 0;
+}
+
+// CHECK-LABEL: si.func @f3
+// CHECK-SAME: ([[ARG0:%.+]]: i43) {
+fn f3(x: uint<43>) {
+}
+
+// CHECK-LABEL: si.func @f4
+// CHECK-SAME: ([[ARG0:%.+]] : i44, [[ARG1:%.+]] : i44) -> i44 {
+fn f4(x: uint<44>, y: uint<44>) -> uint<44> {
+    // CHECK: [[TMP:%.+]] = si.add [[ARG0]], [[ARG1]] : i44
+    // CHECK: si.return [[TMP]] : i44
+    return x + y;
+}

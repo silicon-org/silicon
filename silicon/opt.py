@@ -4,9 +4,10 @@ from typing import Type, IO
 from silicon.ir import SiliconDialect
 from silicon.codegen import codegen
 from silicon.transforms.unroll import UnrollPass
-from silicon.diagnostics import DiagnosticException
+from silicon.diagnostics import DiagnosticException, Loc, emit_error
 
 import xdsl
+import xdsl.utils.exceptions
 from xdsl.dialects.builtin import ModuleOp
 from xdsl.xdsl_opt_main import xDSLOptMain
 from xdsl.passes import ModulePass
@@ -54,7 +55,10 @@ class SiliconOptMain(xDSLOptMain):
 
     def apply_passes(self, prog: ModuleOp) -> bool:
         try:
-            return super().apply_passes(prog)
+            try:
+                return super().apply_passes(prog)
+            except xdsl.utils.exceptions.DiagnosticException as e:
+                emit_error(Loc.unknown(), str(e))
         except DiagnosticException:
             self.any_failed = True
             return False
