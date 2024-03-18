@@ -51,3 +51,30 @@ si.module @Foo {
   // CHECK: si.mux [[C0]], [[X]], [[Z]] : i42
   si.mux %c0_i1, %x, %z : i42
 }
+
+// CHECK-LABEL: si.func @f1
+// CHECK: () {
+si.func @f1() {
+  // CHECK: si.return
+  si.return
+}
+
+// CHECK-LABEL: si.func @f2
+// CHECK: () -> i42 {
+si.func @f2() -> i42 {
+  %43 = si.constant 0 : i42 : i42
+  // CHECK: si.return {{%.+}} : i42
+  si.return %43 : i42
+}
+
+// CHECK-LABEL: si.func @f3
+// CHECK: ({{%.+}} : i43) {
+si.func @f3(%x : i43) {
+}
+
+// CHECK-LABEL: si.func @f4
+// CHECK: ([[TMP:%.+]] : i44, {{%.+}} : i44) -> i44 {
+si.func @f4(%0 : i44, %1 : i44) -> i44 {
+  // CHECK: si.return [[TMP]] : i44
+  si.return %0 : i44
+}
