@@ -19,7 +19,7 @@ si.module @Foo {
     %u = si.reg %c, %c9001 : i42
 
     // CHECK: hw.constant 9001 : i42
-    %c9001 = si.constant 9001 : i42 : i42
+    %c9001 = si.constant 9001 : i42
     // CHECK: comb.sub %c0_i16, %a : i16
     si.neg %a : i16
     // CHECK: comb.xor %c-1_i16, %a : i16

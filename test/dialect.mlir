@@ -15,7 +15,7 @@ si.module @Foo {
   si.assign %z, %z : i42
 
   // CHECK: [[C0:%.+]] = si.constant false
-  %c0_i1 = si.constant false : i1
+  %c0_i1 = si.constant false
   // CHECK: si.constant_unit : !si.unit
   %unit = si.constant_unit : !si.unit
 
@@ -73,7 +73,7 @@ si.func @f1() {
 // CHECK-LABEL: si.func @f2
 // CHECK: () -> i42 {
 si.func @f2() -> i42 {
-  %43 = si.constant 0 : i42 : i42
+  %43 = si.constant 0 : i42
   // CHECK: si.return {{%.+}} : i42
   si.return %43 : i42
 }

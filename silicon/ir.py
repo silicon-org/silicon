@@ -18,6 +18,7 @@ import xdsl
 import xdsl.dialects.utils
 from xdsl.builder import (Builder, InsertPoint)
 from xdsl.dialects.builtin import (
+    AnyIntegerAttr,
     FlatSymbolRefAttr,
     FunctionType,
     IntAttr,
@@ -66,6 +67,7 @@ from xdsl.traits import (
     SymbolTable,
 )
 from xdsl.utils.exceptions import VerifyException
+from xdsl.utils.hints import isa
 
 __all__ = ["convert_ast_to_ir"]
 
@@ -439,20 +441,35 @@ class ReturnOp(IRDLOperation):
 class ConstantOp(IRDLOperation):
     name = "si.constant"
     T = Annotated[IntegerType, ConstraintVar("T")]
-    value: IntegerAttr = attr_def(IntegerAttr[T])
+    value: IntegerAttr = prop_def(IntegerAttr[T])
     result: OpResult = result_def(T)
-    assembly_format = "$value `:` type($result) attr-dict"
 
     def __init__(self, value: IntegerAttr, loc: Loc):
         super().__init__(
             result_types=[value.type],
-            attributes={"value": value},
+            properties={"value": value},
         )
         self.loc = loc
 
     @staticmethod
     def from_value(value: int, width: int, loc: Loc) -> ConstantOp:
         return ConstantOp(IntegerAttr(value, IntegerType(width)), loc)
+
+    @classmethod
+    def parse(cls, parser: Parser) -> ConstantOp:
+        p0 = parser.pos
+        value = parser.parse_attribute()
+        if not isa(value, AnyIntegerAttr):
+            parser.raise_error("invalid constant value", p0, parser.pos)
+        attrs = parser.parse_optional_attr_dict()
+        op = ConstantOp(value, Loc.unknown())
+        op.attributes |= attrs
+        return op
+
+    def print(self, printer: Printer):
+        printer.print(" ")
+        printer.print_attribute(self.value)
+        printer.print_op_attributes(self.attributes)
 
 
 # The unit constant `()`, similar to `void` in C, but being an actual value.

@@ -10,7 +10,7 @@ si.module @Foo {
 // -----
 
 si.module @Foo {
-    %c0_i42 = si.constant 0 : i42 : i42
+    %c0_i42 = si.constant 0 : i42
     // CHECK: info: previous definition of port `x` was here
     si.output "x", %c0_i42 : i42
     // CHECK: error: port `x` already defined
@@ -20,7 +20,7 @@ si.module @Foo {
 // -----
 
 si.module @Foo {
-    %c0_i42 = si.constant 0 : i42 : i42
+    %c0_i42 = si.constant 0 : i42
     // CHECK: info: previous definition of port `x` was here
     si.input "x" : i42
     // CHECK: error: port `x` already defined

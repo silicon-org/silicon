@@ -10,7 +10,7 @@ si.module @Outputs {
   // CHECK: si.output "x", [[Y:%.+]] : i32
   %x = si.output_decl "x" : i32
   // CHECK: [[C0:%.+]] = si.constant 0 :
-  %c0_i32 = si.constant 0 : i32 : i32
+  %c0_i32 = si.constant 0 : i32
   // CHECK-NOT: si.assign
   // CHECK: si.not %c0_i32
   si.assign %x, %c0_i32 : i32
@@ -28,9 +28,9 @@ si.module @Vars {
   // CHECK: [[C0:%.+]] = si.constant 0 :
   // CHECK: [[C1:%.+]] = si.constant 1 :
   // CHECK: [[C2:%.+]] = si.constant 2 :
-  %c0_i32 = si.constant 0 : i32 : i32
-  %c1_i32 = si.constant 1 : i32 : i32
-  %c2_i32 = si.constant 2 : i32 : i32
+  %c0_i32 = si.constant 0 : i32
+  %c1_i32 = si.constant 1 : i32
+  %c2_i32 = si.constant 2 : i32
 
   // CHECK-NOT: si.var_decl "v0"
   %v0 = si.var_decl "v0" : i32
@@ -57,7 +57,7 @@ si.module @Wires {
   %unused = si.wire_decl : !si.wire<i32>
 
   // CHECK: [[C0:%.+]] = si.constant 0 : i32
-  %c0_i32 = si.constant 0 : i32 : i32
+  %c0_i32 = si.constant 0 : i32
   // CHECK-NOT: si.wire_decl
   // CHECK-NOT: si.wire_get
   %0 = si.wire_decl : !si.wire<i32>
@@ -80,7 +80,7 @@ si.module @Regs {
   %unused = si.reg_decl %clock : !si.reg<i32>
 
   // CHECK: [[C0:%.+]] = si.constant 0 : i32
-  %c0_i32 = si.constant 0 : i32 : i32
+  %c0_i32 = si.constant 0 : i32
   // CHECK-NOT: si.reg_decl
   // CHECK-NOT: si.reg_current
   // CHECK: [[REG0:%.+]] = si.reg [[CLOCK]], [[C0]] : i32

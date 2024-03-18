@@ -17,6 +17,6 @@ si.module @UnassignedVar {
 
 si.module @BadAssignLHS {
     // CHECK: error: expression `{{.*}}` cannot appear on left-hand side of `=`
-    %0 = si.constant 1 : i32 : i32
+    %0 = si.constant 1 : i32
     si.assign %0, %0 : i32
 }
