@@ -20,3 +20,16 @@ si.module @BadAssignLHS {
     %0 = si.constant 1 : i32
     si.assign %0, %0 : i32
 }
+
+// -----
+
+// CHECK: warning: function `UnusedRoot` is never used
+si.func @UnusedRoot() {
+  si.call @UnusedInner() : () -> ()
+  si.return
+}
+
+// CHECK: warning: function `UnusedInner` is never used
+si.func @UnusedInner() {
+  si.return
+}

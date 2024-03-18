@@ -60,6 +60,7 @@ from xdsl.irdl import (
 from xdsl.parser import Parser
 from xdsl.printer import Printer
 from xdsl.traits import (
+    HasParent,
     IsTerminator,
     IsolatedFromAbove,
     NoTerminator,
@@ -247,6 +248,7 @@ class InputPortOp(IRDLOperation):
     port_name: StringAttr = attr_def(StringAttr)
     value: OpResult = result_def()
     assembly_format = "$port_name `:` type($value) attr-dict"
+    traits = frozenset([HasParent(SiModuleOp)])
 
     def __init__(self, name: str, ty: TypeAttribute, loc: Loc):
         super().__init__(result_types=[ty],
@@ -260,6 +262,7 @@ class OutputPortOp(IRDLOperation):
     port_name: StringAttr = attr_def(StringAttr)
     value: Operand = operand_def()
     assembly_format = "$port_name `,` $value `:` type($value) attr-dict"
+    traits = frozenset([HasParent(SiModuleOp)])
 
     def __init__(self, name: str | StringAttr, value: SSAValue, loc: Loc):
         if isinstance(name, str):
@@ -282,6 +285,7 @@ class DeclOpBase(IRDLOperation):
 @irdl_op_definition
 class OutputDeclOp(DeclOpBase):
     name = "si.output_decl"
+    traits = frozenset([HasParent(SiModuleOp)])
 
 
 @irdl_op_definition
@@ -632,6 +636,11 @@ class CallOp(IRDLOperation):
             raise VerifyException(
                 f"call type {function_type} differs from callee type {callee.function_type}"
             )
+
+    def get_called_func(self) -> FuncOp:
+        callee = SymbolTable.lookup_symbol(self, self.callee)
+        assert isinstance(callee, FuncOp)
+        return callee
 
     @classmethod
     def parse(cls, parser: Parser) -> CallOp:

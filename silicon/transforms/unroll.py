@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, List
+from typing import Dict, List, Set
 
 from silicon import ir
 from silicon.diagnostics import *
@@ -21,11 +21,15 @@ class UnrollPass(ModulePass):
     """
     name = "unroll"
 
+    worklist: List[Operation]
     decls: List[Operation]
     reads: List[Operation]
     assignments: Dict[SSAValue, SSAValue]
+    called_funcs: Set[ir.FuncOp]
 
     def apply(self, ctx: MLContext, module: ModuleOp):
+        self.called_funcs = set()
+
         for op in module.ops:
             if not isinstance(op, ir.SiModuleOp):
                 continue
@@ -33,7 +37,11 @@ class UnrollPass(ModulePass):
             self.decls = []
             self.reads = []
             self.assignments = {}
-            self.unroll(op)
+
+            # Unroll the module body using a worklist.
+            self.worklist = list(op.body.ops)
+            while len(self.worklist) > 0:
+                self.unroll(self.worklist.pop(0))
 
             # Replace all `RegDeclOp`s with a corresponding `RegOp` that has its
             # input connected to the final assigned "next" value.
@@ -80,6 +88,16 @@ class UnrollPass(ModulePass):
                 decl.detach()
                 decl.erase()
 
+        # Remove functions.
+        for op in module.ops:
+            if not isinstance(op, ir.FuncOp):
+                continue
+            if op not in self.called_funcs:
+                emit_warning(op.loc,
+                             f"function `{op.sym_name.data}` is never used")
+            op.detach()
+            op.erase()
+
     def unroll(self, op: Operation):
         # Replace all variable uses with the current assignment.
         for idx in range(len(op.operands)):
@@ -96,6 +114,26 @@ class UnrollPass(ModulePass):
                     f"`{operand.owner.decl_name.data}` is unassigned at this point"
                 )
             op.operands[idx] = assignment
+
+        # Inline calls.
+        if isinstance(op, ir.CallOp):
+            func = op.get_called_func()
+            self.called_funcs.add(func)
+            mapping: Dict[SSAValue, SSAValue] = dict()
+            for call_arg, func_arg in zip(op.args, func.body.blocks[0].args):
+                mapping[func_arg] = call_arg
+            builder = Builder.before(op)
+            inlined_ops = []
+            for body_op in func.body.blocks[0].ops:
+                if isinstance(body_op, ir.ReturnOp):
+                    for call_result, return_arg in zip(op.res, body_op.args):
+                        call_result.replace_by(mapping[return_arg])
+                    continue
+                inlined_ops.append(builder.insert(body_op.clone(mapping)))
+            op.detach()
+            op.erase()
+            self.worklist = inlined_ops + self.worklist
+            return
 
         # Keep track of the declarations for later post-processing.
         if isinstance(op, ir.VarDeclOp) or isinstance(
@@ -129,8 +167,7 @@ class UnrollPass(ModulePass):
             self.reads.append(op)
             return
 
-        # Process the body.
+        # Add any nested ops to the worklist.
         for region in op.regions:
             for block in region.blocks:
-                for inner_op in block.ops:
-                    self.unroll(inner_op)
+                self.worklist = list(block.ops) + self.worklist

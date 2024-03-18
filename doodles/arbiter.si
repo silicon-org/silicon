@@ -1,76 +1,173 @@
-let in1_data = ...
-let in2_data = ...
-let in3_data = ...
-let in4_data = ...
+// RUN: silc %s | firtool --format=mlir
 
-let x = mux(..., in1_data, in2_data)
-let y = mux(..., in3_data, in4_data)
-let out_data = mux(..., x, y)
+mod Arbiter {
+    input in_valid_0: uint<1>;
+    input in_valid_1: uint<1>;
+    input in_valid_2: uint<1>;
+    input in_valid_3: uint<1>;
+    input in_req_0: uint<42>;
+    input in_req_1: uint<42>;
+    input in_req_2: uint<42>;
+    input in_req_3: uint<42>;
+    output in_ready_0: uint<1> = 0;
+    output in_ready_1: uint<1> = 0;
+    output in_ready_2: uint<1> = 0;
+    output in_ready_3: uint<1> = 0;
+    output in_resp_0: uint<19> = 0;
+    output in_resp_1: uint<19> = 0;
+    output in_resp_2: uint<19> = 0;
+    output in_resp_3: uint<19> = 0;
 
-let out_result = wire();
-*in1_result = *out_result;
-*in2_result = *out_result;
-*in3_result = *out_result;
-*in4_result = *out_result;
+    output out_valid: uint<1> = 0;
+    output out_req: uint<42> = 0;
+    input out_ready: uint<1>;
+    input out_resp: uint<19>;
 
+    let tmp_ready_0 = wire(0u1);
+    let tmp_ready_1 = wire(0u1);
+    let tmp_ready_2 = wire(0u1);
+    let tmp_ready_3 = wire(0u1);
+    let tmp_resp_0 = wire(0u19);
+    let tmp_resp_1 = wire(0u19);
+    let tmp_resp_2 = wire(0u19);
+    let tmp_resp_3 = wire(0u19);
+    in_ready_0 = tmp_ready_0.get();
+    in_ready_1 = tmp_ready_1.get();
+    in_ready_2 = tmp_ready_2.get();
+    in_ready_3 = tmp_ready_3.get();
+    in_resp_0 = tmp_resp_0.get();
+    in_resp_1 = tmp_resp_1.get();
+    in_resp_2 = tmp_resp_2.get();
+    in_resp_3 = tmp_resp_3.get();
 
-fn pick(
-    in1_data: u32,
-    in2_data: u32,
-    in3_data: u32,
-    in4_data: u32,
-    in1_result: &u32,
-    in2_result: &u32,
-    in3_result: &u32,
-    in4_result: &u32,
-) -> (
-    out_data: u32,
-    out_result: &u32,
+    let tmp_out_valid = wire(0u1);
+    let tmp_out_req = wire(0u42);
+    out_valid = tmp_out_valid.get();
+    out_req = tmp_out_req.get();
+
+    arbitrate4(
+        in_valid_0,
+        in_valid_1,
+        in_valid_2,
+        in_valid_3,
+        in_req_0,
+        in_req_1,
+        in_req_2,
+        in_req_3,
+        tmp_ready_0,
+        tmp_ready_1,
+        tmp_ready_2,
+        tmp_ready_3,
+        tmp_resp_0,
+        tmp_resp_1,
+        tmp_resp_2,
+        tmp_resp_3,
+        tmp_out_valid,
+        tmp_out_req,
+        out_ready,
+        out_resp,
+    );
+}
+
+fn arbitrate2(
+    in_valid_0: uint<1>,
+    in_valid_1: uint<1>,
+    in_req_0: uint<42>,
+    in_req_1: uint<42>,
+    in_ready_0: Wire<uint<1>>,
+    in_ready_1: Wire<uint<1>>,
+    in_resp_0: Wire<uint<19>>,
+    in_resp_1: Wire<uint<19>>,
+    out_valid: Wire<uint<1>>,
+    out_req: Wire<uint<42>>,
+    out_ready: uint<1>,
+    out_resp: uint<19>,
 ) {
+    let which = in_valid_1;
+    let valid = which.mux(in_valid_1, in_valid_0);
+    let req = which.mux(in_req_1, in_req_0);
+    in_ready_0.set(which.mux(0, out_ready));
+    in_ready_1.set(which.mux(out_ready, 0));
+    in_resp_0.set(which.mux(0, out_resp));
+    in_resp_1.set(which.mux(out_resp, 0));
 
+    out_valid.set(valid);
+    out_req.set(req);
 }
 
-struct Wire {
-    value: u32;
+fn arbitrate4(
+    in_valid_0: uint<1>,
+    in_valid_1: uint<1>,
+    in_valid_2: uint<1>,
+    in_valid_3: uint<1>,
+    in_req_0: uint<42>,
+    in_req_1: uint<42>,
+    in_req_2: uint<42>,
+    in_req_3: uint<42>,
+    in_ready_0: Wire<uint<1>>,
+    in_ready_1: Wire<uint<1>>,
+    in_ready_2: Wire<uint<1>>,
+    in_ready_3: Wire<uint<1>>,
+    in_resp_0: Wire<uint<19>>,
+    in_resp_1: Wire<uint<19>>,
+    in_resp_2: Wire<uint<19>>,
+    in_resp_3: Wire<uint<19>>,
+    out_valid: Wire<uint<1>>,
+    out_req: Wire<uint<42>>,
+    out_ready: uint<1>,
+    out_resp: uint<19>,
+) {
+    let in_valid_01 = wire(0u1);
+    let in_valid_23 = wire(0u1);
+    let in_req_01 = wire(0u42);
+    let in_req_23 = wire(0u42);
+    let in_ready_01 = wire(0u1);
+    let in_ready_23 = wire(0u1);
+    let in_resp_01 = wire(0u19);
+    let in_resp_23 = wire(0u19);
+
+    arbitrate2(
+        in_valid_0,
+        in_valid_1,
+        in_req_0,
+        in_req_1,
+        in_ready_0,
+        in_ready_1,
+        in_resp_0,
+        in_resp_1,
+        in_valid_01,
+        in_req_01,
+        in_ready_01.get(),
+        in_resp_01.get(),
+    );
+
+    arbitrate2(
+        in_valid_2,
+        in_valid_3,
+        in_req_2,
+        in_req_3,
+        in_ready_2,
+        in_ready_3,
+        in_resp_2,
+        in_resp_3,
+        in_valid_23,
+        in_req_23,
+        in_ready_23.get(),
+        in_resp_23.get(),
+    );
+
+    arbitrate2(
+        in_valid_01.get(),
+        in_valid_23.get(),
+        in_req_01.get(),
+        in_req_23.get(),
+        in_ready_01,
+        in_ready_23,
+        in_resp_01,
+        in_resp_23,
+        out_valid,
+        out_req,
+        out_ready,
+        out_resp,
+    );
 }
-
-impl Wire {
-    set() { self.value = ...; }
-    get() { &self.value }
-}
-
-
-struct Arbiter {
-    inputs: [&u32],
-    outp: u32,
-}
-
-
-let arb_module: Arbiter = pick();
-*arb_module.inputs[0] = 42;
-*arb_module.inputs[1] = 512;
-
-let arb2 = pick();
-*arb2.inputs[0] = arb_module.outp;
-
-struct Bus {
-    data: u32,
-    error: &u4,
-}
-
-fn pick2(select: u1, in1: Bus, in2: Bus) -> (out: Bus) {
-    out.data = mux(select, in1.data, in2.data);
-    out.error = wire();
-    *in1.error = *out.error;
-    *in2.error = *out.error;
-}
-
-let p = pick2();
-*p.error = 6;
-
-
-let x: &const u32 = param_N;
-let y: &dyn u32 = input_a;
-
-*x1 = *x2;  *&const u32 = const u32
-*y1 = *y1;  *&dyn u32 = dyn u32

@@ -11,7 +11,7 @@ Rough roadmap:
 - [x] Type inference
 - [x] Basic Intermediate Representation
 - [ ] Canonicalize IR
-- [ ] Functions and calls
+- [x] Functions and calls
 - [ ] Reference types and operations (`&T`, `*x = 4`, `4 + *x`)
 - [ ] Parametric functions
 - [ ] Unit tests and execution
@@ -23,3 +23,5 @@ Rough roadmap:
 - [ ] Enum types
 - [ ] Struct types
 - [ ] Constraints on ports/types in module signature, checked inside/outside
+- [ ] Make `return` an expression
+- [ ] Make blocks and expression

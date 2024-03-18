@@ -134,6 +134,8 @@ class ModuleCodegen:
                 IntegerType.get_signless(op.value.type.width.data),
                 op.value.value.data,
             ).result
+        if isinstance(op, ir.ConstantUnitOp):
+            return hw.ConstantOp.create(IntegerType.get_signless(1), 0).result
         if isinstance(op, ir.NegOp):
             zero = hw.ConstantOp.create(operands[0].type, 0)
             return comb.SubOp(zero, operands[0]).result
