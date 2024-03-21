@@ -225,6 +225,12 @@ class ParenExpr(Expr):
 
 
 @dataclass(eq=False)
+class BlockExpr(Expr):
+    stmts: List[Stmt]
+    result: Optional[Expr]
+
+
+@dataclass(eq=False)
 class UnaryExpr(Expr):
     op: UnaryOp
     arg: Expr

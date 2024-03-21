@@ -64,6 +64,23 @@ mod Expressions {
     // CHECK:   IdentExpr "a"
     (a);
 
+    // CHECK: BlockExpr
+    {}
+    // CHECK: BlockExpr
+    {};
+    // CHECK: BlockExpr
+    // CHECK:   result: IdentExpr "a"
+    { a };
+    // CHECK: BlockExpr
+    // CHECK:   stmts[0]: ExprStmt
+    // CHECK:     IdentExpr "a"
+    // CHECK-NOT: result:
+    { a; };
+    // CHECK: BlockExpr
+    // CHECK:   stmts[0]: LetStmt "x"
+    // CHECK:   result: IdentExpr "a"
+    { let x; a };
+
     // CHECK: UnaryExpr NEG
     // CHECK:   arg: IdentExpr "a"
     -a;

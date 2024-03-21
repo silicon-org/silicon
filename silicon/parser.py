@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import *
+from copy import copy
+
 from silicon.lexer import Token, TokenKind
 from silicon import ast
 from silicon.diagnostics import *
@@ -110,7 +112,7 @@ def parse_item(p: Parser) -> ast.Item:
     emit_error(p.loc(), f"expected item, found {p.tokens[0].kind.name}")
 
 
-def parse_stmt(p: Parser) -> ast.Stmt:
+def parse_stmt_or_expr(p: Parser) -> ast.Stmt | ast.Expr:
     loc = p.loc()
 
     # Parse stray semicolons.
@@ -171,6 +173,8 @@ def parse_stmt(p: Parser) -> ast.Stmt:
 
     # Otherwise this is a statement that starts with an expression.
     expr = parse_expr(p)
+    if p.consume_if(TokenKind.SEMICOLON):
+        return ast.ExprStmt(loc=expr.loc, full_loc=loc | p.last_loc, expr=expr)
 
     # Parse assignments.
     if assign := p.consume_if(TokenKind.ASSIGN):
@@ -181,8 +185,24 @@ def parse_stmt(p: Parser) -> ast.Stmt:
                               lhs=expr,
                               rhs=rhs)
 
-    p.require(TokenKind.SEMICOLON)
-    return ast.ExprStmt(loc=expr.loc, full_loc=loc | p.last_loc, expr=expr)
+    return expr
+
+
+def parse_stmt(p: Parser) -> ast.Stmt:
+    stmt = parse_stmt_or_expr(p)
+    if isinstance(stmt, ast.Stmt):
+        return stmt
+    if expr_requires_semicolon(stmt):
+        p.require(TokenKind.SEMICOLON)
+    return ast.ExprStmt(loc=stmt.loc,
+                        full_loc=stmt.loc | p.last_loc,
+                        expr=stmt)
+
+
+# Check whether an expression requires a trailing semicolon if used as a
+# statement in a block.
+def expr_requires_semicolon(expr: ast.Expr) -> bool:
+    return not isinstance(expr, ast.BlockExpr)
 
 
 def parse_type(p: Parser) -> ast.AstType:
@@ -236,6 +256,27 @@ def parse_expr(
     return expr
 
 
+def parse_prefix_expr(p: Parser) -> ast.Expr:
+    loc = p.loc()
+
+    # Parse unary operators.
+    if op := ast.UNARY_OPS.get(p.tokens[0].kind):
+        op_loc = p.consume().loc
+        arg = parse_prefix_expr(p)
+        return ast.UnaryExpr(
+            loc=op_loc,
+            full_loc=loc | arg.loc,
+            op=op,
+            arg=arg,
+        )
+
+    # Otherwise parse a primary expression and optional suffix expressions.
+    expr = parse_primary_expr(p)
+    while suffix := parse_suffix_expr(p, expr):
+        expr = suffix
+    return expr
+
+
 def parse_infix_expr(
     p: Parser,
     lhs: ast.Expr,
@@ -256,27 +297,6 @@ def parse_infix_expr(
             )
 
     return None
-
-
-def parse_prefix_expr(p: Parser) -> ast.Expr:
-    loc = p.loc()
-
-    # Parse unary operators.
-    if op := ast.UNARY_OPS.get(p.tokens[0].kind):
-        op_loc = p.consume().loc
-        arg = parse_prefix_expr(p)
-        return ast.UnaryExpr(
-            loc=op_loc,
-            full_loc=loc | arg.loc,
-            op=op,
-            arg=arg,
-        )
-
-    # Otherwise parse a primary expression and optional suffix expressions.
-    expr = parse_primary_expr(p)
-    while suffix := parse_suffix_expr(p, expr):
-        expr = suffix
-    return expr
 
 
 def parse_suffix_expr(p: Parser, expr: ast.Expr) -> Optional[ast.Expr]:
@@ -347,4 +367,50 @@ def parse_primary_expr(p: Parser) -> ast.Expr:
                              full_loc=loc | p.last_loc,
                              expr=expr)
 
+    # Parse blocks.
+    if p.isa(TokenKind.LCURLY):
+        return parse_block_expr(p)
+
     emit_error(p.loc(), f"expected expression, found {p.tokens[0].kind.name}")
+
+
+def parse_block_expr(p: Parser) -> ast.BlockExpr:
+    loc = p.loc()
+    stmts: List[ast.Stmt] = []
+    result: Optional[ast.Expr] = None
+    p.require(TokenKind.LCURLY)
+
+    while p.not_delim(TokenKind.RCURLY):
+        stmt = parse_stmt_or_expr(p)
+
+        # If the statement was an expression, this may be the final expression
+        # in the block which defines the block's result value.
+        if isinstance(stmt, ast.Expr):
+            # If this was an expression without subsequent semicolon, and the
+            # next token is the closing brace `}`, this expression is the result
+            # value of the block.
+            if p.isa(TokenKind.RCURLY):
+                result = stmt
+                break
+
+            # Otherwise the block isn't done yet. Complain about the missing
+            # semicolon.
+            if expr_requires_semicolon(stmt):
+                after = copy(p.last_loc)
+                after.offset += after.length
+                after.length = 0
+                emit_error(after, "expected `;` after expression")
+
+            # Wrap this expression up as a statement, since there are more left
+            # in the block.
+            stmt = ast.ExprStmt(loc=stmt.loc,
+                                full_loc=stmt.full_loc,
+                                expr=stmt)
+
+        stmts.append(stmt)
+
+    p.require(TokenKind.RCURLY)
+    return ast.BlockExpr(loc=loc | p.last_loc,
+                         full_loc=loc | p.last_loc,
+                         stmts=stmts,
+                         result=result)
