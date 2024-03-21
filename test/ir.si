@@ -180,3 +180,11 @@ fn calls(a: uint<43>, b: uint<44>) {
     // CHECK: si.assign [[Y]], [[TMP]]
     let y = inputs_and_outputs(b, b);
 }
+
+// CHECK-LABEL: si.func @default_literal_sizes_should_propagate_through_wires
+fn default_literal_sizes_should_propagate_through_wires() {
+    // CHECK: si.var_decl "x" : !si.wire<i0>
+    let x = wire(0);
+    // CHECK: si.var_decl "y" : !si.reg<i0>
+    let y = reg(0, 0);
+}

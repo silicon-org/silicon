@@ -159,24 +159,6 @@ class Typeck:
 
         self.finalize(self.root)
 
-    # Finalize the types in the AST. This replaces all type variables with the
-    # actual type that was inferred.
-    def finalize(self, root: ast.AstNode):
-        for node in root.walk(ast.WalkOrder.PostOrder):
-            if hasattr(node, "fty"):
-                if node.fty is None:
-                    emit_error(node.loc,
-                               f"uninferred type: {node.__class__.__name__}")
-                ty = self.simplify_type(node.fty)
-
-                # Make uninferred uints the minimum size for their literals.
-                if isinstance(ty, InferrableUIntType):
-                    ty.inferred = UIntType(ty.width_hint)
-                    ty = ty.inferred
-
-                node.fty = ty
-            self.finalize_node(node)
-
     def typeck_stmt(self, stmt: ast.Stmt):
         if isinstance(stmt, ast.ExprStmt):
             self.typeck_expr(stmt.expr)
@@ -425,6 +407,34 @@ class Typeck:
             return inner
 
         emit_error(expr.name.loc, f"unknown function `{name}`")
+
+    # Finalize the types in the AST. This replaces all type variables with the
+    # actual type that was inferred.
+    def finalize(self, root: ast.AstNode):
+        for node in root.walk(ast.WalkOrder.PostOrder):
+            if hasattr(node, "fty"):
+                if node.fty is None:
+                    emit_error(node.loc,
+                               f"uninferred type: {node.__class__.__name__}")
+                node.fty = self.finalize_type(node.fty)
+            self.finalize_node(node)
+
+    # A final chance to modify the type of each node in the AST. This is useful
+    # to do a final cleanup and get rid of type variables, or replace uninferred
+    # types with some default.
+    def finalize_type(self, ty: Type) -> Type:
+        ty = self.simplify_type(ty)
+
+        # Make uninferred uints the minimum size for their literals.
+        if isinstance(ty, InferrableUIntType):
+            ty.inferred = UIntType(ty.width_hint)
+            ty = ty.inferred
+
+        # Finalize inner types.
+        if isinstance(ty, (WireType, RegType)):
+            ty.inner = self.finalize_type(ty.inner)
+
+        return ty
 
     def finalize_node(self, node: ast.AstNode):
         # Make sure that integer literals fit into their inferred type.
