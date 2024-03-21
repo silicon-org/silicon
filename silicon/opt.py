@@ -9,8 +9,10 @@ from silicon.diagnostics import DiagnosticException, Loc, emit_error
 import xdsl
 import xdsl.utils.exceptions
 from xdsl.dialects.builtin import ModuleOp
-from xdsl.xdsl_opt_main import xDSLOptMain
 from xdsl.passes import ModulePass
+from xdsl.transforms.canonicalize import CanonicalizePass
+from xdsl.transforms.dead_code_elimination import DeadCodeElimination
+from xdsl.xdsl_opt_main import xDSLOptMain
 
 
 def main():
@@ -28,6 +30,8 @@ class SiliconOptMain(xDSLOptMain):
         self.ctx.load_dialect(SiliconDialect)
 
     def register_all_passes(self):
+        self.register_module_pass(CanonicalizePass)
+        self.register_module_pass(DeadCodeElimination)
         self.register_module_pass(UnrollPass)
 
     def register_module_pass(self, p: Type[ModulePass]):

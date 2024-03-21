@@ -15,6 +15,9 @@ from silicon.ir import convert_ast_to_ir
 from silicon.ty import typeck
 
 from xdsl.ir import MLContext
+from xdsl.passes import PipelinePass
+from xdsl.transforms.canonicalize import CanonicalizePass
+from xdsl.transforms.dead_code_elimination import DeadCodeElimination
 
 
 def main():
@@ -120,7 +123,15 @@ def process_input(args: argparse.Namespace, input: SourceFile):
 
     # Run the lowering pipeline.
     ctx = MLContext()
-    UnrollPass().apply(ctx, ir)
+    pipeline = [
+        CanonicalizePass(),
+        DeadCodeElimination(),
+        UnrollPass(),
+        CanonicalizePass(),
+        DeadCodeElimination(),
+    ]
+    PipelinePass(pipeline).apply(ctx, ir)
+
     if args.dump_final_ir:
         print(ir)
         return

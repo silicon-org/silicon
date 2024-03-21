@@ -60,10 +60,12 @@ from xdsl.irdl import (
 from xdsl.parser import Parser
 from xdsl.printer import Printer
 from xdsl.traits import (
+    ConstantLike,
     HasParent,
     IsTerminator,
     IsolatedFromAbove,
     NoTerminator,
+    Pure,
     SymbolOpInterface,
     SymbolTable,
 )
@@ -447,6 +449,7 @@ class ConstantOp(IRDLOperation):
     T = Annotated[IntegerType, ConstraintVar("T")]
     value: IntegerAttr = prop_def(IntegerAttr[T])
     result: OpResult = result_def(T)
+    traits = frozenset([Pure(), ConstantLike()])
 
     def __init__(self, value: IntegerAttr, loc: Loc):
         super().__init__(
@@ -482,6 +485,7 @@ class ConstantUnitOp(IRDLOperation):
     name = "si.constant_unit"
     result: OpResult = result_def(UnitType)
     assembly_format = "`:` type($result) attr-dict"
+    traits = frozenset([Pure(), ConstantLike()])
 
     def __init__(self, loc: Loc):
         super().__init__(result_types=[UnitType()])
@@ -493,6 +497,7 @@ class UnaryOpBase(IRDLOperation):
     arg: Operand = operand_def(T)
     result: OpResult = result_def(T)
     assembly_format = "$arg `:` type($arg) attr-dict"
+    traits = frozenset([Pure()])
 
     def __init__(self, arg: SSAValue, loc: Loc):
         super().__init__(result_types=[arg.type], operands=[arg])
@@ -515,6 +520,7 @@ class BinaryOpBase(IRDLOperation):
     rhs: Operand = operand_def(T)
     result: OpResult = result_def(T)
     assembly_format = "$lhs `,` $rhs `:` type($lhs) attr-dict"
+    traits = frozenset([Pure()])
 
     def __init__(self, lhs: SSAValue, rhs: SSAValue, loc: Loc):
         super().__init__(result_types=[lhs.type], operands=[lhs, rhs])
@@ -537,6 +543,7 @@ class ConcatOp(IRDLOperation):
     args: VarOperand = var_operand_def(IntegerType)
     result: OpResult = result_def(IntegerType)
     assembly_format = "$args `:` `(` type($args) `)` `->` type($result) attr-dict"
+    traits = frozenset([Pure()])
 
     def __init__(self, args: List[SSAValue], loc: Loc):
         width = 0
@@ -565,6 +572,7 @@ class ExtractOp(IRDLOperation):
     offset: IntAttr = attr_def(IntAttr)
     result: OpResult = result_def(IntegerType)
     assembly_format = "$arg `,` $offset `:` type($arg) `->` type($result) attr-dict"
+    traits = frozenset([Pure()])
 
     def __init__(self, arg: SSAValue, offset: int, width: int, loc: Loc):
         super().__init__(result_types=[IntegerType(width)],
@@ -591,6 +599,7 @@ class MuxOp(IRDLOperation):
     false_value: Operand = operand_def(T)
     result: OpResult = result_def(T)
     assembly_format = "$condition `,` $true_value `,` $false_value `:` type($true_value) attr-dict"
+    traits = frozenset([Pure()])
 
     def __init__(self, condition: SSAValue, true_value: SSAValue,
                  false_value: SSAValue, loc: Loc):

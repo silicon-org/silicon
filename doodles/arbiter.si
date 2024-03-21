@@ -23,14 +23,14 @@ mod Arbiter {
     input out_ready: uint<1>;
     input out_resp: uint<19>;
 
-    let tmp_ready_0 = wire(0u1);
-    let tmp_ready_1 = wire(0u1);
-    let tmp_ready_2 = wire(0u1);
-    let tmp_ready_3 = wire(0u1);
-    let tmp_resp_0 = wire(0u19);
-    let tmp_resp_1 = wire(0u19);
-    let tmp_resp_2 = wire(0u19);
-    let tmp_resp_3 = wire(0u19);
+    let tmp_ready_0 = wire(0);
+    let tmp_ready_1 = wire(0);
+    let tmp_ready_2 = wire(0);
+    let tmp_ready_3 = wire(0);
+    let tmp_resp_0 = wire(0);
+    let tmp_resp_1 = wire(0);
+    let tmp_resp_2 = wire(0);
+    let tmp_resp_3 = wire(0);
     in_ready_0 = tmp_ready_0.get();
     in_ready_1 = tmp_ready_1.get();
     in_ready_2 = tmp_ready_2.get();
@@ -40,8 +40,8 @@ mod Arbiter {
     in_resp_2 = tmp_resp_2.get();
     in_resp_3 = tmp_resp_3.get();
 
-    let tmp_out_valid = wire(0u1);
-    let tmp_out_req = wire(0u42);
+    let tmp_out_valid = wire(0);
+    let tmp_out_req = wire(0);
     out_valid = tmp_out_valid.get();
     out_req = tmp_out_req.get();
 
@@ -117,14 +117,14 @@ fn arbitrate4(
     out_ready: uint<1>,
     out_resp: uint<19>,
 ) {
-    let in_valid_01 = wire(0u1);
-    let in_valid_23 = wire(0u1);
-    let in_req_01 = wire(0u42);
-    let in_req_23 = wire(0u42);
-    let in_ready_01 = wire(0u1);
-    let in_ready_23 = wire(0u1);
-    let in_resp_01 = wire(0u19);
-    let in_resp_23 = wire(0u19);
+    let in_valid_01 = wire(0);
+    let in_valid_23 = wire(0);
+    let in_req_01 = wire(0);
+    let in_req_23 = wire(0);
+    let in_ready_01 = wire(0);
+    let in_ready_23 = wire(0);
+    let in_resp_01 = wire(0);
+    let in_resp_23 = wire(0);
 
     arbitrate2(
         in_valid_0,

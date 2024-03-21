@@ -10,7 +10,7 @@ Rough roadmap:
 - [x] Let bindings
 - [x] Type inference
 - [x] Basic Intermediate Representation
-- [ ] Canonicalize IR
+- [x] Canonicalize IR
 - [x] Functions and calls
 - [ ] Reference types and operations (`&T`, `*x = 4`, `4 + *x`)
 - [ ] Parametric functions
