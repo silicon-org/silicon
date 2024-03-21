@@ -117,6 +117,11 @@ class Stmt(AstNode):
 
 
 @dataclass(eq=False)
+class EmptyStmt(Stmt):
+    pass
+
+
+@dataclass(eq=False)
 class InputStmt(Stmt):
     name: Token
     ty: AstType

@@ -113,6 +113,10 @@ def parse_item(p: Parser) -> ast.Item:
 def parse_stmt(p: Parser) -> ast.Stmt:
     loc = p.loc()
 
+    # Parse stray semicolons.
+    if p.consume_if(TokenKind.SEMICOLON):
+        return ast.EmptyStmt(loc=loc | p.last_loc, full_loc=loc | p.last_loc)
+
     # Parse input port declarations.
     if kw := p.consume_if(TokenKind.KW_INPUT):
         name = p.require(TokenKind.IDENT, "input name")
