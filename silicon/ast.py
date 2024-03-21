@@ -166,6 +166,11 @@ class AstType(AstNode):
 
 
 @dataclass(eq=False)
+class UnitType(AstType):
+    pass
+
+
+@dataclass(eq=False)
 class UIntType(AstType):
     size: int
     size_loc: Loc
@@ -202,6 +207,11 @@ class IdentExpr(Expr):
 class IntLitExpr(Expr):
     value: int
     width: Optional[int]
+
+
+@dataclass(eq=False)
+class UnitLitExpr(Expr):
+    pass
 
 
 @dataclass(eq=False)

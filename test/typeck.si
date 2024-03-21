@@ -21,6 +21,11 @@ mod Foo {
     // CHECK: IntLitExpr fty=uint<42> value=9001
     9001u42;
 
+    // CHECK: UnitLitExpr fty=()
+    ();
+    // CHECK: LetStmt "unit" fty=()
+    let unit: ();
+
     let a: uint<9>;
     let b: uint<9>;
 

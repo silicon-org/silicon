@@ -36,6 +36,8 @@ mod Expressions {
 
     // CHECK: si.constant 9001 : i42
     9001u42;
+    // CHECK: si.constant_unit : !si.unit
+    ();
 
     // CHECK: si.neg [[A]] : i19
     -a;

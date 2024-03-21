@@ -873,6 +873,9 @@ class Converter:
                 ConstantOp.from_value(expr.value, expr.fty.width,
                                       expr.loc)).result
 
+        if isinstance(expr, ast.UnitLitExpr):
+            return self.builder.insert(ConstantUnitOp(expr.loc)).result
+
         if isinstance(expr, ast.IdentExpr):
             target = expr.binding.get()
             # TODO: This should probably be a `si.read_var` op or similar.

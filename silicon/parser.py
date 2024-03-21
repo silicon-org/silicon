@@ -184,6 +184,12 @@ def parse_stmt(p: Parser) -> ast.Stmt:
 def parse_type(p: Parser) -> ast.AstType:
     loc = p.loc()
 
+    # Parse the `()` unit type.
+    if p.consume_if(TokenKind.LPAREN):
+        p.require(TokenKind.RPAREN)
+        return ast.UnitType(loc=loc | p.last_loc)
+
+    # Parse types that start with a name.
     if p.isa(TokenKind.IDENT):
         name = p.tokens[0].spelling()
         if name == "uint":
@@ -292,6 +298,8 @@ def parse_suffix_expr(p: Parser, expr: ast.Expr) -> Optional[ast.Expr]:
 
 
 def parse_primary_expr(p: Parser) -> ast.Expr:
+    loc = p.loc()
+
     # Parse number literals.
     if lit := p.consume_if(TokenKind.NUM_LIT):
         m = re.match(r'(\d+)(u(\d+))?', lit.spelling())
@@ -324,12 +332,15 @@ def parse_primary_expr(p: Parser) -> ast.Expr:
 
         return ast.IdentExpr(loc=token.loc, full_loc=token.loc, name=token)
 
-    # Parse parenthesized expressions.
-    if lparen := p.consume_if(TokenKind.LPAREN):
+    # Parse parenthesized expressions or `()` unit literals.
+    if p.consume_if(TokenKind.LPAREN):
+        if p.consume_if(TokenKind.RPAREN):
+            return ast.UnitLitExpr(loc=loc | p.last_loc,
+                                   full_loc=loc | p.last_loc)
         expr = parse_expr(p)
-        rparen = p.require(TokenKind.RPAREN)
+        p.require(TokenKind.RPAREN)
         return ast.ParenExpr(loc=expr.loc,
-                             full_loc=lparen.loc | rparen.loc,
+                             full_loc=loc | p.last_loc,
                              expr=expr)
 
     emit_error(p.loc(), f"expected expression, found {p.tokens[0].kind.name}")

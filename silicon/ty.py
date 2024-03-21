@@ -138,6 +138,8 @@ class Typeck:
 
     # Convert an AST type node into an actual type.
     def convert_ast_type(self, ty: ast.AstType) -> Type:
+        if isinstance(ty, ast.UnitType):
+            return UnitType()
         if isinstance(ty, ast.UIntType):
             return UIntType(ty.size)
         if isinstance(ty, ast.WireType):
@@ -216,6 +218,9 @@ class Typeck:
                     width_hint=min_bits_for_int(expr.value))
             else:
                 return UIntType(expr.width)
+
+        if isinstance(expr, ast.UnitLitExpr):
+            return UnitType()
 
         if isinstance(expr, ast.IdentExpr):
             target = expr.binding.get()
