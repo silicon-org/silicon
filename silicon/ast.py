@@ -205,6 +205,11 @@ class IntLitExpr(Expr):
 
 
 @dataclass(eq=False)
+class ParenExpr(Expr):
+    expr: Expr
+
+
+@dataclass(eq=False)
 class UnaryExpr(Expr):
     op: UnaryOp
     arg: Expr

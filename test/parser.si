@@ -60,6 +60,9 @@ mod Expressions {
     9001u42;
     // CHECK: IdentExpr "a"
     a;
+    // CHECK: ParenExpr
+    // CHECK:   IdentExpr "a"
+    (a);
 
     // CHECK: UnaryExpr NEG
     // CHECK:   arg: IdentExpr "a"

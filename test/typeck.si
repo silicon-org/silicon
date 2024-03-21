@@ -26,6 +26,8 @@ mod Foo {
 
     // CHECK: IdentExpr fty=uint<9>
     a;
+    // CHECK: ParenExpr fty=uint<9>
+    (a);
     // CHECK: UnaryExpr fty=uint<9>
     -a;
     // CHECK: UnaryExpr fty=uint<9>
@@ -91,6 +93,12 @@ mod Foo {
     let b = reg(0, a);
     let c = b.current();
     b.next(0u42);
+
+    // Should infer through parentheses.
+    // CHECK: LetStmt "a" fty=uint<13>
+    // CHECK:   ParenExpr fty=uint<13>
+    // CHECK:     IntLitExpr fty=uint<13>
+    let a: uint<13> = (0);
 }
 
 // CHECK-LABEL: FnItem "f0"

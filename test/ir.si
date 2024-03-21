@@ -20,7 +20,7 @@ mod Statements {
     // CHECK: si.assign [[V]], [[A]] : i42
     let v: uint<42> = a;
     // CHECK: si.assign [[B]], [[A]] : i42
-    b = a;
+    b = (a);
     // CHECK: si.assign [[U]], [[A]] : i42
     u = a;
 }

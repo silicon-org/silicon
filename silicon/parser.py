@@ -324,4 +324,12 @@ def parse_primary_expr(p: Parser) -> ast.Expr:
 
         return ast.IdentExpr(loc=token.loc, full_loc=token.loc, name=token)
 
+    # Parse parenthesized expressions.
+    if lparen := p.consume_if(TokenKind.LPAREN):
+        expr = parse_expr(p)
+        rparen = p.require(TokenKind.RPAREN)
+        return ast.ParenExpr(loc=expr.loc,
+                             full_loc=lparen.loc | rparen.loc,
+                             expr=expr)
+
     emit_error(p.loc(), f"expected expression, found {p.tokens[0].kind.name}")

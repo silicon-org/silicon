@@ -226,6 +226,9 @@ class Typeck:
                       f"name `{expr.name.spelling()}` defined here")
             emit_error(expr.loc, f"`{expr.name.spelling()}` has no known type")
 
+        if isinstance(expr, ast.ParenExpr):
+            return self.typeck_expr(expr.expr)
+
         if isinstance(expr, ast.UnaryExpr):
             return self.typeck_expr(expr.arg)
 

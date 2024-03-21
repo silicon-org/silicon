@@ -8,7 +8,7 @@ from silicon.diagnostics import *
 from silicon.source import Loc, SourceFile
 from silicon.ty import (
     Type,
-    UIntType,
+    UIntType as TyUIntType,
     UnitType as TyUnitType,
     WireType as TyWireType,
     RegType as TyRegType,
@@ -732,7 +732,7 @@ class Converter:
 
         if isinstance(ty, TyUnitType):
             return UnitType()
-        if isinstance(ty, UIntType):
+        if isinstance(ty, TyUIntType):
             return IntegerType(ty.width)
         if isinstance(ty, TyWireType):
             return WireType(self.convert_type(ty.inner, loc))
@@ -868,7 +868,7 @@ class Converter:
         op: IRDLOperation
 
         if isinstance(expr, ast.IntLitExpr):
-            assert isinstance(expr.fty, UIntType)
+            assert isinstance(expr.fty, TyUIntType)
             return self.builder.insert(
                 ConstantOp.from_value(expr.value, expr.fty.width,
                                       expr.loc)).result
@@ -877,6 +877,9 @@ class Converter:
             target = expr.binding.get()
             # TODO: This should probably be a `si.read_var` op or similar.
             return self.named_values[target]
+
+        if isinstance(expr, ast.ParenExpr):
+            return self.convert_expr(expr.expr)
 
         if isinstance(expr, ast.UnaryExpr):
             arg = self.convert_expr(expr.arg)
