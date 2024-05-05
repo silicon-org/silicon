@@ -1,3 +1,5 @@
+// RUN: silc %s | firtool --format=mlir
+
 mod DumbAlu {
     input clock: uint<1>;
     input lhs: uint<32>;

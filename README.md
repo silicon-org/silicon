@@ -18,7 +18,7 @@ Rough roadmap:
 - [ ] Assertions
 - [ ] If expressions and loop statements
 - [ ] Clock domain associations for values
-- [ ] Tuple types
+- [x] Tuple types
 - [ ] Array types
 - [ ] Enum types
 - [ ] Struct types

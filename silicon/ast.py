@@ -176,6 +176,11 @@ class UnitType(AstType):
 
 
 @dataclass(eq=False)
+class TupleType(AstType):
+    fields: List[AstType]
+
+
+@dataclass(eq=False)
 class UIntType(AstType):
     size: int
     size_loc: Loc
@@ -222,6 +227,17 @@ class UnitLitExpr(Expr):
 @dataclass(eq=False)
 class ParenExpr(Expr):
     expr: Expr
+
+
+@dataclass(eq=False)
+class TupleExpr(Expr):
+    fields: List[Expr]
+
+
+@dataclass(eq=False)
+class TupleFieldExpr(Expr):
+    target: Expr
+    field: int
 
 
 @dataclass(eq=False)

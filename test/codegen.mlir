@@ -34,5 +34,13 @@ si.module @Foo {
     si.extract %a, #builtin.int<9> : i16 -> i4
     // CHECK: comb.mux %c, %a, %b : i16
     si.mux %c, %a, %b : i16
+
+    // CHECK: [[TUPLE:%.+]] = hw.struct_create (%a, %c) : !hw.struct<_0: i16, _1: i1>
+    // CHECK: hw.struct_extract [[TUPLE]]["_0"] : !hw.struct<_0: i16, _1: i1>
+    // CHECK: hw.struct_extract [[TUPLE]]["_1"] : !hw.struct<_0: i16, _1: i1>
+    %tuple = si.tuple_create %a, %c : (i16, i1) -> !si.tuple<[i16, i1]>
+    si.tuple_get %tuple, #builtin.int<0> : !si.tuple<[i16, i1]> -> i16
+    si.tuple_get %tuple, #builtin.int<1> : !si.tuple<[i16, i1]> -> i1
+
     // CHECK: hw.output [[REG]]
 }

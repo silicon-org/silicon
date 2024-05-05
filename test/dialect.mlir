@@ -61,6 +61,13 @@ si.module @Foo {
   si.call @f3(%x) : (i42) -> ()
   // CHECK: si.call @f4([[X]], [[Y]]) : (i42, i42) -> i42
   si.call @f4(%x, %y) : (i42, i42) -> i42
+
+  // CHECK: [[TMP:%.+]] = si.tuple_create [[X]], [[C0]] : (i42, i1) -> !si.tuple<[i42, i1]>
+  %2 = si.tuple_create %x, %c0_i1 : (i42, i1) -> !si.tuple<[i42, i1]>
+  // CHECK: si.tuple_get [[TMP]], #builtin.int<0> : !si.tuple<[i42, i1]> -> i42
+  si.tuple_get %2, #builtin.int<0> : !si.tuple<[i42, i1]> -> i42
+  // CHECK: si.tuple_get [[TMP]], #builtin.int<1> : !si.tuple<[i42, i1]> -> i1
+  si.tuple_get %2, #builtin.int<1> : !si.tuple<[i42, i1]> -> i1
 }
 
 // CHECK-LABEL: si.func @f1

@@ -1,0 +1,6 @@
+// RUN: ! silc %s --dump-ast --split-input-file 2>&1 | FileCheck %s
+
+mod Foo {
+    // CHECK: error: tuple requires at least two fields
+    let x: (uint<32>);
+}

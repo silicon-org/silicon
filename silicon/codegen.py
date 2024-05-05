@@ -37,6 +37,10 @@ def codegen_type(ty: ir.Attribute, loc: Loc) -> circt.ir.Type:
         return IntegerType.get_signless(ty.width.data)
     if isinstance(ty, ir.WireType) or isinstance(ty, ir.RegType):
         return codegen_type(ty.inner, loc)
+    if isinstance(ty, ir.TupleType):
+        fields = [(f"_{i}", codegen_type(field, loc))
+                  for i, field in enumerate(ty.fields)]
+        return hw.StructType.get(fields)
 
     emit_error(loc, f"type `{ty}` not supported for codegen")
 
@@ -161,4 +165,10 @@ class ModuleCodegen:
             next = operands[1]
             clock = seq.ToClockOp(operands[0]).result
             return seq.CompRegOp(next.type, next, clock).result
+        if isinstance(op, ir.TupleCreateOp):
+            ty = codegen_type(op.res.type, ir.get_loc(op))
+            return hw.StructCreateOp(ty, operands).result
+        if isinstance(op, ir.TupleGetOp):
+            ty = codegen_type(op.res.type, ir.get_loc(op))
+            return hw.StructExtractOp(ty, operands[0], op.field.data).result
         return None

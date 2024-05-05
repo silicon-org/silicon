@@ -33,3 +33,16 @@ si.func @UnusedRoot() {
 si.func @UnusedInner() {
   si.return
 }
+
+// -----
+
+// Cannot assign to tuple fields at the moment.
+si.module @AssignTupleField {
+  %false = si.constant 0 : i1
+  %v = si.var_decl "v" : !si.tuple<[i1, i1]>
+  %0 = si.tuple_create %false, %false : (i1, i1) -> !si.tuple<[i1, i1]>
+  si.assign %v, %0 : !si.tuple<[i1, i1]>
+  %1 = si.tuple_get %v, #builtin.int<0> : !si.tuple<[i1, i1]> -> i1
+  // CHECK: error: expression `` cannot appear on left-hand side of `=`
+  si.assign %1, %false : i1
+}

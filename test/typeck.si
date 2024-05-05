@@ -33,6 +33,8 @@ mod Foo {
     a;
     // CHECK: ParenExpr fty=uint<9>
     (a);
+    // CHECK: TupleExpr fty=(uint<9>, uint<9>)
+    (a, b);
     // CHECK: UnaryExpr fty=uint<9>
     -a;
     // CHECK: UnaryExpr fty=uint<9>
@@ -104,6 +106,17 @@ mod Foo {
     // CHECK:   ParenExpr fty=uint<13>
     // CHECK:     IntLitExpr fty=uint<13>
     let a: uint<13> = (0);
+
+    // CHECK: LetStmt "a" fty=(uint<42>, uint<43>)
+    // CHECK: TupleFieldExpr fty=uint<42> field=0
+    // CHECK: TupleFieldExpr fty=uint<43> field=1
+    let a: (uint<42>, uint<43>);
+    a.0;
+    a.1;
+
+    // Should infer through tuple fields.
+    // CHECK: TupleExpr fty=(uint<19>, uint<20>)
+    let a: (uint<19>, uint<20>) = (42, 43);
 }
 
 // CHECK-LABEL: FnItem "f0"

@@ -5,6 +5,12 @@ mod Foo {}
 // CHECK-LABEL: si.module @Bar
 mod Bar {}
 
+// CHECK-LABEL: si.module @Types
+mod Types {
+    // CHECK: si.var_decl "a" : !si.tuple<[i1, i2]>
+    let a: (uint<1>, uint<2>);
+}
+
 // CHECK-LABEL: si.module @Statements
 mod Statements {
     // CHECK: [[A:%.+]] = si.input "a" : i42
@@ -30,14 +36,22 @@ mod Expressions {
     // CHECK: [[A:%.+]] = si.var_decl "a" : i19
     // CHECK: [[B:%.+]] = si.var_decl "b" : i19
     // CHECK: [[C:%.+]] = si.var_decl "c" : i1
+    // CHECK: [[D:%.+]] = si.var_decl "d" : !si.tuple<[i42, i43]>
     let a: uint<19>;
     let b: uint<19>;
     let c: uint<1>;
+    let d: (uint<42>, uint<43>);
 
     // CHECK: si.constant 9001 : i42
     9001u42;
     // CHECK: si.constant_unit : !si.unit
     ();
+    // CHECK: si.tuple_create [[A]], [[C]] : (i19, i1) -> !si.tuple<[i19, i1]>
+    (a, c);
+    // CHECK: si.tuple_get [[D]], #builtin.int<0> : !si.tuple<[i42, i43]> -> i42
+    // CHECK: si.tuple_get [[D]], #builtin.int<1> : !si.tuple<[i42, i43]> -> i43
+    d.0;
+    d.1;
 
     // CHECK: si.neg [[A]] : i19
     -a;

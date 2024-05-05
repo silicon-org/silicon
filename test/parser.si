@@ -17,6 +17,12 @@ mod Types {
     // CHECK: RegType
     // CHECK:   inner: UIntType size=34
     let t2: Reg<uint<34>>;
+    // CHECK: UnitType
+    let t3: ();
+    // CHECK: TupleType
+    // CHECK:   fields[0]: UIntType size=32
+    // CHECK:   fields[1]: UIntType size=33
+    let t4: (uint<32>, uint<33>);
 }
 
 // CHECK-LABEL: ModItem "Statements"
@@ -63,6 +69,18 @@ mod Expressions {
     // CHECK: ParenExpr
     // CHECK:   IdentExpr "a"
     (a);
+    // CHECK: TupleExpr
+    // CHECK:   fields[0]: IdentExpr "a"
+    // CHECK:   fields[1]: IdentExpr "b"
+    (a, b);
+    // CHECK: TupleFieldExpr field=42
+    // CHECK:   IdentExpr "a"
+    a.42;
+    // CHECK: TupleFieldExpr field=3
+    // CHECK:   TupleFieldExpr field=2
+    // CHECK:     TupleFieldExpr field=1
+    // CHECK:       IdentExpr "a"
+    a.1.2.3;
 
     // CHECK: BlockExpr
     {}

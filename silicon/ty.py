@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from math import log2, floor
-from typing import Optional
+from typing import Optional, List
 from dataclasses import dataclass, field
 from itertools import count
 
@@ -32,6 +32,14 @@ class UnitType(Type):
 
     def __str__(self) -> str:
         return "()"
+
+
+@dataclass
+class TupleType(Type):
+    fields: List[Type]
+
+    def __str__(self) -> str:
+        return "(" + ", ".join(map(str, self.fields)) + ")"
 
 
 @dataclass
@@ -140,6 +148,9 @@ class Typeck:
     def convert_ast_type(self, ty: ast.AstType) -> Type:
         if isinstance(ty, ast.UnitType):
             return UnitType()
+        if isinstance(ty, ast.TupleType):
+            return TupleType(
+                [self.convert_ast_type(field) for field in ty.fields])
         if isinstance(ty, ast.UIntType):
             return UIntType(ty.size)
         if isinstance(ty, ast.WireType):
@@ -171,20 +182,18 @@ class Typeck:
             return
 
         if isinstance(stmt, ast.OutputStmt):
-            stmt.fty = self.convert_ast_type(stmt.ty)
+            ty = self.convert_ast_type(stmt.ty)
             if stmt.expr:
-                self.unify_types(stmt.fty, self.typeck_expr(stmt.expr),
-                                 stmt.loc)
+                self.unify_types(ty, self.typeck_expr(stmt.expr), stmt.loc)
+            stmt.fty = self.simplify_type(ty)
             return
 
         if isinstance(stmt, ast.LetStmt):
-            if stmt.ty:
-                stmt.fty = self.convert_ast_type(stmt.ty)
-            else:
-                stmt.fty = InferrableType()
+            ty = self.convert_ast_type(
+                stmt.ty) if stmt.ty else InferrableType()
             if stmt.expr:
-                self.unify_types(stmt.fty, self.typeck_expr(stmt.expr),
-                                 stmt.loc)
+                self.unify_types(ty, self.typeck_expr(stmt.expr), stmt.loc)
+            stmt.fty = self.simplify_type(ty)
             return
 
         if isinstance(stmt, ast.ReturnStmt):
@@ -208,7 +217,7 @@ class Typeck:
                    f"unsupported in typeck: {stmt.__class__.__name__}")
 
     def typeck_expr(self, expr: ast.Expr) -> Type:
-        expr.fty = self.type_of_expr(expr)
+        expr.fty = self.simplify_type(self.type_of_expr(expr))
         return expr.fty
 
     def type_of_expr(self, expr: ast.Expr) -> Type:
@@ -233,6 +242,22 @@ class Typeck:
 
         if isinstance(expr, ast.ParenExpr):
             return self.typeck_expr(expr.expr)
+
+        if isinstance(expr, ast.TupleExpr):
+            fields = [self.typeck_expr(field) for field in expr.fields]
+            return TupleType(fields)
+
+        if isinstance(expr, ast.TupleFieldExpr):
+            ty = self.typeck_expr(expr.target)
+            if not isinstance(ty, TupleType):
+                emit_error(expr.loc, f"cannot access tuple field in `{ty}`")
+            if expr.field >= len(ty.fields):
+                emit_info(
+                    expr.target.loc,
+                    f"the field index `{expr.field}` is outside the tuple `{ty}` whose field range is `0..{len(ty.fields)}`"
+                )
+                emit_error(expr.loc, f"tuple field out of bounds for `{ty}`")
+            return ty.fields[expr.field]
 
         if isinstance(expr, ast.UnaryExpr):
             return self.typeck_expr(expr.arg)
@@ -489,6 +514,13 @@ class Typeck:
             self.unify_types(lhs.inner, rhs.inner, loc, lhs_loc, rhs_loc)
             return
 
+        # Unify fields of tuples.
+        if isinstance(lhs, TupleType) and isinstance(rhs, TupleType):
+            if len(lhs.fields) == len(rhs.fields):
+                for a, b in zip(lhs.fields, rhs.fields):
+                    self.unify_types(a, b, loc, lhs_loc, rhs_loc)
+                return
+
         # unify(uint<?A>, uint<?B>) -> uint<?A>
         # unify(uint<?A>, uint<N>) -> uint<N>
         # unify(uint<N>, uint<?B>) -> uint<N>
@@ -526,6 +558,10 @@ class Typeck:
 
     # Simplify a type by replacing type variables with their assigned type.
     def simplify_type(self, ty: Type) -> Type:
+        if isinstance(ty, TupleType):
+            ty.fields = [self.simplify_type(field) for field in ty.fields]
+            return ty
+
         if isinstance(ty, InferrableUIntType) and ty.inferred:
             ty.inferred = self.simplify_type(ty.inferred)
             return ty.inferred

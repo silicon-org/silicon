@@ -1,0 +1,10 @@
+// RUN: silc %s | firtool --format=mlir
+
+mod Foo {
+    let x = (42, 43);
+    input clock: uint<1>;
+    let u = reg(clock, x);
+    let v = u.current();
+    output y: uint<19> = v.0;
+    output z: uint<20> = v.1;
+}

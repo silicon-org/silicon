@@ -208,10 +208,19 @@ def expr_requires_semicolon(expr: ast.Expr) -> bool:
 def parse_type(p: Parser) -> ast.AstType:
     loc = p.loc()
 
-    # Parse the `()` unit type.
+    # Parse tuples or the `()` unit type.
     if p.consume_if(TokenKind.LPAREN):
+        if p.consume_if(TokenKind.RPAREN):
+            return ast.UnitType(loc=loc | p.last_loc)
+        fields: List[ast.AstType] = []
+        while p.not_delim(TokenKind.RPAREN):
+            fields.append(parse_type(p))
+            if not p.consume_if(TokenKind.COMMA):
+                break
         p.require(TokenKind.RPAREN)
-        return ast.UnitType(loc=loc | p.last_loc)
+        if len(fields) < 2:
+            emit_error(loc | p.last_loc, "tuple requires at least two fields")
+        return ast.TupleType(loc=loc | p.last_loc, fields=fields)
 
     # Parse types that start with a name.
     if p.isa(TokenKind.IDENT):
@@ -300,23 +309,38 @@ def parse_infix_expr(
 
 
 def parse_suffix_expr(p: Parser, expr: ast.Expr) -> Optional[ast.Expr]:
-    # Parse field calls, such as `a.b(c)`.
+    # Parse field calls, such as `a.b(c)`, or tuple field accesses.
     if dot := p.consume_if(TokenKind.DOT):
-        name = p.require(TokenKind.IDENT, "field name")
-        p.require(TokenKind.LPAREN)
-        args: List[ast.Expr] = []
-        while p.not_delim(TokenKind.RPAREN):
-            args.append(parse_expr(p))
-            if not p.consume_if(TokenKind.COMMA):
-                break
-        p.require(TokenKind.RPAREN)
-        return ast.FieldCallExpr(
-            loc=name.loc,
-            full_loc=expr.loc | p.last_loc,
-            target=expr,
-            name=name,
-            args=args,
-        )
+        # a.b(c)
+        if name := p.consume_if(TokenKind.IDENT):
+            p.require(TokenKind.LPAREN)
+            args: List[ast.Expr] = []
+            while p.not_delim(TokenKind.RPAREN):
+                args.append(parse_expr(p))
+                if not p.consume_if(TokenKind.COMMA):
+                    break
+            p.require(TokenKind.RPAREN)
+            return ast.FieldCallExpr(
+                loc=name.loc,
+                full_loc=expr.loc | p.last_loc,
+                target=expr,
+                name=name,
+                args=args,
+            )
+
+        # a.42
+        if index := p.consume_if(TokenKind.NUM_LIT):
+            try:
+                index_value = int(index.spelling())
+            except:
+                emit_error(index.loc, "invalid tuple index")
+            return ast.TupleFieldExpr(loc=index.loc,
+                                      full_loc=expr.loc | p.last_loc,
+                                      target=expr,
+                                      field=index_value)
+
+        emit_error(dot.loc,
+                   f"expected field name, found {p.tokens[0].kind.name}")
 
     return None
 
@@ -356,16 +380,25 @@ def parse_primary_expr(p: Parser) -> ast.Expr:
 
         return ast.IdentExpr(loc=token.loc, full_loc=token.loc, name=token)
 
-    # Parse parenthesized expressions or `()` unit literals.
+    # Parse parenthesized expressions, tuples, or `()` unit literals.
     if p.consume_if(TokenKind.LPAREN):
         if p.consume_if(TokenKind.RPAREN):
             return ast.UnitLitExpr(loc=loc | p.last_loc,
                                    full_loc=loc | p.last_loc)
-        expr = parse_expr(p)
+        fields: List[ast.Expr] = []
+        while p.not_delim(TokenKind.RPAREN):
+            fields.append(parse_expr(p))
+            if not p.consume_if(TokenKind.COMMA):
+                break
         p.require(TokenKind.RPAREN)
-        return ast.ParenExpr(loc=expr.loc,
-                             full_loc=loc | p.last_loc,
-                             expr=expr)
+        if len(fields) == 1:
+            return ast.ParenExpr(loc=fields[0].loc,
+                                 full_loc=loc | p.last_loc,
+                                 expr=fields[0])
+        else:
+            return ast.TupleExpr(loc=loc | p.last_loc,
+                                 full_loc=loc | p.last_loc,
+                                 fields=fields)
 
     # Parse blocks.
     if p.isa(TokenKind.LCURLY):

@@ -12,6 +12,7 @@ from silicon.ty import (
     UnitType as TyUnitType,
     WireType as TyWireType,
     RegType as TyRegType,
+    TupleType as TyTupleType,
 )
 
 import xdsl
@@ -19,6 +20,7 @@ import xdsl.dialects.utils
 from xdsl.builder import (Builder, InsertPoint)
 from xdsl.dialects.builtin import (
     AnyIntegerAttr,
+    ArrayAttr,
     FlatSymbolRefAttr,
     FunctionType,
     IntAttr,
@@ -93,6 +95,17 @@ def get_loc(value: Union[SSAValue, Operation]) -> Loc:
 @irdl_attr_definition
 class UnitType(ParametrizedAttribute, TypeAttribute):
     name = "si.unit"
+
+
+@irdl_attr_definition
+class TupleType(ParametrizedAttribute, TypeAttribute):
+    name = "si.tuple"
+    fields: ParameterDef[ArrayAttr[TypeAttribute]]
+
+    def __init__(self, fields: list[TypeAttribute] | ArrayAttr[TypeAttribute]):
+        if isinstance(fields, list):
+            fields = ArrayAttr(fields)
+        super().__init__([fields])
 
 
 _WireInnerT = TypeVar("_WireInnerT", bound=Attribute)
@@ -671,6 +684,59 @@ class CallOp(IRDLOperation):
         )
 
 
+# Create a tuple.
+@irdl_op_definition
+class TupleCreateOp(IRDLOperation):
+    name = "si.tuple_create"
+    args: VarOperand = var_operand_def()
+    res: OpResult = result_def()
+    assembly_format = "$args `:` `(` type($args) `)` `->` type($res) attr-dict"
+
+    def __init__(
+        self,
+        args: Sequence[SSAValue],
+        loc: Loc,
+    ):
+        fields: List[TypeAttribute] = []
+        for arg in args:
+            assert isa(arg.type, TypeAttribute)
+            fields.append(arg.type)
+        result_type = TupleType(fields)
+        super().__init__(
+            operands=[args],
+            result_types=[result_type],
+        )
+        self.loc = loc
+
+    # TODO: verify
+
+
+# Get the value of a tuple field..
+@irdl_op_definition
+class TupleGetOp(IRDLOperation):
+    name = "si.tuple_get"
+    arg: Operand = operand_def()
+    field: IntAttr = prop_def(IntAttr)
+    res: OpResult = result_def()
+    assembly_format = "$arg `,` $field `:` type($arg) `->` type($res) attr-dict"
+
+    def __init__(
+        self,
+        arg: SSAValue,
+        field: int,
+        loc: Loc,
+    ):
+        assert isa(arg.type, TupleType)
+        super().__init__(
+            operands=[arg],
+            result_types=[arg.type.fields.data[field]],
+            properties={"field": IntAttr(field)},
+        )
+        self.loc = loc
+
+    # TODO: verify
+
+
 #===------------------------------------------------------------------------===#
 # Dialect
 #===------------------------------------------------------------------------===#
@@ -697,12 +763,15 @@ SiliconDialect = Dialect("silicon", [
     ReturnOp,
     SiModuleOp,
     SubOp,
+    TupleCreateOp,
+    TupleGetOp,
     VarDeclOp,
     WireDeclOp,
     WireGetOp,
     WireSetOp,
 ], [
     RegType,
+    TupleType,
     UnitType,
     WireType,
 ])
@@ -732,6 +801,9 @@ class Converter:
 
         if isinstance(ty, TyUnitType):
             return UnitType()
+        if isinstance(ty, TyTupleType):
+            return TupleType(
+                [self.convert_type(field, loc) for field in ty.fields])
         if isinstance(ty, TyUIntType):
             return IntegerType(ty.width)
         if isinstance(ty, TyWireType):
@@ -883,6 +955,17 @@ class Converter:
 
         if isinstance(expr, ast.ParenExpr):
             return self.convert_expr(expr.expr)
+
+        if isinstance(expr, ast.TupleExpr):
+            fields = [self.convert_expr(field) for field in expr.fields]
+            op = self.builder.insert(TupleCreateOp(fields, expr.loc))
+            return op.results[0]
+
+        if isinstance(expr, ast.TupleFieldExpr):
+            op = self.builder.insert(
+                TupleGetOp(self.convert_expr(expr.target), expr.field,
+                           expr.full_loc))
+            return op.results[0]
 
         if isinstance(expr, ast.UnaryExpr):
             arg = self.convert_expr(expr.arg)
