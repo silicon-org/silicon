@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from math import log2, floor
-from typing import Optional, List
+from typing import Optional, List, Dict
 from dataclasses import dataclass, field
 from itertools import count
 
@@ -15,6 +15,44 @@ __all__ = ["typeck"]
 # Compute the minimum number of bits required to represent a given integer.
 def min_bits_for_int(value: int) -> int:
     return floor(log2(value)) + 1 if value > 0 else 0
+
+
+#===------------------------------------------------------------------------===#
+# Parameters
+#===------------------------------------------------------------------------===#
+
+
+@dataclass
+class IntParam:
+    pass
+
+
+@dataclass
+class ConstIntParam(IntParam):
+    value: int
+
+    def __str__(self) -> str:
+        return f"{self.value}"
+
+
+@dataclass
+class FreeIntParam(IntParam):
+    name_hint: Optional[str] = None
+    num: int = field(default_factory=count().__next__)
+
+    def __str__(self) -> str:
+        return self.name_hint or f"@{self.num}"
+
+
+@dataclass
+class InferrableIntParam(IntParam):
+    num: int = field(default_factory=count().__next__)
+
+    # The value this parameter has been inferred to.
+    inferred: Optional[IntParam] = None
+
+    def __str__(self) -> str:
+        return f"?{self.num}"
 
 
 #===------------------------------------------------------------------------===#
@@ -35,6 +73,13 @@ class UnitType(Type):
 
 
 @dataclass
+class GenericIntType(Type):
+
+    def __str__(self) -> str:
+        return "{integer}"
+
+
+@dataclass
 class TupleType(Type):
     fields: List[Type]
 
@@ -44,7 +89,7 @@ class TupleType(Type):
 
 @dataclass
 class UIntType(Type):
-    width: int
+    width: IntParam
 
     def __str__(self) -> str:
         return f"uint<{self.width}>"
@@ -144,6 +189,9 @@ def require_int_lit(
 class Typeck:
     root: ast.ModItem | ast.FnItem
 
+    # TODO: This needs to be a scoped stack probably.
+    params: Dict[ast.AstNode, IntParam] = field(default_factory=dict)
+
     # Convert an AST type node into an actual type.
     def convert_ast_type(self, ty: ast.AstType) -> Type:
         if isinstance(ty, ast.UnitType):
@@ -152,7 +200,19 @@ class Typeck:
             return TupleType(
                 [self.convert_ast_type(field) for field in ty.fields])
         if isinstance(ty, ast.UIntType):
-            return UIntType(ty.size)
+            self.typeck_expr(ty.size)
+            if isinstance(ty.size, ast.IntLitExpr):
+                return UIntType(ConstIntParam(ty.size.value))
+            if isinstance(ty.size, ast.IdentExpr):
+                binding = ty.size.binding.get()
+                param = self.params.get(binding)
+                if not param:
+                    emit_info(binding.loc,
+                              f"`{ty.size.name.spelling()}` defined here")
+                    emit_error(ty.size.loc,
+                               f"invalid parameter for `uint` width")
+                return UIntType(param)
+            emit_error(ty.size.loc, f"unsupported expression for `uint` width")
         if isinstance(ty, ast.WireType):
             return WireType(self.convert_ast_type(ty.inner))
         if isinstance(ty, ast.RegType):
@@ -162,6 +222,11 @@ class Typeck:
     # Type-check the entire AST starting at the `root` node.
     def typeck(self):
         if isinstance(self.root, ast.FnItem):
+            for param in self.root.params:
+                param.fty = GenericIntType()
+                p = FreeIntParam(param.name.spelling())
+                param.free_param = p
+                self.params[param] = p
             for arg in self.root.args:
                 arg.fty = self.convert_ast_type(arg.ty)
             self.root.return_fty = self.convert_ast_type(
@@ -226,7 +291,7 @@ class Typeck:
                 return InferrableUIntType(
                     width_hint=min_bits_for_int(expr.value))
             else:
-                return UIntType(expr.width)
+                return UIntType(ConstIntParam(expr.width))
 
         if isinstance(expr, ast.UnitLitExpr):
             return UnitType()
@@ -290,6 +355,13 @@ class Typeck:
                 emit_info(target.loc, f"`{name}` defined here")
                 emit_error(expr.loc, f"cannot call `{name}`")
 
+            # Define inferrable parameters for the called function's parameters.
+            call_params = []
+            for param in target.params:
+                p = InferrableIntParam()
+                self.params[param] = p
+                call_params.append(p)
+
             # Make sure the arguments match.
             if len(expr.args) != len(target.args):
                 emit_error(
@@ -298,11 +370,15 @@ class Typeck:
                 )
             for call_arg, func_arg in zip(expr.args, target.args):
                 call_ty = self.typeck_expr(call_arg)
+                # TODO: this needs to use a special scope for `self.params` where the func params are defined
                 func_ty = self.convert_ast_type(func_arg.ty)
                 self.unify_types(func_ty,
                                  call_ty,
                                  call_arg.loc,
                                  lhs_loc=func_arg.loc)
+
+            # Annotate the call parameters.
+            expr.call_params = [self.simplify_param(p) for p in call_params]
 
             # Propagate the return type.
             return self.convert_ast_type(
@@ -313,10 +389,11 @@ class Typeck:
             width = 0
             for arg in expr.args:
                 ty = self.typeck_expr(arg)
-                if not isinstance(ty, UIntType):
+                if not isinstance(ty, UIntType) or not isinstance(
+                        ty.width, ConstIntParam):
                     emit_error(arg.loc, f"cannot concatenate `{ty}`")
-                width += ty.width
-            return UIntType(width)
+                width += ty.width.value
+            return UIntType(ConstIntParam(width))
 
         if name == "wire":
             require_num_args(expr, 1)
@@ -325,7 +402,7 @@ class Typeck:
         if name == "reg":
             require_num_args(expr, 2)
             clock = self.typeck_expr(expr.args[0])
-            self.unify_types(UIntType(1),
+            self.unify_types(UIntType(ConstIntParam(1)),
                              clock,
                              expr.loc,
                              rhs_loc=expr.args[0].full_loc)
@@ -343,17 +420,18 @@ class Typeck:
             require_num_args(expr, 1)
             target = self.typeck_expr(expr.target)
             self.typeck_expr(expr.args[0])
-            if not isinstance(target, UIntType):
+            if not isinstance(target, UIntType) or not isinstance(
+                    target.width, ConstIntParam):
                 emit_error(expr.loc, f"cannot access bits in `{target}`")
             offset = require_int_lit(expr, 0)
-            if offset < 0 or offset >= target.width:
+            if offset < 0 or offset >= target.width.value:
                 emit_info(
                     expr.target.loc,
                     f"the bit index `{offset}` is outside the type `{target}` whose bit range is `0..{target.width}`"
                 )
                 emit_error(expr.args[0].loc,
                            f"bit index out of bounds for `{target}`")
-            return UIntType(1)
+            return UIntType(ConstIntParam(1))
 
         if name == "slice":
             require_num_args(expr, 2)
@@ -362,21 +440,22 @@ class Typeck:
             target = self.typeck_expr(expr.target)
             self.typeck_expr(expr.args[0])
             self.typeck_expr(expr.args[1])
-            if not isinstance(target, UIntType):
+            if not isinstance(target, UIntType) or not isinstance(
+                    target.width, ConstIntParam):
                 emit_error(expr.loc, f"cannot slice `{target}`")
-            if offset + width > target.width:
+            if offset + width > target.width.value:
                 emit_info(
                     expr.args[0].loc | expr.args[1].loc,
                     f"the slice `{offset}..{offset+width}` is outside the type `{target}` whose bit range is `0..{target.width}`"
                 )
                 emit_error(expr.args[0].loc | expr.args[1].loc,
                            f"slice out of bounds for `{target}`")
-            return UIntType(width)
+            return UIntType(ConstIntParam(width))
 
         if name == "mux":
             require_num_args(expr, 2)
             target = self.typeck_expr(expr.target)
-            self.unify_types(UIntType(1),
+            self.unify_types(UIntType(ConstIntParam(1)),
                              target,
                              expr.loc,
                              rhs_loc=expr.target.full_loc)
@@ -460,7 +539,7 @@ class Typeck:
 
         # Make uninferred uints the minimum size for their literals.
         if isinstance(ty, InferrableUIntType):
-            ty.inferred = UIntType(ty.width_hint)
+            ty.inferred = UIntType(ConstIntParam(ty.width_hint))
             ty = ty.inferred
 
         # Finalize inner types.
@@ -473,7 +552,9 @@ class Typeck:
         # Make sure that integer literals fit into their inferred type.
         if isinstance(node, ast.IntLitExpr) and node.width is None:
             width = min_bits_for_int(node.value)
-            if isinstance(node.fty, UIntType) and width > node.fty.width:
+            if isinstance(node.fty, UIntType) and (
+                    not isinstance(node.fty.width, ConstIntParam)
+                    or width > node.fty.width.value):
                 emit_info(
                     node.loc,
                     f"the literal `{node.value}` does not fit into the type `{node.fty}` since it requires at least {width} bits"
@@ -536,6 +617,18 @@ class Typeck:
             rhs.inferred = lhs
             return
 
+        if isinstance(lhs, UIntType) and isinstance(rhs, UIntType):
+            if isinstance(lhs.width, InferrableIntParam) and isinstance(
+                    rhs.width, InferrableIntParam):
+                rhs.width.inferred = lhs.width
+                return
+            if isinstance(rhs.width, InferrableIntParam):
+                rhs.width.inferred = lhs.width
+                return
+            if isinstance(lhs.width, InferrableIntParam):
+                lhs.width.inferred = rhs.width
+                return
+
         # unify(?A, ?B) -> ?A
         # unify(?A, T) -> T
         # unify(T, ?B) -> T
@@ -570,7 +663,18 @@ class Typeck:
             ty.inferred = self.simplify_type(ty.inferred)
             return ty.inferred
 
+        if isinstance(ty, UIntType):
+            ty.width = self.simplify_param(ty.width)
+
         return ty
+
+    # Simplify a parameter by replacing variables with their assigned value.
+    def simplify_param(self, param: IntParam) -> IntParam:
+        if isinstance(param, InferrableIntParam) and param.inferred:
+            param.inferred = self.simplify_param(param.inferred)
+            return param.inferred
+
+        return param
 
 
 def typeck(root: ast.Root):

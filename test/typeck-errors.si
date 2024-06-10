@@ -198,3 +198,12 @@ fn f2(x: uint<43>) {
     // CHECK: error: incompatible types: `uint<42>` and `uint<43>`
     f1(x);
 }
+
+// -----
+
+fn f1<N,M>() {
+    let a: uint<N>;
+    let b: uint<M>;
+    // CHECK: error: incompatible types: `uint<N>` and `uint<M>`
+    a = b;
+}

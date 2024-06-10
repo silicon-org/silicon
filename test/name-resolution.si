@@ -42,3 +42,14 @@ fn f2(x: uint<32>) {
     // CHECK: IdentExpr "x" binding=FnArg([[ARG_ID]])
     x;
 }
+
+// CHECK-LABEL: FnItem "f3"
+// CHECK: FnParam "N" {{.*}}[[PARAM_ID:@.+]]
+// CHECK: FnArg "x"
+// CHECK:   ty: UIntType
+// CHECK:     size: IdentExpr "N" binding=FnParam([[PARAM_ID]])
+fn f3<N>(x: uint<N>) {
+    // CHECK: ExprStmt
+    // CHECK:   IdentExpr "N" binding=FnParam([[PARAM_ID]])
+    N;
+}

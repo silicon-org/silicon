@@ -143,3 +143,25 @@ fn f2() {
     // CHECK: LetStmt "b" fty=uint<13>
     let b = f1(a);
 }
+
+// CHECK-LABEL: FnItem "f3"
+fn f3<N>() {
+    // CHECK: LetStmt "a" fty=uint<N>
+    let a: uint<N>;
+    // CHECK: LetStmt "b" fty=uint<N>
+    let b: uint<N>;
+}
+
+fn f4<N>(a: uint<N>) {}
+fn f5(b: uint<42>) {
+    f4(b);
+}
+
+fn f6<N>(a: uint<N>, b: uint<N>) -> uint<N> {}
+fn f7() {
+    let a;
+    let b = f6(a, a);
+    let c = b;
+    let d = f6(c, c);
+    d = 1u16;
+}

@@ -99,6 +99,7 @@ def declare_node(node: ast.AstNode, scope: Scope):
     if isinstance(node, (
             ast.ModItem,
             ast.FnItem,
+            ast.FnParam,
             ast.FnArg,
             ast.InputStmt,
             ast.OutputStmt,

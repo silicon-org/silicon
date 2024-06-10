@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Generator, List, Optional, Dict
 from silicon.lexer import Token, TokenKind
 from silicon.source import Loc
-from silicon.ty import Type
+from silicon.ty import Type, IntParam, FreeIntParam
 from enum import Enum, IntEnum, auto
 
 
@@ -92,10 +92,17 @@ class ModItem(Item):
 class FnItem(Item):
     full_loc: Loc
     name: Token
+    params: List[FnParam]
     args: List[FnArg]
     return_ty: Optional[AstType]
     stmts: List[Stmt]
     return_fty: Optional[Type] = None
+
+
+@dataclass(eq=False)
+class FnParam(AstNode):
+    name: Token
+    free_param: Optional[FreeIntParam] = None
 
 
 @dataclass(eq=False)
@@ -182,8 +189,7 @@ class TupleType(AstType):
 
 @dataclass(eq=False)
 class UIntType(AstType):
-    size: int
-    size_loc: Loc
+    size: Expr
 
 
 @dataclass(eq=False)
@@ -306,6 +312,7 @@ class CallExpr(Expr):
     name: Token
     args: List[Expr]
     binding: Binding = field(default_factory=Binding)
+    call_params: Optional[List[IntParam]] = None
 
 
 @dataclass(eq=False)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Dict, TypeVar, List, Generic, Union, Sequence
+from typing import Annotated, Dict, TypeVar, List, Generic, Union, Sequence, Tuple
 from dataclasses import dataclass
 
 from silicon import ast
@@ -8,11 +8,13 @@ from silicon.diagnostics import *
 from silicon.source import Loc, SourceFile
 from silicon.ty import (
     Type,
+    ConstIntParam as TyConstIntParam,
+    FreeIntParam as TyFreeIntParam,
+    RegType as TyRegType,
+    TupleType as TyTupleType,
     UIntType as TyUIntType,
     UnitType as TyUnitType,
     WireType as TyWireType,
-    RegType as TyRegType,
-    TupleType as TyTupleType,
 )
 
 import xdsl
@@ -788,6 +790,8 @@ class Converter:
     named_values: Dict[ast.AstNode, SSAValue]
     is_terminated_at: Loc | None
     warned_about_terminator_at: Loc | None
+    fn_worklist: List[Tuple[ast.FnItem, List[int]]]
+    params: Dict[int, int]
 
     def __init__(self):
         self.module = ModuleOp([])
@@ -795,6 +799,8 @@ class Converter:
         self.named_values = dict()
         self.is_terminated_at = None
         self.warned_about_terminator_at = None
+        self.fn_worklist = []
+        self.params = dict()
 
     def convert_type(self, ty: Type | None, loc: Loc) -> TypeAttribute:
         assert ty is not None, "type checking should have assigned types"
@@ -805,7 +811,13 @@ class Converter:
             return TupleType(
                 [self.convert_type(field, loc) for field in ty.fields])
         if isinstance(ty, TyUIntType):
-            return IntegerType(ty.width)
+            if isinstance(ty.width, TyConstIntParam):
+                return IntegerType(ty.width.value)
+            if isinstance(ty.width, TyFreeIntParam):
+                param = self.params.get(ty.width.num)
+                if param is None:
+                    emit_error(loc, f"param {ty.width} not set")
+                return IntegerType(param)
         if isinstance(ty, TyWireType):
             return WireType(self.convert_type(ty.inner, loc))
         if isinstance(ty, TyRegType):
@@ -819,11 +831,15 @@ class Converter:
             if isinstance(item, ast.ModItem):
                 self.convert_mod(item)
             elif isinstance(item, ast.FnItem):
-                self.convert_fn(item)
+                if not item.params:
+                    self.convert_fn(item, [])
             else:
                 emit_error(
                     item.loc,
                     f"unsupported in IR conversion: {item.__class__.__name__}")
+            while self.fn_worklist:
+                fn, params = self.fn_worklist.pop()
+                self.convert_fn(fn, params)
 
         # Verify the module.
         self.module.verify()
@@ -839,7 +855,13 @@ class Converter:
             self.convert_stmt(stmt)
         self.builder.insertion_point = ip
 
-    def convert_fn(self, fn: ast.FnItem):
+    def convert_fn(self, fn: ast.FnItem, params: List[int]):
+        func_name = fn.name.spelling()
+        for func_param, value in zip(fn.params, params):
+            assert func_param.free_param is not None
+            func_name += f"_{value}"
+            self.params[func_param.free_param.num] = value
+
         # Determine the input and output types for the function.
         input_types = [
             self.convert_type(arg.fty, arg.ty.loc) for arg in fn.args
@@ -852,8 +874,7 @@ class Converter:
         function_type = FunctionType.from_lists(input_types, output_types)
 
         # Build the function itself, and apply some name hints to the arguments.
-        op = self.builder.insert(
-            FuncOp(fn.name.spelling(), function_type, fn.loc))
+        op = self.builder.insert(FuncOp(func_name, function_type, fn.loc))
         for block_arg, ast_arg in zip(op.body.blocks[0].args, fn.args):
             block_arg.name_hint = ast_arg.name.spelling()
             self.named_values[ast_arg] = block_arg
@@ -941,8 +962,13 @@ class Converter:
 
         if isinstance(expr, ast.IntLitExpr):
             assert isinstance(expr.fty, TyUIntType)
+            if not isinstance(expr.fty.width, TyConstIntParam):
+                emit_error(
+                    expr.loc,
+                    f"`{expr.loc.spelling}` has unknown width {expr.fty.width}"
+                )
             return self.builder.insert(
-                ConstantOp.from_value(expr.value, expr.fty.width,
+                ConstantOp.from_value(expr.value, expr.fty.width.value,
                                       expr.loc)).result
 
         if isinstance(expr, ast.UnitLitExpr):
@@ -1007,15 +1033,28 @@ class Converter:
     def convert_call_expr(self, expr: ast.CallExpr) -> SSAValue:
         if target := expr.binding.target:
             assert isinstance(target, ast.FnItem)
+            func_name = target.name.spelling()
+            if target.params:
+                params = []
+                assert expr.call_params is not None
+                for func_param, call_param in zip(target.params,
+                                                  expr.call_params):
+                    if not isinstance(call_param, TyConstIntParam):
+                        emit_error(
+                            expr.loc,
+                            f"parameter `{func_param.name.spelling()}` is not a constant integer"
+                        )
+                    func_name += f"_{call_param.value}"
+                    params.append(call_param.value)
+                self.fn_worklist.append((target, params))
             args = [self.convert_expr(arg) for arg in expr.args]
             if isinstance(expr.fty, TyUnitType):
-                self.builder.insert(
-                    CallOp(target.name.spelling(), args, [], expr.loc))
+                self.builder.insert(CallOp(func_name, args, [], expr.loc))
                 return self.builder.insert(ConstantUnitOp(expr.loc)).result
             else:
                 results = [self.convert_type(expr.fty, expr.loc)]
                 op = self.builder.insert(
-                    CallOp(target.name.spelling(), args, results, expr.loc))
+                    CallOp(func_name, args, results, expr.loc))
                 return op.results[0]
 
         # Handle builtin functions.

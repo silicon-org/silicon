@@ -75,6 +75,16 @@ def parse_item(p: Parser) -> ast.Item:
     if kw := p.consume_if(TokenKind.KW_FN):
         name = p.require(TokenKind.IDENT, "function name")
 
+        # Parse optional parameters.
+        params: List[ast.FnParam] = []
+        if p.consume_if(TokenKind.LT):
+            while p.not_delim(TokenKind.GT):
+                param_name = p.require(TokenKind.IDENT, "parameter name")
+                params.append(ast.FnParam(loc=param_name.loc, name=param_name))
+                if not p.consume_if(TokenKind.COMMA):
+                    break
+            p.require(TokenKind.GT)
+
         # Parse arguments.
         p.require(TokenKind.LPAREN)
         args: List[ast.FnArg] = []
@@ -105,6 +115,7 @@ def parse_item(p: Parser) -> ast.Item:
         return ast.FnItem(loc=name.loc,
                           full_loc=kw.loc | p.last_loc,
                           name=name,
+                          params=params,
                           args=args,
                           return_ty=return_ty,
                           stmts=stmts)
@@ -228,15 +239,10 @@ def parse_type(p: Parser) -> ast.AstType:
         if name == "uint":
             token = p.consume()
             p.require(TokenKind.LT)
-            size = p.require(TokenKind.NUM_LIT)
-            try:
-                size_value = int(size.spelling())
-            except:
-                emit_error(size.loc, "invalid size for `uint`")
+            size = parse_expr(p)
             p.require(TokenKind.GT)
             return ast.UIntType(loc=loc | p.last_loc,
-                                size=size_value,
-                                size_loc=size.loc)
+                                size=size)
 
         if name == "Wire":
             token = p.consume()

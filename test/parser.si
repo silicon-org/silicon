@@ -9,41 +9,49 @@ mod Bar {}
 
 // CHECK-LABEL: ModItem "Types"
 mod Types {
-    // CHECK: UIntType size=32
+    // CHECK: UIntType
+    // CHECK:   size: IntLitExpr value=32
     let t0: uint<32>;
     // CHECK: WireType
-    // CHECK:   inner: UIntType size=33
+    // CHECK:   inner: UIntType
+    // CHECK:     size: IntLitExpr value=33
     let t1: Wire<uint<33>>;
     // CHECK: RegType
-    // CHECK:   inner: UIntType size=34
+    // CHECK:   inner: UIntType
+    // CHECK:     size: IntLitExpr value=34
     let t2: Reg<uint<34>>;
     // CHECK: UnitType
     let t3: ();
     // CHECK: TupleType
-    // CHECK:   fields[0]: UIntType size=32
-    // CHECK:   fields[1]: UIntType size=33
+    // CHECK:   fields[0]: UIntType
+    // CHECK:     size: IntLitExpr value=32
+    // CHECK:   fields[1]: UIntType
+    // CHECK:     size: IntLitExpr value=33
     let t4: (uint<32>, uint<33>);
+    // CHECK: UIntType
+    // CHECK:   size: IdentExpr "N"
+    let t5: uint<N>;
 }
 
 // CHECK-LABEL: ModItem "Statements"
 mod Statements {
     // CHECK: InputStmt "a"
-    // CHECK: ty: UIntType size=32
+    // CHECK: ty: UIntType
     input a: uint<32>;
     // CHECK: OutputStmt "b"
-    // CHECK: ty: UIntType size=11
+    // CHECK: ty: UIntType
     // CHECK-NOT: expr:
     output b: uint<11>;
     // CHECK: OutputStmt "c"
-    // CHECK: ty: UIntType size=19
+    // CHECK: ty: UIntType
     // CHECK: expr: IdentExpr "a"
     output c: uint<19> = a;
 
     // CHECK: LetStmt "v0"
-    // CHECK: ty: UIntType size=42
+    // CHECK: ty: UIntType
     let v0: uint<42>;
     // CHECK: LetStmt "v1"
-    // CHECK: ty: UIntType size=42
+    // CHECK: ty: UIntType
     // CHECK: expr: IdentExpr "a"
     let v1: uint<42> = a;
 
@@ -153,18 +161,37 @@ fn f1() {
 }
 
 // CHECK-LABEL: FnItem "f2"
-// CHECK: return_ty: UIntType size=42
+// CHECK: return_ty: UIntType
+// CHECK:   size: IntLitExpr value=42
 fn f2() -> uint<42> {}
 
 // CHECK-LABEL: FnItem "f3"
 // CHECK: args[0]: FnArg "x"
-// CHECK:   ty: UIntType size=43
+// CHECK:   ty: UIntType
+// CHECK:     size: IntLitExpr value=43
 fn f3(x: uint<43>) {}
 
 // CHECK-LABEL: FnItem "f4"
 // CHECK: args[0]: FnArg "x"
-// CHECK:   ty: UIntType size=44
+// CHECK:   ty: UIntType
+// CHECK:     size: IntLitExpr value=44
 // CHECK: args[1]: FnArg "y"
-// CHECK:   ty: UIntType size=45
-// CHECK: return_ty: UIntType size=46
+// CHECK:   ty: UIntType
+// CHECK:     size: IntLitExpr value=45
+// CHECK: return_ty: UIntType
+// CHECK:     size: IntLitExpr value=46
 fn f4(x: uint<44>, y: uint<45>) -> uint<46> {}
+
+// CHECK-LABEL: FnItem "paramFunc1"
+fn paramFunc1<>() {}
+
+// CHECK-LABEL: FnItem "paramFunc2"
+// CHECK: params[0]: FnParam "N"
+fn paramFunc2<N>() {}
+
+// CHECK-LABEL: FnItem "paramFunc3"
+// CHECK: params[0]: FnParam "N"
+// CHECK: args[0]: FnArg "x"
+// CHECK:   ty: UIntType
+// CHECK:     size: IdentExpr "N"
+fn paramFunc3<N,>(x: uint<N>) {}
