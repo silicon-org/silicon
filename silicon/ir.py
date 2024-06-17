@@ -787,18 +787,22 @@ SiliconDialect = Dialect("silicon", [
 class Converter:
     module: ModuleOp
     builder: Builder
+    name_uniquification_ids: Dict[str, int]
     named_values: Dict[ast.AstNode, SSAValue]
     is_terminated_at: Loc | None
     warned_about_terminator_at: Loc | None
-    fn_worklist: List[Tuple[ast.FnItem, List[int]]]
+    generated_fns: Dict[Tuple[ast.FnItem, Tuple[int, ...]], str]
+    fn_worklist: List[Tuple[ast.FnItem, Tuple[int, ...], str]]
     params: Dict[int, int]
 
     def __init__(self):
         self.module = ModuleOp([])
         self.builder = Builder.at_end(self.module.body.blocks[0])
+        self.name_uniquification_ids = dict()
         self.named_values = dict()
         self.is_terminated_at = None
         self.warned_about_terminator_at = None
+        self.generated_fns = dict()
         self.fn_worklist = []
         self.params = dict()
 
@@ -832,22 +836,39 @@ class Converter:
                 self.convert_mod(item)
             elif isinstance(item, ast.FnItem):
                 if not item.params:
-                    self.convert_fn(item, [])
+                    self.schedule_convert_fn(item, ())
             else:
                 emit_error(
                     item.loc,
                     f"unsupported in IR conversion: {item.__class__.__name__}")
             while self.fn_worklist:
-                fn, params = self.fn_worklist.pop()
-                self.convert_fn(fn, params)
+                fn, params, name = self.fn_worklist.pop(0)
+                self.convert_fn(fn, params, name)
 
         # Verify the module.
         self.module.verify()
         return self.module
 
+    # Returns a version of the given `name` that is guaranteed to be unique in
+    # the IR.
+    def uniquify_name(self, name: str) -> str:
+        idx = self.name_uniquification_ids.get(name)
+        if idx is None:
+            self.name_uniquification_ids[name] = 0
+            return name
+
+        while True:
+            try_name = f"{name}_{idx}"
+            idx += 1
+            if try_name not in self.name_uniquification_ids:
+                break
+        self.name_uniquification_ids[name] = idx
+        self.name_uniquification_ids[try_name] = 0
+        return try_name
+
     def convert_mod(self, mod: ast.ModItem):
-        op = self.builder.insert(
-            SiModuleOp.with_empty_body(mod.name.spelling(), mod.loc))
+        name = self.uniquify_name(mod.name.spelling())
+        op = self.builder.insert(SiModuleOp.with_empty_body(name, mod.loc))
         ip = self.builder.insertion_point
         self.builder.create_block_at_end(op.body)
         self.is_terminated_at = None
@@ -855,11 +876,23 @@ class Converter:
             self.convert_stmt(stmt)
         self.builder.insertion_point = ip
 
-    def convert_fn(self, fn: ast.FnItem, params: List[int]):
-        func_name = fn.name.spelling()
+    def schedule_convert_fn(self, fn: ast.FnItem, params: Tuple[int,
+                                                                ...]) -> str:
+        if existing_fn_name := self.generated_fns.get((fn, params)):
+            return existing_fn_name
+
+        name = fn.name.spelling()
+        for param in params:
+            name += f"_{param}"
+        name = self.uniquify_name(name)
+        self.generated_fns[(fn, params)] = name
+        self.fn_worklist.append((fn, params, name))
+        return name
+
+    def convert_fn(self, fn: ast.FnItem, params: Tuple[int, ...],
+                   func_name: str):
         for func_param, value in zip(fn.params, params):
             assert func_param.free_param is not None
-            func_name += f"_{value}"
             self.params[func_param.free_param.num] = value
 
         # Determine the input and output types for the function.
@@ -1033,20 +1066,16 @@ class Converter:
     def convert_call_expr(self, expr: ast.CallExpr) -> SSAValue:
         if target := expr.binding.target:
             assert isinstance(target, ast.FnItem)
-            func_name = target.name.spelling()
-            if target.params:
-                params = []
-                assert expr.call_params is not None
-                for func_param, call_param in zip(target.params,
-                                                  expr.call_params):
-                    if not isinstance(call_param, TyConstIntParam):
-                        emit_error(
-                            expr.loc,
-                            f"parameter `{func_param.name.spelling()}` is not a constant integer"
-                        )
-                    func_name += f"_{call_param.value}"
-                    params.append(call_param.value)
-                self.fn_worklist.append((target, params))
+            assert expr.call_params is not None
+            params = []
+            for func_param, call_param in zip(target.params, expr.call_params):
+                if not isinstance(call_param, TyConstIntParam):
+                    emit_error(
+                        expr.loc,
+                        f"parameter `{func_param.name.spelling()}` is not a constant integer"
+                    )
+                params.append(call_param.value)
+            func_name = self.schedule_convert_fn(target, tuple(params))
             args = [self.convert_expr(arg) for arg in expr.args]
             if isinstance(expr.fty, TyUnitType):
                 self.builder.insert(CallOp(func_name, args, [], expr.loc))

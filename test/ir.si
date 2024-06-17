@@ -205,20 +205,22 @@ fn default_literal_sizes_should_propagate_through_wires() {
     let y = reg(0, 0);
 }
 
-// CHECK-LABEL: si.func @param_func_1
-fn param_func_1(a: uint<4>, b: uint<5>) {
-    // CHECK: si.call @param_func_2{{.*}} : (i4, i4) -> i4
-    param_func_2(a, a);
-    // CHECK: si.call @param_func_2{{.*}} : (i5, i5) -> i5
-    param_func_2(b, b);
-    // CHECK: si.call @param_func_3{{.*}} : (i4, i5) -> i5
-    param_func_3(a, b);
+// CHECK-LABEL: si.func @param_func_a
+fn param_func_a(a: uint<4>, b: uint<5>) {
+    // CHECK: si.call @param_func_b{{.*}} : (i4, i4) -> i4
+    param_func_b(a, a);
+    // CHECK: si.call @param_func_b{{.*}} : (i4, i4) -> i4
+    param_func_b(a, a);
+    // CHECK: si.call @param_func_b{{.*}} : (i5, i5) -> i5
+    param_func_b(b, b);
+    // CHECK: si.call @param_func_c{{.*}} : (i4, i5) -> i5
+    param_func_c(a, b);
 }
 
-fn param_func_2<N>(u: uint<N>, v: uint<N>) -> uint<N> {
+fn param_func_b<N>(u: uint<N>, v: uint<N>) -> uint<N> {
     return u + v;
 }
 
-fn param_func_3<N, M>(u: uint<N>, v: uint<M>) -> uint<M> {
+fn param_func_c<N, M>(u: uint<N>, v: uint<M>) -> uint<M> {
     return v;
 }
