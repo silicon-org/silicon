@@ -51,6 +51,11 @@ class InferrableIntParam(IntParam):
     # The value this parameter has been inferred to.
     inferred: Optional[IntParam] = None
 
+    # The minimum number of bits needed by the literal that generated this
+    # parameter. If the parameter remains uninferred, this width shall be used
+    # instead.
+    width_hint: int = 0
+
     def __str__(self) -> str:
         return f"?{self.num}"
 
@@ -124,25 +129,6 @@ class InferrableType(Type):
 
     def __str__(self) -> str:
         return f"?{self.num}"
-
-
-@dataclass
-class InferrableUIntType(Type):
-    # A unique integer identifier.
-    num: int = field(default_factory=count().__next__)
-
-    # The type this uint has been inferred to.
-    inferred: Type | None = None
-
-    # The minimum number of bits needed by the literal if this type remains
-    # uninferred.
-    width_hint: int = 0
-
-    def __eq__(self, other) -> bool:
-        return id(self) == id(other)
-
-    def __str__(self) -> str:
-        return f"uint<?{self.num}>"
 
 
 #===------------------------------------------------------------------------===#
@@ -291,8 +277,9 @@ class Typeck:
     def type_of_expr(self, expr: ast.Expr) -> Type:
         if isinstance(expr, ast.IntLitExpr):
             if expr.width is None:
-                return InferrableUIntType(
-                    width_hint=min_bits_for_int(expr.value))
+                return UIntType(
+                    InferrableIntParam(
+                        width_hint=min_bits_for_int(expr.value)))
             else:
                 return UIntType(ConstIntParam(expr.width))
 
@@ -391,6 +378,8 @@ class Typeck:
                 target.return_ty) if target.return_ty else UnitType()
 
         # Handle builtin functions.
+        expr.call_params = []
+
         if name == "concat":
             width = 0
             for arg in expr.args:
@@ -543,16 +532,29 @@ class Typeck:
     def finalize_type(self, ty: Type) -> Type:
         ty = self.simplify_type(ty)
 
-        # Make uninferred uints the minimum size for their literals.
-        if isinstance(ty, InferrableUIntType):
-            ty.inferred = UIntType(ConstIntParam(ty.width_hint))
-            ty = ty.inferred
+        # Finalize parameters.
+        if isinstance(ty, UIntType):
+            ty.width = self.finalize_param(ty.width)
 
         # Finalize inner types.
         if isinstance(ty, (WireType, RegType)):
             ty.inner = self.finalize_type(ty.inner)
 
         return ty
+
+    # A final chance to modify a parameter at the end of type-checking. This is
+    # useful to do a final cleanup and get rid of parameters, or replace
+    # uninferred parameters with some default.
+    def finalize_param(self, param: IntParam) -> IntParam:
+        param = self.simplify_param(param)
+
+        # Make uninferred int parameters the minimum size for their literals.
+        if isinstance(param,
+                      InferrableIntParam) and param.width_hint is not None:
+            param.inferred = ConstIntParam(param.width_hint)
+            param = param.inferred
+
+        return param
 
     def finalize_node(self, node: ast.AstNode):
         # Make sure that integer literals fit into their inferred type.
@@ -577,6 +579,13 @@ class Typeck:
                     ast.BinaryOp.SUB: "subtract",
                 }.get(node.op, node.op.name)
                 emit_error(node.loc, f"cannot {word} `{node.fty}`")
+
+        # Finalize call parameters.
+        if isinstance(node, ast.CallExpr):
+            assert node.call_params is not None
+            node.call_params = [
+                self.finalize_param(p) for p in node.call_params
+            ]
 
     def unify_types(
         self,
@@ -611,22 +620,12 @@ class Typeck:
         # unify(uint<?A>, uint<?B>) -> uint<?A>
         # unify(uint<?A>, uint<N>) -> uint<N>
         # unify(uint<N>, uint<?B>) -> uint<N>
-        if isinstance(lhs, InferrableUIntType) and isinstance(
-                rhs, InferrableUIntType):
-            rhs.inferred = lhs
-            lhs.width_hint = max(lhs.width_hint, rhs.width_hint)
-            return
-        if isinstance(lhs, InferrableUIntType) and isinstance(rhs, UIntType):
-            lhs.inferred = rhs
-            return
-        if isinstance(lhs, UIntType) and isinstance(rhs, InferrableUIntType):
-            rhs.inferred = lhs
-            return
-
         if isinstance(lhs, UIntType) and isinstance(rhs, UIntType):
             if isinstance(lhs.width, InferrableIntParam) and isinstance(
                     rhs.width, InferrableIntParam):
                 rhs.width.inferred = lhs.width
+                lhs.width.width_hint = max(lhs.width.width_hint,
+                                           rhs.width.width_hint)
                 return
             if isinstance(rhs.width, InferrableIntParam):
                 rhs.width.inferred = lhs.width
@@ -660,10 +659,6 @@ class Typeck:
         if isinstance(ty, TupleType):
             ty.fields = [self.simplify_type(field) for field in ty.fields]
             return ty
-
-        if isinstance(ty, InferrableUIntType) and ty.inferred:
-            ty.inferred = self.simplify_type(ty.inferred)
-            return ty.inferred
 
         if isinstance(ty, InferrableType) and ty.inferred:
             ty.inferred = self.simplify_type(ty.inferred)

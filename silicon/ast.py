@@ -338,6 +338,8 @@ def dump_ast(node: AstNode) -> str:
     def dump_field(name: str, value) -> List[str]:
         if isinstance(value, AstNode):
             return [dump_inner(value, name)]
+        elif isinstance(value, IntParam):
+            return [f"{name}: {value.__class__.__name__} {value}"]
         elif isinstance(value, list):
             fields = []
             for i, v in enumerate(value):
