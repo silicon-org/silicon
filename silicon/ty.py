@@ -188,8 +188,6 @@ def require_int_lit(
 @dataclass
 class Typeck:
     root: ast.ModItem | ast.FnItem
-
-    # TODO: This needs to be a scoped stack probably.
     params: Dict[ast.AstNode, IntParam] = field(default_factory=dict)
 
     # Convert an AST type node into an actual type.
@@ -219,18 +217,23 @@ class Typeck:
             return RegType(self.convert_ast_type(ty.inner))
         emit_error(ty.loc, f"unsupported type: `{ty.loc.spelling()}`")
 
-    # Type-check the entire AST starting at the `root` node.
-    def typeck(self):
+    # Type-check just the signature of the `root` node.
+    def typeck_signature(self):
         if isinstance(self.root, ast.FnItem):
             for param in self.root.params:
                 param.fty = GenericIntType()
-                p = FreeIntParam(param.name.spelling())
-                param.free_param = p
-                self.params[param] = p
+                param.free_param = FreeIntParam(param.name.spelling())
+                self.params[param] = param.free_param
             for arg in self.root.args:
                 arg.fty = self.convert_ast_type(arg.ty)
             self.root.return_fty = self.convert_ast_type(
                 self.root.return_ty) if self.root.return_ty else UnitType()
+
+    # Type-check the entire AST starting at the `root` node.
+    def typeck(self):
+        if isinstance(self.root, ast.FnItem):
+            for param in self.root.params:
+                self.params[param] = param.free_param
 
         for stmt in self.root.stmts:
             self.typeck_stmt(stmt)
@@ -355,11 +358,15 @@ class Typeck:
                 emit_info(target.loc, f"`{name}` defined here")
                 emit_error(expr.loc, f"cannot call `{name}`")
 
+            # Create a new type-checking context for the called function, to
+            # evaluate parameters.
+            target_typeck = Typeck(target)
+
             # Define inferrable parameters for the called function's parameters.
             call_params = []
             for param in target.params:
                 p = InferrableIntParam()
-                self.params[param] = p
+                target_typeck.params[param] = p
                 call_params.append(p)
 
             # Make sure the arguments match.
@@ -368,20 +375,19 @@ class Typeck:
                     expr.loc,
                     f"argument mismatch: `{name}` takes {len(target.args)} arguments, but got {len(expr.args)} instead"
                 )
-            for call_arg, func_arg in zip(expr.args, target.args):
+            for call_arg, target_arg in zip(expr.args, target.args):
                 call_ty = self.typeck_expr(call_arg)
-                # TODO: this needs to use a special scope for `self.params` where the func params are defined
-                func_ty = self.convert_ast_type(func_arg.ty)
+                func_ty = target_typeck.convert_ast_type(target_arg.ty)
                 self.unify_types(func_ty,
                                  call_ty,
                                  call_arg.loc,
-                                 lhs_loc=func_arg.loc)
+                                 lhs_loc=target_arg.loc)
 
             # Annotate the call parameters.
             expr.call_params = [self.simplify_param(p) for p in call_params]
 
             # Propagate the return type.
-            return self.convert_ast_type(
+            return target_typeck.convert_ast_type(
                 target.return_ty) if target.return_ty else UnitType()
 
         # Handle builtin functions.
@@ -678,6 +684,15 @@ class Typeck:
 
 
 def typeck(root: ast.Root):
+    # Type-check all signature and prepare the necessary free parameters.
+    for item in root.items:
+        if isinstance(item, (ast.ModItem, ast.FnItem)):
+            Typeck(item).typeck_signature()
+        else:
+            emit_error(item.loc,
+                       f"unsupported in typeck: {item.__class__.__name__}")
+
+    # Type-check the AST in full detail.
     for item in root.items:
         if isinstance(item, (ast.ModItem, ast.FnItem)):
             Typeck(item).typeck()
