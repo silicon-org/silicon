@@ -1,6 +1,6 @@
 # Silicon
 
-An experimental hardware language and compiler.
+An experimental hardware language and compiler. Requires xdsl 0.21.1 or higher.
 
 Rough roadmap:
 

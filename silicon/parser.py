@@ -241,8 +241,7 @@ def parse_type(p: Parser) -> ast.AstType:
             p.require(TokenKind.LT)
             size = parse_expr(p)
             p.require(TokenKind.GT)
-            return ast.UIntType(loc=loc | p.last_loc,
-                                size=size)
+            return ast.UIntType(loc=loc | p.last_loc, size=size)
 
         if name == "Wire":
             token = p.consume()

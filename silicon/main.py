@@ -14,7 +14,7 @@ from silicon.diagnostics import DiagnosticException
 from silicon.ir import convert_ast_to_ir
 from silicon.ty import typeck
 
-from xdsl.ir import MLContext
+from xdsl.context import MLContext
 from xdsl.passes import PipelinePass
 from xdsl.transforms.canonicalize import CanonicalizePass
 from xdsl.transforms.dead_code_elimination import DeadCodeElimination
@@ -130,7 +130,7 @@ def process_input(args: argparse.Namespace, input: SourceFile):
         CanonicalizePass(),
         DeadCodeElimination(),
     ]
-    PipelinePass(pipeline).apply(ctx, ir)
+    PipelinePass(tuple(pipeline)).apply(ctx, ir)
 
     if args.dump_final_ir:
         print(ir)

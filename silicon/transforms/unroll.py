@@ -5,9 +5,9 @@ from silicon import ir
 from silicon.diagnostics import *
 
 from xdsl.builder import Builder
+from xdsl.context import MLContext
 from xdsl.dialects.builtin import ModuleOp
 from xdsl.ir import (
-    MLContext,
     Operation,
     SSAValue,
 )

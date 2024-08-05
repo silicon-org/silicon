@@ -1,4 +1,4 @@
-from typing import NoReturn
+from typing import NoReturn, Literal
 from sys import stderr
 from silicon.source import *
 from termcolor import colored
@@ -24,7 +24,8 @@ def emit_info(loc: Loc, msg: str):
     emit_diagnostic("info", "cyan", loc, msg)
 
 
-def emit_diagnostic(severity: str, color: str, loc: Loc, msg: str):
+def emit_diagnostic(severity: str, color: Literal["red", "yellow", "cyan"],
+                    loc: Loc, msg: str):
     text = colored(severity + ":", color, attrs=["bold"])
     text += " "
     text += colored(msg, attrs=["bold"])
