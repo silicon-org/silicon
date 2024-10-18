@@ -724,7 +724,7 @@ class TupleCreateOp(IRDLOperation):
     # TODO: verify
 
 
-# Get the value of a tuple field..
+# Get the value of a tuple field.
 @irdl_op_definition
 class TupleGetOp(IRDLOperation):
     name = "si.tuple_get"
@@ -748,6 +748,45 @@ class TupleGetOp(IRDLOperation):
         self.loc = loc
 
     # TODO: verify
+
+
+# Get a reference to a tuple field.
+@irdl_op_definition
+class TupleGetRefOp(IRDLOperation):
+    name = "si.tuple_get_ref"
+    arg: Operand = operand_def(RefType[TupleType])
+    field: IntAttr = prop_def(IntAttr)
+    res: OpResult = result_def(RefType)
+    assembly_format = "$arg `,` $field `:` type($arg) `->` type($res) attr-dict"
+
+    def __init__(
+        self,
+        arg: SSAValue,
+        field: int,
+        loc: Loc,
+    ):
+        assert isa(arg.type, RefType)
+        assert isa(arg.type.inner, TupleType)
+        super().__init__(
+            operands=[arg],
+            result_types=[RefType(arg.type.inner.fields.data[field])],
+            properties={"field": IntAttr(field)},
+        )
+        self.loc = loc
+
+    def verify_(self) -> None:
+        assert isa(self.arg.type, RefType)
+        assert isa(self.arg.type.inner, TupleType)
+        assert isa(self.res.type, RefType)
+        field = self.field.data
+        fields = self.arg.type.inner.fields.data
+        if field >= len(fields):
+            raise VerifyException(f"field {field} out of bounds")
+        actual = self.res.type
+        expected = RefType(fields[field])
+        if expected != actual:
+            raise VerifyException(
+                f"result type {actual} must match tuple field type {expected}")
 
 
 @irdl_op_definition
@@ -807,6 +846,7 @@ SiliconDialect = Dialect("silicon", [
     SubOp,
     TupleCreateOp,
     TupleGetOp,
+    TupleGetRefOp,
     VarDeclOp,
     WireDeclOp,
     WireGetOp,
@@ -984,7 +1024,7 @@ class Converter:
             return
 
         if isinstance(stmt, ast.ExprStmt):
-            self.convert_expr(stmt.expr)
+            self.convert_expr_rvalue(stmt.expr)
             return
 
         if isinstance(stmt, ast.InputStmt):
@@ -1000,7 +1040,7 @@ class Converter:
                 OutputDeclOp(stmt.name.spelling(), ty, stmt.loc)).result
             self.named_values[stmt] = decl
             if stmt.expr:
-                expr = self.convert_expr(stmt.expr)
+                expr = self.convert_expr_rvalue(stmt.expr)
                 self.builder.insert(AssignOp(decl, expr, stmt.expr.loc))
             return
 
@@ -1010,7 +1050,7 @@ class Converter:
                 VarDeclOp(stmt.name.spelling(), ty, stmt.loc)).result
             self.named_values[stmt] = decl
             if stmt.expr:
-                expr = self.convert_expr(stmt.expr)
+                expr = self.convert_expr_rvalue(stmt.expr)
                 self.builder.insert(AssignOp(decl, expr, stmt.expr.loc))
             return
 
@@ -1019,22 +1059,13 @@ class Converter:
             if not stmt.expr:
                 self.builder.insert(ReturnOp([], stmt.loc))
                 return
-            expr = self.convert_expr(stmt.expr)
+            expr = self.convert_expr_rvalue(stmt.expr)
             self.builder.insert(ReturnOp([expr], stmt.loc))
             return
 
         if isinstance(stmt, ast.AssignStmt):
-            dst = self.convert_expr(stmt.lhs)
-            src = self.convert_expr(stmt.rhs)
-            # HACK: This should be handled by a dedicated lvalue expr lowering.
-            if isinstance(dst.owner, DerefOp):
-                new_dst = dst.owner.arg
-                if not dst.uses:
-                    dst.owner.detach()
-                    dst.owner.erase()
-                dst = new_dst
-            else:
-                dst = self.builder.insert(RefOp(dst, stmt.loc)).result
+            dst = self.convert_expr_lvalue(stmt.lhs)
+            src = self.convert_expr_rvalue(stmt.rhs)
             self.builder.insert(AssignOp(dst, src, stmt.loc))
             return
 
@@ -1042,7 +1073,34 @@ class Converter:
         emit_error(stmt.loc,
                    f"unsupported in IR conversion: {stmt.__class__.__name__}")
 
-    def convert_expr(self, expr: ast.Expr) -> SSAValue:
+    def convert_expr_lvalue(self, expr: ast.Expr) -> SSAValue:
+        value = self.try_convert_expr_lvalue(expr)
+        if value is not None:
+            return value
+        emit_error(expr.loc, f"expression is not assignable")
+
+    def try_convert_expr_lvalue(self, expr: ast.Expr) -> SSAValue | None:
+        if isinstance(expr, ast.IdentExpr):
+            target = expr.binding.get()
+            named_value = self.named_values[target]
+            if isinstance(target, (ast.LetStmt, ast.OutputStmt)):
+                return named_value
+            return None
+
+        if isinstance(expr, ast.TupleFieldExpr):
+            if value := self.try_convert_expr_lvalue(expr.target):
+                return self.builder.insert(
+                    TupleGetRefOp(value, expr.field, expr.full_loc)).res
+            return None
+
+        if isinstance(expr, ast.UnaryExpr):
+            # Getting an lvalue for a dereferenced `*x` is a no-op.
+            if expr.op == ast.UnaryOp.DEREF:
+                return self.convert_expr_rvalue(expr.arg)
+
+        return None
+
+    def convert_expr_rvalue(self, expr: ast.Expr) -> SSAValue:
         op: IRDLOperation
 
         if isinstance(expr, ast.IntLitExpr):
@@ -1067,28 +1125,35 @@ class Converter:
             return value
 
         if isinstance(expr, ast.ParenExpr):
-            return self.convert_expr(expr.expr)
+            return self.convert_expr_rvalue(expr.expr)
 
         if isinstance(expr, ast.TupleExpr):
-            fields = [self.convert_expr(field) for field in expr.fields]
+            fields = [self.convert_expr_rvalue(field) for field in expr.fields]
             op = self.builder.insert(TupleCreateOp(fields, expr.loc))
             return op.results[0]
 
         if isinstance(expr, ast.TupleFieldExpr):
             op = self.builder.insert(
-                TupleGetOp(self.convert_expr(expr.target), expr.field,
+                TupleGetOp(self.convert_expr_rvalue(expr.target), expr.field,
                            expr.full_loc))
             return op.results[0]
 
         if isinstance(expr, ast.UnaryExpr):
-            arg = self.convert_expr(expr.arg)
+            # Taking a reference `&x` is a no-op if the `x` can be lowered to an
+            # lvalue. A variable declaration for example already is an reference
+            # which we can return immediately.
+            if expr.op == ast.UnaryOp.REF:
+                if maybe_arg := self.try_convert_expr_lvalue(expr.arg):
+                    return maybe_arg
+                arg = self.convert_expr_rvalue(expr.arg)
+                return self.builder.insert(RefOp(arg, expr.loc)).result
+
+            arg = self.convert_expr_rvalue(expr.arg)
 
             if expr.op == ast.UnaryOp.NEG:
                 op = self.builder.insert(NegOp(arg, expr.loc))
             elif expr.op == ast.UnaryOp.NOT:
                 op = self.builder.insert(NotOp(arg, expr.loc))
-            elif expr.op == ast.UnaryOp.REF:
-                op = self.builder.insert(RefOp(arg, expr.loc))
             elif expr.op == ast.UnaryOp.DEREF:
                 op = self.builder.insert(DerefOp(arg, expr.loc))
             else:
@@ -1098,8 +1163,8 @@ class Converter:
             return op.results[0]
 
         if isinstance(expr, ast.BinaryExpr):
-            lhs = self.convert_expr(expr.lhs)
-            rhs = self.convert_expr(expr.rhs)
+            lhs = self.convert_expr_rvalue(expr.lhs)
+            rhs = self.convert_expr_rvalue(expr.rhs)
 
             if expr.op == ast.BinaryOp.ADD:
                 op = self.builder.insert(AddOp(lhs, rhs, expr.loc))
@@ -1134,7 +1199,7 @@ class Converter:
                     )
                 params.append(call_param.value)
             func_name = self.schedule_convert_fn(target, tuple(params))
-            args = [self.convert_expr(arg) for arg in expr.args]
+            args = [self.convert_expr_rvalue(arg) for arg in expr.args]
             if isinstance(expr.fty, TyUnitType):
                 self.builder.insert(CallOp(func_name, args, [], expr.loc))
                 return self.builder.insert(ConstantUnitOp(expr.loc)).result
@@ -1148,21 +1213,21 @@ class Converter:
         name = expr.name.spelling()
 
         if name == "concat":
-            args = [self.convert_expr(arg) for arg in expr.args]
+            args = [self.convert_expr_rvalue(arg) for arg in expr.args]
             return self.builder.insert(ConcatOp(args, expr.loc)).result
 
         if name == "wire":
             ty = self.convert_type(expr.args[0].fty, expr.args[0].loc)
             wire = self.builder.insert(WireDeclOp(ty, expr.loc)).result
-            init = self.convert_expr(expr.args[0])
+            init = self.convert_expr_rvalue(expr.args[0])
             self.builder.insert(WireSetOp(wire, init, expr.loc))
             return wire
 
         if name == "reg":
             ty = self.convert_type(expr.args[1].fty, expr.args[1].loc)
-            clock = self.convert_expr(expr.args[0])
+            clock = self.convert_expr_rvalue(expr.args[0])
             reg = self.builder.insert(RegDeclOp(ty, clock, expr.loc)).result
-            init = self.convert_expr(expr.args[1])
+            init = self.convert_expr_rvalue(expr.args[1])
             self.builder.insert(RegNextOp(reg, init, expr.loc))
             return reg
 
@@ -1172,7 +1237,7 @@ class Converter:
         name = expr.name.spelling()
 
         if name == "bit":
-            arg = self.convert_expr(expr.target)
+            arg = self.convert_expr_rvalue(expr.target)
             offset = require_int_lit(expr.args[0])
             return self.builder.insert(ExtractOp(arg, offset, 1,
                                                  expr.loc)).result
@@ -1180,35 +1245,35 @@ class Converter:
         if name == "slice":
             offset = require_int_lit(expr.args[0])
             width = require_int_lit(expr.args[1])
-            arg = self.convert_expr(expr.target)
+            arg = self.convert_expr_rvalue(expr.target)
             return self.builder.insert(ExtractOp(arg, offset, width,
                                                  expr.loc)).result
 
         if name == "mux":
-            cond = self.convert_expr(expr.target)
-            true = self.convert_expr(expr.args[0])
-            false = self.convert_expr(expr.args[1])
+            cond = self.convert_expr_rvalue(expr.target)
+            true = self.convert_expr_rvalue(expr.args[0])
+            false = self.convert_expr_rvalue(expr.args[1])
             return self.builder.insert(MuxOp(cond, true, false,
                                              expr.loc)).result
 
         if name == "set":
-            target = self.convert_expr(expr.target)
-            arg = self.convert_expr(expr.args[0])
+            target = self.convert_expr_rvalue(expr.target)
+            arg = self.convert_expr_rvalue(expr.args[0])
             self.builder.insert(WireSetOp(target, arg, expr.loc))
             return target
 
         if name == "get":
-            target = self.convert_expr(expr.target)
+            target = self.convert_expr_rvalue(expr.target)
             return self.builder.insert(WireGetOp(target, expr.loc)).result
 
         if name == "next":
-            target = self.convert_expr(expr.target)
-            arg = self.convert_expr(expr.args[0])
+            target = self.convert_expr_rvalue(expr.target)
+            arg = self.convert_expr_rvalue(expr.args[0])
             self.builder.insert(RegNextOp(target, arg, expr.loc))
             return target
 
         if name == "current":
-            target = self.convert_expr(expr.target)
+            target = self.convert_expr_rvalue(expr.target)
             return self.builder.insert(RegCurrentOp(target, expr.loc)).result
 
         emit_error(expr.name.loc, f"unknown function `{name}`")

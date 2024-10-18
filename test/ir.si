@@ -39,8 +39,6 @@ fn Expressions(
     b: uint<19>,
     // CHECK-SAME: [[C:%c]] : i1
     c: uint<1>,
-    // CHECK-SAME: [[D:%d]] : !si.tuple<[i42, i43]>
-    d: (uint<42>, uint<43>),
     // CHECK-SAME: [[E:%e]] : !si.ref<i19>
     e: &uint<19>,
 ) {
@@ -48,12 +46,6 @@ fn Expressions(
     9001u42;
     // CHECK: si.constant_unit : !si.unit
     ();
-    // CHECK: si.tuple_create [[A]], [[C]] : (i19, i1) -> !si.tuple<[i19, i1]>
-    (a, c);
-    // CHECK: si.tuple_get [[D]], #builtin.int<0> : !si.tuple<[i42, i43]> -> i42
-    // CHECK: si.tuple_get [[D]], #builtin.int<1> : !si.tuple<[i42, i43]> -> i43
-    d.0;
-    d.1;
 
     // CHECK: si.neg [[A]] : i19
     -a;
@@ -240,4 +232,35 @@ fn param_func_b<N>(u: uint<N>, v: uint<N>) -> uint<N> {
 
 fn param_func_c<N, M>(u: uint<N>, v: uint<M>) -> uint<M> {
     return v;
+}
+
+// CHECK-LABEL: si.func @Refs
+fn Refs(a: &uint<42>, b: uint<42>) -> &uint<42> {
+    // CHECK: si.assign %a, %b : !si.ref<i42>
+    *a = b;
+
+    // CHECK: [[TMP:%.+]] = si.var_decl {{.+}} : !si.ref<i42>
+    let c: uint<42>;
+    // CHECK: si.return [[TMP]] : !si.ref<i42>
+    return &c;
+}
+
+// CHECK-LABEL: si.func @Tuples
+fn Tuples(a: uint<42>, b: uint<43>) {
+    // CHECK: si.tuple_create %a, %b : (i42, i43) -> !si.tuple<[i42, i43]>
+    (a, b);
+
+    // CHECK: [[C:%.+]] = si.var_decl {{.+}} : !si.ref<!si.tuple<[i42, i1337]>>
+    let c: (uint<42>, uint<1337>);
+
+    // CHECK: [[TMP:%.+]] = si.deref [[C]] : !si.ref<!si.tuple<[i42, i1337]>>
+    // CHECK: si.tuple_get [[TMP]], #builtin.int<0> : !si.tuple<[i42, i1337]> -> i42
+    c.0;
+    // CHECK: [[TMP:%.+]] = si.deref [[C]] : !si.ref<!si.tuple<[i42, i1337]>>
+    // CHECK: si.tuple_get [[TMP]], #builtin.int<1> : !si.tuple<[i42, i1337]> -> i1337
+    c.1;
+
+    // CHECK: si.tuple_get_ref [[C]], #builtin.int<0> : !si.ref<!si.tuple<[i42, i1337]>> -> !si.ref<i42>
+    &c.0;
+    &c.1;
 }

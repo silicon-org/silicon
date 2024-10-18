@@ -5,7 +5,9 @@ si.func @Types(
   // CHECK-SAME: %arg0 : !si.unit
   %arg0 : !si.unit,
   // CHECK-SAME: %arg1 : !si.ref<i42>
-  %arg1 : !si.ref<i42>
+  %arg1 : !si.ref<i42>,
+  // CHECK-SAME: %arg2 : !si.tuple<[i42, i1337]>
+  %arg2 : !si.tuple<[i42, i1337]>
 ) {
   si.return
 }
@@ -73,13 +75,6 @@ si.module @Foo {
   si.call @f3(%x) : (i42) -> ()
   // CHECK: si.call @f4([[X]], [[W]]) : (i42, i42) -> i42
   si.call @f4(%x, %w) : (i42, i42) -> i42
-
-  // CHECK: [[TMP:%.+]] = si.tuple_create [[X]], [[C0]] : (i42, i1) -> !si.tuple<[i42, i1]>
-  %2 = si.tuple_create %x, %c0_i1 : (i42, i1) -> !si.tuple<[i42, i1]>
-  // CHECK: si.tuple_get [[TMP]], #builtin.int<0> : !si.tuple<[i42, i1]> -> i42
-  si.tuple_get %2, #builtin.int<0> : !si.tuple<[i42, i1]> -> i42
-  // CHECK: si.tuple_get [[TMP]], #builtin.int<1> : !si.tuple<[i42, i1]> -> i1
-  si.tuple_get %2, #builtin.int<1> : !si.tuple<[i42, i1]> -> i1
 }
 
 // CHECK-LABEL: si.func @f1
@@ -109,6 +104,24 @@ si.func @f3(%x : i42) {
 si.func @f4(%0 : i42, %1 : i42) -> i42 {
   // CHECK: si.return [[TMP]] : i42
   si.return %0 : i42
+}
+
+// CHECK-LABEL: si.func @Tuples
+si.func @Tuples(%a : i42, %b : i1, %t1 : !si.ref<!si.tuple<[i42, i1]>>) {
+  // CHECK: [[T0:%.+]] = si.tuple_create %a, %b : (i42, i1) -> !si.tuple<[i42, i1]>
+  %t0 = si.tuple_create %a, %b : (i42, i1) -> !si.tuple<[i42, i1]>
+
+  // CHECK: si.tuple_get [[T0]], #builtin.int<0> : !si.tuple<[i42, i1]> -> i42
+  si.tuple_get %t0, #builtin.int<0> : !si.tuple<[i42, i1]> -> i42
+  // CHECK: si.tuple_get [[T0]], #builtin.int<1> : !si.tuple<[i42, i1]> -> i1
+  si.tuple_get %t0, #builtin.int<1> : !si.tuple<[i42, i1]> -> i1
+
+  // CHECK: si.tuple_get_ref %t1, #builtin.int<0> : !si.ref<!si.tuple<[i42, i1]>> -> !si.ref<i42>
+  si.tuple_get_ref %t1, #builtin.int<0> : !si.ref<!si.tuple<[i42, i1]>> -> !si.ref<i42>
+  // CHECK: si.tuple_get_ref %t1, #builtin.int<1> : !si.ref<!si.tuple<[i42, i1]>> -> !si.ref<i1>
+  si.tuple_get_ref %t1, #builtin.int<1> : !si.ref<!si.tuple<[i42, i1]>> -> !si.ref<i1>
+
+  si.return
 }
 
 // CHECK-LABEL: si.func @Refs
