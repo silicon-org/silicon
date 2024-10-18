@@ -207,3 +207,21 @@ fn f1<N,M>() {
     // CHECK: error: incompatible types: `uint<N>` and `uint<M>`
     a = b;
 }
+
+// -----
+
+fn f1<N>() {
+    let a: uint<N>;
+    // CHECK: error: bit index out of bounds for `uint<N>`
+    a.bit(5);
+}
+
+// -----
+
+// CHECK: info: for example consider N = 3
+fn f1<N>(a: uint<N>) where N > 5 {}
+fn f2() {
+    let b: uint<3>;
+    // CHECK: error: parameter mismatch: `f1` requires N > 5
+    f1(b);
+}

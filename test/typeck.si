@@ -165,3 +165,11 @@ fn f7() {
     let d = f6(c, c);
     d = 1u16;
 }
+
+fn f8<N>(a: uint<N>) where N > 5 {
+    a.bit(5);
+}
+fn f9() {
+    let b: uint<7>;
+    f8(b);
+}
