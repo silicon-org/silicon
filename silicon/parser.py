@@ -38,9 +38,9 @@ class Parser:
     def require(self, kind: TokenKind, msg: Optional[str] = None) -> Token:
         if token := self.consume_if(kind):
             return token
-        msg = msg or kind.name
+        msg = msg or kind.human()
         emit_error(self.loc(),
-                   f"expected {msg}, found {self.tokens[0].kind.name}")
+                   f"expected {msg}, found {self.tokens[0].human()}")
 
     def isa(self, kind: TokenKind) -> bool:
         return self.tokens[0].kind == kind
@@ -129,7 +129,7 @@ def parse_item(p: Parser) -> ast.Item:
                           return_ty=return_ty,
                           stmts=stmts)
 
-    emit_error(p.loc(), f"expected item, found {p.tokens[0].kind.name}")
+    emit_error(p.loc(), f"expected item, found {p.tokens[0].human()}")
 
 
 def parse_stmt_or_expr(p: Parser) -> ast.Stmt | ast.Expr:
@@ -242,6 +242,11 @@ def parse_type(p: Parser) -> ast.AstType:
             emit_error(loc | p.last_loc, "tuple requires at least two fields")
         return ast.TupleType(loc=loc | p.last_loc, fields=fields)
 
+    # Parse the reference type.
+    if p.consume_if(TokenKind.AND):
+        inner = parse_type(p)
+        return ast.RefType(loc=loc | p.last_loc, inner=inner)
+
     # Parse types that start with a name.
     if p.isa(TokenKind.IDENT):
         name = p.tokens[0].spelling()
@@ -266,7 +271,7 @@ def parse_type(p: Parser) -> ast.AstType:
             p.require(TokenKind.GT)
             return ast.RegType(loc=loc | p.last_loc, inner=inner)
 
-    emit_error(p.loc(), f"expected type, found {p.tokens[0].kind.name}")
+    emit_error(p.loc(), f"expected type, found {p.tokens[0].human()}")
 
 
 def parse_expr(
@@ -354,7 +359,7 @@ def parse_suffix_expr(p: Parser, expr: ast.Expr) -> Optional[ast.Expr]:
                                       field=index_value)
 
         emit_error(dot.loc,
-                   f"expected field name, found {p.tokens[0].kind.name}")
+                   f"expected field name, found {p.tokens[0].human()}")
 
     return None
 
@@ -418,7 +423,7 @@ def parse_primary_expr(p: Parser) -> ast.Expr:
     if p.isa(TokenKind.LCURLY):
         return parse_block_expr(p)
 
-    emit_error(p.loc(), f"expected expression, found {p.tokens[0].kind.name}")
+    emit_error(p.loc(), f"expected expression, found {p.tokens[0].human()}")
 
 
 def parse_block_expr(p: Parser) -> ast.BlockExpr:

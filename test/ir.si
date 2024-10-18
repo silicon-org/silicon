@@ -37,10 +37,12 @@ mod Expressions {
     // CHECK: [[B:%.+]] = si.var_decl "b" : i19
     // CHECK: [[C:%.+]] = si.var_decl "c" : i1
     // CHECK: [[D:%.+]] = si.var_decl "d" : !si.tuple<[i42, i43]>
+    // CHECK: [[E:%.+]] = si.var_decl "e" : !si.ref<i19>
     let a: uint<19>;
     let b: uint<19>;
     let c: uint<1>;
     let d: (uint<42>, uint<43>);
+    let e: &uint<19>;
 
     // CHECK: si.constant 9001 : i42
     9001u42;
@@ -57,6 +59,10 @@ mod Expressions {
     -a;
     // CHECK: si.not [[A]] : i19
     !a;
+    // CHECK: si.ref [[A]] : !si.ref<i19>
+    &a;
+    // CHECK: si.deref [[E]] : !si.ref<i19>
+    *e;
 
     // CHECK: si.add [[A]], [[B]] : i19
     a + b;

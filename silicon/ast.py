@@ -203,6 +203,11 @@ class RegType(AstType):
     inner: AstType
 
 
+@dataclass(eq=False)
+class RefType(AstType):
+    inner: AstType
+
+
 #===------------------------------------------------------------------------===#
 # Expressions
 #===------------------------------------------------------------------------===#
@@ -262,11 +267,15 @@ class UnaryExpr(Expr):
 class UnaryOp(Enum):
     NEG = auto()
     NOT = auto()
+    REF = auto()
+    DEREF = auto()
 
 
 UNARY_OPS: Dict[TokenKind, UnaryOp] = {
     TokenKind.SUB: UnaryOp.NEG,
     TokenKind.NOT: UnaryOp.NOT,
+    TokenKind.AND: UnaryOp.REF,
+    TokenKind.MUL: UnaryOp.DEREF,
 }
 
 

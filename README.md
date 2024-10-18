@@ -13,6 +13,7 @@ Rough roadmap:
 - [x] Canonicalize IR
 - [x] Functions and calls
 - [ ] Reference types and operations (`&T`, `*x = 4`, `4 + *x`)
+- [ ] Dynamic types (`dyn T`)
 - [x] Parametric functions
 - [ ] Unit tests and execution
 - [ ] Assertions

@@ -173,3 +173,34 @@ fn f9() {
     let b: uint<7>;
     f8(b);
 }
+
+fn refArgs<N>(a: &uint<N>) -> &uint<N> {
+    return a;
+}
+
+// CHECK-LABEL: FnItem "refs"
+fn refs() {
+    // CHECK: LetStmt "a" fty=uint<6>
+    let a;
+    // CHECK: LetStmt "b" fty=&uint<6>
+    let b = &a;
+    // CHECK: AssignStmt
+    // CHECK:   lhs: IdentExpr fty=uint<6> "a"
+    // CHECK:   rhs: IntLitExpr fty=uint<6>
+    a = 42;
+
+    // CHECK: LetStmt "c" fty=&uint<14>
+    let c;
+    // CHECK: AssignStmt
+    // CHECK:   lhs: UnaryExpr fty=uint<14> DEREF
+    // CHECK:     arg: IdentExpr fty=&uint<14> "c"
+    // CHECK:   rhs: IntLitExpr fty=uint<14>
+    *c = 9001;
+
+    let d = &42;
+    let e = &9001;
+    // CHECK: AssignStmt
+    // CHECK:   lhs: {{.+}} fty=&uint<14>
+    // CHECK:   rhs: {{.+}} fty=&uint<14>
+    d = e;
+}

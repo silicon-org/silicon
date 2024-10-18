@@ -1,5 +1,15 @@
 // RUN: silicon-opt %s | silicon-opt | FileCheck %s
 
+// CHECK-LABEL: si.func @Types
+si.func @Types(
+  // CHECK-SAME: %arg0 : !si.unit
+  %arg0 : !si.unit,
+  // CHECK-SAME: %arg1 : !si.ref<i42>
+  %arg1 : !si.ref<i42>
+) {
+  si.return
+}
+
 // CHECK-LABEL: si.module @Foo
 si.module @Foo {
   // CHECK: [[X:%.+]] = si.input "x" : i42
@@ -97,4 +107,11 @@ si.func @f3(%x : i42) {
 si.func @f4(%0 : i42, %1 : i42) -> i42 {
   // CHECK: si.return [[TMP]] : i42
   si.return %0 : i42
+}
+
+// CHECK-LABEL: si.func @Refs
+si.func @Refs(%a : i42, %b : !si.ref<i42>) {
+  si.ref %a : !si.ref<i42>
+  si.deref %b : !si.ref<i42>
+  si.return
 }

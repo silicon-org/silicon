@@ -13,6 +13,8 @@ __all__ = [
     "tokenize_file",
 ]
 
+token_names: Dict[TokenKind, str] = {}
+
 
 class TokenKind(Enum):
     IDENT = auto()
@@ -31,6 +33,8 @@ class TokenKind(Enum):
     SEMICOLON = auto()
     NOT = auto()
     ARROW = auto()
+    AND = auto()
+    OR = auto()
 
     EQ = auto()
     NE = auto()
@@ -41,6 +45,8 @@ class TokenKind(Enum):
 
     ADD = auto()
     SUB = auto()
+    MUL = auto()
+    DIV = auto()
 
     ASSIGN = auto()
 
@@ -58,6 +64,10 @@ class TokenKind(Enum):
 
     EOF = auto()
 
+    # Return a human-readable string describing this token kind.
+    def human(self) -> str:
+        return token_names[self] if self in token_names else self.name
+
 
 @dataclass
 class Token:
@@ -66,6 +76,11 @@ class Token:
 
     def spelling(self) -> str:
         return self.loc.spelling()
+
+    def human(self) -> str:
+        if self.kind in (TokenKind.IDENT, TokenKind.NUM_LIT):
+            return f"{self.kind.human()} `{self.spelling()}`"
+        return self.kind.human()
 
 
 SYMBOLS1: Dict[str, TokenKind] = {
@@ -80,11 +95,15 @@ SYMBOLS1: Dict[str, TokenKind] = {
     ":": TokenKind.COLON,
     ";": TokenKind.SEMICOLON,
     "!": TokenKind.NOT,
+    "&": TokenKind.AND,
+    "|": TokenKind.OR,
     "<": TokenKind.LT,
     ">": TokenKind.GT,
     "=": TokenKind.ASSIGN,
     "+": TokenKind.ADD,
     "-": TokenKind.SUB,
+    "*": TokenKind.MUL,
+    "/": TokenKind.DIV,
 }
 
 SYMBOLS2: Dict[str, TokenKind] = {
@@ -108,6 +127,12 @@ KEYWORDS: Dict[str, TokenKind] = {
     "where": TokenKind.KW_WHERE,
     "while": TokenKind.KW_WHILE,
 }
+
+token_names[TokenKind.IDENT] = "identifier"
+token_names[TokenKind.NUM_LIT] = "number"
+token_names |= {k: f"`{s}`" for s, k in SYMBOLS1.items()}
+token_names |= {k: f"`{s}`" for s, k in SYMBOLS2.items()}
+token_names |= {k: f"keyword `{s}`" for s, k in KEYWORDS.items()}
 
 
 def tokenize_file(path: str) -> List[Token]:

@@ -124,6 +124,14 @@ class RegType(Type):
 
 
 @dataclass
+class RefType(Type):
+    inner: Type
+
+    def __str__(self) -> str:
+        return f"&{self.inner}"
+
+
+@dataclass
 class InferrableType(Type):
     # A unique integer identifier.
     num: int = field(default_factory=count().__next__)
@@ -215,6 +223,8 @@ class Typeck:
             return WireType(self.convert_ast_type(ty.inner))
         if isinstance(ty, ast.RegType):
             return RegType(self.convert_ast_type(ty.inner))
+        if isinstance(ty, ast.RefType):
+            return RefType(self.convert_ast_type(ty.inner))
         emit_error(ty.loc, f"unsupported type: `{ty.loc.spelling()}`")
 
     # Type-check just the signature of the `root` node.
@@ -353,13 +363,27 @@ class Typeck:
             return ty.fields[expr.field]
 
         if isinstance(expr, ast.UnaryExpr):
-            return self.typeck_expr(expr.arg)
+            arg = self.typeck_expr(expr.arg)
+
+            if expr.op == ast.UnaryOp.REF:
+                return RefType(arg)
+
+            if expr.op == ast.UnaryOp.DEREF:
+                if isinstance(arg, RefType):
+                    return arg.inner
+                ty = InferrableType()
+                self.unify_types(arg, RefType(ty), expr.loc, expr.arg.full_loc,
+                                 expr.loc)
+                return ty
+
+            return arg
 
         if isinstance(expr, ast.BinaryExpr):
             lhs = self.typeck_expr(expr.lhs)
             rhs = self.typeck_expr(expr.rhs)
             self.unify_types(lhs, rhs, expr.loc, expr.lhs.full_loc,
                              expr.rhs.full_loc)
+            # TODO: return i1 for relational operators
             return lhs
 
         if isinstance(expr, ast.CallExpr):
@@ -618,10 +642,6 @@ class Typeck:
         if isinstance(ty, UIntType):
             ty.width = self.finalize_param(ty.width)
 
-        # Finalize inner types.
-        if isinstance(ty, (WireType, RegType)):
-            ty.inner = self.finalize_type(ty.inner)
-
         return ty
 
     # A final chance to modify a parameter at the end of type-checking. This is
@@ -653,8 +673,9 @@ class Typeck:
 
         # Unary and binary operators must operate on integers.
         if isinstance(node, ast.UnaryExpr) or isinstance(node, ast.BinaryExpr):
-            if not isinstance(node.fty, UIntType) and not isinstance(
-                    node.fty, GenericIntType):
+            if not isinstance(node.fty,
+                              (UIntType, GenericIntType)) and node.op not in (
+                                  ast.UnaryOp.REF, ast.UnaryOp.DEREF):
                 word = {
                     ast.UnaryOp.NEG: "negate",
                     ast.UnaryOp.NOT: "invert",
@@ -690,6 +711,11 @@ class Typeck:
 
         # unify(Reg<?A>, Reg<?B>) -> Reg<unify(?A, ?B)>
         if isinstance(lhs, RegType) and isinstance(rhs, RegType):
+            self.unify_types(lhs.inner, rhs.inner, loc, lhs_loc, rhs_loc)
+            return
+
+        # unify(&?A, &?B) -> &unify(?A, ?B)
+        if isinstance(lhs, RefType) and isinstance(rhs, RefType):
             self.unify_types(lhs.inner, rhs.inner, loc, lhs_loc, rhs_loc)
             return
 
@@ -756,6 +782,9 @@ class Typeck:
 
         if isinstance(ty, UIntType):
             ty.width = self.simplify_param(ty.width)
+
+        if isinstance(ty, (RefType, WireType, RegType)):
+            ty.inner = self.simplify_type(ty.inner)
 
         return ty
 

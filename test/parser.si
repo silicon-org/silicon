@@ -31,6 +31,9 @@ mod Types {
     // CHECK: UIntType
     // CHECK:   size: IdentExpr "N"
     let t5: uint<N>;
+    // CHECK: RefType
+    // CHECK:   inner: UnitType
+    let t6: &();
 }
 
 // CHECK-LABEL: ModItem "Statements"
@@ -117,6 +120,12 @@ mod Expressions {
     // CHECK:   arg: UnaryExpr NEG
     // CHECK:     arg: IdentExpr "a"
     !-a;
+    // CHECK: UnaryExpr REF
+    // CHECK:   arg: IdentExpr "a"
+    &a;
+    // CHECK: UnaryExpr DEREF
+    // CHECK:   arg: IdentExpr "a"
+    *a;
 
     // CHECK: BinaryExpr ADD
     // CHECK:   lhs: IntLitExpr value=1

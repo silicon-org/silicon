@@ -15,6 +15,7 @@ from silicon.ty import (
     UIntType as TyUIntType,
     UnitType as TyUnitType,
     WireType as TyWireType,
+    RefType as TyRefType,
 )
 
 import xdsl
@@ -112,6 +113,7 @@ class TupleType(ParametrizedAttribute, TypeAttribute):
 
 _WireInnerT = TypeVar("_WireInnerT", bound=Attribute)
 _RegInnerT = TypeVar("_RegInnerT", bound=Attribute)
+_RefInnerT = TypeVar("_RefInnerT", bound=Attribute)
 
 
 @irdl_attr_definition
@@ -129,6 +131,15 @@ class RegType(Generic[_RegInnerT], ParametrizedAttribute, TypeAttribute):
     inner: ParameterDef[_RegInnerT]
 
     def __init__(self, inner: _RegInnerT):
+        super().__init__([inner])
+
+
+@irdl_attr_definition
+class RefType(Generic[_RefInnerT], ParametrizedAttribute, TypeAttribute):
+    name = "si.ref"
+    inner: ParameterDef[_RefInnerT]
+
+    def __init__(self, inner: _RefInnerT):
         super().__init__([inner])
 
 
@@ -739,6 +750,33 @@ class TupleGetOp(IRDLOperation):
     # TODO: verify
 
 
+@irdl_op_definition
+class RefOp(IRDLOperation):
+    name = "si.ref"
+    T = Annotated[TypeAttribute, ConstraintVar("T")]
+    arg: Operand = operand_def(T)
+    result: OpResult = result_def(RefType[T])
+    assembly_format = "$arg `:` type($result) attr-dict"
+
+    def __init__(self, arg: SSAValue, loc: Loc):
+        super().__init__(result_types=[RefType(arg.type)], operands=[arg])
+        self.loc = loc
+
+
+@irdl_op_definition
+class DerefOp(IRDLOperation):
+    name = "si.deref"
+    T = Annotated[TypeAttribute, ConstraintVar("T")]
+    arg: Operand = operand_def(RefType[T])
+    result: OpResult = result_def(T)
+    assembly_format = "$arg `:` type($arg) attr-dict"
+
+    def __init__(self, arg: SSAValue, loc: Loc):
+        assert isinstance(arg.type, RefType)
+        super().__init__(result_types=[arg.type.inner], operands=[arg])
+        self.loc = loc
+
+
 #===------------------------------------------------------------------------===#
 # Dialect
 #===------------------------------------------------------------------------===#
@@ -750,6 +788,7 @@ SiliconDialect = Dialect("silicon", [
     ConcatOp,
     ConstantOp,
     ConstantUnitOp,
+    DerefOp,
     ExtractOp,
     FuncOp,
     InputPortOp,
@@ -758,6 +797,7 @@ SiliconDialect = Dialect("silicon", [
     NotOp,
     OutputDeclOp,
     OutputPortOp,
+    RefOp,
     RegCurrentOp,
     RegDeclOp,
     RegNextOp,
@@ -772,6 +812,7 @@ SiliconDialect = Dialect("silicon", [
     WireGetOp,
     WireSetOp,
 ], [
+    RefType,
     RegType,
     TupleType,
     UnitType,
@@ -826,6 +867,8 @@ class Converter:
             return WireType(self.convert_type(ty.inner, loc))
         if isinstance(ty, TyRegType):
             return RegType(self.convert_type(ty.inner, loc))
+        if isinstance(ty, TyRefType):
+            return RefType(self.convert_type(ty.inner, loc))
 
         emit_error(loc,
                    f"unsupported in IR conversion: {ty.__class__.__name__}")
@@ -1033,6 +1076,10 @@ class Converter:
                 op = self.builder.insert(NegOp(arg, expr.loc))
             elif expr.op == ast.UnaryOp.NOT:
                 op = self.builder.insert(NotOp(arg, expr.loc))
+            elif expr.op == ast.UnaryOp.REF:
+                op = self.builder.insert(RefOp(arg, expr.loc))
+            elif expr.op == ast.UnaryOp.DEREF:
+                op = self.builder.insert(DerefOp(arg, expr.loc))
             else:
                 emit_error(expr.loc,
                            f"unsupported unary operator `{expr.op.name}`")
