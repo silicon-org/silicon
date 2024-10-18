@@ -305,7 +305,7 @@ class DeclOpBase(IRDLOperation):
     assembly_format = "$decl_name `:` type($result) attr-dict"
 
     def __init__(self, name: str, ty: TypeAttribute, loc: Loc):
-        super().__init__(result_types=[ty],
+        super().__init__(result_types=[RefType(ty)],
                          attributes={"decl_name": StringAttr(name)})
         self.loc = loc
 
@@ -325,7 +325,7 @@ class VarDeclOp(DeclOpBase):
 class AssignOp(IRDLOperation):
     name = "si.assign"
     T = Annotated[TypeAttribute, ConstraintVar("T")]
-    dst: Operand = operand_def(T)
+    dst: Operand = operand_def(RefType[T])
     src: Operand = operand_def(T)
     assembly_format = "$dst `,` $src `:` type($dst) attr-dict"
 
@@ -996,22 +996,22 @@ class Converter:
 
         if isinstance(stmt, ast.OutputStmt):
             ty = self.convert_type(stmt.fty, stmt.loc)
-            value = self.builder.insert(
+            decl = self.builder.insert(
                 OutputDeclOp(stmt.name.spelling(), ty, stmt.loc)).result
-            self.named_values[stmt] = value
+            self.named_values[stmt] = decl
             if stmt.expr:
                 expr = self.convert_expr(stmt.expr)
-                self.builder.insert(AssignOp(value, expr, stmt.expr.loc))
+                self.builder.insert(AssignOp(decl, expr, stmt.expr.loc))
             return
 
         if isinstance(stmt, ast.LetStmt):
             ty = self.convert_type(stmt.fty, stmt.loc)
-            value = self.builder.insert(
+            decl = self.builder.insert(
                 VarDeclOp(stmt.name.spelling(), ty, stmt.loc)).result
-            self.named_values[stmt] = value
+            self.named_values[stmt] = decl
             if stmt.expr:
                 expr = self.convert_expr(stmt.expr)
-                self.builder.insert(AssignOp(value, expr, stmt.expr.loc))
+                self.builder.insert(AssignOp(decl, expr, stmt.expr.loc))
             return
 
         if isinstance(stmt, ast.ReturnStmt):
@@ -1026,6 +1026,15 @@ class Converter:
         if isinstance(stmt, ast.AssignStmt):
             dst = self.convert_expr(stmt.lhs)
             src = self.convert_expr(stmt.rhs)
+            # HACK: This should be handled by a dedicated lvalue expr lowering.
+            if isinstance(dst.owner, DerefOp):
+                new_dst = dst.owner.arg
+                if not dst.uses:
+                    dst.owner.detach()
+                    dst.owner.erase()
+                dst = new_dst
+            else:
+                dst = self.builder.insert(RefOp(dst, stmt.loc)).result
             self.builder.insert(AssignOp(dst, src, stmt.loc))
             return
 
@@ -1052,8 +1061,10 @@ class Converter:
 
         if isinstance(expr, ast.IdentExpr):
             target = expr.binding.get()
-            # TODO: This should probably be a `si.read_var` op or similar.
-            return self.named_values[target]
+            value = self.named_values[target]
+            if isinstance(target, (ast.LetStmt, ast.OutputStmt)):
+                value = self.builder.insert(DerefOp(value, expr.loc)).result
+            return value
 
         if isinstance(expr, ast.ParenExpr):
             return self.convert_expr(expr.expr)

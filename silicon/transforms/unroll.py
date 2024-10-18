@@ -99,21 +99,19 @@ class UnrollPass(ModulePass):
             op.erase()
 
     def unroll(self, op: Operation):
-        # Replace all variable uses with the current assignment.
-        for idx in range(len(op.operands)):
-            if idx == 0 and isinstance(op, ir.AssignOp):
-                continue
-            operand = op.operands[idx]
-            if not isinstance(operand.owner, ir.VarDeclOp) and not isinstance(
-                    operand.owner, ir.OutputDeclOp):
-                continue
-            assignment = self.assignments.get(operand)
+        # Replace all derefs with the current assignment.
+        if isinstance(op, ir.DerefOp):
+            assignment = self.assignments.get(op.arg)
             if not assignment:
-                emit_error(
-                    ir.get_loc(op),
-                    f"`{operand.owner.decl_name.data}` is unassigned at this point"
-                )
-            op.operands[idx] = assignment
+                name = "value"
+                if isinstance(op.arg.owner, (ir.VarDeclOp, ir.OutputDeclOp)):
+                    name = f"`{op.arg.owner.decl_name.data}`"
+                emit_error(ir.get_loc(op),
+                           f"{name} is unassigned at this point")
+            op.result.replace_by(assignment)
+            op.detach()
+            op.erase()
+            return
 
         # Inline calls.
         if isinstance(op, ir.CallOp):

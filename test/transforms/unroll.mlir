@@ -8,19 +8,21 @@ si.module @Empty {
 si.module @Outputs {
   // CHECK-NOT: si.output_decl
   // CHECK: si.output "x", [[Y:%.+]] : i32
-  %x = si.output_decl "x" : i32
+  %x = si.output_decl "x" : !si.ref<i32>
   // CHECK: [[C0:%.+]] = si.constant 0 :
   %c0_i32 = si.constant 0 : i32
   // CHECK-NOT: si.assign
   // CHECK: si.not %c0_i32
-  si.assign %x, %c0_i32 : i32
-  si.not %x : i32
+  si.assign %x, %c0_i32 : !si.ref<i32>
+  %0 = si.deref %x : !si.ref<i32>
+  si.not %0 : i32
   // CHECK: [[Y]] = si.input "y" : i32
   %y = si.input "y" : i32
   // CHECK-NOT: si.assign
   // CHECK: si.not [[Y]]
-  si.assign %x, %y : i32
-  si.not %x : i32
+  si.assign %x, %y : !si.ref<i32>
+  %1 = si.deref %x : !si.ref<i32>
+  si.not %1 : i32
 }
 
 // CHECK-LABEL: si.module @Vars
@@ -33,22 +35,25 @@ si.module @Vars {
   %c2_i32 = si.constant 2 : i32
 
   // CHECK-NOT: si.var_decl "v0"
-  %v0 = si.var_decl "v0" : i32
+  %v0 = si.var_decl "v0" : !si.ref<i32>
 
   // CHECK-NOT: si.var_decl "v1"
-  %v1 = si.var_decl "v1" : i32
+  %v1 = si.var_decl "v1" : !si.ref<i32>
   // CHECK-NOT: si.assign
   // CHECK: si.not [[C0]]
-  si.assign %v1, %c0_i32 : i32
-  si.not %v1 : i32
+  si.assign %v1, %c0_i32 : !si.ref<i32>
+  %0 = si.deref %v1 : !si.ref<i32>
+  si.not %0 : i32
   // CHECK-NOT: si.assign
   // CHECK: si.not [[C1]]
-  si.assign %v1, %c1_i32 : i32
-  si.not %v1 : i32
+  si.assign %v1, %c1_i32 : !si.ref<i32>
+  %1 = si.deref %v1 : !si.ref<i32>
+  si.not %1 : i32
   // CHECK-NOT: si.assign
   // CHECK: si.not [[C2]]
-  si.assign %v1, %c2_i32 : i32
-  si.not %v1 : i32
+  si.assign %v1, %c2_i32 : !si.ref<i32>
+  %2 = si.deref %v1 : !si.ref<i32>
+  si.not %2 : i32
 }
 
 // CHECK-LABEL: si.module @Wires
@@ -138,13 +143,16 @@ si.func @SimpleFunc() -> i32 {
 
 // CHECK-NOT: si.func @ComplexFunc
 si.func @ComplexFunc(%arg0 : i32, %arg1 : i32, %arg2 : i32) -> i32 {
-  %0 = si.var_decl "x" : i32
+  %0 = si.var_decl "x" : !si.ref<i32>
   %1 = si.call @SimpleFunc() : () -> i32
-  si.assign %0, %1 : i32
-  %2 = si.add %0, %arg0 : i32
-  si.assign %0, %2 : i32
-  %3 = si.add %arg1, %0 : i32
-  si.assign %0, %3 : i32
-  %4 = si.sub %0, %arg2 : i32
-  si.return %4 : i32
+  si.assign %0, %1 : !si.ref<i32>
+  %2 = si.deref %0 : !si.ref<i32>
+  %3 = si.add %2, %arg0 : i32
+  si.assign %0, %3 : !si.ref<i32>
+  %4 = si.deref %0 : !si.ref<i32>
+  %5 = si.add %arg1, %4 : i32
+  si.assign %0, %5 : !si.ref<i32>
+  %6 = si.deref %0 : !si.ref<i32>
+  %7 = si.sub %6, %arg2 : i32
+  si.return %7 : i32
 }

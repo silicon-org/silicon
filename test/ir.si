@@ -7,7 +7,7 @@ mod Bar {}
 
 // CHECK-LABEL: si.module @Types
 mod Types {
-    // CHECK: si.var_decl "a" : !si.tuple<[i1, i2]>
+    // CHECK: si.var_decl "a" : !si.ref<!si.tuple<[i1, i2]>>
     let a: (uint<1>, uint<2>);
 }
 
@@ -15,35 +15,35 @@ mod Types {
 mod Statements {
     // CHECK: [[A:%.+]] = si.input "a" : i42
     input a: uint<42>;
-    // CHECK: [[B:%.+]] = si.output_decl "b" : i42
+    // CHECK: [[B:%.+]] = si.output_decl "b" : !si.ref<i42>
     output b: uint<42>;
-    // CHECK: [[C:%.+]] = si.output_decl "c" : i42
-    // CHECK: si.assign [[C]], [[A]] : i42
+    // CHECK: [[C:%.+]] = si.output_decl "c" : !si.ref<i42>
+    // CHECK: si.assign [[C]], [[A]] : !si.ref<i42>
     output c: uint<42> = a;
-    // CHECK: [[U:%.+]] = si.var_decl "u" : i42
+    // CHECK: [[U:%.+]] = si.var_decl "u" : !si.ref<i42>
     let u: uint<42>;
-    // CHECK: [[V:%.+]] = si.var_decl "v" : i42
-    // CHECK: si.assign [[V]], [[A]] : i42
+    // CHECK: [[V:%.+]] = si.var_decl "v" : !si.ref<i42>
+    // CHECK: si.assign [[V]], [[A]] : !si.ref<i42>
     let v: uint<42> = a;
-    // CHECK: si.assign [[B]], [[A]] : i42
+    // CHECK: si.assign [[B]], [[A]] : !si.ref<i42>
     b = (a);
-    // CHECK: si.assign [[U]], [[A]] : i42
+    // CHECK: si.assign [[U]], [[A]] : !si.ref<i42>
     u = a;
 }
 
-// CHECK-LABEL: si.module @Expressions
-mod Expressions {
-    // CHECK: [[A:%.+]] = si.var_decl "a" : i19
-    // CHECK: [[B:%.+]] = si.var_decl "b" : i19
-    // CHECK: [[C:%.+]] = si.var_decl "c" : i1
-    // CHECK: [[D:%.+]] = si.var_decl "d" : !si.tuple<[i42, i43]>
-    // CHECK: [[E:%.+]] = si.var_decl "e" : !si.ref<i19>
-    let a: uint<19>;
-    let b: uint<19>;
-    let c: uint<1>;
-    let d: (uint<42>, uint<43>);
-    let e: &uint<19>;
-
+// CHECK-LABEL: si.func @Expressions
+fn Expressions(
+    // CHECK-SAME: [[A:%a]] : i19
+    a: uint<19>,
+    // CHECK-SAME: [[B:%b]] : i19
+    b: uint<19>,
+    // CHECK-SAME: [[C:%c]] : i1
+    c: uint<1>,
+    // CHECK-SAME: [[D:%d]] : !si.tuple<[i42, i43]>
+    d: (uint<42>, uint<43>),
+    // CHECK-SAME: [[E:%e]] : !si.ref<i19>
+    e: &uint<19>,
+) {
     // CHECK: si.constant 9001 : i42
     9001u42;
     // CHECK: si.constant_unit : !si.unit
@@ -80,44 +80,51 @@ mod Expressions {
     c.mux(a, b);
 }
 
-// CHECK-LABEL: si.module @LetUpdates
-mod LetUpdates {
-    // CHECK: [[A:%.+]] = si.input "a"
-    // CHECK: [[B:%.+]] = si.input "b"
-    // CHECK: [[C:%.+]] = si.input "c"
-    input a: uint<3>;
-    input b: uint<3>;
-    input c: uint<3>;
+// CHECK-LABEL: si.func @LetUpdates
+fn LetUpdates(
+    // CHECK-SAME: [[A:%a]] : i3
+    a: uint<3>,
+    // CHECK-SAME: [[B:%b]] : i3
+    b: uint<3>,
+    // CHECK-SAME: [[C:%c]] : i3
+    c: uint<3>,
+) {
 
     // CHECK: [[X:%.+]] = si.var_decl "x"
     // CHECK: [[CONST:%.+]] = si.constant 0 : i3
     // CHECK: si.assign [[X]], [[CONST]]
-    // CHECK: [[TMP:%.+]] = si.add [[X]], [[A]]
-    // CHECK: si.assign [[X]], [[TMP]]
-    // CHECK: [[TMP:%.+]] = si.add [[X]], [[B]]
-    // CHECK: si.assign [[X]], [[TMP]]
-    // CHECK: [[TMP:%.+]] = si.add [[X]], [[C]]
-    // CHECK: si.assign [[X]], [[TMP]]
     let x: uint<3> = 0u3;
+    // CHECK: [[TMP1:%.+]] = si.deref [[X]]
+    // CHECK: [[TMP2:%.+]] = si.add [[TMP1]], [[A]]
+    // CHECK: si.assign [[X]], [[TMP2]]
     x = x + a;
+    // CHECK: [[TMP1:%.+]] = si.deref [[X]]
+    // CHECK: [[TMP2:%.+]] = si.add [[TMP1]], [[B]]
+    // CHECK: si.assign [[X]], [[TMP2]]
     x = x + b;
+    // CHECK: [[TMP1:%.+]] = si.deref [[X]]
+    // CHECK: [[TMP2:%.+]] = si.add [[TMP1]], [[C]]
+    // CHECK: si.assign [[X]], [[TMP2]]
     x = x + c;
 
     // CHECK: [[Y0:%.+]] = si.var_decl "y"
     // CHECK: [[CONST:%.+]] = si.constant 1 : i3
     // CHECK: si.assign [[Y0]], [[CONST]]
-    // CHECK: [[Y1:%.+]] = si.var_decl "y"
-    // CHECK: [[TMP:%.+]] = si.add [[Y0]], [[A]]
-    // CHECK: si.assign [[Y1]], [[TMP]]
-    // CHECK: [[Y2:%.+]] = si.var_decl "y"
-    // CHECK: [[TMP:%.+]] = si.add [[Y1]], [[B]]
-    // CHECK: si.assign [[Y2]], [[TMP]]
-    // CHECK: [[Y3:%.+]] = si.var_decl "y"
-    // CHECK: [[TMP:%.+]] = si.add [[Y2]], [[C]]
-    // CHECK: si.assign [[Y3]], [[TMP]]
     let y: uint<3> = 1u3;
+    // CHECK: [[Y1:%.+]] = si.var_decl "y"
+    // CHECK: [[TMP1:%.+]] = si.deref [[Y0]]
+    // CHECK: [[TMP2:%.+]] = si.add [[TMP1]], [[A]]
+    // CHECK: si.assign [[Y1]], [[TMP2]]
     let y: uint<3> = y + a;
+    // CHECK: [[Y2:%.+]] = si.var_decl "y"
+    // CHECK: [[TMP1:%.+]] = si.deref [[Y1]]
+    // CHECK: [[TMP2:%.+]] = si.add [[TMP1]], [[B]]
+    // CHECK: si.assign [[Y2]], [[TMP2]]
     let y: uint<3> = y + b;
+    // CHECK: [[Y3:%.+]] = si.var_decl "y"
+    // CHECK: [[TMP1:%.+]] = si.deref [[Y2]]
+    // CHECK: [[TMP2:%.+]] = si.add [[TMP1]], [[C]]
+    // CHECK: si.assign [[Y3]], [[TMP2]]
     let y: uint<3> = y + c;
 }
 
@@ -126,29 +133,33 @@ mod WiresAndRegisters {
     // CHECK: [[CLOCK:%.+]] = si.input "clock" : i1
     input clock: uint<1>;
 
-    // CHECK: [[X:%.+]] = si.var_decl "x" : !si.wire<i42>
+    // CHECK: [[X:%.+]] = si.var_decl "x" : !si.ref<!si.wire<i42>>
     // CHECK: [[WIRE:%.+]] = si.wire_decl : !si.wire<i42>
     // CHECK: [[TMP:%.+]] = si.constant 0 : i42
     // CHECK: si.wire_set [[WIRE]], [[TMP]] : !si.wire<i42>
-    // CHECK: si.assign [[X]], [[WIRE]] : !si.wire<i42>
+    // CHECK: si.assign [[X]], [[WIRE]] : !si.ref<!si.wire<i42>>
     let x: Wire<uint<42>> = wire(0u42);
 
-    // CHECK: [[Y:%.+]] = si.var_decl "y" : !si.reg<i42>
+    // CHECK: [[Y:%.+]] = si.var_decl "y" : !si.ref<!si.reg<i42>>
     // CHECK: [[REG:%.+]] = si.reg_decl [[CLOCK]] : !si.reg<i42>
     // CHECK: [[TMP:%.+]] = si.constant 0 : i42
     // CHECK: si.reg_next [[REG]], [[TMP]] : !si.reg<i42>
-    // CHECK: si.assign [[Y]], [[REG]] : !si.reg<i42>
+    // CHECK: si.assign [[Y]], [[REG]] : !si.ref<!si.reg<i42>>
     let y: Reg<uint<42>> = reg(clock, 0u42);
 
-    // CHECK: si.reg_current [[Y]] : !si.reg<i42>
+    // CHECK: [[TMP:%.+]] = si.deref [[Y]] : !si.ref<!si.reg<i42>>
+    // CHECK: si.reg_current [[TMP]] : !si.reg<i42>
     y.current();
 
-    // CHECK: [[TMP:%.+]] = si.wire_get [[X]] : !si.wire<i42>
-    // CHECK: si.reg_next [[Y]], [[TMP]] : !si.reg<i42>
+    // CHECK: [[TMP1:%.+]] = si.deref [[Y]] : !si.ref<!si.reg<i42>>
+    // CHECK: [[TMP2:%.+]] = si.deref [[X]] : !si.ref<!si.wire<i42>>
+    // CHECK: [[TMP3:%.+]] = si.wire_get [[TMP2]] : !si.wire<i42>
+    // CHECK: si.reg_next [[TMP1]], [[TMP3]] : !si.reg<i42>
     y.next(x.get());
 
-    // CHECK: [[TMP:%.+]] = si.constant 1337 : i42
-    // CHECK: si.wire_set [[X]], [[TMP]] : !si.wire<i42>
+    // CHECK: [[TMP1:%.+]] = si.deref [[X]] : !si.ref<!si.wire<i42>>
+    // CHECK: [[TMP2:%.+]] = si.constant 1337 : i42
+    // CHECK: si.wire_set [[TMP1]], [[TMP2]] : !si.wire<i42>
     x.set(1337u42);
 }
 
@@ -205,9 +216,9 @@ fn calls(a: uint<43>, b: uint<44>) {
 
 // CHECK-LABEL: si.func @default_literal_sizes_should_propagate_through_wires
 fn default_literal_sizes_should_propagate_through_wires() {
-    // CHECK: si.var_decl "x" : !si.wire<i0>
+    // CHECK: si.var_decl "x" : !si.ref<!si.wire<i0>>
     let x = wire(0);
-    // CHECK: si.var_decl "y" : !si.reg<i0>
+    // CHECK: si.var_decl "y" : !si.ref<!si.reg<i0>>
     let y = reg(0, 0);
 }
 
