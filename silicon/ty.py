@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import z3
 from math import log2, floor
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass, field
 from itertools import count
 
@@ -34,6 +34,12 @@ class ConstIntParam(IntParam):
 
     def __str__(self) -> str:
         return f"{self.value}"
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, ConstIntParam) and self.value == other.value
+
+    def __hash__(self) -> int:
+        return hash(self.value)
 
 
 @dataclass(eq=False)
@@ -176,7 +182,7 @@ class Typeck:
     root: ast.ModItem | ast.FnItem
     params: Dict[ast.AstNode, IntParam]
     solver: z3.Solver
-    solver_params: Dict[ast.AstNode, z3.Int]
+    solver_params: Dict[IntParam, z3.Int]
 
     def __init__(self, root: ast.ModItem | ast.FnItem) -> None:
         self.root = root
@@ -404,6 +410,36 @@ class Typeck:
 
             # Annotate the call parameters.
             expr.call_params = [self.simplify_param(p) for p in call_params]
+            for cp in expr.call_params:
+                if isinstance(cp, InferrableIntParam):
+                    target_typeck.solver_params[cp] = z3.FreshConst(
+                        z3.IntSort())
+                elif isinstance(cp, ConstIntParam):
+                    target_typeck.solver_params[cp] = z3.IntVal(cp.value)
+                elif isinstance(cp, FreeIntParam):
+                    target_typeck.solver_params[cp] = self.solver_params[cp]
+
+            # Check that we adhere to the where clauses.
+            for where in target.wheres:
+                solver_expr = target_typeck.convert_to_solver_expr(where)
+                self.solver.push()
+                self.solver.add(~solver_expr)
+                good = (self.solver.check() == z3.unsat)
+                if not good:
+                    model = self.solver.model()
+                    for ast_param, free_param in target_typeck.params.items():
+                        solver_param = target_typeck.solver_params[
+                            self.simplify_param(free_param)]
+                        value = model.eval(solver_param)
+                        emit_info(
+                            where.loc,
+                            f"for example consider {ast_param.loc.spelling()} = {value}"
+                        )
+                    emit_error(
+                        expr.loc,
+                        f"parameter mismatch: `{name}` requires {where.full_loc.spelling()}"
+                    )
+                self.solver.pop()
 
             # Propagate the return type.
             return target_typeck.convert_ast_type(
@@ -736,7 +772,7 @@ class Typeck:
         self,
         param: IntParam,
         value: int,
-    ) -> Tuple[bool, List[Tuple[IntParam, int]]]:
+    ) -> Tuple[bool, List[Tuple[IntParam, Loc, int]]]:
         self.solver.push()
         solver_param = self.solver_params[param]
         self.solver.add(~(solver_param > value))
@@ -760,7 +796,7 @@ class Typeck:
         if isinstance(expr, ast.IdentExpr):
             binding = expr.binding.get()
             if isinstance(binding, ast.FnParam):
-                param = self.params[binding]
+                param = self.simplify_param(self.params[binding])
                 return self.solver_params[param]
 
         if isinstance(expr, ast.BinaryExpr):

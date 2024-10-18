@@ -22,6 +22,6 @@ Rough roadmap:
 - [ ] Array types
 - [ ] Enum types
 - [ ] Struct types
-- [ ] Constraints on ports/types in module signature, checked inside/outside
+- [x] Constraints on ports/types in module signature, checked inside/outside
 - [ ] Make `return` an expression
 - [x] Make blocks an expression
