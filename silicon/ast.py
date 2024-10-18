@@ -95,6 +95,7 @@ class FnItem(Item):
     params: List[FnParam]
     args: List[FnArg]
     return_ty: Optional[AstType]
+    wheres: List[Expr]
     stmts: List[Stmt]
     return_fty: Optional[Type] = None
 
@@ -279,11 +280,19 @@ class BinaryExpr(Expr):
 class BinaryOp(Enum):
     ADD = auto()
     SUB = auto()
+    LT = auto()
+    GT = auto()
+    LE = auto()
+    GE = auto()
 
 
 BINARY_OPS: Dict[TokenKind, BinaryOp] = {
     TokenKind.ADD: BinaryOp.ADD,
     TokenKind.SUB: BinaryOp.SUB,
+    TokenKind.LT: BinaryOp.LT,
+    TokenKind.GT: BinaryOp.GT,
+    TokenKind.LE: BinaryOp.LE,
+    TokenKind.GE: BinaryOp.GE,
 }
 
 
@@ -304,6 +313,10 @@ class Precedence(IntEnum):
 BINARY_PRECEDENCE: Dict[BinaryOp, Precedence] = {
     BinaryOp.ADD: Precedence.ADD_SUB,
     BinaryOp.SUB: Precedence.ADD_SUB,
+    BinaryOp.LT: Precedence.RELATIONAL,
+    BinaryOp.GT: Precedence.RELATIONAL,
+    BinaryOp.LE: Precedence.RELATIONAL,
+    BinaryOp.GE: Precedence.RELATIONAL,
 }
 
 

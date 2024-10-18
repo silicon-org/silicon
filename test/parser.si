@@ -195,3 +195,11 @@ fn paramFunc2<N>() {}
 // CHECK:   ty: UIntType
 // CHECK:     size: IdentExpr "N"
 fn paramFunc3<N,>(x: uint<N>) {}
+
+// CHECK-LABEL: FnItem "funcWithWhere1"
+// CHECK: wheres[0]: BinaryExpr GT
+fn funcWithWhere1<N>() where N > 4 {}
+// CHECK-LABEL: FnItem "funcWithWhere2"
+// CHECK: wheres[0]: BinaryExpr GT
+// CHECK: wheres[1]: BinaryExpr LT
+fn funcWithWhere2<M>() where N > 4, M < 9 {}

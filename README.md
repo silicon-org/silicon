@@ -24,4 +24,4 @@ Rough roadmap:
 - [ ] Struct types
 - [ ] Constraints on ports/types in module signature, checked inside/outside
 - [ ] Make `return` an expression
-- [ ] Make blocks and expression
+- [x] Make blocks an expression

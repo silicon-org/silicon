@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import z3
 from math import log2, floor
 from typing import Optional, List, Dict
 from dataclasses import dataclass, field
@@ -22,7 +23,7 @@ def min_bits_for_int(value: int) -> int:
 #===------------------------------------------------------------------------===#
 
 
-@dataclass
+@dataclass(eq=False)
 class IntParam:
     pass
 
@@ -35,7 +36,7 @@ class ConstIntParam(IntParam):
         return f"{self.value}"
 
 
-@dataclass
+@dataclass(eq=False)
 class FreeIntParam(IntParam):
     name_hint: Optional[str] = None
     num: int = field(default_factory=count().__next__)
@@ -44,7 +45,7 @@ class FreeIntParam(IntParam):
         return self.name_hint or f"@{self.num}"
 
 
-@dataclass
+@dataclass(eq=False)
 class InferrableIntParam(IntParam):
     num: int = field(default_factory=count().__next__)
 
@@ -171,10 +172,17 @@ def require_int_lit(
     return arg.value
 
 
-@dataclass
 class Typeck:
     root: ast.ModItem | ast.FnItem
-    params: Dict[ast.AstNode, IntParam] = field(default_factory=dict)
+    params: Dict[ast.AstNode, IntParam]
+    solver: z3.Solver
+    solver_params: Dict[ast.AstNode, z3.Int]
+
+    def __init__(self, root: ast.ModItem | ast.FnItem) -> None:
+        self.root = root
+        self.params = dict()
+        self.solver = z3.Solver()
+        self.solver_params = dict()
 
     # Convert an AST type node into an actual type.
     def convert_ast_type(self, ty: ast.AstType) -> Type:
@@ -206,21 +214,45 @@ class Typeck:
     # Type-check just the signature of the `root` node.
     def typeck_signature(self):
         if isinstance(self.root, ast.FnItem):
+            # Declare the parameters.
             for param in self.root.params:
                 param.fty = GenericIntType()
                 param.free_param = FreeIntParam(param.name.spelling())
                 self.params[param] = param.free_param
+                self.solver_params[param.free_param] = z3.Int(
+                    param.name.spelling())
+
+            # Apply where clauses.
+            for expr in self.root.wheres:
+                self.typeck_where(expr)
+
+            # Check the arguments.
             for arg in self.root.args:
                 arg.fty = self.convert_ast_type(arg.ty)
+
+            # Check the return type.
             self.root.return_fty = self.convert_ast_type(
                 self.root.return_ty) if self.root.return_ty else UnitType()
 
+    def typeck_where(self, expr: ast.Expr):
+        self.typeck_expr(expr)
+        solver_expr = self.convert_to_solver_expr(expr)
+
+        # Check if the clause is trivially true.
+        self.solver.push()
+        self.solver.add(~solver_expr)
+        if self.solver.check() == z3.unsat:
+            emit_warning(expr.loc,
+                         "constraint always holds and can be removed")
+        self.solver.pop()
+
+        # Check if the clause renders the constraints unsatisfiable.
+        self.solver.add(solver_expr)
+        if self.solver.check() == z3.unsat:
+            emit_error(expr.loc, "constraint is unsatisfiable")
+
     # Type-check the entire AST starting at the `root` node.
     def typeck(self):
-        if isinstance(self.root, ast.FnItem):
-            for param in self.root.params:
-                self.params[param] = param.free_param
-
         for stmt in self.root.stmts:
             self.typeck_stmt(stmt)
 
@@ -415,17 +447,31 @@ class Typeck:
             require_num_args(expr, 1)
             target = self.typeck_expr(expr.target)
             self.typeck_expr(expr.args[0])
-            if not isinstance(target, UIntType) or not isinstance(
-                    target.width, ConstIntParam):
+            if not isinstance(target, UIntType):
                 emit_error(expr.loc, f"cannot access bits in `{target}`")
+
             offset = require_int_lit(expr, 0)
-            if offset < 0 or offset >= target.width.value:
-                emit_info(
-                    expr.target.loc,
-                    f"the bit index `{offset}` is outside the type `{target}` whose bit range is `0..{target.width}`"
-                )
-                emit_error(expr.args[0].loc,
-                           f"bit index out of bounds for `{target}`")
+            if isinstance(target.width, ConstIntParam):
+                if offset < 0 or offset >= target.width.value:
+                    emit_info(
+                        expr.target.loc,
+                        f"the bit index `{offset}` is outside the type `{target}` whose bit range is `0..{target.width}`"
+                    )
+                    emit_error(expr.args[0].loc,
+                               f"bit index out of bounds for `{target}`")
+            else:
+                good, counter = self.prove_greater_than(target.width, offset)
+                if not good:
+                    emit_info(
+                        expr.target.loc,
+                        f"the bit index may be outside the type `{target}` whose bit range is `0..{target.width}`"
+                    )
+                    for param, loc, value in counter:
+                        emit_info(loc,
+                                  f"for example consider {param} = {value}")
+                    emit_error(expr.args[0].loc,
+                               f"bit index out of bounds for `{target}`")
+
             return UIntType(ConstIntParam(1))
 
         if name == "slice":
@@ -571,7 +617,8 @@ class Typeck:
 
         # Unary and binary operators must operate on integers.
         if isinstance(node, ast.UnaryExpr) or isinstance(node, ast.BinaryExpr):
-            if not isinstance(node.fty, UIntType):
+            if not isinstance(node.fty, UIntType) and not isinstance(
+                    node.fty, GenericIntType):
                 word = {
                     ast.UnaryOp.NEG: "negate",
                     ast.UnaryOp.NOT: "invert",
@@ -634,6 +681,13 @@ class Typeck:
                 lhs.width.inferred = rhs.width
                 return
 
+        # unify({integer}, uint<_>) -> {integer}
+        # unify(uint<_>, {integer}) -> {integer}
+        if isinstance(lhs, GenericIntType) and isinstance(rhs, UIntType):
+            return
+        if isinstance(lhs, UIntType) and isinstance(rhs, GenericIntType):
+            return
+
         # unify(?A, ?B) -> ?A
         # unify(?A, T) -> T
         # unify(T, ?B) -> T
@@ -677,20 +731,61 @@ class Typeck:
 
         return param
 
+    # Prove that the given parameter is greater than the given constant value.
+    def prove_greater_than(
+        self,
+        param: IntParam,
+        value: int,
+    ) -> Tuple[bool, List[Tuple[IntParam, int]]]:
+        self.solver.push()
+        solver_param = self.solver_params[param]
+        self.solver.add(~(solver_param > value))
+        good = (self.solver.check() == z3.unsat)
+        counter = []
+        if not good:
+            model = self.solver.model()
+            if model:
+                for ast_param, free_param in self.params.items():
+                    solver_param = self.solver_params[free_param]
+                    value = model.eval(solver_param)
+                    counter.append((free_param, ast_param.loc, value))
+        self.solver.pop()
+        return good, counter
+
+    # Convert an AST expression to a solver expression.
+    def convert_to_solver_expr(self, expr: ast.Expr) -> z3.Ast:
+        if isinstance(expr, ast.IntLitExpr):
+            return z3.IntVal(expr.value)
+
+        if isinstance(expr, ast.IdentExpr):
+            binding = expr.binding.get()
+            if isinstance(binding, ast.FnParam):
+                param = self.params[binding]
+                return self.solver_params[param]
+
+        if isinstance(expr, ast.BinaryExpr):
+            lhs = self.convert_to_solver_expr(expr.lhs)
+            rhs = self.convert_to_solver_expr(expr.rhs)
+            if expr.op == ast.BinaryOp.GT:
+                return lhs > rhs
+
+        emit_error(expr.loc, f"invalid constraint expression")
+
 
 def typeck(root: ast.Root):
+    root_typecks = []
+
     # Type-check all signature and prepare the necessary free parameters.
     for item in root.items:
         if isinstance(item, (ast.ModItem, ast.FnItem)):
-            Typeck(item).typeck_signature()
+            cx = Typeck(item)
+            cx.typeck_signature()
+            root_typecks.append((item, cx))
         else:
             emit_error(item.loc,
                        f"unsupported in typeck: {item.__class__.__name__}")
+    assert len(root_typecks) == len(root.items)
 
     # Type-check the AST in full detail.
-    for item in root.items:
-        if isinstance(item, (ast.ModItem, ast.FnItem)):
-            Typeck(item).typeck()
-        else:
-            emit_error(item.loc,
-                       f"unsupported in typeck: {item.__class__.__name__}")
+    for item, cx in root_typecks:
+        cx.typeck()

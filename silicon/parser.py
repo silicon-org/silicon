@@ -106,6 +106,14 @@ def parse_item(p: Parser) -> ast.Item:
         if p.consume_if(TokenKind.ARROW):
             return_ty = parse_type(p)
 
+        # Parse optional where clause.
+        wheres: List[ast.Expr] = []
+        if p.consume_if(TokenKind.KW_WHERE):
+            while p.not_delim(TokenKind.LCURLY):
+                wheres.append(parse_expr(p))
+                if not p.consume_if(TokenKind.COMMA):
+                    break
+
         # Parse body.
         p.require(TokenKind.LCURLY)
         stmts = []
@@ -117,6 +125,7 @@ def parse_item(p: Parser) -> ast.Item:
                           name=name,
                           params=params,
                           args=args,
+                          wheres=wheres,
                           return_ty=return_ty,
                           stmts=stmts)
 
@@ -239,7 +248,7 @@ def parse_type(p: Parser) -> ast.AstType:
         if name == "uint":
             token = p.consume()
             p.require(TokenKind.LT)
-            size = parse_expr(p)
+            size = parse_expr(p, ast.Precedence.RELATIONAL)
             p.require(TokenKind.GT)
             return ast.UIntType(loc=loc | p.last_loc, size=size)
 

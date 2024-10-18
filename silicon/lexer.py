@@ -53,6 +53,7 @@ class TokenKind(Enum):
     KW_MOD = auto()
     KW_OUTPUT = auto()
     KW_RETURN = auto()
+    KW_WHERE = auto()
     KW_WHILE = auto()
 
     EOF = auto()
@@ -104,6 +105,7 @@ KEYWORDS: Dict[str, TokenKind] = {
     "mod": TokenKind.KW_MOD,
     "output": TokenKind.KW_OUTPUT,
     "return": TokenKind.KW_RETURN,
+    "where": TokenKind.KW_WHERE,
     "while": TokenKind.KW_WHILE,
 }
 
