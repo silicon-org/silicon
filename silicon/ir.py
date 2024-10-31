@@ -301,13 +301,18 @@ class OutputPortOp(IRDLOperation):
 
 class DeclOpBase(IRDLOperation):
     decl_name: StringAttr = attr_def(StringAttr)
-    result: OpResult = result_def()
+    T = Annotated[TypeAttribute, ConstraintVar("T")]
+    result: OpResult = result_def(RefType[T])
     assembly_format = "$decl_name `:` type($result) attr-dict"
 
     def __init__(self, name: str, ty: TypeAttribute, loc: Loc):
         super().__init__(result_types=[RefType(ty)],
                          attributes={"decl_name": StringAttr(name)})
         self.loc = loc
+
+    def get_declared_type(self):
+      assert isinstance(self.result.type, RefType)
+      return self.result.type.inner
 
 
 @irdl_op_definition

@@ -156,3 +156,155 @@ si.func @ComplexFunc(%arg0 : i32, %arg1 : i32, %arg2 : i32) -> i32 {
   %7 = si.sub %6, %arg2 : i32
   si.return %7 : i32
 }
+
+// CHECK-LABEL: si.module @Tuples
+si.module @Tuples {
+  %c42_i42 = si.constant 42 : i42
+  %c9001_i1337 = si.constant 9001 : i1337
+  %c1337_i42 = si.constant 1337 : i42
+  %x = si.var_decl "x" : !si.ref<!si.tuple<[i42, i1337]>>
+  %x0 = si.tuple_get_ref %x, #builtin.int<0> : !si.ref<!si.tuple<[i42, i1337]>> -> !si.ref<i42>
+  %x1 = si.tuple_get_ref %x, #builtin.int<1> : !si.ref<!si.tuple<[i42, i1337]>> -> !si.ref<i1337>
+
+  // x.0 = 42; x.1 = 1337; read x.0, x.0, x
+  // CHECK-NOT: si.assign
+  si.assign %x0, %c42_i42 : !si.ref<i42>
+  si.assign %x1, %c9001_i1337 : !si.ref<i1337>
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "a0", %c42_i42
+  %a0 = si.deref %x0 : !si.ref<i42>
+  si.output "a0", %a0 : i42
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "a1", %c9001_i1337
+  %a1 = si.deref %x1 : !si.ref<i1337>
+  si.output "a1", %a1 : i1337
+  // CHECK-NOT: si.deref
+  // CHECK: [[TMP:%.+]] = si.tuple_create %c42_i42, %c9001_i1337 :
+  // CHECK: si.output "a2", [[TMP]]
+  %a2 = si.deref %x : !si.ref<!si.tuple<[i42, i1337]>>
+  si.output "a2", %a2 : !si.tuple<[i42, i1337]>
+
+  // x = (42, 9001); read x.0, x.1
+  // CHECK-NOT: si.assign
+  // CHECK-NOT: si.tuple_create
+  %0 = si.tuple_create %c42_i42, %c9001_i1337 : (i42, i1337) -> !si.tuple<[i42, i1337]>
+  si.assign %x, %0 : !si.ref<!si.tuple<[i42, i1337]>>
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "b0", %c42_i42
+  %b0 = si.deref %x0 : !si.ref<i42>
+  si.output "b0", %b0 : i42
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "b1", %c9001_i1337
+  %b1 = si.deref %x1 : !si.ref<i1337>
+  si.output "b1", %b1 : i1337
+
+  // x = (42, 9001); x.0 = 1337; read x.0, x.1
+  // CHECK-NOT: si.assign
+  si.assign %x, %0 : !si.ref<!si.tuple<[i42, i1337]>>
+  si.assign %x0, %c1337_i42 : !si.ref<i42>
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "c0", %c1337_i42
+  %c0 = si.deref %x0 : !si.ref<i42>
+  si.output "c0", %c0 : i42
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "c1", %c9001_i1337
+  %c1 = si.deref %x1 : !si.ref<i1337>
+  si.output "c1", %c1 : i1337
+  // CHECK-NOT: si.deref
+  // CHECK: [[TMP:%.+]] = si.tuple_create %c1337_i42, %c9001_i1337
+  // CHECK: si.output "c2", [[TMP]]
+  %c2 = si.deref %x : !si.ref<!si.tuple<[i42, i1337]>>
+  si.output "c2", %c2 : !si.tuple<[i42, i1337]>
+}
+
+// CHECK-LABEL: si.module @DerefRefInTuple
+si.module @DerefRefInTuple {
+  %c0_i0 = si.constant 0 : i0
+  %c17_i15 = si.constant 17 : i15
+  %c42_i15 = si.constant 42 : i15
+  %c1337_i15 = si.constant 1337 : i15
+  %c9001_i15 = si.constant 9001 : i15
+
+  // let x = 42, y = 17
+  // CHECK-NOT: si.var_decl
+  %x = si.var_decl "x" : !si.ref<i15>
+  %y = si.var_decl "y" : !si.ref<i15>
+  // CHECK-NOT: si.assign
+  si.assign %x, %c42_i15 : !si.ref<i15>
+  si.assign %y, %c17_i15 : !si.ref<i15>
+
+  // let z = (&x, 0)
+  // CHECK-NOT: si.var_decl
+  %z = si.var_decl "z" : !si.ref<!si.tuple<[!si.ref<i15>, i0]>>
+  // CHECK-NOT: si.tuple_create
+  %0 = si.tuple_create %x, %c0_i0 : (!si.ref<i15>, i0) -> !si.tuple<[!si.ref<i15>, i0]>
+  // CHECK-NOT: si.assign
+  si.assign %z, %0 : !si.ref<!si.tuple<[!si.ref<i15>, i0]>>
+
+  // read *z.0, x
+  // CHECK-NOT: si.tuple_get_ref
+  %z.0 = si.tuple_get_ref %z, #builtin.int<0> : !si.ref<!si.tuple<[!si.ref<i15>, i0]>> -> !si.ref<!si.ref<i15>>
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "a0", %c42_i15
+  %1 = si.deref %z.0 : !si.ref<!si.ref<i15>>
+  %2 = si.deref %1 : !si.ref<i15>
+  si.output "a0", %2 : i15
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "a1", %c42_i15
+  %3 = si.deref %x : !si.ref<i15>
+  si.output "a1", %3 : i15
+
+  // *z.0 = 1337
+  // CHECK-NOT: si.deref
+  %4 = si.deref %z.0 : !si.ref<!si.ref<i15>>
+  // CHECK-NOT: si.assign
+  si.assign %4, %c1337_i15 : !si.ref<i15>
+
+  // read *z.0, x
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "b0", %c1337_i15
+  %5 = si.deref %z.0 : !si.ref<!si.ref<i15>>
+  %6 = si.deref %5 : !si.ref<i15>
+  si.output "b0", %6 : i15
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "b1", %c1337_i15
+  %7 = si.deref %x : !si.ref<i15>
+  si.output "b1", %7 : i15
+
+  // z.0 = &y
+  // CHECK-NOT: si.assign
+  si.assign %z.0, %y : !si.ref<!si.ref<i15>>
+
+  // read *z.0, y
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "c0", %c17_i15
+  %8 = si.deref %z.0 : !si.ref<!si.ref<i15>>
+  %9 = si.deref %8 : !si.ref<i15>
+  si.output "c0", %9 : i15
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "c1", %c17_i15
+  %10 = si.deref %y : !si.ref<i15>
+  si.output "c1", %10 : i15
+
+  // *z.0 = 9001
+  // CHECK-NOT: si.deref
+  %11 = si.deref %z.0 : !si.ref<!si.ref<i15>>
+  // CHECK-NOT: si.assign
+  si.assign %11, %c9001_i15 : !si.ref<i15>
+
+  // read *z.0, y
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "d0", %c9001_i15
+  %12 = si.deref %z.0 : !si.ref<!si.ref<i15>>
+  %13 = si.deref %12 : !si.ref<i15>
+  si.output "d0", %13 : i15
+  // CHECK-NOT: si.deref
+  // CHECK: si.output "d1", %c9001_i15
+  %14 = si.deref %y : !si.ref<i15>
+  si.output "d1", %14 : i15
+
+  // CHECK-NOT: si.tuple_get
+  // CHECK: si.output "e", %c0_i0
+  %15 = si.tuple_get %0, #builtin.int<1> : !si.tuple<[!si.ref<i15>, i0]> -> i0
+  si.output "e", %15 : i0
+}
