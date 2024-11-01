@@ -72,7 +72,7 @@ class InferrableIntParam(IntParam):
 #===------------------------------------------------------------------------===#
 
 
-@dataclass
+@dataclass(eq=False)
 class Type:
   pass
 
@@ -84,8 +84,26 @@ class UnitType(Type):
     return "()"
 
 
-@dataclass
+# The type of an integer literal. This is essentially an inferrable integer type
+# with a hint about the concrete literal. It can be inferred to a generic
+# integer type, or a concrete fixed-width integer.
+@dataclass(eq=False)
+class LiteralIntType(Type):
+  # The minimum number of bits needed by the literal that generated this type.
+  # If the type remains uninferred, this width is used to construct a UIntType.
+  width_hint: int
+
+  # The concrete type this has been inferred to.
+  inferred: LiteralIntType | GenericIntType | UIntType | None = None
+
+  def __str__(self) -> str:
+    return "{literal}"
+
+
+@dataclass(eq=False)
 class GenericIntType(Type):
+  # The concrete integer type that has been inferred.
+  inferred: Optional[Type] = None
 
   def __str__(self) -> str:
     return "{integer}"
@@ -131,16 +149,13 @@ class RefType(Type):
     return f"&{self.inner}"
 
 
-@dataclass
+@dataclass(eq=False)
 class InferrableType(Type):
   # A unique integer identifier.
   num: int = field(default_factory=count().__next__)
 
   # The type this uint has been inferred to.
   inferred: Type | None = None
-
-  def __eq__(self, other) -> bool:
-    return id(self) == id(other)
 
   def __str__(self) -> str:
     return f"?{self.num}"
@@ -230,7 +245,6 @@ class Typeck:
     if isinstance(self.root, ast.FnItem):
       # Declare the parameters.
       for param in self.root.params:
-        param.fty = GenericIntType()
         param.free_param = FreeIntParam(param.name.spelling())
         self.params[param] = param.free_param
         self.solver_params[param.free_param] = z3.Int(param.name.spelling())
@@ -318,8 +332,7 @@ class Typeck:
   def type_of_expr(self, expr: ast.Expr) -> Type:
     if isinstance(expr, ast.IntLitExpr):
       if expr.width is None:
-        return UIntType(
-            InferrableIntParam(width_hint=min_bits_for_int(expr.value)))
+        return LiteralIntType(min_bits_for_int(expr.value))
       else:
         return UIntType(ConstIntParam(expr.width))
 
@@ -328,6 +341,8 @@ class Typeck:
 
     if isinstance(expr, ast.IdentExpr):
       target = expr.binding.get()
+      if isinstance(target, ast.FnParam):
+        return GenericIntType()
       if hasattr(target, "fty") and target.fty and isinstance(target.fty, Type):
         return target.fty
       emit_info(target.loc, f"name `{expr.name.spelling()}` defined here")
@@ -619,6 +634,19 @@ class Typeck:
   def finalize_type(self, ty: Type) -> Type:
     ty = self.simplify_type(ty)
 
+    if isinstance(ty, WireType):
+      return WireType(self.finalize_type(ty.inner))
+    if isinstance(ty, RegType):
+      return RegType(self.finalize_type(ty.inner))
+    if isinstance(ty, RefType):
+      return RefType(self.finalize_type(ty.inner))
+    if isinstance(ty, TupleType):
+      return TupleType([self.finalize_type(fty) for fty in ty.fields])
+
+    # Map `{literal}` to the smallest possible `uint<N>`.
+    if isinstance(ty, LiteralIntType):
+      return UIntType(ConstIntParam(ty.width_hint))
+
     # Finalize parameters.
     if isinstance(ty, UIntType):
       ty.width = self.finalize_param(ty.width)
@@ -653,14 +681,29 @@ class Typeck:
 
     # Unary and binary operators must operate on integers.
     if isinstance(node, ast.UnaryExpr) or isinstance(node, ast.BinaryExpr):
-      if not isinstance(node.fty,
-                        (UIntType, GenericIntType)) and node.op not in (
-                            ast.UnaryOp.REF, ast.UnaryOp.DEREF):
+      if not isinstance(
+          node.fty,
+          (UIntType, GenericIntType, LiteralIntType)) and node.op not in (
+              ast.UnaryOp.REF, ast.UnaryOp.DEREF):
         word = {
             ast.UnaryOp.NEG: "negate",
             ast.UnaryOp.NOT: "invert",
+            ast.BinaryOp.AND: "bitwise and",
+            ast.BinaryOp.OR: "bitwise or",
+            ast.BinaryOp.XOR: "bitwise xor",
             ast.BinaryOp.ADD: "add",
             ast.BinaryOp.SUB: "subtract",
+            ast.BinaryOp.MUL: "multiply",
+            ast.BinaryOp.DIV: "divide",
+            ast.BinaryOp.MOD: "compute the remainder of",
+            ast.BinaryOp.SHL: "shift",
+            ast.BinaryOp.SHR: "shift",
+            ast.BinaryOp.EQ: "compare",
+            ast.BinaryOp.NE: "compare",
+            ast.BinaryOp.LT: "compare",
+            ast.BinaryOp.LE: "compare",
+            ast.BinaryOp.GT: "compare",
+            ast.BinaryOp.GE: "compare",
         }.get(node.op, node.op.name)
         emit_error(node.loc, f"cannot {word} `{node.fty}`")
 
@@ -669,6 +712,8 @@ class Typeck:
       assert node.call_params is not None
       node.call_params = [self.finalize_param(p) for p in node.call_params]
 
+  # TODO: This should return the final unified type to simplify code in other
+  # places.
   def unify_types(
       self,
       lhs: Type,
@@ -704,7 +749,7 @@ class Typeck:
           self.unify_types(a, b, loc, lhs_loc, rhs_loc)
         return
 
-    # unify(uint<?A>, uint<?B>) -> uint<?A>
+    # unify(uint<?A>, uint<?B>) -> uint<?A> with maximized width hint
     # unify(uint<?A>, uint<N>) -> uint<N>
     # unify(uint<N>, uint<?B>) -> uint<N>
     if isinstance(lhs, UIntType) and isinstance(rhs, UIntType):
@@ -720,11 +765,35 @@ class Typeck:
         lhs.width.inferred = rhs.width
         return
 
-    # unify({integer}, uint<_>) -> {integer}
-    # unify(uint<_>, {integer}) -> {integer}
-    if isinstance(lhs, GenericIntType) and isinstance(rhs, UIntType):
+    # unify(uint<?A>, {literal}) -> uint<?A> with maximized width hint
+    # unify({literal}, uint<?B>) -> uint<?B> with maximized width hint
+    # unify(uint<N>, {literal}) -> uint<N>
+    # unify({literal}, uint<N>) -> uint<N>
+    if isinstance(lhs, UIntType) and isinstance(rhs, LiteralIntType):
+      rhs.inferred = lhs
+      if isinstance(lhs.width, InferrableIntParam):
+        lhs.width.width_hint = max(lhs.width.width_hint, rhs.width_hint)
       return
-    if isinstance(lhs, UIntType) and isinstance(rhs, GenericIntType):
+    if isinstance(lhs, LiteralIntType) and isinstance(rhs, UIntType):
+      lhs.inferred = rhs
+      if isinstance(rhs.width, InferrableIntParam):
+        rhs.width.width_hint = max(rhs.width.width_hint, lhs.width_hint)
+      return
+
+    # unify({literal}, {literal}) -> {literal} with maximized width hint
+    if isinstance(lhs, LiteralIntType) and isinstance(rhs, LiteralIntType):
+      rhs.inferred = lhs
+      lhs.width_hint = max(lhs.width_hint, rhs.width_hint)
+      rhs.width_hint = lhs.width_hint
+      return
+
+    # unify({integer}, {literal}) -> {integer}
+    # unify({literal}, {integer}) -> {integer}
+    if isinstance(lhs, GenericIntType) and isinstance(rhs, LiteralIntType):
+      rhs.inferred = lhs
+      return
+    if isinstance(lhs, LiteralIntType) and isinstance(rhs, GenericIntType):
+      lhs.inferred = rhs
       return
 
     # unify(?A, ?B) -> ?A
@@ -755,6 +824,18 @@ class Typeck:
 
     if isinstance(ty, InferrableType) and ty.inferred:
       ty.inferred = self.simplify_type(ty.inferred)
+      return ty.inferred
+
+    if isinstance(ty, LiteralIntType) and ty.inferred:
+      inner = self.simplify_type(ty.inferred)
+      assert isinstance(inner, (LiteralIntType, GenericIntType, UIntType))
+      ty.inferred = inner
+      return ty.inferred
+
+    if isinstance(ty, GenericIntType) and ty.inferred:
+      inner = self.simplify_type(ty.inferred)
+      assert isinstance(inner, UIntType)
+      ty.inferred = inner
       return ty.inferred
 
     if isinstance(ty, UIntType):
