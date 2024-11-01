@@ -12,39 +12,39 @@ __all__ = [
 
 
 def emit_error(loc: Loc, msg: str) -> NoReturn:
-    emit_diagnostic("error", "red", loc, msg)
-    raise DiagnosticException()
+  emit_diagnostic("error", "red", loc, msg)
+  raise DiagnosticException()
 
 
 def emit_warning(loc: Loc, msg: str):
-    emit_diagnostic("warning", "yellow", loc, msg)
+  emit_diagnostic("warning", "yellow", loc, msg)
 
 
 def emit_info(loc: Loc, msg: str):
-    emit_diagnostic("info", "cyan", loc, msg)
+  emit_diagnostic("info", "cyan", loc, msg)
 
 
 def emit_diagnostic(severity: str, color: Literal["red", "yellow", "cyan"],
                     loc: Loc, msg: str):
-    text = colored(severity + ":", color, attrs=["bold"])
-    text += " "
-    text += colored(msg, attrs=["bold"])
-    print(text, file=stderr)
-    print(f"{loc}:", file=stderr)
+  text = colored(severity + ":", color, attrs=["bold"])
+  text += " "
+  text += colored(msg, attrs=["bold"])
+  print(text, file=stderr)
+  print(f"{loc}:", file=stderr)
 
-    src_before = loc.file.contents[:loc.offset].split("\n")[-1]
-    src_within = loc.file.contents[loc.offset:loc.offset + loc.length]
-    src_after = loc.file.contents[loc.offset + loc.length:].split("\n")[0]
+  src_before = loc.file.contents[:loc.offset].split("\n")[-1]
+  src_within = loc.file.contents[loc.offset:loc.offset + loc.length]
+  src_after = loc.file.contents[loc.offset + loc.length:].split("\n")[0]
 
-    text = "  | " + src_before
-    text += colored(src_within, color, attrs=["bold"])
-    text += src_after
-    print(text, file=stderr)
+  text = "  | " + src_before
+  text += colored(src_within, color, attrs=["bold"])
+  text += src_after
+  print(text, file=stderr)
 
-    text = "  | " + " " * len(src_before)
-    text += colored("^" * max(len(src_within), 1), color, attrs=["bold"])
-    print(text, file=stderr)
+  text = "  | " + " " * len(src_before)
+  text += colored("^" * max(len(src_within), 1), color, attrs=["bold"])
+  print(text, file=stderr)
 
 
 class DiagnosticException(Exception):
-    pass
+  pass

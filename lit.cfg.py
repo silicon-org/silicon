@@ -13,5 +13,5 @@ config.substitutions += [
 ]
 python_path = root_dir
 if env := os.environ.get("PYTHONPATH"):
-    python_path += ":" + env
+  python_path += ":" + env
 config.environment["PYTHONPATH"] = python_path
