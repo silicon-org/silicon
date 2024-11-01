@@ -18,9 +18,15 @@
 // CHECK: COMMA
 // CHECK: COLON
 // CHECK: SEMICOLON
-// CHECK: NOT
 // CHECK: ARROW
-. , : ; ! ->
+// CHECK: ASSIGN
+. , : ; -> =
+
+// CHECK: NOT
+// CHECK: AND
+// CHECK: OR
+// CHECK: XOR
+! & | ^
 
 // CHECK: EQ
 // CHECK: NE
@@ -32,8 +38,10 @@
 
 // CHECK: ADD
 // CHECK: SUB
-// CHECK: ASSIGN
-+ - =
+// CHECK: MUL
+// CHECK: DIV
+// CHECK: MOD
++ - * / %
 
 // CHECK: ELSE
 // CHECK: FN

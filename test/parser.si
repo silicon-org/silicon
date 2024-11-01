@@ -15,11 +15,11 @@ mod Types {
     // CHECK: WireType
     // CHECK:   inner: UIntType
     // CHECK:     size: IntLitExpr value=33
-    let t1: Wire<uint<33>>;
+    let t1: Wire<uint<33> >;
     // CHECK: RegType
     // CHECK:   inner: UIntType
     // CHECK:     size: IntLitExpr value=34
-    let t2: Reg<uint<34>>;
+    let t2: Reg<uint<34> >;
     // CHECK: UnitType
     let t3: ();
     // CHECK: TupleType

@@ -559,6 +559,31 @@ class BinaryOpBase(IRDLOperation):
 
 
 @irdl_op_definition
+class AndOp(BinaryOpBase):
+    name = "si.and"
+
+
+@irdl_op_definition
+class OrOp(BinaryOpBase):
+    name = "si.or"
+
+
+@irdl_op_definition
+class XorOp(BinaryOpBase):
+    name = "si.xor"
+
+
+@irdl_op_definition
+class ShlOp(BinaryOpBase):
+    name = "si.shl"
+
+
+@irdl_op_definition
+class ShrOp(BinaryOpBase):
+    name = "si.shr"
+
+
+@irdl_op_definition
 class AddOp(BinaryOpBase):
     name = "si.add"
 
@@ -566,6 +591,64 @@ class AddOp(BinaryOpBase):
 @irdl_op_definition
 class SubOp(BinaryOpBase):
     name = "si.sub"
+
+
+@irdl_op_definition
+class MulOp(BinaryOpBase):
+    name = "si.mul"
+
+
+@irdl_op_definition
+class DivOp(BinaryOpBase):
+    name = "si.div"
+
+
+@irdl_op_definition
+class ModOp(BinaryOpBase):
+    name = "si.mod"
+
+
+class CmpOpBase(IRDLOperation):
+    T = Annotated[IntegerType, ConstraintVar("T")]
+    lhs: Operand = operand_def(T)
+    rhs: Operand = operand_def(T)
+    result: OpResult = result_def(IntegerType(1))
+    assembly_format = "$lhs `,` $rhs `:` type($lhs) attr-dict"
+    traits = frozenset([Pure()])
+
+    def __init__(self, lhs: SSAValue, rhs: SSAValue, loc: Loc):
+        super().__init__(result_types=[IntegerType(1)], operands=[lhs, rhs])
+        self.loc = loc
+
+
+@irdl_op_definition
+class EqOp(CmpOpBase):
+    name = "si.eq"
+
+
+@irdl_op_definition
+class NeqOp(CmpOpBase):
+    name = "si.neq"
+
+
+@irdl_op_definition
+class LtOp(CmpOpBase):
+    name = "si.lt"
+
+
+@irdl_op_definition
+class LeqOp(CmpOpBase):
+    name = "si.leq"
+
+
+@irdl_op_definition
+class GtOp(CmpOpBase):
+    name = "si.gt"
+
+
+@irdl_op_definition
+class GeqOp(CmpOpBase):
+    name = "si.geq"
 
 
 @irdl_op_definition
@@ -827,18 +910,29 @@ class DerefOp(IRDLOperation):
 
 SiliconDialect = Dialect("silicon", [
     AddOp,
+    AndOp,
     AssignOp,
     CallOp,
     ConcatOp,
     ConstantOp,
     ConstantUnitOp,
     DerefOp,
+    DivOp,
+    EqOp,
     ExtractOp,
     FuncOp,
+    GeqOp,
+    GtOp,
     InputPortOp,
+    LeqOp,
+    LtOp,
+    ModOp,
+    MulOp,
     MuxOp,
     NegOp,
+    NeqOp,
     NotOp,
+    OrOp,
     OutputDeclOp,
     OutputPortOp,
     RefOp,
@@ -847,6 +941,8 @@ SiliconDialect = Dialect("silicon", [
     RegNextOp,
     RegOp,
     ReturnOp,
+    ShlOp,
+    ShrOp,
     SiModuleOp,
     SubOp,
     TupleCreateOp,
@@ -856,6 +952,7 @@ SiliconDialect = Dialect("silicon", [
     WireDeclOp,
     WireGetOp,
     WireSetOp,
+    XorOp,
 ], [
     RefType,
     RegType,
@@ -1171,10 +1268,38 @@ class Converter:
             lhs = self.convert_expr_rvalue(expr.lhs)
             rhs = self.convert_expr_rvalue(expr.rhs)
 
-            if expr.op == ast.BinaryOp.ADD:
+            if expr.op == ast.BinaryOp.AND:
+                op = self.builder.insert(AndOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.OR:
+                op = self.builder.insert(OrOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.XOR:
+                op = self.builder.insert(XorOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.ADD:
                 op = self.builder.insert(AddOp(lhs, rhs, expr.loc))
             elif expr.op == ast.BinaryOp.SUB:
                 op = self.builder.insert(SubOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.MUL:
+                op = self.builder.insert(MulOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.DIV:
+                op = self.builder.insert(DivOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.MOD:
+                op = self.builder.insert(ModOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.EQ:
+                op = self.builder.insert(EqOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.NE:
+                op = self.builder.insert(NeqOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.LT:
+                op = self.builder.insert(LtOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.LE:
+                op = self.builder.insert(LeqOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.GT:
+                op = self.builder.insert(GtOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.GE:
+                op = self.builder.insert(GeqOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.SHL:
+                op = self.builder.insert(ShlOp(lhs, rhs, expr.loc))
+            elif expr.op == ast.BinaryOp.SHR:
+                op = self.builder.insert(ShrOp(lhs, rhs, expr.loc))
             else:
                 emit_error(expr.loc,
                            f"unsupported binary operator `{expr.op.name}`")

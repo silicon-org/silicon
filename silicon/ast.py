@@ -287,8 +287,18 @@ class BinaryExpr(Expr):
 
 
 class BinaryOp(Enum):
+    AND = auto()
+    OR = auto()
+    XOR = auto()
+    SHL = auto()
+    SHR = auto()
     ADD = auto()
     SUB = auto()
+    MUL = auto()
+    DIV = auto()
+    MOD = auto()
+    EQ = auto()
+    NE = auto()
     LT = auto()
     GT = auto()
     LE = auto()
@@ -296,8 +306,18 @@ class BinaryOp(Enum):
 
 
 BINARY_OPS: Dict[TokenKind, BinaryOp] = {
+    TokenKind.AND: BinaryOp.AND,
+    TokenKind.OR: BinaryOp.OR,
+    TokenKind.XOR: BinaryOp.XOR,
+    TokenKind.SHL: BinaryOp.SHL,
+    TokenKind.SHR: BinaryOp.SHR,
     TokenKind.ADD: BinaryOp.ADD,
     TokenKind.SUB: BinaryOp.SUB,
+    TokenKind.MUL: BinaryOp.MUL,
+    TokenKind.DIV: BinaryOp.DIV,
+    TokenKind.MOD: BinaryOp.MOD,
+    TokenKind.EQ: BinaryOp.EQ,
+    TokenKind.NE: BinaryOp.NE,
     TokenKind.LT: BinaryOp.LT,
     TokenKind.GT: BinaryOp.GT,
     TokenKind.LE: BinaryOp.LE,
@@ -313,6 +333,7 @@ class Precedence(IntEnum):
     AND = auto()
     EQUALITY = auto()
     RELATIONAL = auto()
+    SHIFT = auto()
     ADD_SUB = auto()
     MUL_DIV = auto()
     PRIMARY = auto()
@@ -320,8 +341,18 @@ class Precedence(IntEnum):
 
 
 BINARY_PRECEDENCE: Dict[BinaryOp, Precedence] = {
+    BinaryOp.AND: Precedence.AND,
+    BinaryOp.OR: Precedence.OR,
+    BinaryOp.XOR: Precedence.XOR,
+    BinaryOp.SHL: Precedence.SHIFT,
+    BinaryOp.SHR: Precedence.SHIFT,
     BinaryOp.ADD: Precedence.ADD_SUB,
     BinaryOp.SUB: Precedence.ADD_SUB,
+    BinaryOp.MUL: Precedence.MUL_DIV,
+    BinaryOp.DIV: Precedence.MUL_DIV,
+    BinaryOp.MOD: Precedence.MUL_DIV,
+    BinaryOp.EQ: Precedence.EQUALITY,
+    BinaryOp.NE: Precedence.EQUALITY,
     BinaryOp.LT: Precedence.RELATIONAL,
     BinaryOp.GT: Precedence.RELATIONAL,
     BinaryOp.LE: Precedence.RELATIONAL,

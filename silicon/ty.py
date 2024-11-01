@@ -383,7 +383,11 @@ class Typeck:
             rhs = self.typeck_expr(expr.rhs)
             self.unify_types(lhs, rhs, expr.loc, expr.lhs.full_loc,
                              expr.rhs.full_loc)
-            # TODO: return i1 for relational operators
+
+            if expr.op in (ast.BinaryOp.EQ, ast.BinaryOp.NE, ast.BinaryOp.LT,
+                ast.BinaryOp.LE, ast.BinaryOp.GT, ast.BinaryOp.GE):
+              return UIntType(ConstIntParam(1))
+
             return lhs
 
         if isinstance(expr, ast.CallExpr):

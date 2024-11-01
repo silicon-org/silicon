@@ -56,10 +56,36 @@ fn Expressions(
     // CHECK: si.deref [[E]] : !si.ref<i19>
     *e;
 
+    // CHECK: si.and [[A]], [[B]] : i19
+    a & b;
+    // CHECK: si.or [[A]], [[B]] : i19
+    a | b;
+    // CHECK: si.xor [[A]], [[B]] : i19
+    a ^ b;
+    // CHECK: si.shl [[A]], [[B]] : i19
+    a << b;
+    // CHECK: si.shr [[A]], [[B]] : i19
+    a >> b;
     // CHECK: si.add [[A]], [[B]] : i19
     a + b;
     // CHECK: si.sub [[A]], [[B]] : i19
     a - b;
+    // CHECK: si.mul [[A]], [[B]] : i19
+    a * b;
+    // CHECK: si.div [[A]], [[B]] : i19
+    a / b;
+    // CHECK: si.eq [[A]], [[B]] : i19
+    a == b;
+    // CHECK: si.neq [[A]], [[B]] : i19
+    a != b;
+    // CHECK: si.lt [[A]], [[B]] : i19
+    a < b;
+    // CHECK: si.leq [[A]], [[B]] : i19
+    a <= b;
+    // CHECK: si.gt [[A]], [[B]] : i19
+    a > b;
+    // CHECK: si.geq [[A]], [[B]] : i19
+    a >= b;
 
     // CHECK: si.concat [[A]], [[B]], [[C]] : (i19, i19, i1) -> i39
     concat(a, b, c);
@@ -130,14 +156,14 @@ mod WiresAndRegisters {
     // CHECK: [[TMP:%.+]] = si.constant 0 : i42
     // CHECK: si.wire_set [[WIRE]], [[TMP]] : !si.wire<i42>
     // CHECK: si.assign [[X]], [[WIRE]] : !si.ref<!si.wire<i42>>
-    let x: Wire<uint<42>> = wire(0u42);
+    let x: Wire<uint<42> > = wire(0u42);
 
     // CHECK: [[Y:%.+]] = si.var_decl "y" : !si.ref<!si.reg<i42>>
     // CHECK: [[REG:%.+]] = si.reg_decl [[CLOCK]] : !si.reg<i42>
     // CHECK: [[TMP:%.+]] = si.constant 0 : i42
     // CHECK: si.reg_next [[REG]], [[TMP]] : !si.reg<i42>
     // CHECK: si.assign [[Y]], [[REG]] : !si.ref<!si.reg<i42>>
-    let y: Reg<uint<42>> = reg(clock, 0u42);
+    let y: Reg<uint<42> > = reg(clock, 0u42);
 
     // CHECK: [[TMP:%.+]] = si.deref [[Y]] : !si.ref<!si.reg<i42>>
     // CHECK: si.reg_current [[TMP]] : !si.reg<i42>

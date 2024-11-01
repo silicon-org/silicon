@@ -20,14 +20,45 @@ si.module @Foo {
 
     // CHECK: hw.constant 9001 : i42
     %c9001 = si.constant 9001 : i42
+
     // CHECK: comb.sub %c0_i16, %a : i16
     si.neg %a : i16
     // CHECK: comb.xor %c-1_i16, %a : i16
     si.not %a : i16
+
+    // CHECK: comb.and %a, %b : i16
+    si.and %a, %b : i16
+    // CHECK: comb.or %a, %b : i16
+    si.or %a, %b : i16
+    // CHECK: comb.xor %a, %b : i16
+    si.xor %a, %b : i16
     // CHECK: comb.add %a, %b : i16
     si.add %a, %b : i16
     // CHECK: comb.sub %a, %b : i16
     si.sub %a, %b : i16
+    // CHECK: comb.mul %a, %b : i16
+    si.mul %a, %b : i16
+    // CHECK: comb.divu %a, %b : i16
+    si.div %a, %b : i16
+    // CHECK: comb.modu %a, %b : i16
+    si.mod %a, %b : i16
+    // CHECK: comb.shl %a, %b : i16
+    si.shl %a, %b : i16
+    // CHECK: comb.shru %a, %b : i16
+    si.shr %a, %b : i16
+    // CHECK: comb.icmp eq %a, %b : i16
+    si.eq %a, %b : i16
+    // CHECK: comb.icmp ne %a, %b : i16
+    si.neq %a, %b : i16
+    // CHECK: comb.icmp ult %a, %b : i16
+    si.lt %a, %b : i16
+    // CHECK: comb.icmp ule %a, %b : i16
+    si.leq %a, %b : i16
+    // CHECK: comb.icmp ugt %a, %b : i16
+    si.gt %a, %b : i16
+    // CHECK: comb.icmp uge %a, %b : i16
+    si.geq %a, %b : i16
+
     // CHECK: comb.concat %a, %b : i16, i16
     si.concat %a, %b : (i16, i16) -> i32
     // CHECK: comb.extract %a from 9 : (i16) -> i4

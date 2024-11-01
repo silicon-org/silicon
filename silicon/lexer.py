@@ -31,10 +31,14 @@ class TokenKind(Enum):
     COMMA = auto()
     COLON = auto()
     SEMICOLON = auto()
-    NOT = auto()
     ARROW = auto()
+
+    NOT = auto()
     AND = auto()
     OR = auto()
+    XOR = auto()
+    SHL = auto()
+    SHR = auto()
 
     EQ = auto()
     NE = auto()
@@ -47,6 +51,7 @@ class TokenKind(Enum):
     SUB = auto()
     MUL = auto()
     DIV = auto()
+    MOD = auto()
 
     ASSIGN = auto()
 
@@ -97,6 +102,7 @@ SYMBOLS1: Dict[str, TokenKind] = {
     "!": TokenKind.NOT,
     "&": TokenKind.AND,
     "|": TokenKind.OR,
+    "^": TokenKind.XOR,
     "<": TokenKind.LT,
     ">": TokenKind.GT,
     "=": TokenKind.ASSIGN,
@@ -104,6 +110,7 @@ SYMBOLS1: Dict[str, TokenKind] = {
     "-": TokenKind.SUB,
     "*": TokenKind.MUL,
     "/": TokenKind.DIV,
+    "%": TokenKind.MOD,
 }
 
 SYMBOLS2: Dict[str, TokenKind] = {
@@ -112,6 +119,8 @@ SYMBOLS2: Dict[str, TokenKind] = {
     "!=": TokenKind.NE,
     "<=": TokenKind.LE,
     ">=": TokenKind.GE,
+    "<<": TokenKind.SHL,
+    ">>": TokenKind.SHR,
 }
 
 KEYWORDS: Dict[str, TokenKind] = {

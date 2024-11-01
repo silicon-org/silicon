@@ -140,16 +140,47 @@ class ModuleCodegen:
             ).result
         if isinstance(op, ir.ConstantUnitOp):
             return hw.ConstantOp.create(IntegerType.get_signless(1), 0).result
+
         if isinstance(op, ir.NegOp):
             zero = hw.ConstantOp.create(operands[0].type, 0)
             return comb.SubOp(zero, operands[0]).result
         if isinstance(op, ir.NotOp):
             ones = hw.ConstantOp.create(operands[0].type, -1)
             return comb.XorOp([ones, operands[0]]).result
+
+        if isinstance(op, ir.AndOp):
+            return comb.AndOp(operands).result
+        if isinstance(op, ir.OrOp):
+            return comb.OrOp(operands).result
+        if isinstance(op, ir.XorOp):
+            return comb.XorOp(operands).result
+        if isinstance(op, ir.ShlOp):
+            return comb.ShlOp(*operands).result
+        if isinstance(op, ir.ShrOp):
+            return comb.ShrUOp(*operands).result
         if isinstance(op, ir.AddOp):
             return comb.AddOp(operands).result
         if isinstance(op, ir.SubOp):
             return comb.SubOp(*operands).result
+        if isinstance(op, ir.MulOp):
+            return comb.MulOp(operands).result
+        if isinstance(op, ir.DivOp):
+            return comb.DivUOp(*operands).result
+        if isinstance(op, ir.ModOp):
+            return comb.ModUOp(*operands).result
+        if isinstance(op, ir.EqOp):
+            return comb.EqOp.create(*operands).result
+        if isinstance(op, ir.NeqOp):
+            return comb.NeOp.create(*operands).result
+        if isinstance(op, ir.LtOp):
+            return comb.LtUOp.create(*operands).result
+        if isinstance(op, ir.LeqOp):
+            return comb.LeUOp.create(*operands).result
+        if isinstance(op, ir.GtOp):
+            return comb.GtUOp.create(*operands).result
+        if isinstance(op, ir.GeqOp):
+            return comb.GeUOp.create(*operands).result
+
         if isinstance(op, ir.ConcatOp):
             return comb.ConcatOp(operands).result
         if isinstance(op, ir.ExtractOp):
