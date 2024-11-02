@@ -162,6 +162,25 @@ class InferrableType(Type):
 
 
 #===------------------------------------------------------------------------===#
+# Constraints
+#===------------------------------------------------------------------------===#
+
+
+@dataclass(eq=False)
+class Constraint:
+  lhs: IntParam
+  relation: str
+  rhs: ConstraintFn | ast.Expr
+  loc: Loc
+
+
+@dataclass(eq=False)
+class ConstraintFn:
+  op: str
+  arg: ConstraintFn | ast.Expr
+
+
+#===------------------------------------------------------------------------===#
 # Type Checking and Inference
 #===------------------------------------------------------------------------===#
 
@@ -207,12 +226,14 @@ class Typeck:
   params: Dict[ast.AstNode, IntParam]
   solver: z3.Solver
   solver_params: Dict[IntParam, z3.Int]
+  constraints: list
 
   def __init__(self, root: ast.ModItem | ast.FnItem) -> None:
     self.root = root
     self.params = dict()
     self.solver = z3.Solver()
     self.solver_params = dict()
+    self.constraints = []
 
   # Convert an AST type node into an actual type.
   def convert_ast_type(self, ty: ast.AstType) -> Type:
@@ -247,7 +268,9 @@ class Typeck:
       for param in self.root.params:
         param.free_param = FreeIntParam(param.name.spelling())
         self.params[param] = param.free_param
-        self.solver_params[param.free_param] = z3.Int(param.name.spelling())
+        solver_param = z3.Int(param.name.spelling())
+        self.solver.add(solver_param >= 0)
+        self.solver_params[param.free_param] = solver_param
 
       # Apply where clauses.
       for expr in self.root.wheres:
@@ -263,7 +286,7 @@ class Typeck:
 
   def typeck_where(self, expr: ast.Expr):
     self.typeck_expr(expr)
-    solver_expr = self.convert_to_solver_expr(expr)
+    solver_expr = convert_to_solver_expr(self, expr)
 
     # Check if the clause is trivially true.
     self.solver.push()
@@ -282,6 +305,7 @@ class Typeck:
     for stmt in self.root.stmts:
       self.typeck_stmt(stmt)
 
+    check_constraints(self)
     self.finalize(self.root)
 
   def typeck_stmt(self, stmt: ast.Stmt):
@@ -448,7 +472,7 @@ class Typeck:
 
       # Check that we adhere to the where clauses.
       for where in target.wheres:
-        solver_expr = target_typeck.convert_to_solver_expr(where)
+        solver_expr = convert_to_solver_expr(target_typeck, where)
         self.solver.push()
         self.solver.add(~solver_expr)
         good = (self.solver.check() == z3.unsat)
@@ -523,6 +547,8 @@ class Typeck:
           emit_error(expr.args[0].loc,
                      f"bit index out of bounds for `{target}`")
       else:
+        self.constraints.append(
+            Constraint(target.width, ">", expr.args[0], expr.loc))
         good, counter = self.prove_greater_than(target.width, offset)
         if not good:
           emit_info(
@@ -615,6 +641,25 @@ class Typeck:
       self.unify_types(
           target, RegType(inner), expr.loc, lhs_loc=expr.target.full_loc)
       return inner
+
+    if name == "as_uint":
+      require_num_args(expr, 0)
+
+      # Make sure we are operating on a generic integer.
+      target = self.typeck_expr(expr.target)
+      if not isinstance(target, GenericIntType):
+        emit_error(expr.target.full_loc, "`as_uint` requires a generic integer")
+
+      # Create a `uint<?A>` return type with `?A` constrained to be large enough
+      # to hold the generic integer.
+      param = InferrableIntParam()
+      self.constraints.append(
+          Constraint(param, ">=", ConstraintFn("clog2", expr.target), expr.loc))
+      return UIntType(param)
+
+    if name == "clog2":
+      require_num_args(expr, 0)
+      return self.typeck_expr(expr.target)
 
     emit_error(expr.name.loc, f"unknown function `{name}`")
 
@@ -787,6 +832,11 @@ class Typeck:
       rhs.width_hint = lhs.width_hint
       return
 
+    # unify({integer}, {integer}) -> {integer}
+    if isinstance(lhs, GenericIntType) and isinstance(rhs, GenericIntType):
+      rhs.inferred = lhs
+      return
+
     # unify({integer}, {literal}) -> {integer}
     # unify({literal}, {integer}) -> {integer}
     if isinstance(lhs, GenericIntType) and isinstance(rhs, LiteralIntType):
@@ -834,7 +884,7 @@ class Typeck:
 
     if isinstance(ty, GenericIntType) and ty.inferred:
       inner = self.simplify_type(ty.inferred)
-      assert isinstance(inner, UIntType)
+      assert isinstance(inner, (GenericIntType, UIntType))
       ty.inferred = inner
       return ty.inferred
 
@@ -875,24 +925,124 @@ class Typeck:
     self.solver.pop()
     return good, counter
 
-  # Convert an AST expression to a solver expression.
-  def convert_to_solver_expr(self, expr: ast.Expr) -> z3.Ast:
-    if isinstance(expr, ast.IntLitExpr):
-      return z3.IntVal(expr.value)
 
-    if isinstance(expr, ast.IdentExpr):
-      binding = expr.binding.get()
-      if isinstance(binding, ast.FnParam):
-        param = self.simplify_param(self.params[binding])
-        return self.solver_params[param]
+def format_constraint(
+    cx: Typeck, con: Constraint | ConstraintFn | IntParam | ast.Expr) -> str:
+  if isinstance(con, Constraint):
+    lhs = format_constraint(cx, con.lhs)
+    rhs = format_constraint(cx, con.rhs)
+    return f"{lhs} {con.relation} {rhs}"
 
-    if isinstance(expr, ast.BinaryExpr):
-      lhs = self.convert_to_solver_expr(expr.lhs)
-      rhs = self.convert_to_solver_expr(expr.rhs)
-      if expr.op == ast.BinaryOp.GT:
-        return lhs > rhs
+  if isinstance(con, ConstraintFn):
+    return f"{con.op}({format_constraint(cx, con.arg)})"
 
-    emit_error(expr.loc, f"invalid constraint expression")
+  if isinstance(con, IntParam):
+    return str(con)
+
+  if isinstance(con, ast.Expr):
+    return con.full_loc.spelling()
+
+  assert False, f"cannot format {con}"
+
+
+def check_constraints(cx: Typeck):
+  # Make sure the constraints reference the final inferred parameters.
+  for con in cx.constraints:
+    con.lhs = cx.simplify_param(con.lhs)
+
+  # Check each constraint.
+  for con in cx.constraints:
+    cx.solver.push()
+    lhs = convert_to_solver_expr(cx, con.lhs)
+    rhs = convert_to_solver_expr(cx, con.rhs)
+    if con.relation == ">=":
+      cond = lhs >= rhs
+    elif con.relation == ">":
+      cond = lhs > rhs
+    elif con.relation == "<=":
+      cond = lhs <= rhs
+    elif con.relation == "<":
+      cond = lhs < rhs
+    elif con.relation == "==":
+      cond = lhs == rhs
+    elif con.relation == "!=":
+      cond = lhs != rhs
+    else:
+      assert False, f"`{con.relation}` relations not implemented in solver"
+    cx.solver.add(~cond)
+
+    if cx.solver.check() == z3.sat:
+      model = cx.solver.model()
+      for c, e in ((con.lhs, lhs), (con.rhs, rhs)):
+        c_str = format_constraint(cx, c)
+        e_str = str(model.eval(e))
+        if c_str != e_str:
+          emit_info(con.loc, f"consider `{c_str} = {e_str}`")
+      emit_error(
+          con.loc,
+          f"type mismatch: `{format_constraint(cx, con)}` does not always hold")
+
+    cx.solver.pop()
+
+
+def convert_to_solver_expr(cx: Typeck,
+                           expr: IntParam | ConstraintFn | ast.Expr) -> z3.Ast:
+  if isinstance(expr, ConstIntParam):
+    return z3.IntVal(expr.value)
+
+  if isinstance(expr, (InferrableIntParam, FreeIntParam)):
+    if expr not in cx.solver_params:
+      param = z3.FreshConst(z3.IntSort(), str(expr))
+      cx.solver.add(param >= 0)
+      cx.solver_params[expr] = param
+    return cx.solver_params[expr]
+
+  if isinstance(expr, ConstraintFn):
+    if expr.op == "clog2":
+      arg = convert_to_solver_expr(cx, expr.arg)
+      clog2 = z3.Function("clog2", z3.IntSort(), z3.IntSort())
+      cx.solver.add(clog2(arg) < arg)
+      return clog2(arg)
+
+  if isinstance(expr, ast.IntLitExpr):
+    return z3.IntVal(expr.value)
+
+  if isinstance(expr, ast.IdentExpr):
+    binding = expr.binding.get()
+    if isinstance(binding, ast.FnParam):
+      return convert_to_solver_expr(cx, cx.simplify_param(cx.params[binding]))
+
+  if isinstance(expr, ast.BinaryExpr):
+    lhs = convert_to_solver_expr(cx, expr.lhs)
+    rhs = convert_to_solver_expr(cx, expr.rhs)
+    if expr.op == ast.BinaryOp.EQ:
+      return lhs == rhs
+    if expr.op == ast.BinaryOp.NE:
+      return lhs != rhs
+    if expr.op == ast.BinaryOp.GT:
+      return lhs > rhs
+    if expr.op == ast.BinaryOp.GE:
+      return lhs >= rhs
+    if expr.op == ast.BinaryOp.LT:
+      return lhs < rhs
+    if expr.op == ast.BinaryOp.LE:
+      return lhs <= rhs
+
+  if isinstance(expr, ast.FieldCallExpr):
+    name = expr.name.spelling()
+    if name == "clog2":
+      arg = convert_to_solver_expr(cx, expr.target)
+      clog2 = z3.Function("clog2", z3.IntSort(), z3.IntSort())
+      if isinstance(arg, z3.IntNumRef):
+        return z3.IntVal(len(arg.as_binary_string()))
+      cx.solver.add(clog2(arg) < z3.If(arg == 0, 1, arg))
+      cx.solver.add(clog2(arg) >= 0)
+      return clog2(arg)
+
+  if isinstance(expr, ast.Expr):
+    emit_error(expr.full_loc, "unsupported constraint expression")
+
+  assert False, f"solving of `{expr}` not implemented"
 
 
 def typeck(root: ast.Root):
