@@ -167,6 +167,13 @@ class AssignStmt(Stmt):
   rhs: Expr
 
 
+@dataclass(eq=False)
+class IfStmt(Stmt):
+  cond: Expr
+  then_stmts: List[Stmt]
+  else_stmts: List[Stmt]
+
+
 #===------------------------------------------------------------------------===#
 # Types
 #===------------------------------------------------------------------------===#

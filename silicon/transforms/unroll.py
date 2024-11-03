@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from silicon import ir
 from silicon.diagnostics import *
 from silicon.source import Loc
+from silicon.consteval import const_eval_ir
 
 from xdsl.builder import Builder
 from xdsl.printer import Printer
@@ -135,6 +136,22 @@ def unroll_op(cx: UnrollPass, op: Operation):
     cx.worklist = inlined_ops + cx.worklist
     return
 
+  # Inline ifs.
+  if isinstance(op, ir.IfOp):
+    cond_attr = const_eval_ir(op.cond)
+    assert cond_attr.type == ir.IntegerType(1)
+    cond = bool(cond_attr.value.data)
+    body_to_inline = op.then_body if cond else op.else_body
+    builder = Builder.before(op)
+    inlined_ops = []
+    mapping = dict()
+    for body_op in body_to_inline.blocks[0].ops:
+      inlined_ops.append(builder.insert(body_op.clone(mapping)))
+    op.detach()
+    op.erase()
+    cx.worklist = inlined_ops + cx.worklist
+    return
+
   # Create allocation slots for declaration ops. These can then be assigned and
   # dereferenced.
   if isinstance(op, (ir.VarDeclOp, ir.OutputDeclOp)):
@@ -242,20 +259,10 @@ def unroll_ref(cx: UnrollPass, op: ir.RefOp):
 # Utilities
 #===------------------------------------------------------------------------===#
 
-xdsl_format_printer = Printer(sys.stdout)
-
-
-# Stringify an IR value, op, block, region, or similar using XDSL's `Printer`.
-def xdsl_format(any) -> str:
-  f = io.StringIO()
-  xdsl_format_printer.stream = f
-  xdsl_format_printer.print(any)
-  return f.getvalue().strip()
-
 
 def format_value(value: Value | None) -> str:
   if isinstance(value, SSAValue):
-    return xdsl_format(value)
+    return ir.format(value)
   return f"{value}"
 
 

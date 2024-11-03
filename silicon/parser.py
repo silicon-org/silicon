@@ -188,6 +188,32 @@ def parse_stmt_or_expr(p: Parser) -> ast.Stmt | ast.Expr:
     p.require(TokenKind.SEMICOLON)
     return ast.ReturnStmt(loc=kw.loc, full_loc=loc | p.last_loc, expr=maybeExpr)
 
+  # Parse if statements.
+  if kw := p.consume_if(TokenKind.KW_IF):
+    cond = parse_expr(p)
+
+    # Parse then body.
+    p.require(TokenKind.LCURLY)
+    then_stmts = []
+    while p.not_delim(TokenKind.RCURLY):
+      then_stmts.append(parse_stmt(p))
+    p.require(TokenKind.RCURLY)
+
+    # Parse optional else body.
+    else_stmts = []
+    if p.consume_if(TokenKind.KW_ELSE):
+      p.require(TokenKind.LCURLY)
+      while p.not_delim(TokenKind.RCURLY):
+        else_stmts.append(parse_stmt(p))
+      p.require(TokenKind.RCURLY)
+
+    return ast.IfStmt(
+        loc=kw.loc,
+        full_loc=loc | p.last_loc,
+        cond=cond,
+        then_stmts=then_stmts,
+        else_stmts=else_stmts)
+
   # Otherwise this is a statement that starts with an expression.
   expr = parse_expr(p)
   if p.consume_if(TokenKind.SEMICOLON):
@@ -403,7 +429,7 @@ def parse_primary_expr(p: Parser) -> ast.Expr:
     p.require(TokenKind.RPAREN)
     if len(fields) == 1:
       return ast.ParenExpr(
-          loc=fields[0].loc, full_loc=loc | p.last_loc, expr=fields[0])
+          loc=loc | p.last_loc, full_loc=loc | p.last_loc, expr=fields[0])
     else:
       return ast.TupleExpr(
           loc=loc | p.last_loc, full_loc=loc | p.last_loc, fields=fields)

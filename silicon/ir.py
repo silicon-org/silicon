@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated, Dict, TypeVar, List, Generic, Union, Sequence, Tuple
 from dataclasses import dataclass
 
-from silicon import ast
+from silicon import ast, consteval
 from silicon.diagnostics import *
 from silicon.source import Loc, SourceFile
 from silicon.ty import (
@@ -18,6 +18,8 @@ from silicon.ty import (
     RefType as TyRefType,
 )
 
+import io
+import sys
 import xdsl
 import xdsl.dialects.utils
 from xdsl.builder import (Builder, InsertPoint)
@@ -78,6 +80,16 @@ from xdsl.utils.exceptions import VerifyException
 from xdsl.utils.hints import isa
 
 __all__ = ["convert_ast_to_ir"]
+
+xdsl_format_printer = Printer(sys.stdout)
+
+
+# Stringify an IR value, op, block, region, or similar using XDSL's `Printer`.
+def format(any: Operation | SSAValue) -> str:
+  f = io.StringIO()
+  xdsl_format_printer.stream = f
+  xdsl_format_printer.print(any)
+  return f.getvalue().strip()
 
 
 def get_loc(value: Union[SSAValue, Operation]) -> Loc:
@@ -444,12 +456,11 @@ class ReturnOp(IRDLOperation):
   def verify_(self) -> None:
     # Ensure we're nested within a function.
     func_op = self.parent_op()
-    while func_op and not isinstance(func_op, FuncOp):
-      func_op = func_op.parent_op()
-    if not func_op:
+    # while func_op and not isinstance(func_op, FuncOp):
+    #   func_op = func_op.parent_op()
+    if not isinstance(func_op, FuncOp):
       raise VerifyException(
           f"'{self.name}' must be nested within '{FuncOp.name}'")
-    assert isinstance(func_op, FuncOp)
 
     # Ensure the values we return match the function type's output.
     types_func = func_op.function_type.outputs.data
@@ -468,6 +479,49 @@ class ReturnOp(IRDLOperation):
   def print(self, printer: Printer):
     xdsl.dialects.utils.print_return_op_like(printer, self.attributes,
                                              self.args)
+
+
+@irdl_op_definition
+class IfOp(IRDLOperation):
+  name = "si.if"
+  cond: Operand = operand_def(IntegerType(1))
+  then_body: Region = region_def("single_block")
+  else_body: Region = region_def("single_block")
+  traits = frozenset([NoTerminator()])
+
+  def __init__(
+      self,
+      cond: SSAValue,
+      loc: Loc,
+      then_body: Region | type[Region.DEFAULT] = Region.DEFAULT,
+      else_body: Region | type[Region.DEFAULT] = Region.DEFAULT,
+  ):
+    if not isinstance(then_body, Region):
+      then_body = Region(Block())
+    if not isinstance(else_body, Region):
+      else_body = Region(Block())
+    super().__init__(operands=[cond], regions=[then_body, else_body])
+    self.loc = loc
+
+  @classmethod
+  def parse(cls, parser: Parser) -> IfOp:
+    cond = parser.parse_operand()
+    then_body = parser.parse_region()
+    else_body = parser.parse_region()
+    if not then_body.blocks:
+      then_body.add_block(Block())
+    if not else_body.blocks:
+      else_body.add_block(Block())
+    op = IfOp(cond, Loc.unknown(), then_body, else_body)
+    return op
+
+  def print(self, printer: Printer):
+    printer.print(" ")
+    printer.print_operand(self.cond)
+    printer.print(" ")
+    printer.print_region(self.then_body, False, False)
+    printer.print(" ")
+    printer.print_region(self.else_body, False, False)
 
 
 #===------------------------------------------------------------------------===#
@@ -926,6 +980,7 @@ SiliconDialect = Dialect("silicon", [
     FuncOp,
     GeqOp,
     GtOp,
+    IfOp,
     InputPortOp,
     LeqOp,
     LtOp,
@@ -980,6 +1035,7 @@ class Converter:
   generated_fns: Dict[Tuple[ast.FnItem, Tuple[int, ...]], str]
   fn_worklist: List[Tuple[ast.FnItem, Tuple[int, ...], str]]
   params: Dict[int, int]
+  const_cx: List[consteval.AstContext]
 
   def __init__(self):
     self.module = ModuleOp([])
@@ -991,6 +1047,7 @@ class Converter:
     self.generated_fns = dict()
     self.fn_worklist = []
     self.params = dict()
+    self.const_cx = []
 
   def convert_type(self, ty: Type | None, loc: Loc) -> TypeAttribute:
     assert ty is not None, "type checking should have assigned types"
@@ -1052,6 +1109,7 @@ class Converter:
     return try_name
 
   def convert_mod(self, mod: ast.ModItem):
+    self.const_cx.append(consteval.AstContext())
     name = self.uniquify_name(mod.name.spelling())
     op = self.builder.insert(SiModuleOp.with_empty_body(name, mod.loc))
     ip = self.builder.insertion_point
@@ -1060,6 +1118,7 @@ class Converter:
     for stmt in mod.stmts:
       self.convert_stmt(stmt)
     self.builder.insertion_point = ip
+    self.const_cx.pop()
 
   def schedule_convert_fn(self, fn: ast.FnItem, params: Tuple[int, ...]) -> str:
     if existing_fn_name := self.generated_fns.get((fn, params)):
@@ -1074,9 +1133,12 @@ class Converter:
     return name
 
   def convert_fn(self, fn: ast.FnItem, params: Tuple[int, ...], func_name: str):
+    self.const_cx.append(consteval.AstContext())
+
     for func_param, value in zip(fn.params, params):
       assert func_param.free_param is not None
       self.params[func_param.free_param.num] = value
+      self.const_cx[-1].values[func_param] = value
 
     # Determine the input and output types for the function.
     input_types = [self.convert_type(arg.fty, arg.ty.loc) for arg in fn.args]
@@ -1107,6 +1169,8 @@ class Converter:
       else:
         emit_error(fn.loc, f"missing return at end of `{fn.name.spelling()}`")
     self.builder.insertion_point = ip
+
+    self.const_cx.pop()
 
   def convert_stmt(self, stmt: ast.Stmt):
     # Ignore statements after we have already returned and emit a warning.
@@ -1164,6 +1228,51 @@ class Converter:
       self.builder.insert(AssignOp(dst, src, stmt.loc))
       return
 
+    if isinstance(stmt, ast.IfStmt):
+      const_cond = consteval.try_const_eval_ast(self.const_cx[-1], stmt.cond)
+
+      # If the condition is always true, only convert the `then` body.
+      if const_cond == 1:
+        for sub_stmt in stmt.then_stmts:
+          self.convert_stmt(sub_stmt)
+
+      # If the condition is always false, only convert the `else` body.
+      elif const_cond == 0:
+        for sub_stmt in stmt.else_stmts:
+          self.convert_stmt(sub_stmt)
+
+      # Otherwise create an `si.if` operation.
+      else:
+        cond = self.convert_expr_rvalue(stmt.cond)
+        op = self.builder.insert(IfOp(cond, loc=stmt.loc))
+        ip = self.builder.insertion_point
+
+        is_terminated_at_before = self.is_terminated_at
+
+        self.is_terminated_at = None
+        self.builder.insertion_point = InsertPoint.at_end(
+            op.then_body.blocks[0])
+        for sub_stmt in stmt.then_stmts:
+          self.convert_stmt(sub_stmt)
+        then_terminated_at = self.is_terminated_at
+
+        self.is_terminated_at = None
+        self.builder.insertion_point = InsertPoint.at_end(
+            op.else_body.blocks[0])
+        for sub_stmt in stmt.else_stmts:
+          self.convert_stmt(sub_stmt)
+        else_terminated_at = self.is_terminated_at
+
+        # if then_terminated_at is not None and else_terminated_at is not None:
+        #   self.is_terminated_at = stmt.loc
+        # else:
+        #   self.is_terminated_at = is_terminated_at_before
+
+        self.is_terminated_at = is_terminated_at_before
+        self.builder.insertion_point = ip
+
+      return
+
     # No idea how to convert this statement.
     emit_error(stmt.loc,
                f"unsupported in IR conversion: {stmt.__class__.__name__}")
@@ -1212,7 +1321,10 @@ class Converter:
 
     if isinstance(expr, ast.IdentExpr):
       target = expr.binding.get()
-      value = self.named_values[target]
+      value = self.named_values.get(target)
+      if value is None:
+        emit_error(expr.loc,
+                   f"`{expr.name.spelling()}` cannot be used in an expression")
       if isinstance(target, (ast.LetStmt, ast.OutputStmt)):
         value = self.builder.insert(DerefOp(value, expr.loc)).result
       return value

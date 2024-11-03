@@ -347,6 +347,19 @@ class Typeck:
       self.unify_types(lhs, rhs, stmt.loc)
       return
 
+    if isinstance(stmt, ast.IfStmt):
+      cond = self.typeck_expr(stmt.cond)
+      self.unify_types(
+          UIntType(ConstIntParam(1)),
+          cond,
+          stmt.loc,
+          rhs_loc=stmt.cond.full_loc)
+      for sub_stmt in stmt.then_stmts:
+        self.typeck_stmt(sub_stmt)
+      for sub_stmt in stmt.else_stmts:
+        self.typeck_stmt(sub_stmt)
+      return
+
     emit_error(stmt.loc, f"unsupported in typeck: {stmt.__class__.__name__}")
 
   def typeck_expr(self, expr: ast.Expr) -> Type:
@@ -1012,6 +1025,9 @@ def convert_to_solver_expr(cx: Typeck,
     if isinstance(binding, ast.FnParam):
       return convert_to_solver_expr(cx, cx.simplify_param(cx.params[binding]))
 
+  if isinstance(expr, ast.ParenExpr):
+    return convert_to_solver_expr(cx, expr.expr)
+
   if isinstance(expr, ast.BinaryExpr):
     lhs = convert_to_solver_expr(cx, expr.lhs)
     rhs = convert_to_solver_expr(cx, expr.rhs)
@@ -1027,6 +1043,16 @@ def convert_to_solver_expr(cx: Typeck,
       return lhs < rhs
     if expr.op == ast.BinaryOp.LE:
       return lhs <= rhs
+    if expr.op == ast.BinaryOp.ADD:
+      return lhs + rhs
+    if expr.op == ast.BinaryOp.SUB:
+      return lhs - rhs
+    if expr.op == ast.BinaryOp.MUL:
+      return lhs * rhs
+    if expr.op == ast.BinaryOp.DIV:
+      return lhs / rhs
+    if expr.op == ast.BinaryOp.MOD:
+      return lhs % rhs
 
   if isinstance(expr, ast.FieldCallExpr):
     name = expr.name.spelling()

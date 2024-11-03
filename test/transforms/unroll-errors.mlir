@@ -45,3 +45,13 @@ si.func @UnusedRoot() {
 si.func @UnusedInner() {
   si.return
 }
+
+// -----
+
+si.module @DynamicIf {
+  // CHECK: error: expression is not a constant
+  %0 = si.input "x" : i1
+  si.if %0 {
+  } {
+  }
+}

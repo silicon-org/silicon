@@ -29,6 +29,44 @@ mod Statements {
     b = (a);
     // CHECK: si.assign [[U]], [[A]] : !si.ref<i42>
     u = a;
+
+    // CHECK: [[COND:%.+]] = si.input "cond" : i1
+    input cond: uint<1>;
+
+    // CHECK:      si.if [[COND]] {
+    // CHECK-NEXT:   si.constant 42
+    // CHECK-NEXT: } {
+    // CHECK-NEXT: }
+    if cond {
+        42;
+    }
+
+    // CHECK:      si.if [[COND]] {
+    // CHECK-NEXT:   si.constant 42
+    // CHECK-NEXT: } {
+    // CHECK-NEXT:   si.constant 1337
+    // CHECK-NEXT: }
+    if cond {
+        42;
+    } else {
+        1337;
+    }
+
+    // CHECK-NOT: si.if
+    // CHECK: si.constant 1337
+    if 0u1 {
+        42;
+    } else {
+        1337;
+    }
+
+    // CHECK-NOT: si.if
+    // CHECK: si.constant 42
+    if 1u1 {
+        42;
+    } else {
+        1337;
+    }
 }
 
 // CHECK-LABEL: si.func @Expressions

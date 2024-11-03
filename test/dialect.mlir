@@ -130,3 +130,18 @@ si.func @Refs(%a : i42, %b : !si.ref<i42>) {
   si.deref %b : !si.ref<i42>
   si.return
 }
+
+// CHECK-LABEL: si.func @Ifs
+si.func @Ifs(%a : i1) {
+  // CHECK: si.if %a {
+  // CHECK:   si.constant true
+  // CHECK: } {
+  // CHECK:   si.constant false
+  // CHECK: }
+  si.if %a {
+    si.constant true
+  } {
+    si.constant false
+  }
+  si.return
+}

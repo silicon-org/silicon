@@ -308,3 +308,30 @@ si.module @DerefRefInTuple {
   %15 = si.tuple_get %0, #builtin.int<1> : !si.tuple<[!si.ref<i15>, i0]> -> i0
   si.output "e", %15 : i0
 }
+
+// CHECK-LABEL: si.module @ConstIfs
+si.module @ConstIfs {
+  %false = si.constant false
+  %true = si.constant true
+  // CHECK: [[TMP1:%.+]] = si.constant 1337 :
+  // CHECK: [[TMP2:%.+]] = si.constant 42 :
+  %1 = si.call @ConstIfsFunc(%false) : (i1) -> i32
+  %2 = si.call @ConstIfsFunc(%true) : (i1) -> i32
+  // CHECK: si.output "a0", [[TMP1]] :
+  // CHECK: si.output "a1", [[TMP2]] :
+  si.output "a0", %1 : i32
+  si.output "a1", %2 : i32
+}
+
+si.func @ConstIfsFunc(%a : i1) -> i32 {
+  %x = si.var_decl "x" : !si.ref<i32>
+  si.if %a {
+    %0 = si.constant 42 : i32
+    si.assign %x, %0 : !si.ref<i32>
+  } {
+    %1 = si.constant 1337 : i32
+    si.assign %x, %1 : !si.ref<i32>
+  }
+  %2 = si.deref %x : !si.ref<i32>
+  si.return %2 : i32
+}
