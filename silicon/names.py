@@ -80,6 +80,19 @@ def resolve_node(node: ast.AstNode, scope: Scope):
       declare_node(child, subscope)
     return
 
+  # Handle nodes with nested scopes.
+  if isinstance(node, ast.IfStmt):
+    resolve_node(node.cond, scope)
+    subscope = Scope(parent=scope)
+    for child in node.then_stmts:
+      resolve_node(child, subscope)
+      declare_node(child, subscope)
+    subscope = Scope(parent=scope)
+    for child in node.else_stmts:
+      resolve_node(child, subscope)
+      declare_node(child, subscope)
+    return
+
   # Resolve children.
   for child in node.children():
     resolve_node(child, scope)

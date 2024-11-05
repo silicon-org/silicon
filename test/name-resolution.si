@@ -18,6 +18,22 @@ mod Foo {
 
     // CHECK: IdentExpr "d" binding=LetStmt([[LET_ID]])
     let e: uint<32> = d;
+
+    // CHECK: LetStmt "x" {{.*}}[[OUTER:@.+]]
+    let x;
+    if a == d {
+        // CHECK: then_stmts[0]: LetStmt "x" {{.*}}[[INNER_THEN:@.+]]
+        let x;
+        // CHECK: IdentExpr "x" binding=LetStmt([[INNER_THEN]])
+        x;
+    } else {
+        // CHECK: else_stmts[0]: LetStmt "x" {{.*}}[[INNER_ELSE:@.+]]
+        let x;
+        // CHECK: IdentExpr "x" binding=LetStmt([[INNER_ELSE]])
+        x;
+    }
+    // CHECK: IdentExpr "x" binding=LetStmt([[OUTER]])
+    x;
 }
 
 // CHECK-LABEL: ModItem "Bar"
