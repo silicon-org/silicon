@@ -81,11 +81,36 @@ def try_const_eval_ast(
     lhs = try_const_eval_ast(cx, node.lhs, must)
     rhs = try_const_eval_ast(cx, node.rhs, must)
     if lhs is None or rhs is None:
-      print(f"failing at {lhs} {node.op} {rhs}")
       return None
 
+    if node.op == ast.BinaryOp.ADD:
+      return int(lhs + rhs)
+    if node.op == ast.BinaryOp.SUB:
+      return int(lhs - rhs)
+    if node.op == ast.BinaryOp.MUL:
+      return int(lhs * rhs)
+    if node.op == ast.BinaryOp.DIV:
+      return int(lhs // rhs)
+    if node.op == ast.BinaryOp.MOD:
+      return int(lhs % rhs)
+    if node.op == ast.BinaryOp.LT:
+      return int(lhs < rhs)
+    if node.op == ast.BinaryOp.LE:
+      return int(lhs <= rhs)
     if node.op == ast.BinaryOp.GT:
       return int(lhs > rhs)
+    if node.op == ast.BinaryOp.GE:
+      return int(lhs >= rhs)
+    if node.op == ast.BinaryOp.EQ:
+      return int(lhs == rhs)
+    if node.op == ast.BinaryOp.NE:
+      return int(lhs != rhs)
+
+    if must:
+      emit_error(
+          node.loc,
+          f"operator `{node.loc.spelling()}` does not have a constant value")
+    return None
 
   if must:
     emit_error(

@@ -67,6 +67,14 @@ class InferrableIntParam(IntParam):
     return f"?{self.num}"
 
 
+@dataclass(eq=False)
+class DerivedIntParam(IntParam):
+  expr: ast.Expr
+
+  def __str__(self) -> str:
+    return self.expr.full_loc.spelling()
+
+
 #===------------------------------------------------------------------------===#
 # Type Hierarchy
 #===------------------------------------------------------------------------===#
@@ -242,7 +250,8 @@ class Typeck:
     if isinstance(ty, ast.TupleType):
       return TupleType([self.convert_ast_type(field) for field in ty.fields])
     if isinstance(ty, ast.UIntType):
-      self.typeck_expr(ty.size)
+      size_ty = self.typeck_expr(ty.size)
+      self.unify_types(GenericIntType(), size_ty, ty.size.full_loc)
       if isinstance(ty.size, ast.IntLitExpr):
         return UIntType(ConstIntParam(ty.size.value))
       if isinstance(ty.size, ast.IdentExpr):
@@ -252,6 +261,8 @@ class Typeck:
           emit_info(binding.loc, f"`{ty.size.name.spelling()}` defined here")
           emit_error(ty.size.loc, f"invalid parameter for `uint` width")
         return UIntType(param)
+      if isinstance(ty.size, ast.Expr):
+        return UIntType(DerivedIntParam(ty.size))
       emit_error(ty.size.loc, f"unsupported expression for `uint` width")
     if isinstance(ty, ast.WireType):
       return WireType(self.convert_ast_type(ty.inner))
@@ -728,8 +739,8 @@ class Typeck:
     # Make sure that integer literals fit into their inferred type.
     if isinstance(node, ast.IntLitExpr) and node.width is None:
       width = min_bits_for_int(node.value)
-      if isinstance(node.fty,
-                    UIntType) and (not isinstance(node.fty.width, ConstIntParam)
+      if width > 0 and isinstance(
+          node.fty, UIntType) and (not isinstance(node.fty.width, ConstIntParam)
                                    or width > node.fty.width.value):
         emit_info(
             node.loc,

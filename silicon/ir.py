@@ -8,8 +8,9 @@ from silicon.diagnostics import *
 from silicon.source import Loc, SourceFile
 from silicon.ty import (
     Type,
-    ConstIntParam as TyConstIntParam,
-    FreeIntParam as TyFreeIntParam,
+    ConstIntParam,
+    FreeIntParam,
+    DerivedIntParam,
     RegType as TyRegType,
     TupleType as TyTupleType,
     UIntType as TyUIntType,
@@ -1057,13 +1058,16 @@ class Converter:
     if isinstance(ty, TyTupleType):
       return TupleType([self.convert_type(field, loc) for field in ty.fields])
     if isinstance(ty, TyUIntType):
-      if isinstance(ty.width, TyConstIntParam):
+      if isinstance(ty.width, ConstIntParam):
         return IntegerType(ty.width.value)
-      if isinstance(ty.width, TyFreeIntParam):
+      if isinstance(ty.width, FreeIntParam):
         param = self.params.get(ty.width.num)
         if param is None:
           emit_error(loc, f"param {ty.width} not set")
         return IntegerType(param)
+      if isinstance(ty.width, DerivedIntParam):
+        width = consteval.const_eval_ast(self.const_cx[-1], ty.width.expr)
+        return IntegerType(width)
     if isinstance(ty, TyWireType):
       return WireType(self.convert_type(ty.inner, loc))
     if isinstance(ty, TyRegType):
@@ -1071,7 +1075,7 @@ class Converter:
     if isinstance(ty, TyRefType):
       return RefType(self.convert_type(ty.inner, loc))
 
-    emit_error(loc, f"unsupported in IR conversion: {ty.__class__.__name__}")
+    emit_error(loc, f"type `{ty}` not supported in the IR")
 
   def convert_root(self, root: ast.Root) -> ModuleOp:
     for item in root.items:
@@ -1309,12 +1313,16 @@ class Converter:
 
     if isinstance(expr, ast.IntLitExpr):
       assert isinstance(expr.fty, TyUIntType)
-      if not isinstance(expr.fty.width, TyConstIntParam):
-        emit_error(expr.loc,
-                   f"`{expr.loc.spelling}` has unknown width {expr.fty.width}")
+      if isinstance(expr.fty.width, DerivedIntParam):
+        width = consteval.const_eval_ast(self.const_cx[-1], expr.fty.width.expr)
+      elif isinstance(expr.fty.width, ConstIntParam):
+        width = expr.fty.width.value
+      else:
+        emit_error(
+            expr.loc,
+            f"`{expr.loc.spelling()}` has unknown width {expr.fty.width}")
       return self.builder.insert(
-          ConstantOp.from_value(expr.value, expr.fty.width.value,
-                                expr.loc)).result
+          ConstantOp.from_value(expr.value, width, expr.loc)).result
 
     if isinstance(expr, ast.UnitLitExpr):
       return self.builder.insert(ConstantUnitOp(expr.loc)).result
@@ -1423,12 +1431,18 @@ class Converter:
       assert expr.call_params is not None
       params = []
       for func_param, call_param in zip(target.params, expr.call_params):
-        if not isinstance(call_param, TyConstIntParam):
+        if isinstance(call_param, FreeIntParam):
+          params.append(self.params[call_param.num])
+        elif isinstance(call_param, ConstIntParam):
+          params.append(call_param.value)
+        elif isinstance(call_param, DerivedIntParam):
+          params.append(
+              consteval.const_eval_ast(self.const_cx[-1], call_param.expr))
+        else:
           emit_error(
               expr.loc,
               f"parameter `{func_param.name.spelling()}` is not a constant integer"
           )
-        params.append(call_param.value)
       func_name = self.schedule_convert_fn(target, tuple(params))
       args = [self.convert_expr_rvalue(arg) for arg in expr.args]
       if isinstance(expr.fty, TyUnitType):

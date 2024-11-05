@@ -130,7 +130,9 @@ def unroll_op(cx: UnrollPass, op: Operation):
         for call_result, return_arg in zip(op.res, body_op.args):
           call_result.replace_by(mapping[return_arg])
         continue
-      inlined_ops.append(builder.insert(body_op.clone(mapping)))
+      cloned_op = body_op.clone(mapping)
+      cloned_op.loc = body_op.loc
+      inlined_ops.append(builder.insert(cloned_op))
     op.detach()
     op.erase()
     cx.worklist = inlined_ops + cx.worklist
@@ -146,7 +148,9 @@ def unroll_op(cx: UnrollPass, op: Operation):
     inlined_ops = []
     mapping = dict()
     for body_op in body_to_inline.blocks[0].ops:
-      inlined_ops.append(builder.insert(body_op.clone(mapping)))
+      cloned_op = body_op.clone(mapping)
+      cloned_op.loc = body_op.loc
+      inlined_ops.append(builder.insert(cloned_op))
     op.detach()
     op.erase()
     cx.worklist = inlined_ops + cx.worklist
