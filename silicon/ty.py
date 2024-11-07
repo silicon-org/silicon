@@ -178,14 +178,14 @@ class InferrableType(Type):
 class Constraint:
   lhs: IntParam
   relation: str
-  rhs: ConstraintFn | ast.Expr
+  rhs: ConstraintFn | IntParam | ast.Expr
   loc: Loc
 
 
 @dataclass(eq=False)
 class ConstraintFn:
   op: str
-  arg: ConstraintFn | ast.Expr
+  arg: ConstraintFn | IntParam | ast.Expr
 
 
 #===------------------------------------------------------------------------===#
@@ -685,6 +685,20 @@ class Typeck:
       require_num_args(expr, 0)
       return self.typeck_expr(expr.target)
 
+    if name == "trunc":
+      require_num_args(expr, 0)
+      target = self.typeck_expr(expr.target)
+      target_param = InferrableIntParam()
+      self.unify_types(
+          target,
+          UIntType(target_param),
+          expr.loc,
+          lhs_loc=expr.target.full_loc)
+      result_param = InferrableIntParam()
+      self.constraints.append(
+          Constraint(result_param, "<=", target_param, expr.loc))
+      return UIntType(result_param)
+
     emit_error(expr.name.loc, f"unknown function `{name}`")
 
   # Finalize the types in the AST. This replaces all type variables with the
@@ -1011,6 +1025,9 @@ def check_constraints(cx: Typeck):
 
 def convert_to_solver_expr(cx: Typeck,
                            expr: IntParam | ConstraintFn | ast.Expr) -> z3.Ast:
+  if isinstance(expr, IntParam):
+    expr = cx.simplify_param(expr)
+
   if isinstance(expr, ConstIntParam):
     return z3.IntVal(expr.value)
 
@@ -1020,6 +1037,9 @@ def convert_to_solver_expr(cx: Typeck,
       cx.solver.add(param >= 0)
       cx.solver_params[expr] = param
     return cx.solver_params[expr]
+
+  if isinstance(expr, DerivedIntParam):
+    return convert_to_solver_expr(cx, expr.expr)
 
   if isinstance(expr, ConstraintFn):
     if expr.op == "clog2":
@@ -1064,6 +1084,7 @@ def convert_to_solver_expr(cx: Typeck,
       return lhs / rhs
     if expr.op == ast.BinaryOp.MOD:
       return lhs % rhs
+    emit_error(expr.loc, "solving of operator `{expr.op}` not implemented")
 
   if isinstance(expr, ast.FieldCallExpr):
     name = expr.name.spelling()

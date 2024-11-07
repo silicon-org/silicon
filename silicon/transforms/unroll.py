@@ -131,7 +131,8 @@ def unroll_op(cx: UnrollPass, op: Operation):
           call_result.replace_by(mapping[return_arg])
         continue
       cloned_op = body_op.clone(mapping)
-      cloned_op.loc = body_op.loc
+      if hasattr(body_op, "loc"):
+        cloned_op.loc = body_op.loc
       inlined_ops.append(builder.insert(cloned_op))
     op.detach()
     op.erase()
@@ -149,7 +150,8 @@ def unroll_op(cx: UnrollPass, op: Operation):
     mapping = dict()
     for body_op in body_to_inline.blocks[0].ops:
       cloned_op = body_op.clone(mapping)
-      cloned_op.loc = body_op.loc
+      if hasattr(body_op, "loc"):
+        cloned_op.loc = body_op.loc
       inlined_ops.append(builder.insert(cloned_op))
     op.detach()
     op.erase()

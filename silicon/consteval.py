@@ -70,6 +70,9 @@ def try_const_eval_ast(
   if (fixed := cx.values.get(node)) is not None:
     return fixed
 
+  if isinstance(node, ast.ParenExpr):
+    return try_const_eval_ast(cx, node.expr, must)
+
   if isinstance(node, ast.IdentExpr):
     target = node.binding.get()
     return try_const_eval_ast(cx, target, must)

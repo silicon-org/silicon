@@ -1517,6 +1517,20 @@ class Converter:
       target = self.convert_expr_rvalue(expr.target)
       return self.builder.insert(RegCurrentOp(target, expr.loc)).result
 
+    if name == "as_uint":
+      const = consteval.const_eval_ast(self.const_cx[-1], expr.target)
+      type = self.convert_type(expr.fty, expr.loc)
+      assert isinstance(type, IntegerType)
+      return self.builder.insert(
+          ConstantOp.from_value(const, type.width.data, expr.loc)).result
+
+    if name == "trunc":
+      target = self.convert_expr_rvalue(expr.target)
+      type = self.convert_type(expr.fty, expr.loc)
+      assert isinstance(type, IntegerType)
+      return self.builder.insert(
+          ExtractOp(target, 0, type.width.data, expr.loc)).result
+
     emit_error(expr.name.loc, f"unknown function `{name}`")
 
 

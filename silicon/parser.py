@@ -337,7 +337,7 @@ def parse_infix_expr(
       rhs = parse_expr(p, prec)
       return ast.BinaryExpr(
           loc=op_loc,
-          full_loc=lhs.loc | rhs.loc,
+          full_loc=lhs.full_loc | rhs.full_loc,
           op=op,
           lhs=lhs,
           rhs=rhs,
