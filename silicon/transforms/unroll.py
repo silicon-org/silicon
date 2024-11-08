@@ -221,13 +221,13 @@ def unroll_op(cx: UnrollPass, op: Operation):
 
 
 def unroll_tuple_get(cx: UnrollPass, op: ir.TupleGetOp):
-  aggregate = cx.assignments[op.arg]
-  assert isinstance(aggregate, AggregateValue)
-  value = aggregate.fields[op.field.data]
-  cx.assignments[op.res] = value
-  if isinstance(value, SSAValue):
-    op.res.replace_by(value)
-  cx.erase_later.append(op)
+  aggregate = cx.assignments.get(op.arg, op.arg)
+  if isinstance(aggregate, AggregateValue):
+    value = aggregate.fields[op.field.data]
+    cx.assignments[op.res] = value
+    if isinstance(value, SSAValue):
+      op.res.replace_by(value)
+    cx.erase_later.append(op)
 
 
 def unroll_tuple_get_ref(cx: UnrollPass, op: ir.TupleGetRefOp):

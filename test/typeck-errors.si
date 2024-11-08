@@ -218,7 +218,7 @@ fn f1<N>() {
 
 // -----
 
-// CHECK: info: for example consider N = 3
+// CHECK: info: consider N = 3
 fn f1<N>(a: uint<N>) where N > 5 {}
 fn f2() {
     let b: uint<3>;

@@ -25,6 +25,8 @@ def min_bits_for_int(value: int) -> int:
 
 @dataclass(eq=False)
 class IntParam:
+  # The type-checking context which created this parameter.
+  cx: Typeck
   pass
 
 
@@ -234,6 +236,7 @@ class Typeck:
   params: Dict[ast.AstNode, IntParam]
   solver: z3.Solver
   solver_params: Dict[IntParam, z3.Int]
+  solver_nodes: Dict[ast.Expr, z3.Ast]
   constraints: list
 
   def __init__(self, root: ast.ModItem | ast.FnItem) -> None:
@@ -241,6 +244,7 @@ class Typeck:
     self.params = dict()
     self.solver = z3.Solver()
     self.solver_params = dict()
+    self.solver_nodes = dict()
     self.constraints = []
 
   # Convert an AST type node into an actual type.
@@ -253,7 +257,7 @@ class Typeck:
       size_ty = self.typeck_expr(ty.size)
       self.unify_types(GenericIntType(), size_ty, ty.size.full_loc)
       if isinstance(ty.size, ast.IntLitExpr):
-        return UIntType(ConstIntParam(ty.size.value))
+        return UIntType(ConstIntParam(self, ty.size.value))
       if isinstance(ty.size, ast.IdentExpr):
         binding = ty.size.binding.get()
         param = self.params.get(binding)
@@ -262,7 +266,7 @@ class Typeck:
           emit_error(ty.size.loc, f"invalid parameter for `uint` width")
         return UIntType(param)
       if isinstance(ty.size, ast.Expr):
-        return UIntType(DerivedIntParam(ty.size))
+        return UIntType(DerivedIntParam(self, ty.size))
       emit_error(ty.size.loc, f"unsupported expression for `uint` width")
     if isinstance(ty, ast.WireType):
       return WireType(self.convert_ast_type(ty.inner))
@@ -277,7 +281,7 @@ class Typeck:
     if isinstance(self.root, ast.FnItem):
       # Declare the parameters.
       for param in self.root.params:
-        param.free_param = FreeIntParam(param.name.spelling())
+        param.free_param = FreeIntParam(self, param.name.spelling())
         self.params[param] = param.free_param
         solver_param = z3.Int(param.name.spelling())
         self.solver.add(solver_param >= 0)
@@ -361,14 +365,23 @@ class Typeck:
     if isinstance(stmt, ast.IfStmt):
       cond = self.typeck_expr(stmt.cond)
       self.unify_types(
-          UIntType(ConstIntParam(1)),
+          UIntType(ConstIntParam(self, 1)),
           cond,
           stmt.loc,
           rhs_loc=stmt.cond.full_loc)
+      solver_cond = convert_to_solver_expr(self, stmt.cond)
+      if not isinstance(solver_cond, z3.BoolRef):
+        solver_cond = (solver_cond != 0)
       for sub_stmt in stmt.then_stmts:
+        self.solver.push()
+        self.solver.add(solver_cond)
         self.typeck_stmt(sub_stmt)
+        self.solver.pop()
       for sub_stmt in stmt.else_stmts:
+        self.solver.push()
+        self.solver.add(~solver_cond)
         self.typeck_stmt(sub_stmt)
+        self.solver.pop()
       return
 
     emit_error(stmt.loc, f"unsupported in typeck: {stmt.__class__.__name__}")
@@ -382,7 +395,7 @@ class Typeck:
       if expr.width is None:
         return LiteralIntType(min_bits_for_int(expr.value))
       else:
-        return UIntType(ConstIntParam(expr.width))
+        return UIntType(ConstIntParam(self, expr.width))
 
     if isinstance(expr, ast.UnitLitExpr):
       return UnitType()
@@ -438,7 +451,7 @@ class Typeck:
 
       if expr.op in (ast.BinaryOp.EQ, ast.BinaryOp.NE, ast.BinaryOp.LT,
                      ast.BinaryOp.LE, ast.BinaryOp.GT, ast.BinaryOp.GE):
-        return UIntType(ConstIntParam(1))
+        return UIntType(ConstIntParam(self, 1))
 
       return lhs
 
@@ -469,8 +482,9 @@ class Typeck:
       # Define inferrable parameters for the called function's parameters.
       call_params = []
       for param in target.params:
-        p = InferrableIntParam()
+        p = InferrableIntParam(self)
         target_typeck.params[param] = p
+        # self.solver_params[param] = z3.FreshConst(z3.IntSort())
         call_params.append(p)
 
       # Make sure the arguments match.
@@ -486,13 +500,9 @@ class Typeck:
 
       # Annotate the call parameters.
       expr.call_params = [self.simplify_param(p) for p in call_params]
-      for cp in expr.call_params:
-        if isinstance(cp, InferrableIntParam):
-          target_typeck.solver_params[cp] = z3.FreshConst(z3.IntSort())
-        elif isinstance(cp, ConstIntParam):
-          target_typeck.solver_params[cp] = z3.IntVal(cp.value)
-        elif isinstance(cp, FreeIntParam):
-          target_typeck.solver_params[cp] = self.solver_params[cp]
+      call_solver_params = []
+      for p2 in expr.call_params:
+        call_solver_params.append(convert_to_solver_expr(p2.cx, p2))
 
       # Check that we adhere to the where clauses.
       for where in target.wheres:
@@ -502,13 +512,15 @@ class Typeck:
         good = (self.solver.check() == z3.unsat)
         if not good:
           model = self.solver.model()
-          for ast_param, free_param in target_typeck.params.items():
-            solver_param = target_typeck.solver_params[self.simplify_param(
-                free_param)]
-            value = model.eval(solver_param)
+          for ast_param, free_param in zip(target.params, call_solver_params):
+            value = model.eval(free_param)
+            param_str = str(free_param)
+            value_str = str(value)
+            if param_str != value_str:
+              value_str = f"{param_str} = {value_str}"
             emit_info(
                 where.loc,
-                f"for example consider {ast_param.loc.spelling()} = {value}")
+                f"consider {ast_param.loc.spelling()} = {value_str}")
           emit_error(
               expr.loc,
               f"parameter mismatch: `{name}` requires {where.full_loc.spelling()}"
@@ -530,7 +542,7 @@ class Typeck:
             ty.width, ConstIntParam):
           emit_error(arg.loc, f"cannot concatenate `{ty}`")
         width += ty.width.value
-      return UIntType(ConstIntParam(width))
+      return UIntType(ConstIntParam(self, width))
 
     if name == "wire":
       require_num_args(expr, 1)
@@ -540,7 +552,7 @@ class Typeck:
       require_num_args(expr, 2)
       clock = self.typeck_expr(expr.args[0])
       self.unify_types(
-          UIntType(ConstIntParam(1)),
+          UIntType(ConstIntParam(self,1)),
           clock,
           expr.loc,
           rhs_loc=expr.args[0].full_loc)
@@ -584,7 +596,7 @@ class Typeck:
           emit_error(expr.args[0].loc,
                      f"bit index out of bounds for `{target}`")
 
-      return UIntType(ConstIntParam(1))
+      return UIntType(ConstIntParam(self, 1))
 
     if name == "slice":
       require_num_args(expr, 2)
@@ -603,13 +615,13 @@ class Typeck:
         )
         emit_error(expr.args[0].loc | expr.args[1].loc,
                    f"slice out of bounds for `{target}`")
-      return UIntType(ConstIntParam(width))
+      return UIntType(ConstIntParam(self, width))
 
     if name == "mux":
       require_num_args(expr, 2)
       target = self.typeck_expr(expr.target)
       self.unify_types(
-          UIntType(ConstIntParam(1)),
+          UIntType(ConstIntParam(self, 1)),
           target,
           expr.loc,
           rhs_loc=expr.target.full_loc)
@@ -676,7 +688,7 @@ class Typeck:
 
       # Create a `uint<?A>` return type with `?A` constrained to be large enough
       # to hold the generic integer.
-      param = InferrableIntParam()
+      param = InferrableIntParam(self)
       self.constraints.append(
           Constraint(param, ">=", ConstraintFn("clog2", expr.target), expr.loc))
       return UIntType(param)
@@ -688,13 +700,13 @@ class Typeck:
     if name == "trunc":
       require_num_args(expr, 0)
       target = self.typeck_expr(expr.target)
-      target_param = InferrableIntParam()
+      target_param = InferrableIntParam(self)
       self.unify_types(
           target,
           UIntType(target_param),
           expr.loc,
           lhs_loc=expr.target.full_loc)
-      result_param = InferrableIntParam()
+      result_param = InferrableIntParam(self)
       self.constraints.append(
           Constraint(result_param, "<=", target_param, expr.loc))
       return UIntType(result_param)
@@ -728,7 +740,7 @@ class Typeck:
 
     # Map `{literal}` to the smallest possible `uint<N>`.
     if isinstance(ty, LiteralIntType):
-      return UIntType(ConstIntParam(ty.width_hint))
+      return UIntType(ConstIntParam(self, ty.width_hint))
 
     # Finalize parameters.
     if isinstance(ty, UIntType):
@@ -744,7 +756,7 @@ class Typeck:
 
     # Make uninferred int parameters the minimum size for their literals.
     if isinstance(param, InferrableIntParam) and param.width_hint is not None:
-      param.inferred = ConstIntParam(param.width_hint)
+      param.inferred = ConstIntParam(self, param.width_hint)
       param = param.inferred
 
     return param
@@ -1032,14 +1044,14 @@ def convert_to_solver_expr(cx: Typeck,
     return z3.IntVal(expr.value)
 
   if isinstance(expr, (InferrableIntParam, FreeIntParam)):
-    if expr not in cx.solver_params:
+    if expr not in expr.cx.solver_params:
       param = z3.FreshConst(z3.IntSort(), str(expr))
-      cx.solver.add(param >= 0)
-      cx.solver_params[expr] = param
-    return cx.solver_params[expr]
+      expr.cx.solver.add(param >= 0)
+      expr.cx.solver_params[expr] = param
+    return expr.cx.solver_params[expr]
 
   if isinstance(expr, DerivedIntParam):
-    return convert_to_solver_expr(cx, expr.expr)
+    return convert_to_solver_expr(expr.cx, expr.expr)
 
   if isinstance(expr, ConstraintFn):
     if expr.op == "clog2":
@@ -1054,7 +1066,12 @@ def convert_to_solver_expr(cx: Typeck,
   if isinstance(expr, ast.IdentExpr):
     binding = expr.binding.get()
     if isinstance(binding, ast.FnParam):
-      return convert_to_solver_expr(cx, cx.simplify_param(cx.params[binding]))
+      return convert_to_solver_expr(cx, cx.params[binding])
+    # Otherwise create an opaque term in the solver.
+    if expr not in cx.solver_nodes:
+      opaque = z3.FreshConst(z3.IntSort())
+      cx.solver_nodes[expr] = opaque
+    return cx.solver_nodes[expr]
 
   if isinstance(expr, ast.ParenExpr):
     return convert_to_solver_expr(cx, expr.expr)
@@ -1100,7 +1117,7 @@ def convert_to_solver_expr(cx: Typeck,
   if isinstance(expr, ast.Expr):
     emit_error(expr.full_loc, "unsupported constraint expression")
 
-  assert False, f"solving of `{expr}` not implemented"
+  assert False, f"solving of `{expr}` not implemented ({expr.__class__.__name__})"
 
 
 def typeck(root: ast.Root):
