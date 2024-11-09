@@ -1317,6 +1317,8 @@ class Converter:
         width = consteval.const_eval_ast(self.const_cx[-1], expr.fty.width.expr)
       elif isinstance(expr.fty.width, ConstIntParam):
         width = expr.fty.width.value
+      elif isinstance(expr.fty.width, FreeIntParam):
+        width = self.params[expr.fty.width.num]
       else:
         emit_error(
             expr.loc,
@@ -1530,6 +1532,19 @@ class Converter:
       assert isinstance(type, IntegerType)
       return self.builder.insert(
           ExtractOp(target, 0, type.width.data, expr.loc)).result
+
+    if name == "zext":
+      target = self.convert_expr_rvalue(expr.target)
+      type = self.convert_type(expr.fty, expr.loc)
+      assert isinstance(target.type, IntegerType)
+      assert isinstance(type, IntegerType)
+      ext = type.width.data - target.type.width.data
+      if ext == 0:
+        return target
+      assert ext > 0, f"zext from {target.type} to {type}"
+      zero_ext = self.builder.insert(ConstantOp.from_value(0, ext,
+                                                           expr.loc)).result
+      return self.builder.insert(ConcatOp([zero_ext, target], expr.loc)).result
 
     emit_error(expr.name.loc, f"unknown function `{name}`")
 

@@ -74,7 +74,7 @@ class DerivedIntParam(IntParam):
   expr: ast.Expr
 
   def __str__(self) -> str:
-    return self.expr.full_loc.spelling()
+    return format_constraint(self.cx, self.expr)
 
 
 #===------------------------------------------------------------------------===#
@@ -518,9 +518,8 @@ class Typeck:
             value_str = str(value)
             if param_str != value_str:
               value_str = f"{param_str} = {value_str}"
-            emit_info(
-                where.loc,
-                f"consider {ast_param.loc.spelling()} = {value_str}")
+            emit_info(where.loc,
+                      f"consider {ast_param.loc.spelling()} = {value_str}")
           emit_error(
               expr.loc,
               f"parameter mismatch: `{name}` requires {where.full_loc.spelling()}"
@@ -552,7 +551,7 @@ class Typeck:
       require_num_args(expr, 2)
       clock = self.typeck_expr(expr.args[0])
       self.unify_types(
-          UIntType(ConstIntParam(self,1)),
+          UIntType(ConstIntParam(self, 1)),
           clock,
           expr.loc,
           rhs_loc=expr.args[0].full_loc)
@@ -711,6 +710,20 @@ class Typeck:
           Constraint(result_param, "<=", target_param, expr.loc))
       return UIntType(result_param)
 
+    if name == "zext":
+      require_num_args(expr, 0)
+      target = self.typeck_expr(expr.target)
+      target_param = InferrableIntParam(self)
+      self.unify_types(
+          target,
+          UIntType(target_param),
+          expr.loc,
+          lhs_loc=expr.target.full_loc)
+      result_param = InferrableIntParam(self)
+      self.constraints.append(
+          Constraint(result_param, ">=", target_param, expr.loc))
+      return UIntType(result_param)
+
     emit_error(expr.name.loc, f"unknown function `{name}`")
 
   # Finalize the types in the AST. This replaces all type variables with the
@@ -860,6 +873,12 @@ class Typeck:
         lhs.width.inferred = rhs.width
         return
 
+      if isinstance(lhs.width, DerivedIntParam) and isinstance(
+          rhs.width, DerivedIntParam):
+        if lhs.width.cx == rhs.width.cx and exprs_match(lhs.width.expr,
+                                                        rhs.width.expr):
+          return
+
     # unify(uint<?A>, {literal}) -> uint<?A> with maximized width hint
     # unify({literal}, uint<?B>) -> uint<?B> with maximized width hint
     # unify(uint<N>, {literal}) -> uint<N>
@@ -952,6 +971,20 @@ class Typeck:
       param.inferred = self.simplify_param(param.inferred)
       return param.inferred
 
+    if isinstance(param, DerivedIntParam):
+      from silicon import consteval
+      const_cx = consteval.AstContext()
+      for child in param.expr.walk():
+        if isinstance(child, ast.IdentExpr):
+          binding = child.binding.get()
+          if isinstance(binding, ast.FnParam):
+            p = param.cx.simplify_param(param.cx.params[binding])
+            if isinstance(p, ConstIntParam):
+              const_cx.values[child] = p.value
+      value = consteval.try_const_eval_ast(const_cx, param.expr)
+      if value is not None:
+        return ConstIntParam(param.cx, value)
+
     return param
 
   # Prove that the given parameter is greater than the given constant value.
@@ -987,10 +1020,31 @@ def format_constraint(
     return f"{con.op}({format_constraint(cx, con.arg)})"
 
   if isinstance(con, IntParam):
+    con = cx.simplify_param(con)
+  if isinstance(con, ConstIntParam):
+    return str(con.value)
+  if isinstance(con, FreeIntParam):
     return str(con)
+  if isinstance(con, DerivedIntParam):
+    return format_constraint(con.cx, con.expr)
 
-  if isinstance(con, ast.Expr):
-    return con.full_loc.spelling()
+  if isinstance(con, ast.IntLitExpr):
+    if con.width is not None:
+      return f"{con.value}u{con.width}"
+    return str(con.value)
+
+  if isinstance(con, ast.IdentExpr):
+    binding = con.binding.get()
+    if isinstance(binding, ast.FnParam):
+      return format_constraint(cx, cx.params[binding])
+
+  if isinstance(con, ast.FieldCallExpr):
+    args = ", ".join(format_constraint(cx, arg) for arg in con.args)
+    return f"{format_constraint(cx, con.target)}.{con.name.spelling()}({args})"
+
+  if isinstance(con, ast.BinaryExpr):
+    return "(" + format_constraint(
+        cx, con.lhs) + con.loc.spelling() + format_constraint(cx, con.rhs) + ")"
 
   assert False, f"cannot format {con}"
 
@@ -1019,6 +1073,11 @@ def check_constraints(cx: Typeck):
       cond = lhs != rhs
     else:
       assert False, f"`{con.relation}` relations not implemented in solver"
+    # Add (A > B) -> (clog2(A) >= clog2(B)) helpers.
+    if lhs.decl().name() == "clog2" and rhs.decl().name() == "clog2":
+      cx.solver.add(z3.Implies(lhs.arg(0) > rhs.arg(0), lhs >= rhs))
+      cx.solver.add(z3.Implies(lhs.arg(0) < rhs.arg(0), lhs <= rhs))
+      cx.solver.add(z3.Implies(lhs.arg(0) == rhs.arg(0), lhs == rhs))
     cx.solver.add(~cond)
 
     if cx.solver.check() == z3.sat:
@@ -1118,6 +1177,27 @@ def convert_to_solver_expr(cx: Typeck,
     emit_error(expr.full_loc, "unsupported constraint expression")
 
   assert False, f"solving of `{expr}` not implemented ({expr.__class__.__name__})"
+
+
+# Check whether two expressions are structurally equivalent.
+def exprs_match(a: ast.Expr, b: ast.Expr) -> bool:
+  if type(a) != type(b):
+    return False
+
+  if isinstance(a, ast.IdentExpr):
+    return a.name.spelling() == b.name.spelling()
+
+  if isinstance(a, ast.FieldCallExpr):
+    if not exprs_match(a.target, b.target):
+      return False
+    if a.name.spelling() != b.name.spelling():
+      return False
+    for arg_a, arg_b in zip(a.args, b.args):
+      if not exprs_match(arg_a, arg_b):
+        return False
+    return True
+
+  assert False, f"cannot compare {type(a).__name__}"
 
 
 def typeck(root: ast.Root):

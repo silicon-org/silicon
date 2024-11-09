@@ -1,6 +1,6 @@
 from __future__ import annotations
-from silicon import ast
-from silicon import ir
+from silicon import ast, ir
+from silicon.ty import min_bits_for_int
 from silicon.diagnostics import *
 from silicon.source import *
 from typing import *
@@ -114,6 +114,14 @@ def try_const_eval_ast(
           node.loc,
           f"operator `{node.loc.spelling()}` does not have a constant value")
     return None
+
+  if isinstance(node, ast.FieldCallExpr):
+    name = node.name.spelling()
+    if name == "clog2":
+      arg = try_const_eval_ast(cx, node.target, must)
+      if arg is None:
+        return None
+      return min_bits_for_int(arg - 1)
 
   if must:
     emit_error(
