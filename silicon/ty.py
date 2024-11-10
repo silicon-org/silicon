@@ -1184,10 +1184,10 @@ def exprs_match(a: ast.Expr, b: ast.Expr) -> bool:
   if type(a) != type(b):
     return False
 
-  if isinstance(a, ast.IdentExpr):
+  if isinstance(a, ast.IdentExpr) and isinstance(b, ast.IdentExpr):
     return a.name.spelling() == b.name.spelling()
 
-  if isinstance(a, ast.FieldCallExpr):
+  if isinstance(a, ast.FieldCallExpr) and isinstance(b, ast.FieldCallExpr):
     if not exprs_match(a.target, b.target):
       return False
     if a.name.spelling() != b.name.spelling():
