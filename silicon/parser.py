@@ -463,9 +463,7 @@ def parse_block_expr(p: Parser) -> ast.BlockExpr:
       # Otherwise the block isn't done yet. Complain about the missing
       # semicolon.
       if expr_requires_semicolon(stmt):
-        after = copy(p.last_loc)
-        after.offset += after.length
-        after.length = 0
+        after = Loc(p.last_loc.file, p.last_loc.offset + p.last_loc.length, 0)
         emit_error(after, "expected `;` after expression")
 
       # Wrap this expression up as a statement, since there are more left

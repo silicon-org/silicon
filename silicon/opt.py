@@ -1,18 +1,19 @@
 from __future__ import annotations
-from typing import Type, IO
-
-from silicon.ir import SiliconDialect
 from silicon.codegen import codegen
-from silicon.transforms.unroll import UnrollPass
 from silicon.diagnostics import DiagnosticException, Loc, emit_error
-
-import xdsl
-import xdsl.utils.exceptions
+from silicon.dialect.hir import HIRDialect
+from silicon.ir import SiliconDialect
+from silicon.transforms.mem2reg import Mem2RegPass
+from silicon.transforms.unroll import UnrollPass
+from typing import Type, IO
 from xdsl.dialects.builtin import ModuleOp
 from xdsl.passes import ModulePass
 from xdsl.transforms.canonicalize import CanonicalizePass
+from xdsl.transforms.common_subexpression_elimination import CommonSubexpressionElimination
 from xdsl.transforms.dead_code_elimination import DeadCodeElimination
 from xdsl.xdsl_opt_main import xDSLOptMain
+import xdsl
+import xdsl.utils.exceptions
 
 
 def main():
@@ -28,11 +29,14 @@ class SiliconOptMain(xDSLOptMain):
   def register_all_dialects(self):
     self.ctx.load_dialect(xdsl.dialects.builtin.Builtin)
     self.ctx.load_dialect(SiliconDialect)
+    self.ctx.load_dialect(HIRDialect)
 
   def register_all_passes(self):
     self.register_module_pass(CanonicalizePass)
     self.register_module_pass(DeadCodeElimination)
+    self.register_module_pass(CommonSubexpressionElimination)
     self.register_module_pass(UnrollPass)
+    self.register_module_pass(Mem2RegPass)
 
   def register_module_pass(self, p: Type[ModulePass]):
     self.register_pass(p.name, lambda: p)

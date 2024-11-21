@@ -8,13 +8,13 @@ __all__ = [
 ]
 
 
-@dataclass
+@dataclass(eq=False, frozen=True)
 class SourceFile:
   path: str
   contents: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class Loc:
   file: SourceFile
   offset: int
