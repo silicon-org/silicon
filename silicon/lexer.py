@@ -171,13 +171,11 @@ class Lexer:
   tokens: List[Token]
 
   def reset_loc(self):
-    self.loc.offset = self.total_length - len(self.text)
-    self.loc.length = 0
+    self.loc = Loc(self.loc.file, self.total_length - len(self.text), 0)
 
   def get_loc(self) -> Loc:
-    loc = copy(self.loc)
-    loc.length = self.total_length - len(self.text) - loc.offset
-    return loc
+    return Loc(self.loc.file, self.loc.offset,
+               self.total_length - len(self.text) - self.loc.offset)
 
   def consume(self, num: int = 1):
     self.text = self.text[num:]
