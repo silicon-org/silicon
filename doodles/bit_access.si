@@ -1,0 +1,26 @@
+
+fn foo<N>(x: uint<N>)
+  where N > 5 // assume(N > 5)
+{
+    x.bit(5); // assert(N > 5)
+    // foo(x.drop_front(1)); // assert((N-1) > 5)
+}
+
+fn bar<Q>() where Q > 5 {
+    let a: uint<42>;
+    let b: uint<4>;
+    foo(a); // assert(42 > 5)
+    foo(b); // assert(4 > 5)
+
+    // let i: index<19>;
+    // i = a as index<19>; // assert(a < 19)
+}
+
+// fn foo<N>(x: uint<N>) where N > 5 {
+//     x.bit(5);
+//     x.try_bit(5);
+// }
+
+// fn bit<N>(dst: uint<N>, const x: natural) -> bit
+//     where x < N
+// fn try_bit(natural) -> Option<bit>

@@ -1,0 +1,42 @@
+fn add1(u: uint<42>, v: uint<42>) -> uint<42> {
+    let k = u + v;
+    return k;
+}
+
+fn add2<N>(u: uint<N>, v: uint<N>) -> uint<N> {
+    let k = u + v;
+    return k;
+}
+
+mod Foo {
+    input a: uint<42>;
+    input b: uint<42>;
+    output y: uint<6>;
+    output z: uint<42>;
+
+    z = add2(a, b);
+    z = add2(a, b);
+    y = add2(3, 63);
+    y = add2(3, 63);
+}
+
+
+// fn arb<N>(valids: uint<N>) {
+//     if N == 1 {
+//         return valids[0];
+//     } else {
+//         let x = arb(valids.slice(0, N/2));
+//         let y = arb(valids.slice(N/2, N/2));
+//         return single_arb(x, y);
+//     }
+// }
+
+// fn mul<N>(a: uint<N>, b: uint<N>) -> uint<N> {
+//     if N == 0 { return 0; }
+//     // assert !(N==0)
+//     if a[0] {
+//         return b + mul(a.slice(1..), b) << 1
+//     } else {
+//         mul(a[1:], b) << 1
+//     }
+// }

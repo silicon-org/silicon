@@ -1,0 +1,53 @@
+mod Foo {
+    input x: uint<42>;
+    output y: uint<42>;
+
+    let a = wire(0);
+    double(x, a);
+    y = a.get();
+}
+
+fn double(u: uint<42>, v: Wire<uint<42>>) {
+    v.set(u + u);
+}
+
+
+// fn arbiter() {
+//     let nodes = [..];
+//     for {
+//         nodes = reduce_one_layer(nodes);
+//     }
+//     return nodes[0];
+// }
+
+fn refs() {
+    let x: Wire<uint<42>> = wire(0);
+    let y: (uint<42>, &uint<42>) = wire(0);
+    *y.1 = 1337;
+}
+
+// fn arbiter_box(a: (bool, &once bool), b: (bool, &once bool)) -> (bool, &once bool) {
+//     let (ready, ready_reference) = wire();
+//     *a.ready = ready;
+//     *b.ready = !a.valid & ready;
+//     return (a.valid | b.valid, ready_reference);
+// }
+
+// fn wire() -> (T, &once T) {}
+
+// struct ArbPort {
+//     valid: bool,
+//     ready: &once bool,
+// }
+
+// module Foo<X> {
+//     input x: uint<X>;
+//     output y: uint<X>;
+// }
+
+// module Bar {
+//     let a: uint<59>;
+//     inst foo Foo;
+//     foo.x = a;
+//     foo.y;
+// }
