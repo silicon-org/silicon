@@ -6,7 +6,7 @@ configure_lit_site_cfg(
 )
 
 set(deps
-  FileCheck
+  FileCheck count not
   silicon-opt
 )
 
