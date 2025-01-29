@@ -1,40 +1,49 @@
 from __future__ import annotations
-from silicon.source import Loc
 from silicon.dialect.util import try_move_before
+from silicon.source import Loc
 from typing import *
 from xdsl.dialects.builtin import AnyIntegerAttr
+from xdsl.dialects.builtin import FlatSymbolRefAttr
 from xdsl.dialects.builtin import IntAttr
 from xdsl.dialects.builtin import IntegerAttr
 from xdsl.dialects.builtin import StringAttr
+from xdsl.ir import Block
+from xdsl.ir import Data
+from xdsl.ir import Operation
 from xdsl.ir import OpResult
 from xdsl.ir import ParametrizedAttribute
-from xdsl.ir import TypeAttribute
-from xdsl.ir import Operation
-from xdsl.ir import Block
 from xdsl.ir import SSAValue
-from xdsl.ir import Data
+from xdsl.ir import TypeAttribute
 from xdsl.irdl import irdl_attr_definition
-from xdsl.irdl import ParameterDef
 from xdsl.irdl import irdl_op_definition
 from xdsl.irdl import IRDLOperation
 from xdsl.irdl import Operand
 from xdsl.irdl import operand_def
 from xdsl.irdl import opt_operand_def
+from xdsl.irdl import ParameterDef
 from xdsl.irdl import prop_def
+from xdsl.irdl import region_def
 from xdsl.irdl import result_def
+from xdsl.irdl import var_operand_def
+from xdsl.irdl import var_result_def
 from xdsl.parser import Parser
 from xdsl.pattern_rewriter import PatternRewriter
 from xdsl.pattern_rewriter import RewritePattern
 from xdsl.printer import Printer
 from xdsl.traits import ConstantLike
 from xdsl.traits import HasCanonicalizationPatternsTrait
-from xdsl.traits import Pure
-from xdsl.traits import NoMemoryEffect
+from xdsl.traits import HasParent
+from xdsl.traits import IsolatedFromAbove
+from xdsl.traits import IsTerminator
 from xdsl.traits import MemoryReadEffect
 from xdsl.traits import MemoryWriteEffect
+from xdsl.traits import NoMemoryEffect
+from xdsl.traits import Pure
+from xdsl.traits import SymbolOpInterface
+from xdsl.utils.exceptions import VerifyException
 from xdsl.utils.hints import isa
-import xdsl
 import silicon
+import xdsl
 
 #===------------------------------------------------------------------------===#
 # Attributes
@@ -478,11 +487,86 @@ class UnifyOp(IRDLOperation):
 
 
 #===------------------------------------------------------------------------===#
+# Functions
+#===------------------------------------------------------------------------===#
+
+
+# Define a function.
+@irdl_op_definition
+class FuncOp(IRDLOperation):
+  name = "hir.func"
+  loc = prop_def(LocAttr)
+  sym_name = prop_def(StringAttr)
+  signature = region_def("single_block")
+  body = region_def()
+  assembly_format = "$sym_name attr-dict-with-keyword $loc $signature $body"
+  traits = frozenset([IsolatedFromAbove(), SymbolOpInterface()])
+
+
+# Define a function argument within a function signature.
+@irdl_op_definition
+class FuncArgOp(IRDLOperation):
+  name = "hir.func_arg"
+  loc = prop_def(LocAttr)
+  decl_name = prop_def(StringAttr)
+  type = operand_def(UnknownType())
+  result = result_def(UnknownType())
+  assembly_format = "$decl_name `,` $type attr-dict $loc"
+  traits = frozenset([HasParent(FuncOp)])
+
+
+# Terminator for function signatures.
+@irdl_op_definition
+class ReturnSignatureOp(IRDLOperation):
+  name = "hir.return_signature"
+  loc = prop_def(LocAttr)
+  assembly_format = "attr-dict $loc"
+  traits = frozenset([HasParent(FuncOp), IsTerminator()])
+
+  def verify_(self) -> None:
+    func = self.parent_op()
+    assert isinstance(func, FuncOp)
+    if self.parent_region() != func.signature:
+      raise VerifyException(
+          "`hir.return_signature` must be in signature region")
+
+
+# Terminator for function bodies.
+@irdl_op_definition
+class ReturnOp(IRDLOperation):
+  name = "hir.return"
+  loc = prop_def(LocAttr)
+  assembly_format = "attr-dict $loc"
+  traits = frozenset([HasParent(FuncOp), IsTerminator()])
+
+  def verify_(self) -> None:
+    func = self.parent_op()
+    assert isinstance(func, FuncOp)
+    if self.parent_region() != func.body:
+      raise VerifyException("`hir.return` must be in body region")
+
+
+# A function call that does not yet impose any constraints from the function
+# signature on the call site. These ops get lowered into `hir.call` alongside
+# additional checks and constraints in order to make the call legal.
+@irdl_op_definition
+class UnlegalizedCallOp(IRDLOperation):
+  name = "hir.unlegalized_call"
+  loc = prop_def(LocAttr)
+  callee = prop_def(FlatSymbolRefAttr)
+  args = var_operand_def(UnknownType())
+  results = var_result_def(UnknownType())
+  assembly_format = "$callee `(` $args `)` attr-dict $loc"
+
+
+#===------------------------------------------------------------------------===#
 # Dialect
 #===------------------------------------------------------------------------===#
 
 HIRDialect = xdsl.ir.Dialect("hir", [
     AddOp,
+    FuncOp,
+    FuncArgOp,
     InferrableOp,
     IntOp,
     IntTypeOp,
@@ -490,11 +574,14 @@ HIRDialect = xdsl.ir.Dialect("hir", [
     LiteralOp,
     LoadOp,
     RefTypeOp,
+    ReturnOp,
+    ReturnSignatureOp,
     StoreOp,
     TypeOfOp,
     TypeOp,
     UIntTypeOp,
     UnifyOp,
+    UnlegalizedCallOp,
     UnpackRefOp,
 ], [
     UIntType,
