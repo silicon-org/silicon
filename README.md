@@ -46,3 +46,8 @@ cmake -G Ninja -B build ../circt/llvm/llvm \
   -DLLVM_EXTERNAL_SILICON_SOURCE_DIR=$PWD \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo
 ```
+
+Build and run all tests:
+```
+ninja -C build check-silicon
+```
