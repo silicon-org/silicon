@@ -1,0 +1,45 @@
+fn arbiter<N>(reqs: uint<N>) -> (uint<N.clog2()>, uint<1>) where N > 0 {
+    let idx = 0;
+    let sel: uint<1> = 0;
+    if N > 1 {
+        let reqs_lo = reqs;
+        let reqs_lo: uint<N/2> = reqs_lo.trunc();
+        let reqs_hi = reqs >> (N/2).as_uint();
+        let reqs_hi: uint<N-N/2> = reqs_hi.trunc();
+        let u = arbiter(reqs_lo);
+        let v = arbiter(reqs_hi);
+        idx = u.1.mux(u.0.zext(), v.0.zext() + (N/2).as_uint());
+        sel = u.1 | v.1;
+        // arbiter(reqs.slice(0, N/2));
+        // arbiter(reqs.slice(N/2, N/2));
+    } else {
+        // idx = reqs.bit(0).mux(1337, 42);
+        idx = 0;
+        sel = reqs.bit(0);
+        // idx = 1337;
+    }
+    return (idx, sel);
+}
+
+fn other<M>(stuff: uint<M>) {
+}
+
+mod test {
+    input reqs: uint<5>;
+    let arb = arbiter(reqs);
+    output result_idx: uint<3> = arb.0;
+    output result_sel: uint<1> = arb.1;
+
+    // output z0: uint<20> = add_or_sub(42, 1337);
+    // output z1: uint<30> = add_or_sub(42, 1337);
+}
+
+fn add_or_sub<N>(a: uint<N>, b: uint<N>) -> uint<N> {
+    let result;
+    if N > 25 {
+        result = a + b;
+    } else {
+        result = a - b;
+    }
+    return result;
+}
