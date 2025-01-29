@@ -34,3 +34,15 @@ Clone the repository and the submodules:
 git clone --recurse-submodules --shallow-submodules git@github.com:silicon-org/silicon.git
 cd silicon
 ```
+
+Configure the build:
+```
+cmake -G Ninja -B build ../circt/llvm/llvm \
+  -DLLVM_ENABLE_PROJECTS=mlir \
+  -DLLVM_TARGETS_TO_BUILD=host \
+  -DLLVM_ENABLE_ASSERTIONS=ON \
+  -DLLVM_EXTERNAL_PROJECTS="circt;silicon" \
+  -DLLVM_EXTERNAL_CIRCT_SOURCE_DIR=$PWD/circt \
+  -DLLVM_EXTERNAL_SILICON_SOURCE_DIR=$PWD \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo
+```
