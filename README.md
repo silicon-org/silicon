@@ -26,3 +26,11 @@ Rough roadmap:
 - [x] Constraints on ports/types in module signature, checked inside/outside
 - [ ] Make `return` an expression
 - [x] Make blocks an expression
+
+## Setup
+
+Clone the repository and the submodules:
+```
+git clone --recurse-submodules --shallow-submodules git@github.com:silicon-org/silicon.git
+cd silicon
+```

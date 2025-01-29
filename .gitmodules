@@ -1,0 +1,5 @@
+[submodule "circt"]
+    path = circt
+    url = https://github.com/llvm/circt.git
+    shallow = true
+    branch = main
