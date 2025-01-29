@@ -1,25 +1,31 @@
-name: Build and Test
-on: [push, pull_request]
+name: Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 jobs:
+  #===----------------------------------------------------------------------===#
+  # Sanity Check
+  #===----------------------------------------------------------------------===#
   sanity-check:
-    name: Build and Test
+    name: Sanity Check
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/circt/images/circt-ci-build:20230126201226
+      image: ghcr.io/circt/images/circt-ci-build:20240213211952
     steps:
-      - name: Configure environment
-        run: |
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-      # Clone the repository and its submodules.
+      # Clone the repository.
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 2
-          submodules: "false"
+          submodules: false
 
-      - name: Set git safe
+      - name: Set git safe directory
         run: |
           git config --global --add safe.directory $PWD
 
@@ -53,27 +59,156 @@ jobs:
           echo "DIFF_COMMIT_NAME=$DIFF_COMMIT_NAME" >> $GITHUB_ENV
           echo "DIFF_COMMIT=$DIFF_COMMIT_SHA" >> $GITHUB_ENV
 
-      # Install Python dependencies.
-      - name: Install Python dependencies
+      # Run clang-format against the changes.
+      - name: Run clang-format
         run: |
-          pip3 install --user mypy termcolor
-
-      # Run yapf to check Python formatting.
-      - name: Python formatting
-        shell: bash
-        run: |
-          files=$(git diff --name-only --diff-filter=d $DIFF_COMMIT | grep -e '\.py$' || echo -n)
-          if [[ ! -z $files ]]; then
-            yapf --diff $files
+          git clang-format $DIFF_COMMIT
+          git diff --ignore-submodules > clang-format.patch
+          if [ -s clang-format.patch ]; then
+            echo "clang-format found formatting problems:"
+            echo "----- 8< -----"
+            cat clang-format.patch
+            echo "----- 8< -----"
+            git checkout .
+            exit 1
           fi
+          echo "clang-format found no formatting problems"
+          exit 0
 
-      # Run mypy to check Python typing.
-      - name: Python typing
+      - name: Upload clang-format patches
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        if: ${{ failure() }}
+        with:
+          name: clang-format-patches
+          path: clang-*.patch
+
+  #===----------------------------------------------------------------------===#
+  # Build and Test
+  #===----------------------------------------------------------------------===#
+  build:
+    name: Build and Test
+    needs: sanity-check
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/circt/images/circt-ci-build:20240213211952
+
+    strategy:
+      matrix:
+        compiler:
+          - cc: clang
+            cxx: clang++
+            mode: Debug
+            assert: ON
+            shared: ON
+          - cc: gcc
+            cxx: g++
+            mode: Release
+            assert: OFF
+            shared: OFF
+
+    steps:
+      # Clone the repository and its submodules.
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Set git safe directory
         run: |
-          mypy -p silicon
+          git config --global --add safe.directory $PWD
 
-      # Run tests.
-      # TODO: Enable this once we have an installation of `llvm-lit` somewhere.
-      # - name: Run tests
-      #   run: |
-      #     llvm-lit test -v
+      # Setup ccache to speed up builds.
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: short-${{ matrix.compiler.cc }}-${{ matrix.build-type }}-${{ matrix.build-shared }}-${{ matrix.build-assert }}
+          max-size: 500M
+
+      # Configure the build
+      - name: Configure
+        run: |
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          cmake -G Ninja circt/llvm/llvm -B build \
+            -DBUILD_SHARED_LIBS=${{ matrix.compiler.shared }} \
+            -DCMAKE_BUILD_TYPE=${{ matrix.compiler.mode }} \
+            -DCMAKE_C_COMPILER=${{ matrix.compiler.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.compiler.cxx }} \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DLLVM_CCACHE_BUILD=ON \
+            -DLLVM_ENABLE_ASSERTIONS=${{ matrix.compiler.assert }} \
+            -DLLVM_ENABLE_PROJECTS=mlir \
+            -DLLVM_EXTERNAL_PROJECTS="circt;silicon" \
+            -DLLVM_EXTERNAL_CIRCT_SOURCE_DIR=$PWD/circt \
+            -DLLVM_EXTERNAL_SILICON_SOURCE_DIR=$PWD \
+            -DLLVM_TARGETS_TO_BUILD="host" \
+            -DLLVM_USE_LINKER=lld \
+            -DLLVM_USE_SPLIT_DWARF=ON \
+            -DLLVM_LIT_ARGS="-v --show-unsupported"
+
+      # Build everything
+      - name: Build
+        run: ninja -C build silicon-headers silicon-libraries silicon-tools silicon-doc
+
+      # Run the tests
+      - name: Tests
+        run: ninja -C build check-silicon
+
+      # Choose the git commit to diff against for the purposes of linting.
+      # Since this workflow is triggered on both pushes and pull requests, we
+      # have to determine if the pull request target branch is set (which it
+      # will only be on the PR triggered flow). If it's not, then compare
+      # against the last commit.
+      #
+      # Since we did a shallow fetch for this repo, we must fetch the commit
+      # upon which we be diff'ing. The last step set the ref name in the
+      # $DIFF_COMMIT_NAME environment variable. When running the fetch, resolve
+      # it to the commit hash and pass that hash along to subsequent steps.
+      - name: Fetch base commit
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          # Base ref is the target branch, in text form (not hash)
+          PR_BASE: ${{ github.base_ref }}
+        run: |
+          if [ -z "$PR_BASE" ]; then
+            DIFF_COMMIT_NAME="HEAD^"
+          else
+            DIFF_COMMIT_NAME="$PR_BASE"
+          fi
+          if echo "$DIFF_COMMIT_NAME" | grep -q HEAD; then
+            DIFF_COMMIT_SHA=$( git rev-parse $DIFF_COMMIT_NAME )
+          else
+            git fetch --recurse-submodules=no origin $DIFF_COMMIT_NAME
+            DIFF_COMMIT_SHA=$( git rev-parse origin/$DIFF_COMMIT_NAME )
+          fi
+          echo "DIFF_COMMIT_NAME=$DIFF_COMMIT_NAME" >> $GITHUB_ENV
+          echo "DIFF_COMMIT=$DIFF_COMMIT_SHA" >> $GITHUB_ENV
+
+      # Run clang-tidy against the changes.
+      - name: Run clang-tidy
+        if: ${{ always() }}
+        run: |
+          if git diff -U0 $DIFF_COMMIT...HEAD | clang-tidy-diff -path build -p1 -fix -j$(nproc); then
+            exit 0
+          fi
+          if git diff --quiet --ignore-submodules; then
+            exit 1
+          fi
+          git clang-format -f $DIFF_COMMIT
+          git diff --ignore-submodules > clang-tidy.patch
+          echo "clang-tidy found formatting problems:"
+          echo "----- 8< -----"
+          cat clang-tidy.patch
+          echo "----- 8< -----"
+          git checkout .
+          exit 1
+
+      - name: Upload clang-tidy patches
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        if: ${{ failure() }}
+        with:
+          name: clang-tidy-patches
+          path: clang-*.patch
