@@ -1,4 +1,7 @@
+get_property(dialect_libs GLOBAL PROPERTY SILICON_DIALECT_LIBS)
+
 set(libs
+  ${dialect_libs}
   CIRCTComb
   CIRCTHW
   CIRCTSeq
