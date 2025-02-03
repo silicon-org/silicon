@@ -17,6 +17,7 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Transforms/Passes.h"
 #include "silicon/Dialect/HIR/HIRDialect.h"
+#include "silicon/Dialect/HIR/HIRPasses.h"
 
 namespace silicon {
 
@@ -49,7 +50,7 @@ inline void registerAllPasses() {
   // none
 
   // Register the Silicon passes.
-  // none
+  hir::registerPasses();
 }
 
 } // namespace silicon

@@ -20,6 +20,8 @@ def HIRDialect : Dialect {
     The HIR dialect defines operations and types to represent a Silicon design
     during constant evaluation and type checking.
   }];
+
+  let useDefaultTypePrinterParser = 1;
 }
 
 #endif // SILICON_DIALECT_HIR_HIRDIALECT_TD

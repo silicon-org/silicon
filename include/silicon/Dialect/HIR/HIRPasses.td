@@ -12,4 +12,7 @@
 include "silicon/Dialect/HIR/HIRDialect.td"
 include "mlir/Pass/PassBase.td"
 
+def InferTypesPass : Pass<"infer-types"> {
+}
+
 #endif // SILICON_DIALECT_HIR_HIRPASSES_TD

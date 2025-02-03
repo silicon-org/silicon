@@ -10,6 +10,33 @@
 #define SILICON_DIALECT_HIR_HIROPS_TD
 
 include "silicon/Dialect/HIR/HIRDialect.td"
+include "silicon/Dialect/HIR/HIRTypes.td"
 include "mlir/IR/OpBase.td"
+
+// Base class for the operations in this dialect.
+class HIROp<string mnemonic, list<Trait> traits = []> :
+  Op<HIRDialect, mnemonic, traits>;
+
+def InferrableTypeOp : HIROp<"inferrable_type", []> {
+  let results = (outs TypeType:$result);
+  let assemblyFormat = "attr-dict";
+}
+
+def LetOp : HIROp<"let", []> {
+  let arguments = (ins StrAttr:$name, TypeType:$type);
+  let results = (outs TypeType:$result);
+  let assemblyFormat = "$name `:` $type attr-dict";
+}
+
+def UnifyTypeOp : HIROp<"unify_type", []> {
+  let arguments = (ins TypeType:$lhs, TypeType:$rhs);
+  let results = (outs TypeType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+}
+
+def StoreOp : HIROp<"store", []> {
+  let arguments = (ins TypeType:$target, TypeType:$value, TypeType:$valueType);
+  let assemblyFormat = "$target `,` $value `:` $valueType attr-dict";
+}
 
 #endif // SILICON_DIALECT_HIR_HIROPS_TD

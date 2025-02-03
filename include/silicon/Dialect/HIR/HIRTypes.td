@@ -12,4 +12,14 @@
 include "silicon/Dialect/HIR/HIRDialect.td"
 include "mlir/IR/AttrTypeBase.td"
 
+class HIRTypeDef<string name, list<Trait> traits = [],
+                     string baseCppClass = "mlir::Type">
+    : TypeDef<HIRDialect, name, traits, baseCppClass> {
+  let mnemonic = ?;
+}
+
+def TypeType : HIRTypeDef<"Type"> {
+  let mnemonic = "type";
+}
+
 #endif // SILICON_DIALECT_HIR_HIRTYPES_TD
