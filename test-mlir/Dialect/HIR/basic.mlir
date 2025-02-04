@@ -4,6 +4,8 @@
 func.func @Foo(%arg0: !hir.type, %arg1: !hir.type, %arg2: !hir.type) {
   // CHECK: hir.inferrable_type
   hir.inferrable_type
+  // CHECK: hir.int_type
+  hir.int_type
   // CHECK: hir.unify_type %arg0, %arg1
   hir.unify_type %arg0, %arg1
   // CHECK: hir.let "x" : %arg0

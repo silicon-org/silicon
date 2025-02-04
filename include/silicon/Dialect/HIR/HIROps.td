@@ -9,15 +9,21 @@
 #ifndef SILICON_DIALECT_HIR_HIROPS_TD
 #define SILICON_DIALECT_HIR_HIROPS_TD
 
+include "mlir/IR/OpBase.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
 include "silicon/Dialect/HIR/HIRDialect.td"
 include "silicon/Dialect/HIR/HIRTypes.td"
-include "mlir/IR/OpBase.td"
 
 // Base class for the operations in this dialect.
 class HIROp<string mnemonic, list<Trait> traits = []> :
   Op<HIRDialect, mnemonic, traits>;
 
 def InferrableTypeOp : HIROp<"inferrable_type", []> {
+  let results = (outs TypeType:$result);
+  let assemblyFormat = "attr-dict";
+}
+
+def IntTypeOp : HIROp<"int_type", [Pure, ConstantLike]> {
   let results = (outs TypeType:$result);
   let assemblyFormat = "attr-dict";
 }
