@@ -32,6 +32,7 @@ struct InferTypesPass : public hir::impl::InferTypesPassBase<InferTypesPass> {
 void InferTypesPass::runOnOperation() {
   SmallVector<UnifyTypeOp> worklist;
   getOperation()->walk([&](UnifyTypeOp op) { worklist.push_back(op); });
+  std::reverse(worklist.begin(), worklist.end());
   LLVM_DEBUG(llvm::dbgs() << "Starting with " << worklist.size()
                           << " initial unify ops\n");
 
@@ -39,22 +40,45 @@ void InferTypesPass::runOnOperation() {
     auto unifyOp = worklist.pop_back_val();
     LLVM_DEBUG(llvm::dbgs() << "Processing " << unifyOp << "\n");
 
-    auto lhs = unifyOp.getLhs().getDefiningOp<InferrableTypeOp>();
-    auto rhs = unifyOp.getRhs().getDefiningOp<InferrableTypeOp>();
-    if (!lhs || !rhs)
-      continue;
+    auto inferrableLhs = unifyOp.getLhs().getDefiningOp<InferrableTypeOp>();
+    auto inferrableRhs = unifyOp.getRhs().getDefiningOp<InferrableTypeOp>();
 
-    auto keepOp = lhs;
-    auto eraseOp = rhs;
-    if (!keepOp->isBeforeInBlock(eraseOp)) {
-      keepOp = rhs;
-      eraseOp = lhs;
+    // In case both operands are inferrable, we pick the earlier one in the IR
+    // and replace all uses of the later one.
+    if (inferrableLhs && inferrableRhs) {
+      auto keepOp = inferrableLhs;
+      auto eraseOp = inferrableRhs;
+      if (!keepOp->isBeforeInBlock(eraseOp)) {
+        keepOp = inferrableRhs;
+        eraseOp = inferrableLhs;
+      }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "Keeping " << keepOp << ", erasing " << eraseOp << "\n");
+      eraseOp.replaceAllUsesWith(keepOp.getResult());
+      eraseOp.erase();
+      unifyOp.replaceAllUsesWith(keepOp.getResult());
+      unifyOp.erase();
+      continue;
     }
-    LLVM_DEBUG(llvm::dbgs()
-               << "Keeping " << keepOp << ", erasing " << eraseOp << "\n");
-    eraseOp.replaceAllUsesWith(keepOp.getResult());
-    eraseOp.erase();
-    unifyOp.replaceAllUsesWith(keepOp.getResult());
-    unifyOp.erase();
+
+    // In case one of the operands is inferrable, try to replace all uses of it
+    // with the other operand.
+    if (inferrableLhs || inferrableRhs) {
+      auto inferrable = inferrableLhs ? inferrableLhs : inferrableRhs;
+      auto concrete = inferrableLhs ? unifyOp.getRhs() : unifyOp.getLhs();
+      auto *concreteOp = concrete.getDefiningOp();
+      if (concreteOp && !concreteOp->isBeforeInBlock(inferrable)) {
+        LLVM_DEBUG(llvm::dbgs() << "Skipping " << inferrable
+                                << " (appears before " << concrete << ")\n");
+        continue;
+      }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "Replacing " << inferrable << " with " << concrete << "\n");
+      inferrable.replaceAllUsesWith(concrete);
+      inferrable.erase();
+      unifyOp.replaceAllUsesWith(concrete);
+      unifyOp.erase();
+      continue;
+    }
   }
 }
