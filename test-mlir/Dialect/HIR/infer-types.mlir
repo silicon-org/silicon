@@ -99,3 +99,25 @@ func.func @UnifyConcreteOps2() {
   call @dummy(%4) : (!hir.type) -> ()
   return
 }
+
+// CHECK-LABEL: func @InferIfDominates
+func.func @InferIfDominates(%arg0: i1) {
+  // CHECK: [[TMP:%.+]] = hir.int_type
+  %0 = hir.int_type
+  cf.cond_br %arg0, ^bb1, ^bb2
+^bb1:
+  cf.br ^bb3
+^bb2:
+  cf.br ^bb3
+^bb3:
+  // CHECK: ^bb3:
+  // CHECK-NEXT: call @dummy([[TMP]])
+  %1 = hir.inferrable_type
+  %2 = hir.unify_type %0, %1
+  call @dummy(%2) : (!hir.type) -> ()
+  // CHECK-NEXT: call @dummy([[TMP]])
+  %3 = hir.int_type
+  %4 = hir.unify_type %0, %3
+  call @dummy(%4) : (!hir.type) -> ()
+  return
+}

@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/IR/Dominance.h"
 #include "silicon/Dialect/HIR/HIROps.h"
 #include "silicon/Dialect/HIR/HIRPasses.h"
 #include "llvm/Support/Debug.h"
@@ -36,6 +37,8 @@ void InferTypesPass::runOnOperation() {
   LLVM_DEBUG(llvm::dbgs() << "Starting with " << worklist.size()
                           << " initial unify ops\n");
 
+  auto &domInfo = getAnalysis<DominanceInfo>();
+
   while (!worklist.empty()) {
     auto unifyOp = worklist.pop_back_val();
     LLVM_DEBUG(llvm::dbgs() << "Processing " << unifyOp << "\n");
@@ -48,7 +51,7 @@ void InferTypesPass::runOnOperation() {
     if (inferrableLhs && inferrableRhs) {
       auto keepOp = inferrableLhs;
       auto eraseOp = inferrableRhs;
-      if (!keepOp->isBeforeInBlock(eraseOp)) {
+      if (domInfo.properlyDominates(eraseOp.getOperation(), keepOp)) {
         keepOp = inferrableRhs;
         eraseOp = inferrableLhs;
       }
@@ -66,8 +69,7 @@ void InferTypesPass::runOnOperation() {
     if (inferrableLhs || inferrableRhs) {
       auto inferrable = inferrableLhs ? inferrableLhs : inferrableRhs;
       auto concrete = inferrableLhs ? unifyOp.getRhs() : unifyOp.getLhs();
-      auto *concreteOp = concrete.getDefiningOp();
-      if (concreteOp && !concreteOp->isBeforeInBlock(inferrable)) {
+      if (!domInfo.properlyDominates(concrete, inferrable)) {
         LLVM_DEBUG(llvm::dbgs() << "Skipping " << inferrable
                                 << " (appears before " << concrete << ")\n");
         continue;
@@ -100,7 +102,7 @@ void InferTypesPass::runOnOperation() {
     // Pick which one of the ops to keep.
     auto *keepOp = lhsOp;
     auto *eraseOp = rhsOp;
-    if (!keepOp->isBeforeInBlock(eraseOp)) {
+    if (domInfo.properlyDominates(eraseOp, keepOp)) {
       keepOp = inferrableRhs;
       eraseOp = inferrableLhs;
     }
@@ -109,9 +111,7 @@ void InferTypesPass::runOnOperation() {
     // that we can introduce unification ops for the operands in front of the op
     // we keep.
     if (!llvm::all_of(eraseOp->getOperands(), [&](auto value) {
-          if (auto *defOp = value.getDefiningOp())
-            return defOp->isBeforeInBlock(keepOp);
-          return true;
+          return domInfo.properlyDominates(value, keepOp);
         }))
       continue;
 
