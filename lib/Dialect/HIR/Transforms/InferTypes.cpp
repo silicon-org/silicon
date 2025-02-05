@@ -80,5 +80,57 @@ void InferTypesPass::runOnOperation() {
       unifyOp.erase();
       continue;
     }
+
+    // If both operands are defined by the same kind of operation, replace the
+    // later with the earlier one and unify their operands.
+    auto *lhsOp = unifyOp.getLhs().getDefiningOp();
+    auto *rhsOp = unifyOp.getRhs().getDefiningOp();
+    if (!lhsOp || !rhsOp)
+      continue;
+    if (lhsOp->getNumRegions() != 0 || lhsOp->getNumSuccessors() != 0 ||
+        lhsOp->getNumResults() != 1)
+      continue;
+    if (!isMemoryEffectFree(lhsOp))
+      continue;
+    if (!OperationEquivalence::isEquivalentTo(
+            lhsOp, rhsOp, OperationEquivalence::ignoreValueEquivalence, nullptr,
+            OperationEquivalence::IgnoreLocations))
+      continue;
+
+    // Pick which one of the ops to keep.
+    auto *keepOp = lhsOp;
+    auto *eraseOp = rhsOp;
+    if (!keepOp->isBeforeInBlock(eraseOp)) {
+      keepOp = inferrableRhs;
+      eraseOp = inferrableLhs;
+    }
+
+    // Ensure that all operands of the erased op dominate the op we keep, such
+    // that we can introduce unification ops for the operands in front of the op
+    // we keep.
+    if (!llvm::all_of(eraseOp->getOperands(), [&](auto value) {
+          if (auto *defOp = value.getDefiningOp())
+            return defOp->isBeforeInBlock(keepOp);
+          return true;
+        }))
+      continue;
+
+    LLVM_DEBUG(llvm::dbgs() << "Unifying " << *keepOp << " (kept) and "
+                            << *eraseOp << " (erased)\n");
+
+    // Create unify ops for each of the operands.
+    OpBuilder builder(keepOp);
+    for (auto [keepArg, eraseArg] :
+         llvm::zip(keepOp->getOpOperands(), eraseOp->getOperands())) {
+      auto unified = builder.create<UnifyTypeOp>(
+          unifyOp.getLoc(), TypeType::get(builder.getContext()), keepArg.get(),
+          eraseArg);
+      keepArg.set(unified);
+      worklist.push_back(unified);
+    }
+    eraseOp->replaceAllUsesWith(keepOp);
+    eraseOp->erase();
+    unifyOp.replaceAllUsesWith(keepOp);
+    unifyOp.erase();
   }
 }

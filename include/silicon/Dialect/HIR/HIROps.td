@@ -28,6 +28,12 @@ def IntTypeOp : HIROp<"int_type", [Pure, ConstantLike]> {
   let assemblyFormat = "attr-dict";
 }
 
+def RefTypeOp : HIROp<"ref_type", [Pure]> {
+  let arguments = (ins TypeType:$innerType);
+  let results = (outs TypeType:$result);
+  let assemblyFormat = "$innerType attr-dict";
+}
+
 def LetOp : HIROp<"let", []> {
   let arguments = (ins StrAttr:$name, TypeType:$type);
   let results = (outs TypeType:$result);
