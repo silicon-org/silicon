@@ -2,6 +2,8 @@
 
 // CHECK-LABEL: func @Foo
 func.func @Foo(%arg0: !hir.type, %arg1: !hir.type, %arg2: !hir.type) {
+  // CHECK: hir.constant_int 42
+  hir.constant_int 42
   // CHECK: hir.inferrable_type
   hir.inferrable_type
   // CHECK: hir.int_type
@@ -16,3 +18,5 @@ func.func @Foo(%arg0: !hir.type, %arg1: !hir.type, %arg2: !hir.type) {
   hir.store %arg0, %arg1 : %arg2
   return
 }
+
+hir.int_type {x = #hir.int<42>}

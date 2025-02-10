@@ -11,12 +11,19 @@
 
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "silicon/Dialect/HIR/HIRAttributes.td"
 include "silicon/Dialect/HIR/HIRDialect.td"
 include "silicon/Dialect/HIR/HIRTypes.td"
 
 // Base class for the operations in this dialect.
 class HIROp<string mnemonic, list<Trait> traits = []> :
   Op<HIRDialect, mnemonic, traits>;
+
+def ConstantIntOp : HIROp<"constant_int", [Pure, ConstantLike]> {
+  let arguments = (ins IntAttr:$value);
+  let results = (outs IntType:$result);
+  let assemblyFormat = "custom<IntAttr>($value) attr-dict";
+}
 
 def InferrableTypeOp : HIROp<"inferrable_type", []> {
   let results = (outs TypeType:$result);

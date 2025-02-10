@@ -22,4 +22,8 @@ def TypeType : HIRTypeDef<"Type"> {
   let mnemonic = "type";
 }
 
+def IntType : HIRTypeDef<"Int"> {
+  let mnemonic = "int";
+}
+
 #endif // SILICON_DIALECT_HIR_HIRTYPES_TD

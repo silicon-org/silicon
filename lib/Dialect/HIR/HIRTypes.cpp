@@ -1,4 +1,4 @@
-//===- HIROps.cpp - High-level IR operations ------------------------------===//
+//===- HIRTypes.cpp - High-level IR types ---------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -10,6 +10,16 @@
 #include "mlir/IR/DialectImplementation.h"
 #include "silicon/Dialect/HIR/HIRDialect.h"
 #include "llvm/ADT/TypeSwitch.h"
+
+using namespace silicon;
+using namespace hir;
+
+void HIRDialect::registerTypes() {
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "silicon/Dialect/HIR/HIRTypes.cpp.inc"
+      >();
+}
 
 // Pull in the generated type definitions.
 #define GET_TYPEDEF_CLASSES
