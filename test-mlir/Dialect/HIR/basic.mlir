@@ -1,20 +1,12 @@
-// RUN: silicon-opt --verify-roundtrip --verify-diagnostics %s | FileCheck %s
+// RUN: silicon-opt --verify-roundtrip --verify-diagnostics %s
 
-// CHECK-LABEL: func @Foo
 func.func @Foo(%arg0: !hir.type, %arg1: !hir.type, %arg2: !hir.type) {
-  // CHECK: hir.constant_int 42
   hir.constant_int 42
-  // CHECK: hir.inferrable_type
-  hir.inferrable_type
-  // CHECK: hir.int_type
+  hir.inferrable : !hir.type
   hir.int_type
-  // CHECK: hir.ref_type %arg0
   hir.ref_type %arg0
-  // CHECK: hir.unify_type %arg0, %arg1
-  hir.unify_type %arg0, %arg1
-  // CHECK: hir.let "x" : %arg0
+  hir.unify %arg0, %arg1 : !hir.type
   hir.let "x" : %arg0
-  // CHECK: hir.store %arg0, %arg1 : %arg2
   hir.store %arg0, %arg1 : %arg2
   return
 }

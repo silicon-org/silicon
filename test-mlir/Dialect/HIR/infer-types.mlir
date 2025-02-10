@@ -1,38 +1,35 @@
 // RUN: silicon-opt --infer-types %s | FileCheck %s
 
-func.func private @dummy(%arg0: !hir.type)
+func.func private @use_type(%arg0: !hir.type)
+func.func private @use_int(%arg0: !hir.int)
 
 // CHECK-LABEL: func @TwoInferrable
 func.func @TwoInferrable() {
-  // CHECK: [[T:%.+]] = hir.inferrable_type {a}
-  // CHECK-NOT: hir.inferrable_type {b}
-  // CHECK-NOT: hir.unify_type
-  // CHECK: call @dummy([[T]])
-  // CHECK: call @dummy([[T]])
-  // CHECK: call @dummy([[T]])
-  %0 = hir.inferrable_type {a}
-  %1 = hir.inferrable_type {b}
-  %2 = hir.unify_type %0, %1
-  call @dummy(%0) : (!hir.type) -> ()
-  call @dummy(%1) : (!hir.type) -> ()
-  call @dummy(%2) : (!hir.type) -> ()
+  // CHECK: [[T:%.+]] = hir.inferrable {a} : !hir.type
+  // CHECK-NEXT: call @use_type([[T]])
+  // CHECK-NEXT: call @use_type([[T]])
+  // CHECK-NEXT: call @use_type([[T]])
+  %0 = hir.inferrable {a} : !hir.type
+  %1 = hir.inferrable {b} : !hir.type
+  %2 = hir.unify %0, %1 : !hir.type
+  call @use_type(%0) : (!hir.type) -> ()
+  call @use_type(%1) : (!hir.type) -> ()
+  call @use_type(%2) : (!hir.type) -> ()
   return
 }
 
 // CHECK-LABEL: func @TwoInferrableReversed
 func.func @TwoInferrableReversed() {
-  // CHECK: [[T:%.+]] = hir.inferrable_type {a}
-  // CHECK-NOT: hir.inferrable_type {b}
-  // CHECK-NOT: hir.unify_type
-  // CHECK: call @dummy([[T]])
-  // CHECK: call @dummy([[T]])
-  // CHECK: call @dummy([[T]])
-  %0 = hir.inferrable_type {a}
-  %1 = hir.inferrable_type {b}
-  %2 = hir.unify_type %1, %0  // reversed
-  call @dummy(%0) : (!hir.type) -> ()
-  call @dummy(%1) : (!hir.type) -> ()
-  call @dummy(%2) : (!hir.type) -> ()
+  // CHECK: [[T:%.+]] = hir.inferrable {a} : !hir.type
+  // CHECK-NEXT: call @use_type([[T]])
+  // CHECK-NEXT: call @use_type([[T]])
+  // CHECK-NEXT: call @use_type([[T]])
+  %0 = hir.inferrable {a} : !hir.type
+  %1 = hir.inferrable {b} : !hir.type
+  %2 = hir.unify %1, %0 : !hir.type  // reversed
+  call @use_type(%0) : (!hir.type) -> ()
+  call @use_type(%1) : (!hir.type) -> ()
+  call @use_type(%2) : (!hir.type) -> ()
   return
 }
 
@@ -40,29 +37,27 @@ func.func @TwoInferrableReversed() {
 // CHECK-LABEL: func @InferrableAndConcrete1
 func.func @InferrableAndConcrete1() {
   // CHECK: [[T:%.+]] = hir.int_type
-  // CHECK-NOT: hir.inferrable_type
-  // CHECK-NOT: hir.unify_type
-  // CHECK: call @dummy([[T]])
-  // CHECK: call @dummy([[T]])
-  // CHECK: call @dummy([[T]])
+  // CHECK-NEXT: call @use_type([[T]])
+  // CHECK-NEXT: call @use_type([[T]])
+  // CHECK-NEXT: call @use_type([[T]])
   %0 = hir.int_type
-  %1 = hir.inferrable_type
-  %2 = hir.unify_type %0, %1
-  call @dummy(%0) : (!hir.type) -> ()
-  call @dummy(%1) : (!hir.type) -> ()
-  call @dummy(%2) : (!hir.type) -> ()
+  %1 = hir.inferrable : !hir.type
+  %2 = hir.unify %0, %1 : !hir.type
+  call @use_type(%0) : (!hir.type) -> ()
+  call @use_type(%1) : (!hir.type) -> ()
+  call @use_type(%2) : (!hir.type) -> ()
   return
 }
 
 // CHECK-LABEL: func @InferrableAndConcrete2
 func.func @InferrableAndConcrete2() {
   // Cannot infer concrete type if it appears after the inferrable type.
-  // CHECK: hir.inferrable_type
+  // CHECK: hir.inferrable : !hir.type
   // CHECK: hir.int_type
-  %0 = hir.inferrable_type
+  %0 = hir.inferrable : !hir.type
   %1 = hir.int_type
-  %2 = hir.unify_type %0, %1
-  call @dummy(%2) : (!hir.type) -> ()
+  %2 = hir.unify %0, %1 : !hir.type
+  call @use_type(%2) : (!hir.type) -> ()
   return
 }
 
@@ -70,17 +65,17 @@ func.func @InferrableAndConcrete2() {
 func.func @UnifyConcreteOps1() {
   // CHECK-NEXT: [[INT:%.+]] = hir.int_type
   // CHECK-NEXT: [[REF:%.+]] = hir.ref_type [[INT]]
-  // CHECK-NEXT: call @dummy([[REF]])
-  // CHECK-NEXT: call @dummy([[REF]])
-  // CHECK-NEXT: call @dummy([[REF]])
+  // CHECK-NEXT: call @use_type([[REF]])
+  // CHECK-NEXT: call @use_type([[REF]])
+  // CHECK-NEXT: call @use_type([[REF]])
   %0 = hir.int_type
-  %1 = hir.inferrable_type
+  %1 = hir.inferrable : !hir.type
   %2 = hir.ref_type %0
   %3 = hir.ref_type %1
-  %4 = hir.unify_type %2, %3
-  call @dummy(%2) : (!hir.type) -> ()
-  call @dummy(%3) : (!hir.type) -> ()
-  call @dummy(%4) : (!hir.type) -> ()
+  %4 = hir.unify %2, %3 : !hir.type
+  call @use_type(%2) : (!hir.type) -> ()
+  call @use_type(%3) : (!hir.type) -> ()
+  call @use_type(%4) : (!hir.type) -> ()
   return
 }
 
@@ -89,14 +84,14 @@ func.func @UnifyConcreteOps2() {
   // Cannot unify concrete types if the operands of don't dominate both types.
   // CHECK: hir.int_type
   // CHECK: hir.ref_type
-  // CHECK: hir.inferrable_type
+  // CHECK: hir.inferrable : !hir.type
   // CHECK: hir.ref_type
   %0 = hir.int_type
   %1 = hir.ref_type %0
-  %2 = hir.inferrable_type
+  %2 = hir.inferrable : !hir.type
   %3 = hir.ref_type %2
-  %4 = hir.unify_type %1, %3
-  call @dummy(%4) : (!hir.type) -> ()
+  %4 = hir.unify %1, %3 : !hir.type
+  call @use_type(%4) : (!hir.type) -> ()
   return
 }
 
@@ -111,13 +106,28 @@ func.func @InferIfDominates(%arg0: i1) {
   cf.br ^bb3
 ^bb3:
   // CHECK: ^bb3:
-  // CHECK-NEXT: call @dummy([[TMP]])
-  %1 = hir.inferrable_type
-  %2 = hir.unify_type %0, %1
-  call @dummy(%2) : (!hir.type) -> ()
-  // CHECK-NEXT: call @dummy([[TMP]])
+  // CHECK-NEXT: call @use_type([[TMP]])
+  %1 = hir.inferrable : !hir.type
+  %2 = hir.unify %0, %1 : !hir.type
+  call @use_type(%2) : (!hir.type) -> ()
+  // CHECK-NEXT: call @use_type([[TMP]])
   %3 = hir.int_type
-  %4 = hir.unify_type %0, %3
-  call @dummy(%4) : (!hir.type) -> ()
+  %4 = hir.unify %0, %3 : !hir.type
+  call @use_type(%4) : (!hir.type) -> ()
+  return
+}
+
+// CHECK-LABEL: func @InferConstantInt
+func.func @InferConstantInt() {
+  // CHECK: [[TMP:%.+]] = hir.constant_int 42
+  // CHECK-NEXT: call @use_int([[TMP]])
+  // CHECK-NEXT: call @use_int([[TMP]])
+  // CHECK-NEXT: call @use_int([[TMP]])
+  %0 = hir.constant_int 42
+  %1 = hir.inferrable : !hir.int
+  %2 = hir.unify %0, %1 : !hir.int
+  call @use_int(%0) : (!hir.int) -> ()
+  call @use_int(%1) : (!hir.int) -> ()
+  call @use_int(%2) : (!hir.int) -> ()
   return
 }

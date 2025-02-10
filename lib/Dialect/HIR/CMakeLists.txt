@@ -6,6 +6,8 @@ add_silicon_dialect_library(SiliconHIR
 
   LINK_LIBS PUBLIC
   MLIRIR
+  MLIRInferTypeOpInterface
+  MLIRSideEffectInterfaces
 )
 
 add_subdirectory(Transforms)

@@ -31,8 +31,8 @@ struct InferTypesPass : public hir::impl::InferTypesPassBase<InferTypesPass> {
 } // namespace
 
 void InferTypesPass::runOnOperation() {
-  SmallVector<UnifyTypeOp> worklist;
-  getOperation()->walk([&](UnifyTypeOp op) { worklist.push_back(op); });
+  SmallVector<UnifyOp> worklist;
+  getOperation()->walk([&](UnifyOp op) { worklist.push_back(op); });
   std::reverse(worklist.begin(), worklist.end());
   LLVM_DEBUG(llvm::dbgs() << "Starting with " << worklist.size()
                           << " initial unify ops\n");
@@ -43,8 +43,8 @@ void InferTypesPass::runOnOperation() {
     auto unifyOp = worklist.pop_back_val();
     LLVM_DEBUG(llvm::dbgs() << "Processing " << unifyOp << "\n");
 
-    auto inferrableLhs = unifyOp.getLhs().getDefiningOp<InferrableTypeOp>();
-    auto inferrableRhs = unifyOp.getRhs().getDefiningOp<InferrableTypeOp>();
+    auto inferrableLhs = unifyOp.getLhs().getDefiningOp<InferrableOp>();
+    auto inferrableRhs = unifyOp.getRhs().getDefiningOp<InferrableOp>();
 
     // In case both operands are inferrable, we pick the earlier one in the IR
     // and replace all uses of the later one.
@@ -122,9 +122,8 @@ void InferTypesPass::runOnOperation() {
     OpBuilder builder(keepOp);
     for (auto [keepArg, eraseArg] :
          llvm::zip(keepOp->getOpOperands(), eraseOp->getOperands())) {
-      auto unified = builder.create<UnifyTypeOp>(
-          unifyOp.getLoc(), TypeType::get(builder.getContext()), keepArg.get(),
-          eraseArg);
+      auto unified = builder.create<UnifyOp>(
+          unifyOp.getLoc(), eraseArg.getType(), keepArg.get(), eraseArg);
       keepArg.set(unified);
       worklist.push_back(unified);
     }

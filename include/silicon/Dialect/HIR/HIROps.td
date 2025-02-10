@@ -11,6 +11,7 @@
 
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
 include "silicon/Dialect/HIR/HIRAttributes.td"
 include "silicon/Dialect/HIR/HIRDialect.td"
 include "silicon/Dialect/HIR/HIRTypes.td"
@@ -25,9 +26,9 @@ def ConstantIntOp : HIROp<"constant_int", [Pure, ConstantLike]> {
   let assemblyFormat = "custom<IntAttr>($value) attr-dict";
 }
 
-def InferrableTypeOp : HIROp<"inferrable_type", []> {
-  let results = (outs TypeType:$result);
-  let assemblyFormat = "attr-dict";
+def InferrableOp : HIROp<"inferrable", []> {
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
 }
 
 def IntTypeOp : HIROp<"int_type", [Pure, ConstantLike]> {
@@ -47,10 +48,13 @@ def LetOp : HIROp<"let", []> {
   let assemblyFormat = "$name `:` $type attr-dict";
 }
 
-def UnifyTypeOp : HIROp<"unify_type", []> {
-  let arguments = (ins TypeType:$lhs, TypeType:$rhs);
-  let results = (outs TypeType:$result);
-  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+def UnifyOp : HIROp<"unify", [
+  SameOperandsAndResultType,
+  Commutative,
+]> {
+  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
 }
 
 def StoreOp : HIROp<"store", []> {
