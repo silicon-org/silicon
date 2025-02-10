@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/Dialect/HIR/HIRDialect.h"
+#include "mlir/IR/DialectImplementation.h"
+#include "silicon/Dialect/HIR/HIRAttributes.h"
 #include "silicon/Dialect/HIR/HIROps.h"
 #include "silicon/Dialect/HIR/HIRTypes.h"
 
@@ -15,10 +17,8 @@ using namespace hir;
 
 void HIRDialect::initialize() {
   // Register types and attributes.
-  addTypes<
-#define GET_TYPEDEF_LIST
-#include "silicon/Dialect/HIR/HIRTypes.cpp.inc"
-      >();
+  registerTypes();
+  registerAttributes();
 
   // Register operations.
   addOperations<

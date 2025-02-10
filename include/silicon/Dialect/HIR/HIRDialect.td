@@ -21,7 +21,12 @@ def HIRDialect : Dialect {
     during constant evaluation and type checking.
   }];
 
+  let useDefaultAttributePrinterParser = 1;
   let useDefaultTypePrinterParser = 1;
+  let extraClassDeclaration = [{
+    void registerTypes();
+    void registerAttributes();
+  }];
 }
 
 #endif // SILICON_DIALECT_HIR_HIRDIALECT_TD
