@@ -28,6 +28,17 @@ static void printIntAttr(OpAsmPrinter &printer, Operation *op, IntAttr value) {
   printer << value.getValue();
 }
 
+SuccessorOperands ConstBranchOp::getSuccessorOperands(unsigned index) {
+  assert(index == 0 && "invalid successor index");
+  return SuccessorOperands(getDestOperandsMutable());
+}
+
+SuccessorOperands ConstCondBranchOp::getSuccessorOperands(unsigned index) {
+  assert(index < getNumSuccessors() && "invalid successor index");
+  return SuccessorOperands(index == 0 ? getTrueOperandsMutable()
+                                      : getFalseOperandsMutable());
+}
+
 // Pull in the generated dialect definition.
 #define GET_OP_CLASSES
 #include "silicon/Dialect/HIR/HIROps.cpp.inc"

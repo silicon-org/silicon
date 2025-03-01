@@ -10,8 +10,9 @@
 #define SILICON_DIALECT_HIR_HIROPS_TD
 
 include "mlir/IR/OpBase.td"
-include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
 include "silicon/Dialect/HIR/HIRAttributes.td"
 include "silicon/Dialect/HIR/HIRDialect.td"
 include "silicon/Dialect/HIR/HIRTypes.td"
@@ -60,6 +61,42 @@ def UnifyOp : HIROp<"unify", [
 def StoreOp : HIROp<"store", []> {
   let arguments = (ins TypeType:$target, TypeType:$value, TypeType:$valueType);
   let assemblyFormat = "$target `,` $value `:` $valueType attr-dict";
+}
+
+def ConstBranchOp : HIROp<"const_br", [
+  DeclareOpInterfaceMethods<BranchOpInterface>,
+  Pure,
+  Terminator
+]> {
+  let arguments = (ins Variadic<AnyType>:$destOperands);
+  let successors = (successor AnySuccessor:$dest);
+  let assemblyFormat = [{
+    $dest (`(` $destOperands^ `:` type($destOperands) `)`)?
+    attr-dict
+  }];
+}
+
+def ConstCondBranchOp : HIROp<"const_cond_br", [
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<BranchOpInterface>,
+  Pure,
+  Terminator
+]> {
+  let arguments = (ins
+    I1:$condition,
+    Variadic<AnyType>:$trueOperands,
+    Variadic<AnyType>:$falseOperands
+  );
+  let successors = (successor
+    AnySuccessor:$trueDest,
+    AnySuccessor:$falseDest
+  );
+  let assemblyFormat = [{
+    $condition `,`
+    $trueDest (`(` $trueOperands^ `:` type($trueOperands) `)`)? `,`
+    $falseDest (`(` $falseOperands^ `:` type($falseOperands) `)`)?
+    attr-dict
+  }];
 }
 
 #endif // SILICON_DIALECT_HIR_HIROPS_TD
