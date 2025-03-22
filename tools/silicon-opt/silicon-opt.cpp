@@ -6,13 +6,19 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Target/LLVMIR/Dialect/All.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "silicon/RegisterAll.h"
+#include "llvm/Support/TargetSelect.h"
 
 int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
+  mlir::registerBuiltinDialectTranslation(registry);
+  mlir::registerLLVMDialectTranslation(registry);
   silicon::registerAllDialects(registry);
   silicon::registerAllPasses();
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
   return mlir::failed(mlir::MlirOptMain(
       argc, argv, "Silicon modular optimizer driver", registry));
 }

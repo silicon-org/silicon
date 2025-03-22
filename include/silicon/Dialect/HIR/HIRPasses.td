@@ -14,5 +14,8 @@ include "mlir/Pass/PassBase.td"
 
 def InferTypesPass : Pass<"infer-types">;
 def EvalConstsPass : Pass<"eval-consts", "mlir::func::FuncOp">;
+def EvalConstRegionsPass : Pass<"eval-const-regions", "mlir::ModuleOp"> {
+  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+}
 
 #endif // SILICON_DIALECT_HIR_HIRPASSES_TD

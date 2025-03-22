@@ -99,4 +99,24 @@ def ConstCondBranchOp : HIROp<"const_cond_br", [
   }];
 }
 
+def ConstRegionOp : HIROp<"const_region", [IsolatedFromAbove]> {
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region AnyRegion:$body);
+  let assemblyFormat = [{
+    (`->` type($results)^)? attr-dict-with-keyword $body
+  }];
+}
+
+def YieldOp : HIROp<"yield", [
+  HasParent<"ConstRegionOp">,
+  Pure,
+  ReturnLike,
+  Terminator,
+]> {
+  let arguments = (ins Variadic<AnyType>:$results);
+  let assemblyFormat = [{
+    ($results^ `:` type($results))? attr-dict
+  }];
+}
+
 #endif // SILICON_DIALECT_HIR_HIROPS_TD
