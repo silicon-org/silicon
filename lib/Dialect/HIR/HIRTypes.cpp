@@ -1,4 +1,4 @@
-//===- HIRTypes.cpp - High-level IR types ---------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,9 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/Dialect/HIR/HIRDialect.h"
 #include "silicon/Dialect/HIR/HIRTypes.h"
 #include "mlir/IR/DialectImplementation.h"
-#include "silicon/Dialect/HIR/HIRDialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace silicon;

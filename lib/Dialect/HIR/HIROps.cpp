@@ -1,4 +1,4 @@
-//===- HIROps.cpp - High-level IR operations ------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,9 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "silicon/Dialect/HIR/HIROps.h"
 #include "Utils.h"
 #include "silicon/Dialect/HIR/HIRAttributes.h"
+#include "silicon/Dialect/HIR/HIROps.h"
 
 using namespace mlir;
 using namespace silicon;

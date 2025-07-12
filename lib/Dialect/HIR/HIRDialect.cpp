@@ -1,4 +1,4 @@
-//===- HIRDialect.cpp - High-level IR dialect definition ------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,11 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "silicon/Dialect/HIR/HIRDialect.h"
-#include "mlir/IR/DialectImplementation.h"
 #include "silicon/Dialect/HIR/HIRAttributes.h"
+#include "silicon/Dialect/HIR/HIRDialect.h"
 #include "silicon/Dialect/HIR/HIROps.h"
 #include "silicon/Dialect/HIR/HIRTypes.h"
+#include "mlir/IR/DialectImplementation.h"
 
 using namespace silicon;
 using namespace hir;

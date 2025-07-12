@@ -1,1 +1,8 @@
-circt/.clang-format
+BasedOnStyle: LLVM
+AlwaysBreakTemplateDeclarations: Yes
+IncludeBlocks: Merge
+IncludeCategories:
+  - { Regex: '^"mlir', Priority: 1 }
+  - { Regex: '^"llvm', Priority: 2 }
+  - { Regex: '^<', Priority: 3 }
+  - { Regex: '.*', Priority: 0 }

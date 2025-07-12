@@ -1,4 +1,4 @@
-//===- RegisterAll.h - All dialects and passes ----------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -11,13 +11,13 @@
 #include "circt/Dialect/Comb/CombDialect.h"
 #include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
+#include "silicon/Dialect/HIR/HIRDialect.h"
+#include "silicon/Dialect/HIR/HIRPasses.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Transforms/Passes.h"
-#include "silicon/Dialect/HIR/HIRDialect.h"
-#include "silicon/Dialect/HIR/HIRPasses.h"
 
 namespace silicon {
 

@@ -1,4 +1,4 @@
-//===- EvalConsts.cpp -----------------------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,14 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/Dialect/HIR/HIROps.h"
+#include "silicon/Dialect/HIR/HIRPasses.h"
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "silicon/Dialect/HIR/HIROps.h"
-#include "silicon/Dialect/HIR/HIRPasses.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GenericIteratedDominanceFrontier.h"
 

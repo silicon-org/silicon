@@ -1,4 +1,4 @@
-//===- HIRAttributes.cpp - High-level IR attributes -----------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,11 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "silicon/Dialect/HIR/HIRAttributes.h"
 #include "Utils.h"
+#include "silicon/Dialect/HIR/HIRAttributes.h"
+#include "silicon/Dialect/HIR/HIRDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
-#include "silicon/Dialect/HIR/HIRDialect.h"
 #include "llvm/ADT/DynamicAPInt.h"
 #include "llvm/ADT/TypeSwitch.h"
 
