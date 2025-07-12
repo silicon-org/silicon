@@ -99,4 +99,30 @@ def ConstCondBranchOp : HIROp<"const_cond_br", [
   }];
 }
 
+def ConstWrapOp : HIROp<"const_wrap", [
+  Pure,
+  TypesMatchWith<
+    "result must be !hir.const of input type",
+    "input", "result",
+    [{ ConstType::get($_self.getContext(), $_self) }]
+  >
+]> {
+  let arguments = (ins AnyType:$input);
+  let results = (outs ConstType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input)";
+}
+
+def ConstUnwrapOp : HIROp<"const_unwrap", [
+  Pure,
+  TypesMatchWith<
+    "input must be !hir.const of result type",
+    "input", "result",
+    [{ cast<ConstType>($_self).getInnerType() }]
+  >
+]> {
+  let arguments = (ins ConstType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input)";
+}
+
 #endif // SILICON_DIALECT_HIR_HIROPS_TD

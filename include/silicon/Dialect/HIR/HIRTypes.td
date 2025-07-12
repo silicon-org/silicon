@@ -26,4 +26,10 @@ def IntType : HIRTypeDef<"Int"> {
   let mnemonic = "int";
 }
 
+def ConstType : HIRTypeDef<"Const"> {
+  let mnemonic = "const";
+  let parameters = (ins "mlir::Type":$innerType);
+  let assemblyFormat = "`<` $innerType `>`";
+}
+
 #endif // SILICON_DIALECT_HIR_HIRTYPES_TD
