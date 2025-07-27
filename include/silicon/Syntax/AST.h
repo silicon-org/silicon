@@ -8,20 +8,66 @@
 
 #pragma once
 #include "silicon/LLVM.h"
+#include "silicon/MLIR.h"
 #include "llvm/Support/Allocator.h"
 
 namespace silicon {
 namespace ast {
 
 struct Item;
+struct Type;
 
 /// A root node in the AST, corresponding to a parsed source file.
 struct Root {
   ArrayRef<Item *> items;
 };
 
+//===----------------------------------------------------------------------===//
+// Items
+//===----------------------------------------------------------------------===//
+
+/// The different kinds of items that can appear in the AST.
+enum class ItemKind { Fn };
+
 /// Base class for all top-level items.
-struct Item {};
+struct Item {
+  const ItemKind kind;
+  Location loc;
+};
+
+/// A function declaration.
+struct FnItem : public Item {
+  StringRef name;
+  static bool classof(const Item *item) { return item->kind == ItemKind::Fn; }
+};
+
+/// An argument of a function declaration.
+struct FnArg {
+  Location loc;
+  StringRef name;
+  Type *type;
+};
+
+//===----------------------------------------------------------------------===//
+// Types
+//===----------------------------------------------------------------------===//
+
+/// The different kinds of types that can appear in the AST.
+enum class TypeKind { Const, Int, UInt };
+
+/// Base class for all types.
+struct Type {
+  const TypeKind kind;
+  Location loc;
+};
+
+/// A constant type, which wraps another type.
+struct ConstType : public Type {
+  Type *type;
+  static bool classof(const Type *type) {
+    return type->kind == TypeKind::Const;
+  }
+};
 
 } // namespace ast
 
@@ -37,8 +83,8 @@ struct AST {
   /// Move a single node into the memory owned by the AST and return a reference
   /// to it. The reference remains valid for as long as the AST is alive.
   template <typename T>
-  T &create(T &&node) {
-    return *new (allocator) T(std::forward<T>(node));
+  T *create(T &&node) {
+    return new (allocator) T(std::forward<T>(node));
   }
 
   /// Move an array of nodes into the memory owned by the AST and return an

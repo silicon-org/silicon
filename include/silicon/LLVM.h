@@ -27,4 +27,5 @@ using llvm::SourceMgr;
 using llvm::StringRef;
 using llvm::succeeded;
 using llvm::success;
+using llvm::Twine;
 } // namespace silicon
