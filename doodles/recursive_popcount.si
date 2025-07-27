@@ -1,0 +1,22 @@
+fn popcount(width: const int, input: uint<width>) -> uint<clog2(width+1)> {
+  if width < 1 {
+    return as_uint(0, clog2(width+1));
+  }
+  if width == 1 {
+    return input;
+  }
+  if width == 2 {
+    return half_adder(input[0], input[1]);
+  }
+  if width == 3 {
+    return full_adder(input[0], input[1], input[2]);
+  }
+  let width_lo: const int = const { width / 2 };
+  let width_hi: const int = const { width - width_lo };
+  let count_lo: uint<clog2(width_lo+1)> = popcount(width_lo, input[0, width_lo]);
+  let count_hi: uint<clog2(width_hi+1)> = popcount(width_hi, input[width_lo, width_hi]);
+  let count_lo: uint<clog2(width+1)> = zext(count_lo, clog2(width+1));
+  let count_hi: uint<clog2(width+1)> = zext(count_hi, clog2(width+1));
+  let count: uint<clog2(width+1)> = count_lo + count_hi;
+  return count;
+}
