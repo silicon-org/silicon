@@ -8,4 +8,4 @@ config.test_source_root = os.path.dirname(__file__)
 config.test_exec_root = os.path.join(config.silicon_binary_dir, 'test')
 
 llvm_config.use_default_substitutions()
-llvm_config.add_tool_substitutions(["silicon-opt"], [config.silicon_tools_dir])
+llvm_config.add_tool_substitutions(["silicon-opt", "silc"], [config.silicon_tools_dir])
