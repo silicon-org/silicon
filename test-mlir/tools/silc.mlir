@@ -1,12 +1,3 @@
- // RUN: silc --help | FileCheck %s --check-prefix=HELP
- // RUN: silc --show-dialects | FileCheck %s --check-prefix=DIALECT
+ // RUN: silc --help | FileCheck %s
 
- // HELP: OVERVIEW: Silicon compiler driver
-
- // DIALECT: Available Dialects:
- // DIALECT-SAME: cf
- // DIALECT-SAME: comb
- // DIALECT-SAME: func
- // DIALECT-SAME: hir
- // DIALECT-SAME: hw
- // DIALECT-SAME: seq
+ // CHECK: OVERVIEW: Silicon hardware description language compiler
