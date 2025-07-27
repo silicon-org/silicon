@@ -13,7 +13,7 @@
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "silicon/Dialect/HIR/HIRDialect.h"
 #include "silicon/Dialect/HIR/HIRPasses.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/DialectRegistry.h"

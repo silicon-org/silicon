@@ -10,7 +10,6 @@
 #include "silicon/MLIR.h"
 #include "silicon/RegisterAll.h"
 #include "silicon/Syntax/Lexer.h"
-#include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/FileUtilities.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/SMLoc.h"

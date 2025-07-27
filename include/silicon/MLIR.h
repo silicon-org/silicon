@@ -9,6 +9,7 @@
 #pragma once
 
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
 
 namespace silicon {

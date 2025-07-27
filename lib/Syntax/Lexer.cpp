@@ -10,7 +10,6 @@
 #include "silicon/Syntax/Tokens.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ManagedStatic.h"
-#include <mlir/IR/Diagnostics.h>
 
 using namespace silicon;
 
