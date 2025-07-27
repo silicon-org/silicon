@@ -9,7 +9,9 @@
 #include "silicon/LLVM.h"
 #include "silicon/MLIR.h"
 #include "silicon/RegisterAll.h"
+#include "silicon/Syntax/AST.h"
 #include "silicon/Syntax/Lexer.h"
+#include "silicon/Syntax/Parser.h"
 #include "mlir/Support/FileUtilities.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/SMLoc.h"
@@ -63,6 +65,13 @@ static LogicalResult process(MLIRContext *context, llvm::SourceMgr &sourceMgr,
     outputFile.keep();
     return success();
   }
+
+  // Create a parser and parse the input into an AST.
+  AST ast;
+  Parser parser(lexer, ast);
+  auto *root = parser.parseRoot();
+  if (!root)
+    return failure();
 
   outputFile.keep();
   return success();

@@ -8,17 +8,20 @@
 
 #pragma once
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
 
 namespace silicon {
+using llvm::ArrayRef;
 using llvm::failed;
 using llvm::failure;
 using llvm::FailureOr;
 using llvm::LogicalResult;
 using llvm::ParseResult;
+using llvm::SmallVector;
 using llvm::SMLoc;
 using llvm::SourceMgr;
 using llvm::StringRef;
