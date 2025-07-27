@@ -1,0 +1,89 @@
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef TOK_ANY
+#define TOK_ANY(NAME)
+#endif
+
+#ifndef TOK_KEYWORD
+#define TOK_KEYWORD(IDENT) TOK_ANY(Kw_##IDENT)
+#endif
+
+#ifndef TOK_SYMBOL
+#define TOK_SYMBOL(NAME, SPELLING) TOK_ANY(NAME)
+#endif
+
+#ifndef TOK_SYMBOL1
+#define TOK_SYMBOL1(NAME, SPELLING) TOK_SYMBOL(NAME, SPELLING)
+#endif
+
+#ifndef TOK_SYMBOL2
+#define TOK_SYMBOL2(NAME, SPELLING) TOK_SYMBOL(NAME, SPELLING)
+#endif
+
+#ifndef TOK_DELIMITER
+#define TOK_DELIMITER(NAME, OPEN, CLOSE)                                       \
+  TOK_SYMBOL1(L##NAME, OPEN)                                                   \
+  TOK_SYMBOL1(R##NAME, CLOSE)
+#endif
+
+TOK_ANY(Ident)
+
+// Opening and closing delimiters
+TOK_DELIMITER(Paren, "(", ")")
+TOK_DELIMITER(Curly, "{", "}")
+TOK_DELIMITER(Brack, "[", "]")
+
+// Punctuation
+TOK_SYMBOL1(Period, ".")
+TOK_SYMBOL1(Comma, ",")
+TOK_SYMBOL1(Colon, ":")
+TOK_SYMBOL1(Semicolon, ";")
+TOK_SYMBOL1(Emark, "!")
+TOK_SYMBOL1(Qmark, "?")
+TOK_SYMBOL1(Assign, "=")
+
+// Comparison
+TOK_SYMBOL2(Eq, "==")
+TOK_SYMBOL2(Neq, "!=")
+TOK_SYMBOL1(Lt, "<")
+TOK_SYMBOL1(Gt, ">")
+TOK_SYMBOL2(Geq, ">=")
+TOK_SYMBOL2(Leq, "<=")
+
+// Logical operators
+TOK_SYMBOL1(And, "&")
+TOK_SYMBOL1(Or, "|")
+TOK_SYMBOL1(Xor, "^")
+TOK_SYMBOL2(Shl, "<<")
+TOK_SYMBOL2(Shr, ">>")
+
+// Arithmetic operators
+TOK_SYMBOL1(Add, "+")
+TOK_SYMBOL1(Sub, "-")
+TOK_SYMBOL1(Mul, "*")
+TOK_SYMBOL1(Div, "/")
+TOK_SYMBOL1(Mod, "%")
+
+// Keywords (alphabetical)
+TOK_KEYWORD(else)
+TOK_KEYWORD(fn)
+TOK_KEYWORD(for)
+TOK_KEYWORD(if)
+TOK_KEYWORD(let)
+TOK_KEYWORD(loop)
+TOK_KEYWORD(match)
+TOK_KEYWORD(return)
+TOK_KEYWORD(while)
+
+#undef TOK_ANY
+#undef TOK_KEYWORD
+#undef TOK_SYMBOL
+#undef TOK_SYMBOL1
+#undef TOK_SYMBOL2
+#undef TOK_DELIMITER

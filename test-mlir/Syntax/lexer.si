@@ -1,0 +1,13 @@
+// RUN: silc --test-lexer %s | FileCheck %s
+
+// CHECK: identifier `hello`
+hello
+
+// CHECK: keyword `return`
+return
+
+// CHECK: `=`
+=
+
+// CHECK: `==`
+==

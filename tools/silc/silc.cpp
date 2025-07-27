@@ -6,16 +6,18 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/LLVM.h"
+#include "silicon/MLIR.h"
 #include "silicon/RegisterAll.h"
+#include "silicon/Syntax/Lexer.h"
 #include "mlir/IR/Diagnostics.h"
-#include "mlir/IR/MLIRContext.h"
 #include "mlir/Support/FileUtilities.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
 
-using namespace mlir;
 using namespace silicon;
 namespace cl = llvm::cl;
 
@@ -36,6 +38,9 @@ struct Opt {
       "verify-diagnostics", cl::init(false), cl::Hidden,
       cl::desc("Check that emitted diagnostics match expected-* lines on the "
                "corresponding line")};
+
+  cl::opt<bool> testLexer{"test-lexer", cl::init(false), cl::Hidden,
+                          cl::desc("Print all tokens in the input")};
 };
 static Opt opt;
 
@@ -43,7 +48,24 @@ static Opt opt;
 // Driver
 //===----------------------------------------------------------------------===//
 
-static LogicalResult process(MLIRContext *context, llvm::SourceMgr &sourceMgr) {
+static LogicalResult process(MLIRContext *context, llvm::SourceMgr &sourceMgr,
+                             llvm::ToolOutputFile &outputFile) {
+  // Create a lexer to tokenize the input.
+  Lexer lexer(context, sourceMgr);
+
+  // If we are only testing the lexer, print all tokens in the input and exit.
+  if (opt.testLexer) {
+    auto &os = outputFile.os();
+    while (auto token = lexer.next()) {
+      if (token.isError())
+        return failure();
+      os << lexer.getLoc(token) << ": " << token << "\n";
+    }
+    outputFile.keep();
+    return success();
+  }
+
+  outputFile.keep();
   return success();
 }
 
@@ -59,16 +81,24 @@ static LogicalResult executeCompiler(MLIRContext *context) {
   }
   sourceMgr.AddNewSourceBuffer(std::move(inputFile), llvm::SMLoc());
 
+  // Open the output file.
+  auto outputFile = mlir::openOutputFile(opt.outputFilename, &errorMessage);
+  if (!outputFile) {
+    llvm::WithColor::error()
+        << "failed to open output file: " << errorMessage << "\n";
+    return failure();
+  }
+
   // Call `process` with either the regular diagnostic handler, or, if
   // `--verify-diagnostics` is set, with the verifying handler.
   if (!opt.verifyDiagnostics) {
     mlir::SourceMgrDiagnosticHandler handler(sourceMgr, context);
-    return process(context, sourceMgr);
+    return process(context, sourceMgr, *outputFile);
   }
 
   mlir::SourceMgrDiagnosticVerifierHandler handler(sourceMgr, context);
   context->printOpOnDiagnostic(false);
-  (void)process(context, sourceMgr);
+  (void)process(context, sourceMgr, *outputFile);
   return handler.verify();
 }
 
@@ -78,7 +108,7 @@ int main(int argc, char **argv) {
   mlir::registerPassManagerCLOptions();
 
   // Register dialects and passes.
-  DialectRegistry registry;
+  mlir::DialectRegistry registry;
   silicon::registerAllDialects(registry);
   silicon::registerAllPasses();
 
