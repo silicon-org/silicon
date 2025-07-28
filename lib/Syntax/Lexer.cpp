@@ -150,6 +150,13 @@ Token Lexer::next() {
     return {ident, kind};
   }
 
+  // Parse number literals.
+  if (llvm::isDigit(text[0])) {
+    auto digits = text.take_while(isIdent);
+    text = text.drop_front(digits.size());
+    return {digits, TokenKind::NumLit};
+  }
+
   // If we get here we didn't recognize what's in the input text. Emit an error
   // diagnostic and produce an error token.
   auto chr = initialText.substr(0, 1);

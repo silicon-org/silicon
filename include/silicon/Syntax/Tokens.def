@@ -33,6 +33,7 @@
 #endif
 
 TOK_ANY(Ident)
+TOK_ANY(NumLit)
 
 // Opening and closing delimiters
 TOK_DELIMITER(Paren, "(", ")")

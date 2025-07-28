@@ -18,6 +18,8 @@ StringRef silicon::symbolizeTokenKind(TokenKind kind) {
     return "<error>";
   case TokenKind::Ident:
     return "identifier";
+  case TokenKind::NumLit:
+    return "number";
 
 #define TOK_KEYWORD(IDENT)                                                     \
   case TokenKind::Kw_##IDENT:                                                  \
@@ -36,6 +38,7 @@ StringRef silicon::symbolizeTokenKind(TokenKind kind) {
 bool silicon::shouldPrintSpelling(TokenKind kind) {
   switch (kind) {
   case TokenKind::Ident:
+  case TokenKind::NumLit:
     return true;
   default:
     return false;
