@@ -9,6 +9,7 @@
 #include "silicon/Syntax/AST.h"
 #include "silicon/Syntax/Parser.h"
 #include "silicon/Syntax/Tokens.h"
+#include "llvm/ADT/StringExtras.h"
 
 using namespace silicon;
 
@@ -211,8 +212,61 @@ ast::Expr *Parser::parsePrimaryExpr() {
     return ast.create<ast::IdentExpr>(
         {{ast::ExprKind::Ident, loc(ident)}, ident.spelling});
 
+  // Parse number literals.
+  if (auto lit = consumeIf(TokenKind::NumLit))
+    return parseNumberLiteral(lit);
+
   // If we get here we didn't find anything that looks like an expression.
   if (!token.isError())
     mlir::emitError(loc()) << "expected expression, found " << token;
   return {};
+}
+
+/// Check whether the given character is a valid digit for the given base.
+static bool isValidDigitForBase(char c, int base) {
+  if (c >= '0' && c <= '9')
+    return (c - '0') < base;
+  c = llvm::toLower(c);
+  if (c >= 'a' && c <= 'f')
+    return (c - 'a' + 10) < base;
+  return false;
+}
+
+ast::Expr *Parser::parseNumberLiteral(Token lit) {
+  StringRef spelling = lit.spelling;
+
+  // Determine the base.
+  unsigned base = 10;
+  if (spelling.consume_front("0b"))
+    base = 2;
+  else if (spelling.consume_front("0o"))
+    base = 8;
+  else if (spelling.consume_front("0x"))
+    base = 16;
+
+  // Filter out `_` and check for invalid digits for the given base.
+  SmallString<32> digits;
+  digits.reserve(spelling.size());
+  for (unsigned i = 0, e = spelling.size(); i != e; ++i) {
+    if (spelling[i] == '_')
+      continue;
+    if (!isValidDigitForBase(spelling[i], base)) {
+      mlir::emitError(loc(spelling.substr(i)))
+          << "`" << spelling[i] << "` is not a valid base-" << base << " digit";
+      return {};
+    }
+    digits.push_back(spelling[i]);
+  }
+
+  // Parse the integer. At this point we know that all characters in `digits`
+  // are valid digits for the given base.
+  APInt value;
+  auto hasRemainder = digits.str().getAsInteger(base, value);
+  assert(!hasRemainder);
+
+  // Resize the APInt to the smallest possible width that can hold the value.
+  value = value.zextOrTrunc(value.getActiveBits());
+
+  return ast.create<ast::NumLitExpr>(
+      {{ast::ExprKind::NumLit, loc(lit)}, value});
 }

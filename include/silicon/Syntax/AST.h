@@ -84,7 +84,7 @@ struct UIntType : public Type {
 //===----------------------------------------------------------------------===//
 
 /// The different kinds of expressions that can appear in the AST.
-enum class ExprKind { Ident, Call };
+enum class ExprKind { Ident, NumLit, Call };
 
 /// Base class for all expressions.
 struct Expr {
@@ -97,6 +97,14 @@ struct IdentExpr : public Expr {
   StringRef name;
   static bool classof(const Expr *expr) {
     return expr->kind == ExprKind::Ident;
+  }
+};
+
+/// A number literal expression.
+struct NumLitExpr : public Expr {
+  APInt value;
+  static bool classof(const Expr *expr) {
+    return expr->kind == ExprKind::NumLit;
   }
 };
 

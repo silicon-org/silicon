@@ -23,6 +23,7 @@ struct Parser {
   ast::Type *parseType();
   ast::Expr *parseExpr();
   ast::Expr *parsePrimaryExpr();
+  ast::Expr *parseNumberLiteral(Token lit);
 
   /// The lexer that produces the input tokens.
   Lexer &lexer;
@@ -37,6 +38,8 @@ private:
   Location loc() const { return loc(token); }
   /// Get the location of a token.
   Location loc(Token token) const { return lexer.getLoc(token); }
+  /// Get the location of a substring of the source text.
+  Location loc(StringRef substring) const { return lexer.getLoc(substring); }
 
   /// Return the current token and advance to the next one.
   Token consume();
