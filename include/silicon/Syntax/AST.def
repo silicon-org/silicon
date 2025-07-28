@@ -1,0 +1,49 @@
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// Operators
+//===----------------------------------------------------------------------===//
+
+#ifndef AST_UNARY
+#define AST_UNARY(NAME, TOKEN)
+#endif
+
+#ifndef AST_BINARY
+#define AST_BINARY(NAME, TOKEN, PREC)
+#endif
+
+AST_UNARY(Neg, Sub)
+AST_UNARY(Not, Emark)
+AST_UNARY(Deref, Mul)
+AST_UNARY(Ref, And)
+
+// Comparison
+AST_BINARY(Eq, Eq, Eq)
+AST_BINARY(Neq, Neq, Eq)
+AST_BINARY(Lt, Lt, Rel)
+AST_BINARY(Gt, Gt, Rel)
+AST_BINARY(Geq, Geq, Rel)
+AST_BINARY(Leq, Leq, Rel)
+
+// Logical operators
+AST_BINARY(And, And, And)
+AST_BINARY(Or, Or, Or)
+AST_BINARY(Xor, Xor, Xor)
+AST_BINARY(Shl, Shl, Shift)
+AST_BINARY(Shr, Shr, Shift)
+
+// Arithmetic operators
+AST_BINARY(Add, Add, Add)
+AST_BINARY(Sub, Sub, Add)
+AST_BINARY(Mul, Mul, Mul)
+AST_BINARY(Div, Div, Mul)
+AST_BINARY(Mod, Mod, Mul)
+
+#undef AST_UNARY
+#undef AST_BINARY

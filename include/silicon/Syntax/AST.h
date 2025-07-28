@@ -19,6 +19,24 @@ struct Type;
 struct Expr;
 struct FnArg;
 
+/// Operator precedences.
+///
+/// See https://en.cppreference.com/w/c/language/operator_precedence.
+enum class Precedence {
+  Min,
+  Or,     // |
+  Xor,    // ^
+  And,    // &
+  Eq,     // == !=
+  Rel,    // < > <= >=
+  Shift,  // << >>
+  Add,    // + -
+  Mul,    // * / %
+  Prefix, // - ! & * (unary prefix operators)
+  Suffix, // a.b a() a[]
+  Max
+};
+
 /// A root node in the AST, corresponding to a parsed source file.
 struct Root {
   ArrayRef<Item *> items;
@@ -84,7 +102,7 @@ struct UIntType : public Type {
 //===----------------------------------------------------------------------===//
 
 /// The different kinds of expressions that can appear in the AST.
-enum class ExprKind { Ident, NumLit, Call };
+enum class ExprKind { Ident, NumLit, Call, Unary, Binary };
 
 /// Base class for all expressions.
 struct Expr {
@@ -113,6 +131,40 @@ struct CallExpr : public Expr {
   Expr *callee;
   ArrayRef<Expr *> args;
   static bool classof(const Expr *expr) { return expr->kind == ExprKind::Call; }
+};
+
+/// All unary operators.
+enum class UnaryOp {
+#define AST_UNARY(NAME, TOKEN) NAME,
+#include "silicon/Syntax/AST.def"
+};
+
+/// All binary operators.
+enum class BinaryOp {
+#define AST_BINARY(NAME, TOKEN, PREC) NAME,
+#include "silicon/Syntax/AST.def"
+};
+
+/// Return the precedence of the given binary operator.
+Precedence getPrecedence(BinaryOp op);
+
+/// A unary operator expression.
+struct UnaryExpr : public Expr {
+  UnaryOp op;
+  Expr *arg;
+  static bool classof(const Expr *expr) {
+    return expr->kind == ExprKind::Unary;
+  }
+};
+
+/// A binary operator expression.
+struct BinaryExpr : public Expr {
+  BinaryOp op;
+  Expr *lhs;
+  Expr *rhs;
+  static bool classof(const Expr *expr) {
+    return expr->kind == ExprKind::Binary;
+  }
 };
 
 } // namespace ast

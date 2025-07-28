@@ -153,7 +153,9 @@ ast::Type *Parser::parseType() {
   if (auto kw = consumeIf(TokenKind::Kw_uint)) {
     if (!require(TokenKind::Lt))
       return {};
-    auto *width = parseExpr();
+    // Use relational precedence to parse the width expression to not consume
+    // the closing `>`.
+    auto *width = parseExpr(ast::Precedence::Rel);
     if (!width)
       return {};
     if (!require(TokenKind::Gt))
@@ -171,8 +173,34 @@ ast::Type *Parser::parseType() {
 // Expressions
 //===----------------------------------------------------------------------===//
 
+/// Check whether the given token kind is a unary operator and return the
+/// corresponding AST unary operator.
+static std::optional<ast::UnaryOp> getUnaryOp(TokenKind kind) {
+  switch (kind) {
+#define AST_UNARY(NAME, TOKEN)                                                 \
+  case TokenKind::TOKEN:                                                       \
+    return ast::UnaryOp::NAME;
+#include "silicon/Syntax/AST.def"
+  default:
+    return {};
+  }
+}
+
+/// Check whether the given token kind is a binary operator and return the
+/// corresponding AST binary operator.
+static std::optional<ast::BinaryOp> getBinaryOp(TokenKind kind) {
+  switch (kind) {
+#define AST_BINARY(NAME, TOKEN, PREC)                                          \
+  case TokenKind::TOKEN:                                                       \
+    return ast::BinaryOp::NAME;
+#include "silicon/Syntax/AST.def"
+  default:
+    return {};
+  }
+}
+
 // NOLINTNEXTLINE(misc-no-recursion)
-ast::Expr *Parser::parseExpr() {
+ast::Expr *Parser::parseExpr(ast::Precedence minPrec) {
   // Parse a primary expression first. This will form the LHS of any operators
   // that may follow.
   auto *lhs = parsePrimaryExpr();
@@ -182,7 +210,8 @@ ast::Expr *Parser::parseExpr() {
   // Parse any operators that may follow the primary expression.
   while (token) {
     // Parse function calls.
-    if (auto lparen = consumeIf(TokenKind::LParen)) {
+    if (isa(TokenKind::LParen) && ast::Precedence::Suffix > minPrec) {
+      auto lparen = consume();
       SmallVector<ast::Expr *> args;
       while (notAtDelimiter(TokenKind::RParen)) {
         auto *arg = parseExpr();
@@ -199,6 +228,20 @@ ast::Expr *Parser::parseExpr() {
       continue;
     }
 
+    // Parse binary operators.
+    if (auto op = getBinaryOp(token.kind)) {
+      auto prec = ast::getPrecedence(*op);
+      if (prec > minPrec) {
+        auto opToken = consume();
+        auto *rhs = parseExpr(prec);
+        if (!rhs)
+          return {};
+        lhs = ast.create<ast::BinaryExpr>(
+            {{ast::ExprKind::Binary, loc(opToken)}, *op, lhs, rhs});
+        continue;
+      }
+    }
+
     // If we get here we didn't recognize the token as part of an expression.
     break;
   }
@@ -206,6 +249,7 @@ ast::Expr *Parser::parseExpr() {
   return lhs;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion)
 ast::Expr *Parser::parsePrimaryExpr() {
   // Parse identifiers.
   if (auto ident = consumeIf(TokenKind::Ident))
@@ -215,6 +259,16 @@ ast::Expr *Parser::parsePrimaryExpr() {
   // Parse number literals.
   if (auto lit = consumeIf(TokenKind::NumLit))
     return parseNumberLiteral(lit);
+
+  // Parse unary operators.
+  if (auto op = getUnaryOp(token.kind)) {
+    auto opToken = consume();
+    auto *arg = parseExpr(ast::Precedence::Prefix);
+    if (!arg)
+      return {};
+    return ast.create<ast::UnaryExpr>(
+        {{ast::ExprKind::Unary, loc(opToken)}, *op, arg});
+  }
 
   // If we get here we didn't find anything that looks like an expression.
   if (!token.isError())

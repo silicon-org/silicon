@@ -21,7 +21,7 @@ struct Parser {
   ast::FnItem *parseFnItem(Token kw);
   ast::FnArg *parseFnArg();
   ast::Type *parseType();
-  ast::Expr *parseExpr();
+  ast::Expr *parseExpr(ast::Precedence minPrec = ast::Precedence::Min);
   ast::Expr *parsePrimaryExpr();
   ast::Expr *parseNumberLiteral(Token lit);
 
