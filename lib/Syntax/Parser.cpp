@@ -35,12 +35,17 @@ Token Parser::consumeIf(TokenKind kind) {
 Token Parser::require(TokenKind kind, const Twine &msg) {
   if (isa(kind))
     return consume();
-  auto d = mlir::emitError(loc(), "expected ");
-  if (msg.isTriviallyEmpty())
-    d << symbolizeTokenKind(kind);
-  else
-    d << msg;
-  d << ", found " << token;
+
+  // Only emit an error if the lexer has not already emitted one.
+  if (!token.isError()) {
+    auto d = mlir::emitError(loc(), "expected ");
+    if (msg.isTriviallyEmpty())
+      d << symbolizeTokenKind(kind);
+    else
+      d << msg;
+    d << ", found " << token;
+  }
+
   return {token.spelling.substr(0, 0), TokenKind::Eof};
 }
 
@@ -65,7 +70,8 @@ ast::Item *Parser::parseItem() {
     return parseFnItem(kw);
 
   // If we get here we didn't find a keyword that starts an item.
-  mlir::emitError(loc()) << "expected item, found " << token;
+  if (!token.isError())
+    mlir::emitError(loc()) << "expected item, found " << token;
   return {};
 }
 
@@ -155,7 +161,8 @@ ast::Type *Parser::parseType() {
   }
 
   // If we get here we didn't find a keyword that starts a type.
-  mlir::emitError(loc()) << "expected type, found " << token;
+  if (!token.isError())
+    mlir::emitError(loc()) << "expected type, found " << token;
   return {};
 }
 
@@ -200,12 +207,12 @@ ast::Expr *Parser::parseExpr() {
 
 ast::Expr *Parser::parsePrimaryExpr() {
   // Parse identifiers.
-  if (auto ident = consumeIf(TokenKind::Ident)) {
+  if (auto ident = consumeIf(TokenKind::Ident))
     return ast.create<ast::IdentExpr>(
         {{ast::ExprKind::Ident, loc(ident)}, ident.spelling});
-  }
 
   // If we get here we didn't find anything that looks like an expression.
-  mlir::emitError(loc()) << "expected expression, found " << token;
+  if (!token.isError())
+    mlir::emitError(loc()) << "expected expression, found " << token;
   return {};
 }
