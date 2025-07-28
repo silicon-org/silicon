@@ -21,6 +21,8 @@ struct Parser {
   ast::FnItem *parseFnItem(Token kw);
   ast::FnArg *parseFnArg();
   ast::Type *parseType();
+  ast::Expr *parseExpr();
+  ast::Expr *parsePrimaryExpr();
 
   /// The lexer that produces the input tokens.
   Lexer &lexer;

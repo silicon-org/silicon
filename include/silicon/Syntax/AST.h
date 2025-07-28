@@ -16,6 +16,8 @@ namespace ast {
 
 struct Item;
 struct Type;
+struct Expr;
+struct FnArg;
 
 /// A root node in the AST, corresponding to a parsed source file.
 struct Root {
@@ -38,6 +40,8 @@ struct Item {
 /// A function declaration.
 struct FnItem : public Item {
   StringRef name;
+  ArrayRef<FnArg *> args;
+  Type *returnType;
   static bool classof(const Item *item) { return item->kind == ItemKind::Fn; }
 };
 
@@ -67,6 +71,40 @@ struct ConstType : public Type {
   static bool classof(const Type *type) {
     return type->kind == TypeKind::Const;
   }
+};
+
+/// An unsigned integer type with a specific width.
+struct UIntType : public Type {
+  Expr *width;
+  static bool classof(const Type *type) { return type->kind == TypeKind::UInt; }
+};
+
+//===----------------------------------------------------------------------===//
+// Expressions
+//===----------------------------------------------------------------------===//
+
+/// The different kinds of expressions that can appear in the AST.
+enum class ExprKind { Ident, Call };
+
+/// Base class for all expressions.
+struct Expr {
+  const ExprKind kind;
+  Location loc;
+};
+
+/// An identifier expression, which refers to something by name.
+struct IdentExpr : public Expr {
+  StringRef name;
+  static bool classof(const Expr *expr) {
+    return expr->kind == ExprKind::Ident;
+  }
+};
+
+/// A call expression.
+struct CallExpr : public Expr {
+  Expr *callee;
+  ArrayRef<Expr *> args;
+  static bool classof(const Expr *expr) { return expr->kind == ExprKind::Call; }
 };
 
 } // namespace ast

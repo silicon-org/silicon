@@ -47,6 +47,7 @@ TOK_SYMBOL1(Semicolon, ";")
 TOK_SYMBOL1(Emark, "!")
 TOK_SYMBOL1(Qmark, "?")
 TOK_SYMBOL1(Assign, "=")
+TOK_SYMBOL2(Arrow, "->")
 
 // Comparison
 TOK_SYMBOL2(Eq, "==")

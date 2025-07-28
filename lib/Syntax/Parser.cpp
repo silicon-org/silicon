@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/Syntax/AST.h"
 #include "silicon/Syntax/Parser.h"
 #include "silicon/Syntax/Tokens.h"
 
@@ -68,6 +69,10 @@ ast::Item *Parser::parseItem() {
   return {};
 }
 
+//===----------------------------------------------------------------------===//
+// Functions
+//===----------------------------------------------------------------------===//
+
 ast::FnItem *Parser::parseFnItem(Token kw) {
   // Parse the function name.
   auto name = require(TokenKind::Ident, "function name");
@@ -89,8 +94,18 @@ ast::FnItem *Parser::parseFnItem(Token kw) {
   if (!require(TokenKind::RParen))
     return {};
 
-  return ast.create<ast::FnItem>(
-      {{ast::ItemKind::Fn, loc(name)}, name.spelling});
+  // Parse the optional function return type.
+  ast::Type *returnType = {};
+  if (consumeIf(TokenKind::Arrow)) {
+    returnType = parseType();
+    if (!returnType)
+      return {};
+  }
+
+  return ast.create<ast::FnItem>({{ast::ItemKind::Fn, loc(name)},
+                                  name.spelling,
+                                  ast.array(args),
+                                  returnType});
 }
 
 ast::FnArg *Parser::parseFnArg() {
@@ -131,12 +146,66 @@ ast::Type *Parser::parseType() {
   if (auto kw = consumeIf(TokenKind::Kw_uint)) {
     if (!require(TokenKind::Lt))
       return {};
+    auto *width = parseExpr();
+    if (!width)
+      return {};
     if (!require(TokenKind::Gt))
       return {};
-    return ast.create<ast::Type>({ast::TypeKind::UInt, loc(kw)});
+    return ast.create<ast::UIntType>({{ast::TypeKind::UInt, loc(kw)}, width});
   }
 
   // If we get here we didn't find a keyword that starts a type.
   mlir::emitError(loc()) << "expected type, found " << token;
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// Expressions
+//===----------------------------------------------------------------------===//
+
+// NOLINTNEXTLINE(misc-no-recursion)
+ast::Expr *Parser::parseExpr() {
+  // Parse a primary expression first. This will form the LHS of any operators
+  // that may follow.
+  auto *lhs = parsePrimaryExpr();
+  if (!lhs)
+    return {};
+
+  // Parse any operators that may follow the primary expression.
+  while (token) {
+    // Parse function calls.
+    if (auto lparen = consumeIf(TokenKind::LParen)) {
+      SmallVector<ast::Expr *> args;
+      while (notAtDelimiter(TokenKind::RParen)) {
+        auto *arg = parseExpr();
+        if (!arg)
+          return {};
+        args.push_back(arg);
+        if (!consumeIf(TokenKind::Comma))
+          break;
+      }
+      if (!require(TokenKind::RParen))
+        return {};
+      lhs = ast.create<ast::CallExpr>(
+          {{ast::ExprKind::Call, loc(lparen)}, lhs, ast.array(args)});
+      continue;
+    }
+
+    // If we get here we didn't recognize the token as part of an expression.
+    break;
+  }
+
+  return lhs;
+}
+
+ast::Expr *Parser::parsePrimaryExpr() {
+  // Parse identifiers.
+  if (auto ident = consumeIf(TokenKind::Ident)) {
+    return ast.create<ast::IdentExpr>(
+        {{ast::ExprKind::Ident, loc(ident)}, ident.spelling});
+  }
+
+  // If we get here we didn't find anything that looks like an expression.
+  mlir::emitError(loc()) << "expected expression, found " << token;
   return {};
 }
