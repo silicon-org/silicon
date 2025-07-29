@@ -296,6 +296,19 @@ ast::Expr *Parser::parsePrimaryExpr() {
         {{ast::ExprKind::If, loc(kw)}, condition, thenExpr, elseExpr});
   }
 
+  // Parse return expressions.
+  if (auto kw = consumeIf(TokenKind::Kw_return)) {
+    ast::Expr *value = {};
+    if (!isa(TokenKind::Semicolon, TokenKind::Comma, TokenKind::RParen,
+             TokenKind::RBrack, TokenKind::RCurly)) {
+      value = parseExpr(ast::Precedence::Min);
+      if (!value)
+        return {};
+    }
+    return ast.create<ast::ReturnExpr>(
+        {{ast::ExprKind::Return, loc(kw)}, value});
+  }
+
   // Parse unary operators.
   if (auto op = getUnaryOp(token.kind)) {
     auto opToken = consume();

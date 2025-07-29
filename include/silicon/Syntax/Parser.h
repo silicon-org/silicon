@@ -57,6 +57,11 @@ private:
 
   /// Check whether the current token is of the given kind.
   bool isa(TokenKind kind) { return token.kind == kind; }
+  /// Check whether the current token is of one of the given kinds.
+  template <typename... Kinds>
+  bool isa(TokenKind kind, Kinds... kinds) {
+    return isa(kind) || isa(kinds...);
+  }
 
   /// Check whether we have not reached the end of the input and the current
   /// token is not of the given kind. This is useful to have a while loop
