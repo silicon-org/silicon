@@ -449,6 +449,35 @@ Parser::ExprOrStmt Parser::parseStmtOrExpr() {
   if (auto token = consumeIf(TokenKind::Semicolon))
     return ast.create<ast::Stmt>({ast::StmtKind::Empty, loc(token)});
 
+  // Parse let bindings.
+  if (auto kw = consumeIf(TokenKind::Kw_let)) {
+    // Parse the variable name.
+    auto name = require(TokenKind::Ident, "variable name");
+    if (!name)
+      return {};
+
+    // Parse the optional type of the variable.
+    ast::Type *type = {};
+    if (consumeIf(TokenKind::Colon)) {
+      type = parseType();
+      if (!type)
+        return {};
+    }
+
+    // Parse the optional value of the variable.
+    ast::Expr *value = {};
+    if (consumeIf(TokenKind::Assign)) {
+      value = parseExpr(ast::Precedence::Min);
+      if (!value)
+        return {};
+    }
+
+    if (!require(TokenKind::Semicolon))
+      return {};
+    return ast.create<ast::LetStmt>(
+        {{ast::StmtKind::Let, loc(kw)}, name.spelling, type, value});
+  }
+
   // Otherwise this is an expression.
   return parseExpr();
 }

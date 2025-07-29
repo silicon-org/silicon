@@ -220,7 +220,7 @@ struct IndexExpr : public Expr {
 //===----------------------------------------------------------------------===//
 
 /// The different kinds of statements that can appear in the AST.
-enum class StmtKind { Empty, Expr };
+enum class StmtKind { Empty, Expr, Let };
 
 /// Base class for all statements.
 struct Stmt {
@@ -232,6 +232,14 @@ struct Stmt {
 struct ExprStmt : public Stmt {
   Expr *expr;
   static bool classof(const Stmt *stmt) { return stmt->kind == StmtKind::Expr; }
+};
+
+/// A let binding.
+struct LetStmt : public Stmt {
+  StringRef name;
+  Type *type;  // optional
+  Expr *value; // optional
+  static bool classof(const Stmt *stmt) { return stmt->kind == StmtKind::Let; }
 };
 
 } // namespace ast
