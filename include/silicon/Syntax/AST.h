@@ -61,7 +61,7 @@ struct Item {
 struct FnItem : public Item {
   StringRef name;
   ArrayRef<FnArg *> args;
-  Type *returnType;
+  Type *returnType; // optional
   BlockExpr *body;
   static bool classof(const Item *item) { return item->kind == ItemKind::Fn; }
 };
@@ -105,7 +105,7 @@ struct UIntType : public Type {
 //===----------------------------------------------------------------------===//
 
 /// The different kinds of expressions that can appear in the AST.
-enum class ExprKind { Ident, NumLit, Call, Unary, Binary, Block };
+enum class ExprKind { Ident, NumLit, Call, Unary, Binary, Block, If };
 
 /// Base class for all expressions.
 struct Expr {
@@ -174,10 +174,18 @@ struct BinaryExpr : public Expr {
 /// expression that is used as the block's return value.
 struct BlockExpr : public Expr {
   SmallVector<Stmt *> stmts;
-  Expr *result;
+  Expr *result; // optional
   static bool classof(const Expr *expr) {
     return expr->kind == ExprKind::Block;
   }
+};
+
+/// An if expression.
+struct IfExpr : public Expr {
+  Expr *condition;
+  Expr *thenExpr;
+  Expr *elseExpr; // optional
+  static bool classof(const Expr *expr) { return expr->kind == ExprKind::If; }
 };
 
 //===----------------------------------------------------------------------===//

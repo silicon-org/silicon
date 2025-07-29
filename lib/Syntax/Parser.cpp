@@ -181,7 +181,7 @@ ast::Type *Parser::parseType() {
 
 /// Check if an expression requires a semicolon when used as a statement.
 static bool requiresSemicolon(ast::Expr *expr) {
-  return !isa<ast::BlockExpr>(expr);
+  return !isa<ast::BlockExpr, ast::IfExpr>(expr);
 }
 
 /// Check whether the given token kind is a unary operator and return the
@@ -274,6 +274,27 @@ ast::Expr *Parser::parsePrimaryExpr() {
   // Parse block expressions.
   if (isa(TokenKind::LCurly))
     return parseBlockExpr();
+
+  // Parse if expressions.
+  if (auto kw = consumeIf(TokenKind::Kw_if)) {
+    auto *condition = parseExpr(ast::Precedence::Min);
+    if (!condition)
+      return {};
+    auto *thenExpr = parseBlockExpr();
+    if (!thenExpr)
+      return {};
+    ast::Expr *elseExpr = {};
+    if (consumeIf(TokenKind::Kw_else)) {
+      if (isa(TokenKind::Kw_if))
+        elseExpr = parseExpr(ast::Precedence::Min);
+      else
+        elseExpr = parseBlockExpr();
+      if (!elseExpr)
+        return {};
+    }
+    return ast.create<ast::IfExpr>(
+        {{ast::ExprKind::If, loc(kw)}, condition, thenExpr, elseExpr});
+  }
 
   // Parse unary operators.
   if (auto op = getUnaryOp(token.kind)) {
