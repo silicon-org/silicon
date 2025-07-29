@@ -115,6 +115,7 @@ enum class ExprKind {
   If,
   Return,
   Index,
+  Slice,
   Const,
 };
 
@@ -213,6 +214,16 @@ struct IndexExpr : public Expr {
   Expr *index;
   static bool classof(const Expr *expr) {
     return expr->kind == ExprKind::Index;
+  }
+};
+
+/// A slice expression.
+struct SliceExpr : public Expr {
+  Expr *base;
+  Expr *index;
+  Expr *length;
+  static bool classof(const Expr *expr) {
+    return expr->kind == ExprKind::Slice;
   }
 };
 

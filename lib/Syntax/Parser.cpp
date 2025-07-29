@@ -242,13 +242,26 @@ ast::Expr *Parser::parseExpr(ast::Precedence minPrec) {
     // Parse indexing expressions.
     if (isa(TokenKind::LBrack) && ast::Precedence::Suffix > minPrec) {
       auto lbrack = consume();
+
+      // Parse the index.
       auto *index = parseExpr();
       if (!index)
         return {};
+
+      // Parse the optional length in case this is a slice expression.
+      if (consumeIf(TokenKind::Comma)) {
+        auto *length = parseExpr();
+        if (!length)
+          return {};
+        lhs = ast.create<ast::SliceExpr>(
+            {{ast::ExprKind::Slice, loc(lbrack)}, lhs, index, length});
+      } else {
+        lhs = ast.create<ast::IndexExpr>(
+            {{ast::ExprKind::Index, loc(lbrack)}, lhs, index});
+      }
+
       if (!require(TokenKind::RBrack))
         return {};
-      lhs = ast.create<ast::IndexExpr>(
-          {{ast::ExprKind::Index, loc(lbrack)}, lhs, index});
       continue;
     }
 
