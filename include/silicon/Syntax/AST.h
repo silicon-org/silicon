@@ -14,10 +14,12 @@
 namespace silicon {
 namespace ast {
 
-struct Item;
-struct Type;
+struct BlockExpr;
 struct Expr;
 struct FnArg;
+struct Item;
+struct Stmt;
+struct Type;
 
 /// Operator precedences.
 ///
@@ -60,6 +62,7 @@ struct FnItem : public Item {
   StringRef name;
   ArrayRef<FnArg *> args;
   Type *returnType;
+  BlockExpr *body;
   static bool classof(const Item *item) { return item->kind == ItemKind::Fn; }
 };
 
@@ -102,7 +105,7 @@ struct UIntType : public Type {
 //===----------------------------------------------------------------------===//
 
 /// The different kinds of expressions that can appear in the AST.
-enum class ExprKind { Ident, NumLit, Call, Unary, Binary };
+enum class ExprKind { Ident, NumLit, Call, Unary, Binary, Block };
 
 /// Base class for all expressions.
 struct Expr {
@@ -165,6 +168,35 @@ struct BinaryExpr : public Expr {
   static bool classof(const Expr *expr) {
     return expr->kind == ExprKind::Binary;
   }
+};
+
+/// A block expression, which is a sequence of statements and an optional final
+/// expression that is used as the block's return value.
+struct BlockExpr : public Expr {
+  SmallVector<Stmt *> stmts;
+  Expr *result;
+  static bool classof(const Expr *expr) {
+    return expr->kind == ExprKind::Block;
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Statements
+//===----------------------------------------------------------------------===//
+
+/// The different kinds of statements that can appear in the AST.
+enum class StmtKind { Empty, Expr };
+
+/// Base class for all statements.
+struct Stmt {
+  const StmtKind kind;
+  Location loc;
+};
+
+/// A statement that is simply an expression.
+struct ExprStmt : public Stmt {
+  Expr *expr;
+  static bool classof(const Stmt *stmt) { return stmt->kind == StmtKind::Expr; }
 };
 
 } // namespace ast

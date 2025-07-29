@@ -109,10 +109,16 @@ ast::FnItem *Parser::parseFnItem(Token kw) {
       return {};
   }
 
+  // Parse the function body.
+  auto *body = parseBlockExpr();
+  if (!body)
+    return {};
+
   return ast.create<ast::FnItem>({{ast::ItemKind::Fn, loc(name)},
                                   name.spelling,
                                   ast.array(args),
-                                  returnType});
+                                  returnType,
+                                  body});
 }
 
 ast::FnArg *Parser::parseFnArg() {
@@ -172,6 +178,11 @@ ast::Type *Parser::parseType() {
 //===----------------------------------------------------------------------===//
 // Expressions
 //===----------------------------------------------------------------------===//
+
+/// Check if an expression requires a semicolon when used as a statement.
+static bool requiresSemicolon(ast::Expr *expr) {
+  return !isa<ast::BlockExpr>(expr);
+}
 
 /// Check whether the given token kind is a unary operator and return the
 /// corresponding AST unary operator.
@@ -260,6 +271,10 @@ ast::Expr *Parser::parsePrimaryExpr() {
   if (auto lit = consumeIf(TokenKind::NumLit))
     return parseNumberLiteral(lit);
 
+  // Parse block expressions.
+  if (isa(TokenKind::LCurly))
+    return parseBlockExpr();
+
   // Parse unary operators.
   if (auto op = getUnaryOp(token.kind)) {
     auto opToken = consume();
@@ -286,7 +301,7 @@ static bool isValidDigitForBase(char c, int base) {
   return false;
 }
 
-ast::Expr *Parser::parseNumberLiteral(Token lit) {
+ast::NumLitExpr *Parser::parseNumberLiteral(Token lit) {
   StringRef spelling = lit.spelling;
 
   // Determine the base.
@@ -323,4 +338,70 @@ ast::Expr *Parser::parseNumberLiteral(Token lit) {
 
   return ast.create<ast::NumLitExpr>(
       {{ast::ExprKind::NumLit, loc(lit)}, value});
+}
+
+// NOLINTNEXTLINE(misc-no-recursion)
+ast::BlockExpr *Parser::parseBlockExpr() {
+  auto lcurly = require(TokenKind::LCurly);
+  if (!lcurly)
+    return {};
+
+  SmallVector<ast::Stmt *> stmts;
+  ast::Expr *result = {};
+
+  // Parse the statements in the block. The very last statement in the block may
+  // be an expression without a terminating semicolon, in which case that
+  // expressions becomes the block's return value.
+  while (notAtDelimiter(TokenKind::RCurly)) {
+    // Parse an expression or statement.
+    auto stmtOrExpr = parseStmtOrExpr();
+    if (!stmtOrExpr)
+      return {};
+
+    // If this is an expression, this may be the final expression in the block
+    // which defines the block's return value.
+    if (auto *expr = dyn_cast<ast::Expr *>(stmtOrExpr)) {
+      // If the next token is a closing curly brace, use the expression as the
+      // block's return value and break out of the loop.
+      if (isa(TokenKind::RCurly)) {
+        result = expr;
+        break;
+      }
+
+      // If the expression requires a semicolon when used as a statement, which
+      // is true for almost all expressions, consume that semicolon.
+      if (requiresSemicolon(expr))
+        if (!require(TokenKind::Semicolon))
+          return {};
+
+      // Wrap the expression in a statement so we can add it to the block.
+      stmts.push_back(
+          ast.create<ast::ExprStmt>({{ast::StmtKind::Expr, expr->loc}, expr}));
+      continue;
+    }
+
+    // Since this was not an expression, it must be a statement.
+    stmts.push_back(cast<ast::Stmt *>(stmtOrExpr));
+  }
+
+  // Consume the closing curly brace.
+  if (!require(TokenKind::RCurly))
+    return {};
+
+  return ast.create<ast::BlockExpr>(
+      {{ast::ExprKind::Block, loc(lcurly)}, stmts, result});
+}
+
+//===----------------------------------------------------------------------===//
+// Statements
+//===----------------------------------------------------------------------===//
+
+// NOLINTNEXTLINE(misc-no-recursion)
+Parser::ExprOrStmt Parser::parseStmtOrExpr() {
+  // Ignore stray semicolons.
+  if (auto token = consumeIf(TokenKind::Semicolon))
+    return ast.create<ast::Stmt>({ast::StmtKind::Empty, loc(token)});
+
+  // Otherwise this is an expression.
+  return parseExpr();
 }

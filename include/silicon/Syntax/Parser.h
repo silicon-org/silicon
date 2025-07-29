@@ -14,6 +14,7 @@ namespace silicon {
 
 /// A parser that converts a stream of input tokens into a syntax tree.
 struct Parser {
+  using ExprOrStmt = PointerUnion<ast::Expr *, ast::Stmt *>;
   Parser(Lexer &lexer, AST &ast);
 
   ast::Root *parseRoot();
@@ -23,7 +24,9 @@ struct Parser {
   ast::Type *parseType();
   ast::Expr *parseExpr(ast::Precedence minPrec = ast::Precedence::Min);
   ast::Expr *parsePrimaryExpr();
-  ast::Expr *parseNumberLiteral(Token lit);
+  ast::NumLitExpr *parseNumberLiteral(Token lit);
+  ast::BlockExpr *parseBlockExpr();
+  ExprOrStmt parseStmtOrExpr();
 
   /// The lexer that produces the input tokens.
   Lexer &lexer;
