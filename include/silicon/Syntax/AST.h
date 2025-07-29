@@ -105,7 +105,17 @@ struct UIntType : public Type {
 //===----------------------------------------------------------------------===//
 
 /// The different kinds of expressions that can appear in the AST.
-enum class ExprKind { Ident, NumLit, Call, Unary, Binary, Block, If, Return };
+enum class ExprKind {
+  Ident,
+  NumLit,
+  Call,
+  Unary,
+  Binary,
+  Block,
+  If,
+  Return,
+  Index,
+};
 
 /// Base class for all expressions.
 struct Expr {
@@ -193,6 +203,15 @@ struct ReturnExpr : public Expr {
   Expr *value; // optional
   static bool classof(const Expr *expr) {
     return expr->kind == ExprKind::Return;
+  }
+};
+
+/// An index expression.
+struct IndexExpr : public Expr {
+  Expr *base;
+  Expr *index;
+  static bool classof(const Expr *expr) {
+    return expr->kind == ExprKind::Index;
   }
 };
 

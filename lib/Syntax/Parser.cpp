@@ -239,6 +239,19 @@ ast::Expr *Parser::parseExpr(ast::Precedence minPrec) {
       continue;
     }
 
+    // Parse indexing expressions.
+    if (isa(TokenKind::LBrack) && ast::Precedence::Suffix > minPrec) {
+      auto lbrack = consume();
+      auto *index = parseExpr();
+      if (!index)
+        return {};
+      if (!require(TokenKind::RBrack))
+        return {};
+      lhs = ast.create<ast::IndexExpr>(
+          {{ast::ExprKind::Index, loc(lbrack)}, lhs, index});
+      continue;
+    }
+
     // Parse binary operators.
     if (auto op = getBinaryOp(token.kind)) {
       auto prec = ast::getPrecedence(*op);
