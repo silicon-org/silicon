@@ -115,6 +115,7 @@ enum class ExprKind {
   If,
   Return,
   Index,
+  Const,
 };
 
 /// Base class for all expressions.
@@ -212,6 +213,14 @@ struct IndexExpr : public Expr {
   Expr *index;
   static bool classof(const Expr *expr) {
     return expr->kind == ExprKind::Index;
+  }
+};
+
+/// A constant expression.
+struct ConstExpr : public Expr {
+  Expr *value;
+  static bool classof(const Expr *expr) {
+    return expr->kind == ExprKind::Const;
   }
 };
 
