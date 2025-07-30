@@ -124,7 +124,7 @@ void EvalConstsPass::runOnOperation() {
   patterns.add<ConstCondBranchOpPattern>(context);
 
   GreedyRewriteConfig config;
-  config.enableRegionSimplification = GreedySimplifyRegionLevel::Normal;
+  config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Normal);
 
   if (failed(
           applyPatternsGreedily(getOperation(), std::move(patterns), config)))

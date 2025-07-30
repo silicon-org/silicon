@@ -12,6 +12,10 @@
 include "silicon/Dialect/HIR/HIRDialect.td"
 include "mlir/IR/AttrTypeBase.td"
 
+def DynamicAPIntParameter : AttrOrTypeParameter<"llvm::DynamicAPInt", ""> {
+  let comparator = "$_lhs == $_rhs";
+}
+
 class HIRAttrDef<
   string name,
   list<Trait> traits = [],
@@ -22,7 +26,7 @@ class HIRAttrDef<
 
 def IntAttr : HIRAttrDef<"Int"> {
   let mnemonic = "int";
-  let parameters = (ins "llvm::DynamicAPInt":$value);
+  let parameters = (ins DynamicAPIntParameter:$value);
   let assemblyFormat = "`<` $value `>`";
 }
 
