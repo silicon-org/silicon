@@ -16,7 +16,7 @@ jobs:
     name: Sanity Check
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/circt/images/circt-ci-build:20240213211952
+      image: ghcr.io/circt/images/circt-ci-build:20250515145637
     steps:
       # Clone the repository.
       - name: Checkout repository
@@ -91,7 +91,7 @@ jobs:
     needs: sanity-check
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/circt/images/circt-ci-build:20240213211952
+      image: ghcr.io/circt/images/circt-ci-build:20250515145637
 
     strategy:
       matrix:
@@ -112,7 +112,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 1
+          fetch-depth: 2
           submodules: recursive
 
       - name: Set git safe directory
