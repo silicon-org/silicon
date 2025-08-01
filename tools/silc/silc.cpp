@@ -42,6 +42,9 @@ struct Opt {
 
   cl::opt<bool> testLexer{"test-lexer", cl::init(false), cl::Hidden,
                           cl::desc("Print all tokens in the input")};
+
+  cl::opt<bool> testParser{"test-parser", cl::init(false), cl::Hidden,
+                           cl::desc("Print the AST after parsing")};
 };
 static Opt opt;
 
@@ -72,6 +75,15 @@ static LogicalResult process(MLIRContext *context, llvm::SourceMgr &sourceMgr,
   auto *root = parser.parseRoot();
   if (!root)
     return failure();
+  ast.roots.push_back(root);
+
+  // If we are only testing the parser, print the AST and exit.
+  if (opt.testParser) {
+    auto &os = outputFile.os();
+    ast.print(os);
+    outputFile.keep();
+    return success();
+  }
 
   outputFile.keep();
   return success();

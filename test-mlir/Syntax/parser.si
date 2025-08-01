@@ -1,0 +1,36 @@
+// RUN: silc --test-parser %s | FileCheck %s
+
+// CHECK-LABEL: name: "left_assoc"
+fn left_assoc() {
+  // CHECK: expr: BinaryExpr
+  // CHECK:   lhs: BinaryExpr
+  // CHECK:     lhs: BinaryExpr
+  // CHECK:       lhs: NumLitExpr
+  // CHECK:         value: 1
+  // CHECK:       rhs: NumLitExpr
+  // CHECK:         value: 2
+  // CHECK:     rhs: NumLitExpr
+  // CHECK:       value: 3
+  // CHECK:   rhs: NumLitExpr
+  // CHECK:     value: 4
+  1 - 2 - 3 - 4;
+}
+
+// CHECK-LABEL: name: "precedence"
+fn precedence() {
+  // CHECK: expr: BinaryExpr
+  // CHECK:   op: Add
+  // CHECK:   lhs: BinaryExpr
+  // CHECK:     op: Mul
+  // CHECK:     lhs: NumLitExpr
+  // CHECK:       value: 1
+  // CHECK:     rhs: NumLitExpr
+  // CHECK:       value: 2
+  // CHECK:   rhs: BinaryExpr
+  // CHECK:     op: Div
+  // CHECK:     lhs: NumLitExpr
+  // CHECK:       value: 3
+  // CHECK:     rhs: NumLitExpr
+  // CHECK:       value: 4
+  1 * 2 + 3 / 4;
+}

@@ -153,7 +153,7 @@ ast::Type *Parser::parseType() {
 
   // Parse the `int` type.
   if (auto kw = consumeIf(TokenKind::Kw_int))
-    return ast.create<ast::Type>({ast::TypeKind::Int, loc(kw)});
+    return ast.create<ast::IntType>({{ast::TypeKind::Int, loc(kw)}});
 
   // Parse the `uint` type.
   if (auto kw = consumeIf(TokenKind::Kw_uint)) {
@@ -402,7 +402,10 @@ ast::NumLitExpr *Parser::parseNumberLiteral(Token lit) {
   assert(!hasRemainder);
 
   // Resize the APInt to the smallest possible width that can hold the value.
-  value = value.zextOrTrunc(value.getActiveBits());
+  unsigned numBits = value.getSignificantBits();
+  if (value.isNegative())
+    ++numBits; // Ensure the number reads positive.
+  value = value.zextOrTrunc(numBits);
 
   return ast.create<ast::NumLitExpr>(
       {{ast::ExprKind::NumLit, loc(lit)}, value});
@@ -457,7 +460,7 @@ ast::BlockExpr *Parser::parseBlockExpr() {
     return {};
 
   return ast.create<ast::BlockExpr>(
-      {{ast::ExprKind::Block, loc(lcurly)}, stmts, result});
+      {{ast::ExprKind::Block, loc(lcurly)}, ast.array(stmts), result});
 }
 
 //===----------------------------------------------------------------------===//
@@ -468,7 +471,7 @@ ast::BlockExpr *Parser::parseBlockExpr() {
 Parser::ExprOrStmt Parser::parseStmtOrExpr() {
   // Ignore stray semicolons.
   if (auto token = consumeIf(TokenKind::Semicolon))
-    return ast.create<ast::Stmt>({ast::StmtKind::Empty, loc(token)});
+    return ast.create<ast::EmptyStmt>({{ast::StmtKind::Empty, loc(token)}});
 
   // Parse let bindings.
   if (auto kw = consumeIf(TokenKind::Kw_let)) {
