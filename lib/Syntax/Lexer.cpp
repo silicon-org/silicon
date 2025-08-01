@@ -50,7 +50,8 @@ Lexer::Lexer(MLIRContext *context, SourceMgr &sourceMgr)
 Location Lexer::getLoc(StringRef substring) {
   auto loc = SMLoc::getFromPointer(substring.data());
   auto lineCol = sourceMgr.getLineAndColumn(loc, sourceMgr.getMainFileID());
-  return FileLineColLoc::get(filename, lineCol.first, lineCol.second);
+  return FileLineColRange::get(filename, lineCol.first, lineCol.second,
+                               lineCol.second + substring.size());
 }
 
 //===----------------------------------------------------------------------===//
