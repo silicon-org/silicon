@@ -45,9 +45,14 @@ namespace ast {
 struct BlockExpr;
 struct Expr;
 struct FnArg;
+struct FnItem;
 struct Item;
+struct LetStmt;
 struct Stmt;
 struct Type;
+
+/// A reference to an AST node produced by name resolution.
+using Binding = PointerUnion<FnItem *, LetStmt *>;
 
 /// Operator precedences.
 ///
@@ -201,7 +206,11 @@ struct Expr {
 /// An identifier expression, which refers to something by name.
 struct IdentExpr : public Expr {
   StringRef name;
-  AST_VISIT_DEF(IdentExpr) { AST_VISIT(name); }
+  Binding binding;
+  AST_VISIT_DEF(IdentExpr) {
+    AST_VISIT(name);
+    AST_VISIT_OPTIONAL(binding);
+  }
   static bool classof(const Expr *expr) {
     return expr->kind == ExprKind::Ident;
   }
@@ -499,6 +508,8 @@ struct Visitor {
   inline void visit(UnaryOp, Args &&...) {}
   template <typename... Args>
   inline void visit(BinaryOp, Args &&...) {}
+  template <typename... Args>
+  inline void visit(Binding, Args &&...) {}
 
   template <typename T, typename... Args>
   void visit(ArrayRef<T> nodes, Args &&...args) {

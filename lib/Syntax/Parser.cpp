@@ -291,7 +291,7 @@ ast::Expr *Parser::parsePrimaryExpr() {
   // Parse identifiers.
   if (auto ident = consumeIf(TokenKind::Ident))
     return ast.create<ast::IdentExpr>(
-        {{ast::ExprKind::Ident, loc(ident)}, ident.spelling});
+        {{ast::ExprKind::Ident, loc(ident)}, ident.spelling, ast::Binding{}});
 
   // Parse number literals.
   if (auto lit = consumeIf(TokenKind::NumLit))

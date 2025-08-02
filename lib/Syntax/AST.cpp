@@ -86,8 +86,13 @@ namespace {
 struct ASTPrinter : public ast::Visitor<ASTPrinter> {
   llvm::raw_ostream &os;
   SmallString<32> indentBuffer;
+  DenseMap<void *, unsigned> nodeIds;
   using Visitor::visit;
   ASTPrinter(llvm::raw_ostream &os) : os(os) {}
+
+  unsigned getNodeId(void *ptr) {
+    return nodeIds.insert({ptr, nodeIds.size()}).first->second;
+  }
 
   void enterField(StringRef field) { os << indentBuffer << field << ": "; }
 
@@ -116,11 +121,19 @@ struct ASTPrinter : public ast::Visitor<ASTPrinter> {
   void visit(APInt &value) { os << value << "\n"; }
   void visit(ast::UnaryOp &op) { os << ast::toString(op) << "\n"; }
   void visit(ast::BinaryOp &op) { os << ast::toString(op) << "\n"; }
+  void visit(ast::Binding &binding) {
+    TypeSwitch<ast::Binding>(binding).Case<ast::FnItem *, ast::LetStmt *>(
+        [&](auto *node) {
+          os << node->getTypeName() << "(@"
+             << getNodeId(static_cast<void *>(node)) << ")\n";
+        });
+  }
 
   /// Print the type name of the AST node and indent for its children.
   template <typename T>
   void preVisitNode(T &node) {
-    os << node.getTypeName() << "\n";
+    os << node.getTypeName() << " @" << getNodeId(static_cast<void *>(&node))
+       << "\n";
     indentBuffer += "  ";
   }
 
