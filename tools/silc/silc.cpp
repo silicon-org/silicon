@@ -14,6 +14,7 @@
 #include "silicon/Syntax/Names.h"
 #include "silicon/Syntax/Parser.h"
 #include "mlir/Support/FileUtilities.h"
+#include "mlir/Support/ToolUtilities.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
@@ -46,6 +47,10 @@ struct Opt {
 
   cl::opt<bool> testParser{"test-parser", cl::init(false), cl::Hidden,
                            cl::desc("Print the AST after parsing")};
+
+  cl::opt<bool> splitInputFile{
+      "split-input-file", cl::init(false), cl::Hidden,
+      cl::desc("Split the input file into chunks and process each separately")};
 };
 static Opt opt;
 
@@ -54,19 +59,17 @@ static Opt opt;
 //===----------------------------------------------------------------------===//
 
 static LogicalResult process(MLIRContext *context, llvm::SourceMgr &sourceMgr,
-                             llvm::ToolOutputFile &outputFile) {
+                             llvm::raw_ostream &os) {
   // Create a lexer to tokenize the input.
   Lexer lexer(context, sourceMgr);
 
   // If we are only testing the lexer, print all tokens in the input and exit.
   if (opt.testLexer) {
-    auto &os = outputFile.os();
     while (auto token = lexer.next()) {
       if (token.isError())
         return failure();
       os << lexer.getLoc(token) << ": " << token << "\n";
     }
-    outputFile.keep();
     return success();
   }
 
@@ -84,27 +87,22 @@ static LogicalResult process(MLIRContext *context, llvm::SourceMgr &sourceMgr,
 
   // If we are only testing the parser, print the AST and exit.
   if (opt.testParser) {
-    auto &os = outputFile.os();
     ast.print(os);
-    outputFile.keep();
     return success();
   }
 
-  outputFile.keep();
   return success();
 }
 
 static LogicalResult executeCompiler(MLIRContext *context) {
   // Open the source file.
   std::string errorMessage;
-  llvm::SourceMgr sourceMgr;
   auto inputFile = mlir::openInputFile(opt.inputFilename, &errorMessage);
   if (!inputFile) {
     llvm::WithColor::error()
         << "failed to open input file: " << errorMessage << "\n";
     return failure();
   }
-  sourceMgr.AddNewSourceBuffer(std::move(inputFile), llvm::SMLoc());
 
   // Open the output file.
   auto outputFile = mlir::openOutputFile(opt.outputFilename, &errorMessage);
@@ -114,17 +112,35 @@ static LogicalResult executeCompiler(MLIRContext *context) {
     return failure();
   }
 
-  // Call `process` with either the regular diagnostic handler, or, if
-  // `--verify-diagnostics` is set, with the verifying handler.
-  if (!opt.verifyDiagnostics) {
-    mlir::SourceMgrDiagnosticHandler handler(sourceMgr, context);
-    return process(context, sourceMgr, *outputFile);
-  }
+  // Utility to call `process` with either the regular diagnostic handler, or,
+  // if `--verify-diagnostics` is set, with the verifying handler.
+  auto processBuffer = [&](std::unique_ptr<llvm::MemoryBuffer> buffer,
+                           llvm::raw_ostream &os) -> LogicalResult {
+    llvm::SourceMgr sourceMgr;
+    sourceMgr.AddNewSourceBuffer(std::move(buffer), llvm::SMLoc());
 
-  mlir::SourceMgrDiagnosticVerifierHandler handler(sourceMgr, context);
-  context->printOpOnDiagnostic(false);
-  (void)process(context, sourceMgr, *outputFile);
-  return handler.verify();
+    if (!opt.verifyDiagnostics) {
+      mlir::SourceMgrDiagnosticHandler handler(sourceMgr, context);
+      return process(context, sourceMgr, os);
+    }
+
+    mlir::SourceMgrDiagnosticVerifierHandler handler(sourceMgr, context);
+    context->printOpOnDiagnostic(false);
+    (void)process(context, sourceMgr, os);
+    return handler.verify();
+  };
+
+  // Split the input file into chunks if the `--split-input-file` option is set.
+  // Otherwise, process the entire input file as a single buffer.
+  auto result = opt.splitInputFile
+                    ? mlir::splitAndProcessBuffer(
+                          std::move(inputFile), processBuffer, outputFile->os())
+                    : processBuffer(std::move(inputFile), outputFile->os());
+
+  // Keep the output file around if no errors occurred.
+  if (succeeded(result))
+    outputFile->keep();
+  return result;
 }
 
 int main(int argc, char **argv) {
