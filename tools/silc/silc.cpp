@@ -81,7 +81,7 @@ static LogicalResult process(MLIRContext *context, llvm::SourceMgr &sourceMgr,
     return failure();
   ast.roots.push_back(root);
 
-  /// Resolve names in the AST.
+  // Resolve names in the AST.
   if (failed(resolveNames(ast)))
     return failure();
 
