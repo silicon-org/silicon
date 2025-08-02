@@ -11,6 +11,7 @@
 #include "silicon/RegisterAll.h"
 #include "silicon/Syntax/AST.h"
 #include "silicon/Syntax/Lexer.h"
+#include "silicon/Syntax/Names.h"
 #include "silicon/Syntax/Parser.h"
 #include "mlir/Support/FileUtilities.h"
 #include "llvm/Support/CommandLine.h"
@@ -76,6 +77,10 @@ static LogicalResult process(MLIRContext *context, llvm::SourceMgr &sourceMgr,
   if (!root)
     return failure();
   ast.roots.push_back(root);
+
+  /// Resolve names in the AST.
+  if (failed(resolveNames(ast)))
+    return failure();
 
   // If we are only testing the parser, print the AST and exit.
   if (opt.testParser) {
