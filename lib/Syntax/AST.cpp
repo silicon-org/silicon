@@ -122,8 +122,8 @@ struct ASTPrinter : public ast::Visitor<ASTPrinter> {
   void visit(ast::UnaryOp &op) { os << ast::toString(op) << "\n"; }
   void visit(ast::BinaryOp &op) { os << ast::toString(op) << "\n"; }
   void visit(ast::Binding &binding) {
-    TypeSwitch<ast::Binding>(binding).Case<ast::FnItem *, ast::LetStmt *>(
-        [&](auto *node) {
+    TypeSwitch<ast::Binding>(binding)
+        .Case<ast::FnItem *, ast::FnArg *, ast::LetStmt *>([&](auto *node) {
           os << node->getTypeName() << "(@"
              << getNodeId(static_cast<void *>(node)) << ")\n";
         });

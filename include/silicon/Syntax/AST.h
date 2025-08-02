@@ -52,7 +52,7 @@ struct Stmt;
 struct Type;
 
 /// A reference to an AST node produced by name resolution.
-using Binding = PointerUnion<FnItem *, LetStmt *>;
+using Binding = PointerUnion<FnItem *, FnArg *, LetStmt *>;
 
 /// Operator precedences.
 ///

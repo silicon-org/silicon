@@ -18,15 +18,15 @@ using namespace silicon;
 /// Get the location of a binding.
 static Location getLoc(ast::Binding binding) {
   return TypeSwitch<ast::Binding, Location>(binding)
-      .Case<ast::FnItem *, ast::LetStmt *>(
+      .Case<ast::FnItem *, ast::FnArg *, ast::LetStmt *>(
           [](auto *node) { return node->loc; });
 }
 
 /// Print a binding as `<type>(<address>)` for debugging purposes.
 static llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
                                      ast::Binding binding) {
-  TypeSwitch<ast::Binding>(binding).Case<ast::FnItem *, ast::LetStmt *>(
-      [&](auto *node) {
+  TypeSwitch<ast::Binding>(binding)
+      .Case<ast::FnItem *, ast::FnArg *, ast::LetStmt *>([&](auto *node) {
         os << node->getTypeName() << "(" << static_cast<void *>(node) << ")";
       });
   return os;
@@ -115,6 +115,10 @@ struct Resolver : public ast::Visitor<Resolver> {
   void visitNode(ast::FnItem &node, Resolve) { resolveScope(node); }
 
   // Declare and resolve names.
+  void visitNode(ast::FnArg &node, Resolve) {
+    node.walk(*this, Resolve{});
+    declareName(node.name, &node, false);
+  }
   void visitNode(ast::LetStmt &node, Resolve) {
     node.walk(*this, Resolve{});
     declareName(node.name, &node, true);
