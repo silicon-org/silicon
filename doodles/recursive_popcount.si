@@ -20,3 +20,16 @@ fn popcount(width: const int, input: uint<width>) -> uint<clog2(width+1)> {
   let count: uint<clog2(width+1)> = count_lo + count_hi;
   return count;
 }
+
+fn half_adder(a: uint<1>, b: uint<1>) -> uint<2> {
+  return zext(a, 2) + zext(b, 2);
+}
+
+fn full_adder(a: uint<1>, b: uint<1>, c: uint<1>) -> uint<2> {
+  return zext(a, 2) + zext(b, 2) + zext(c, 2);
+}
+
+// Dummy function definitions.
+fn clog2(x: int) -> int {}
+fn zext(x: int, target_width: int) -> int {}
+fn as_uint(x: int, target_width: int) -> uint<target_width> {}
