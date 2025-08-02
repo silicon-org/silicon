@@ -1,0 +1,13 @@
+// RUN: silc --split-input-file --verify-diagnostics %s
+
+fn main() {
+  // expected-error @below {{unknown name `y`}}
+  let x = y;
+}
+
+// -----
+
+// expected-note @below {{previous definition of `foo` was here}}
+fn foo() {}
+// expected-error @below {{name `foo` already defined}}
+fn foo() {}
