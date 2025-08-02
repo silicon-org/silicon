@@ -170,7 +170,7 @@ struct IntType : public Type {
 /// An unsigned integer type with a specific width.
 struct UIntType : public Type {
   Expr *width;
-  AST_VISIT_DEF(ConstType) { AST_VISIT(width); }
+  AST_VISIT_DEF(UIntType) { AST_VISIT(width); }
   static bool classof(const Type *type) { return type->kind == TypeKind::UInt; }
 };
 
