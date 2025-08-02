@@ -426,19 +426,67 @@ struct Visitor {
   /// Called by the AST nodes for each of their member fields.
   template <typename T, typename... Args>
   void visitField(T &value, StringRef field, Args &&...args) {
-    derived().enterField(field, std::forward(args)...);
-    derived().visit(value, std::forward(args)...);
-    derived().leaveField(field, std::forward(args)...);
+    derived().enterField(field, std::forward<Args>(args)...);
+    derived().visit(value, std::forward<Args>(args)...);
+    derived().leaveField(field, std::forward<Args>(args)...);
   }
 
   template <typename T, typename... Args>
   void visit(T &node, Args &&...args) {
-    derived().visitNode(node, std::forward(args)...);
+    derived().visitNode(node, std::forward<Args>(args)...);
   }
 
   template <typename T, typename... Args>
   void visit(T *node, Args &&...args) {
-    derived().visit(*node, std::forward(args)...);
+    derived().visit(*node, std::forward<Args>(args)...);
+  }
+
+  /// Dispatch concrete items.
+  template <typename... Args>
+  void visit(ast::Item &item, Args &&...args) {
+    switch (item.kind) {
+#define AST_ITEM(NAME)                                                         \
+  case ItemKind::NAME:                                                         \
+    return derived().visitNode(static_cast<NAME##Item &>(item),                \
+                               std::forward<Args>(args)...);
+#include "silicon/Syntax/AST.def"
+    }
+  }
+
+  /// Dispatch concrete types.
+  template <typename... Args>
+  void visit(ast::Type &type, Args &&...args) {
+    switch (type.kind) {
+#define AST_TYPE(NAME)                                                         \
+  case TypeKind::NAME:                                                         \
+    return derived().visitNode(static_cast<NAME##Type &>(type),                \
+                               std::forward<Args>(args)...);
+#include "silicon/Syntax/AST.def"
+    }
+  }
+
+  /// Dispatch concrete expressions.
+  template <typename... Args>
+  void visit(ast::Expr &expr, Args &&...args) {
+    switch (expr.kind) {
+#define AST_EXPR(NAME)                                                         \
+  case ExprKind::NAME:                                                         \
+    return derived().visitNode(static_cast<NAME##Expr &>(expr),                \
+                               std::forward<Args>(args)...);
+#include "silicon/Syntax/AST.def"
+    }
+  }
+
+  /// Dispatch concrete statements.
+  template <typename... Args>
+  void visit(ast::Stmt &stmt, Args &&...args) {
+    switch (stmt.kind) {
+#define AST_STMT(NAME)                                                         \
+  case StmtKind::NAME:                                                         \
+    return derived().visitNode(static_cast<NAME##Stmt &>(stmt),                \
+                               std::forward<Args>(args)...);
+#include "silicon/Syntax/AST.def"
+    }
   }
 
   template <typename... Args>
@@ -455,14 +503,14 @@ struct Visitor {
   template <typename T, typename... Args>
   void visit(ArrayRef<T> nodes, Args &&...args) {
     for (auto &node : nodes)
-      derived().visit(node, std::forward(args)...);
+      derived().visit(node, std::forward<Args>(args)...);
   }
 
   template <typename T, typename... Args>
   void visitNode(T &node, Args &&...args) {
-    derived().preVisitNode(node, std::forward(args)...);
-    node.walk(derived(), std::forward(args)...);
-    derived().postVisitNode(node, std::forward(args)...);
+    derived().preVisitNode(node, std::forward<Args>(args)...);
+    node.walk(derived(), std::forward<Args>(args)...);
+    derived().postVisitNode(node, std::forward<Args>(args)...);
   }
 
   template <typename T, typename... Args>
@@ -509,6 +557,13 @@ struct AST {
     for (auto &&element : container)
       new (data++) T(element);
     return a;
+  }
+
+  /// Visit the nodes in the AST.
+  template <typename V, typename... Args>
+  void walk(V &visitor, Args &&...args) {
+    for (auto *root : roots)
+      visitor.visit(root, std::forward<Args>(args)...);
   }
 
   /// Print the AST to the given output stream.

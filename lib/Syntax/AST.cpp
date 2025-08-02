@@ -134,6 +134,5 @@ struct ASTPrinter : public ast::Visitor<ASTPrinter> {
 
 void AST::print(llvm::raw_ostream &os) {
   ASTPrinter printer(os);
-  for (auto *root : roots)
-    printer.visit(root);
+  walk(printer);
 }
