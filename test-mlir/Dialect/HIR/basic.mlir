@@ -24,5 +24,5 @@ hir.func @foo {
   hir.args
 } {
   %0 = hir.constant_unit
-  hir.return %0 : !hir.type
+  hir.return %0 : !hir.value
 }

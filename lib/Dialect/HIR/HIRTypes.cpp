@@ -8,6 +8,7 @@
 
 #include "silicon/Dialect/HIR/HIRDialect.h"
 #include "silicon/Dialect/HIR/HIRTypes.h"
+#include "silicon/LLVM.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -25,3 +26,13 @@ void HIRDialect::registerTypes() {
 // Pull in the generated type definitions.
 #define GET_TYPEDEF_CLASSES
 #include "silicon/Dialect/HIR/HIRTypes.cpp.inc"
+
+mlir::Type hir::getLowerKind(mlir::Type type) {
+  auto *context = type.getContext();
+  if (auto constType = dyn_cast<ConstType>(type))
+    return ConstType::get(context, getLowerKind(constType.getInnerType()));
+  if (isa<TypeType>(type))
+    return ValueType::get(context);
+  assert(false && "no lower kind");
+  return {};
+}

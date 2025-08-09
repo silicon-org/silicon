@@ -22,8 +22,8 @@ def TypeType : HIRTypeDef<"Type"> {
   let mnemonic = "type";
 }
 
-def IntType : HIRTypeDef<"Int"> {
-  let mnemonic = "int";
+def ValueType : HIRTypeDef<"Value"> {
+  let mnemonic = "value";
 }
 
 def ConstType : HIRTypeDef<"Const"> {

@@ -23,12 +23,12 @@ class HIROp<string mnemonic, list<Trait> traits = []> :
 
 def ConstantIntOp : HIROp<"constant_int", [Pure, ConstantLike]> {
   let arguments = (ins IntAttr:$value);
-  let results = (outs IntType:$result);
+  let results = (outs ValueType:$result);
   let assemblyFormat = "custom<IntAttr>($value) attr-dict";
 }
 
 def ConstantUnitOp : HIROp<"constant_unit", [Pure, ConstantLike]> {
-  let results = (outs TypeType:$result);
+  let results = (outs ValueType:$result);
   let assemblyFormat = "attr-dict";
 }
 
@@ -43,9 +43,9 @@ def IntTypeOp : HIROp<"int_type", [Pure, ConstantLike]> {
 }
 
 def UIntTypeOp : HIROp<"uint_type", [Pure]> {
-  let arguments = (ins AnyType:$value);
+  let arguments = (ins ValueType:$value);
   let results = (outs TypeType:$result);
-  let assemblyFormat = "$value attr-dict `:` type($value)";
+  let assemblyFormat = "$value attr-dict";
 }
 
 def RefTypeOp : HIROp<"ref_type", [Pure]> {
@@ -56,11 +56,11 @@ def RefTypeOp : HIROp<"ref_type", [Pure]> {
 
 def BinaryOp : HIROp<"binary", [
   Pure,
-  // SameOperandsAndResultType,
+  SameOperandsAndResultType,
 ]> {
-  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
-  let results = (outs AnyType:$result);
-  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+  let arguments = (ins ValueType:$lhs, ValueType:$rhs);
+  let results = (outs ValueType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
 }
 
 def LetOp : HIROp<"let", []> {
@@ -122,7 +122,7 @@ def ConstCondBranchOp : HIROp<"const_cond_br", [
 def ConstOp : HIROp<"const", [
   RecursiveMemoryEffects,
 ]> {
-  let arguments = (ins Variadic<AnyType>:$operands);
+  let arguments = (ins Variadic<ConstType>:$operands);
   let results = (outs Variadic<ConstType>:$results);
   let regions = (region AnyRegion:$body);
   let assemblyFormat = [{
@@ -177,9 +177,13 @@ def FuncOp : HIROp<"func", [
 def ArgOp : HIROp<"arg", [
   HasParent<"FuncOp">,
   Pure,
-  SameOperandsAndResultType,
+  TypesMatchWith<
+    "input must be const type of result",
+    "type", "result",
+    [{ getLowerKind(cast<ConstType>($_self).getInnerType()) }]
+  >,
 ]> {
-  let arguments = (ins StrAttr:$name, AnyType:$type);
+  let arguments = (ins StrAttr:$name, ConstType:$type);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$name `:` $type `:` type($type) attr-dict";
 }

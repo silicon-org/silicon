@@ -1,7 +1,7 @@
 // RUN: silicon-opt --infer-types %s | FileCheck %s
 
 func.func private @use_type(%arg0: !hir.type)
-func.func private @use_int(%arg0: !hir.int)
+func.func private @use_value(%arg0: !hir.value)
 
 // CHECK-LABEL: func @TwoInferrable
 func.func @TwoInferrable() {
@@ -120,14 +120,14 @@ func.func @InferIfDominates(%arg0: i1) {
 // CHECK-LABEL: func @InferConstantInt
 func.func @InferConstantInt() {
   // CHECK: [[TMP:%.+]] = hir.constant_int 42
-  // CHECK-NEXT: call @use_int([[TMP]])
-  // CHECK-NEXT: call @use_int([[TMP]])
-  // CHECK-NEXT: call @use_int([[TMP]])
+  // CHECK-NEXT: call @use_value([[TMP]])
+  // CHECK-NEXT: call @use_value([[TMP]])
+  // CHECK-NEXT: call @use_value([[TMP]])
   %0 = hir.constant_int 42
-  %1 = hir.inferrable : !hir.int
-  %2 = hir.unify %0, %1 : !hir.int
-  call @use_int(%0) : (!hir.int) -> ()
-  call @use_int(%1) : (!hir.int) -> ()
-  call @use_int(%2) : (!hir.int) -> ()
+  %1 = hir.inferrable : !hir.value
+  %2 = hir.unify %0, %1 : !hir.value
+  call @use_value(%0) : (!hir.value) -> ()
+  call @use_value(%1) : (!hir.value) -> ()
+  call @use_value(%2) : (!hir.value) -> ()
   return
 }

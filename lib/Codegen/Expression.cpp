@@ -66,9 +66,7 @@ static Value convert(ast::BinaryExpr &expr, Context &cx) {
   auto rhs = cx.convertExpr(*expr.rhs);
   if (!rhs)
     return {};
-  return hir::BinaryOp::create(cx.builder, expr.loc,
-                               hir::TypeType::get(cx.builder.getContext()), lhs,
-                               rhs);
+  return hir::BinaryOp::create(cx.builder, expr.loc, lhs, rhs);
 }
 
 /// Handle block expressions.

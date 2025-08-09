@@ -14,3 +14,11 @@
 
 #define GET_TYPEDEF_CLASSES
 #include "silicon/Dialect/HIR/HIRTypes.h.inc"
+
+namespace silicon {
+namespace hir {
+
+mlir::Type getLowerKind(mlir::Type type);
+
+} // namespace hir
+} // namespace silicon
