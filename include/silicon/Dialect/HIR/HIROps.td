@@ -27,6 +27,11 @@ def ConstantIntOp : HIROp<"constant_int", [Pure, ConstantLike]> {
   let assemblyFormat = "custom<IntAttr>($value) attr-dict";
 }
 
+def ConstantUnitOp : HIROp<"constant_unit", [Pure, ConstantLike]> {
+  let results = (outs TypeType:$result);
+  let assemblyFormat = "attr-dict";
+}
+
 def InferrableOp : HIROp<"inferrable", []> {
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict `:` type($result)";
@@ -123,6 +128,31 @@ def ConstUnwrapOp : HIROp<"const_unwrap", [
   let arguments = (ins ConstType:$input);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$input attr-dict `:` type($input)";
+}
+
+def FuncOp : HIROp<"func", [
+  IsolatedFromAbove
+]> {
+  let arguments = (ins SymbolNameAttr:$sym_name);
+  let regions = (region AnyRegion:$signature, AnyRegion:$body);
+  let assemblyFormat = "$sym_name attr-dict-with-keyword $signature $body";
+}
+
+def ArgsOp : HIROp<"args", [
+  Pure,
+  Terminator,
+]> {
+  let assemblyFormat = "attr-dict";
+}
+
+def ReturnOp : HIROp<"return", [
+  HasParent<"FuncOp">,
+  Pure,
+  ReturnLike,
+  Terminator,
+]> {
+  let arguments = (ins Variadic<AnyType>:$operands);
+  let assemblyFormat = "attr-dict ($operands^ `:` type($operands))?";
 }
 
 #endif // SILICON_DIALECT_HIR_HIROPS_TD

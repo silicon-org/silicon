@@ -2,6 +2,7 @@
 
 func.func @Foo(%arg0: !hir.type, %arg1: !hir.type, %arg2: !hir.type, %arg3: i1, %arg4: !hir.const<!hir.type>) {
   hir.constant_int 42
+  hir.constant_unit
   hir.inferrable : !hir.type
   hir.int_type
   hir.ref_type %arg0
@@ -18,3 +19,9 @@ func.func @Foo(%arg0: !hir.type, %arg1: !hir.type, %arg2: !hir.type, %arg3: i1, 
 }
 
 hir.int_type {x = #hir.int<42>}
+
+hir.func @foo {
+  hir.args
+} {
+  hir.return
+}

@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/Codegen/Codegen.h"
 #include "silicon/LLVM.h"
 #include "silicon/MLIR.h"
 #include "silicon/RegisterAll.h"
@@ -91,6 +92,13 @@ static LogicalResult process(MLIRContext *context, llvm::SourceMgr &sourceMgr,
     return success();
   }
 
+  // Convert the AST to MLIR.
+  auto module = convertToIR(context, ast);
+  if (!module)
+    return failure();
+
+  // Print the final MLIR.
+  module->print(os);
   return success();
 }
 
@@ -159,5 +167,6 @@ int main(int argc, char **argv) {
 
   // Perform the actual work.
   MLIRContext context(registry);
+  context.printOpOnDiagnostic(false);
   exit(failed(executeCompiler(&context)));
 }

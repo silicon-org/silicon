@@ -19,14 +19,14 @@
   static constexpr StringRef typeName = #type;                                 \
   StringRef getTypeName() const { return typeName; }                           \
   template <typename V, typename... Args>                                      \
-  void walk(V &visitor, Args &&..._args)
+  void walk(V &&visitor, Args &&..._args)
 
 /// Declare visitor-related methods for base classes of AST nodes, to be
 /// implemented later on in the file once all AST nodes are defined.
 #define AST_VISIT_DECL()                                                       \
   StringRef getTypeName() const;                                               \
   template <typename V, typename... Args>                                      \
-  void walk(V &visitor, Args &&...args)
+  void walk(V &&visitor, Args &&...args)
 
 /// Visit a field. Call this inside AST_VISIT_DEF.
 #define AST_VISIT(field)                                                       \
@@ -78,6 +78,12 @@ struct Root {
   AST_VISIT_DEF(Root) { AST_VISIT(items); }
 };
 
+/// Call `fn` with the given `node` and optional `args`.
+template <typename Callable, typename T, typename... Args>
+decltype(auto) visit(T &node, Callable &&fn, Args &&...args) {
+  return fn(node, std::forward<Args>(args)...);
+}
+
 //===----------------------------------------------------------------------===//
 // Items
 //===----------------------------------------------------------------------===//
@@ -123,16 +129,23 @@ struct FnArg {
   }
 };
 
-/// Walk implementation for items.
-template <typename V, typename... Args>
-void Item::walk(V &visitor, Args &&...args) {
-  switch (kind) {
+/// Call `fn` with the concrete subclass of `item` and optional `args`.
+template <typename Callable, typename... Args>
+decltype(auto) visit(ast::Item &item, Callable &&fn, Args &&...args) {
+  switch (item.kind) {
 #define AST_ITEM(NAME)                                                         \
   case ItemKind::NAME:                                                         \
-    return static_cast<NAME##Item *>(this)->walk(visitor,                      \
-                                                 std::forward<Args>(args)...);
+    return fn(static_cast<NAME##Item &>(item), std::forward<Args>(args)...);
 #include "silicon/Syntax/AST.def"
   }
+}
+
+/// Walk implementation for items.
+template <typename V, typename... Args>
+void Item::walk(V &&visitor, Args &&...args) {
+  return visit(*this, [&](auto &node) {
+    node.walk(visitor, std::forward<Args>(args)...);
+  });
 }
 
 //===----------------------------------------------------------------------===//
@@ -176,7 +189,7 @@ struct UIntType : public Type {
 
 /// Walk implementation for types.
 template <typename V, typename... Args>
-void Type::walk(V &visitor, Args &&...args) {
+void Type::walk(V &&visitor, Args &&...args) {
   switch (kind) {
 #define AST_TYPE(NAME)                                                         \
   case TypeKind::NAME:                                                         \
@@ -357,16 +370,23 @@ struct ConstExpr : public Expr {
   }
 };
 
-/// Walk implementation for expressions.
-template <typename V, typename... Args>
-void Expr::walk(V &visitor, Args &&...args) {
-  switch (kind) {
+/// Call `fn` with the concrete subclass of `expr` and optional `args`.
+template <typename Callable, typename... Args>
+decltype(auto) visit(ast::Expr &expr, Callable &&fn, Args &&...args) {
+  switch (expr.kind) {
 #define AST_EXPR(NAME)                                                         \
   case ExprKind::NAME:                                                         \
-    return static_cast<NAME##Expr *>(this)->walk(visitor,                      \
-                                                 std::forward<Args>(args)...);
+    return fn(static_cast<NAME##Expr &>(expr), std::forward<Args>(args)...);
 #include "silicon/Syntax/AST.def"
   }
+}
+
+/// Walk implementation for expressions.
+template <typename V, typename... Args>
+void Expr::walk(V &&visitor, Args &&...args) {
+  return visit(*this, [&](auto &node) {
+    node.walk(visitor, std::forward<Args>(args)...);
+  });
 }
 
 //===----------------------------------------------------------------------===//
@@ -416,7 +436,7 @@ struct LetStmt : public Stmt {
 
 /// Walk implementation for statements.
 template <typename V, typename... Args>
-void Stmt::walk(V &visitor, Args &&...args) {
+void Stmt::walk(V &&visitor, Args &&...args) {
   switch (kind) {
 #define AST_STMT(NAME)                                                         \
   case StmtKind::NAME:                                                         \
@@ -441,30 +461,26 @@ struct Visitor {
   }
 
   template <typename T, typename... Args>
-  void visit(T &node, Args &&...args) {
-    derived().visitNode(node, std::forward<Args>(args)...);
+  decltype(auto) visit(T &node, Args &&...args) {
+    return derived().visitNode(node, std::forward<Args>(args)...);
   }
 
   template <typename T, typename... Args>
-  void visit(T *node, Args &&...args) {
-    derived().visit(*node, std::forward<Args>(args)...);
+  decltype(auto) visit(T *node, Args &&...args) {
+    return derived().visit(*node, std::forward<Args>(args)...);
   }
 
   /// Dispatch concrete items.
   template <typename... Args>
-  void visit(ast::Item &item, Args &&...args) {
-    switch (item.kind) {
-#define AST_ITEM(NAME)                                                         \
-  case ItemKind::NAME:                                                         \
-    return derived().visitNode(static_cast<NAME##Item &>(item),                \
-                               std::forward<Args>(args)...);
-#include "silicon/Syntax/AST.def"
-    }
+  decltype(auto) visit(ast::Item &item, Args &&...args) {
+    return ast::visit(item, [&](auto &item) {
+      return derived().visitNode(item, std::forward<Args>(args)...);
+    });
   }
 
   /// Dispatch concrete types.
   template <typename... Args>
-  void visit(ast::Type &type, Args &&...args) {
+  decltype(auto) visit(ast::Type &type, Args &&...args) {
     switch (type.kind) {
 #define AST_TYPE(NAME)                                                         \
   case TypeKind::NAME:                                                         \
@@ -476,7 +492,7 @@ struct Visitor {
 
   /// Dispatch concrete expressions.
   template <typename... Args>
-  void visit(ast::Expr &expr, Args &&...args) {
+  decltype(auto) visit(ast::Expr &expr, Args &&...args) {
     switch (expr.kind) {
 #define AST_EXPR(NAME)                                                         \
   case ExprKind::NAME:                                                         \
@@ -488,7 +504,7 @@ struct Visitor {
 
   /// Dispatch concrete statements.
   template <typename... Args>
-  void visit(ast::Stmt &stmt, Args &&...args) {
+  decltype(auto) visit(ast::Stmt &stmt, Args &&...args) {
     switch (stmt.kind) {
 #define AST_STMT(NAME)                                                         \
   case StmtKind::NAME:                                                         \
@@ -572,7 +588,7 @@ struct AST {
 
   /// Visit the nodes in the AST.
   template <typename V, typename... Args>
-  void walk(V &visitor, Args &&...args) {
+  void walk(V &&visitor, Args &&...args) {
     for (auto *root : roots)
       visitor.visit(root, std::forward<Args>(args)...);
   }
