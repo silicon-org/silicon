@@ -22,27 +22,15 @@ static Value convert(ast::IntType &type, Context &cx) {
 
 /// Handle const types.
 static Value convert(ast::ConstType &type, Context &cx) {
-  auto innerType = cx.convertType(*type.type);
-  if (!innerType)
-    return {};
-  return hir::ConstWrapOp::create(cx.builder, type.loc, innerType);
+  return cx.withinConst(type.loc, [&] { return cx.convertType(*type.type); });
 }
 
 /// Handle the uint type.
 static Value convert(ast::UIntType &type, Context &cx) {
-  auto constOp = hir::ConstOp::create(
-      cx.builder, type.loc,
-      hir::ConstType::get(cx.builder.getContext(),
-                          hir::TypeType::get(cx.builder.getContext())),
-      {});
-  auto &block = constOp.getBody().emplaceBlock();
-  cx.builder.setInsertionPointToStart(&block);
   auto width = cx.convertExpr(*type.width);
   if (!width)
     return {};
-  hir::YieldOp::create(cx.builder, type.loc, width);
-  cx.builder.setInsertionPointAfter(constOp);
-  return hir::UIntTypeOp::create(cx.builder, type.loc, constOp.getResult(0));
+  return hir::UIntTypeOp::create(cx.builder, type.loc, width);
 }
 
 Value Context::convertType(ast::Type &type) {

@@ -54,3 +54,23 @@ LogicalResult Context::convertAST(AST &ast) {
 
   return success();
 }
+
+Value Context::withinConst(Location loc, llvm::function_ref<Value()> fn) {
+  // Create a new const op to contain any ops `fn` might create.
+  auto type = hir::ConstType::get(builder.getContext(),
+                                  hir::TypeType::get(builder.getContext()));
+  auto constOp = hir::ConstOp::create(builder, loc, type, {});
+
+  // Create the body block and set the insertion point to it.
+  auto guard = OpBuilder::InsertionGuard(builder);
+  builder.setInsertionPointToStart(&constOp.getBody().emplaceBlock());
+
+  // Call `fn` to populate the body.
+  auto value = fn();
+  if (!value)
+    return {};
+
+  // Yield the result from the body and return the result of the const op.
+  hir::YieldOp::create(builder, loc, value);
+  return constOp.getResult(0);
+}

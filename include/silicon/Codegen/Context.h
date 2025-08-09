@@ -35,6 +35,9 @@ struct Context {
   LogicalResult convertFnItem(ast::FnItem &item);
   Value convertExpr(ast::Expr &expr);
   Value convertType(ast::Type &type);
+
+  /// Call `fn` embedded within a `hir::ConstOp`.
+  Value withinConst(Location loc, llvm::function_ref<Value()> fn);
 };
 
 } // namespace codegen

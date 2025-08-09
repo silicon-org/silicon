@@ -26,7 +26,8 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
   {
     auto guard = BindingsScope(bindings);
     for (auto *arg : item.args) {
-      auto type = convertType(*arg->type);
+      auto type =
+          withinConst(arg->loc, [&] { return convertType(*arg->type); });
       if (!type)
         return failure();
       auto argOp = hir::ArgOp::create(builder, arg->loc, arg->name, type);
