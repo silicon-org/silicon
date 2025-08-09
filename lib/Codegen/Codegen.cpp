@@ -31,7 +31,7 @@ OwningOpRef<ModuleOp> silicon::convertToIR(MLIRContext *context, AST &ast) {
   // should catch all user errors at the AST level during conversion. If the
   // verifier fails here, that's a compiler bug.
   if (failed(mlir::verify(module))) {
-    module.emitError("compiler generated invalid IR");
+    emitBug(module.getLoc()) << "compiler generated invalid IR";
     return {};
   }
   return module;
