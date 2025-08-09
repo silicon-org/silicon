@@ -8,7 +8,6 @@
 
 #include "silicon/Codegen/Context.h"
 #include "silicon/Dialect/HIR/HIROps.h"
-#include "silicon/Dialect/HIR/HIRTypes.h"
 #include "silicon/MLIR.h"
 #include "silicon/Syntax/AST.h"
 

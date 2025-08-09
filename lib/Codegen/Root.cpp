@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/Codegen/Context.h"
+#include "silicon/Dialect/HIR/HIRTypes.h"
 #include "silicon/Syntax/AST.h"
 
 using namespace silicon;
@@ -70,7 +71,11 @@ Value Context::withinConst(Location loc, llvm::function_ref<Value()> fn) {
   if (!value)
     return {};
 
-  // Yield the result from the body and return the result of the const op.
+  // Yield the value from the body.
   hir::YieldOp::create(builder, loc, value);
-  return constOp.getResult(0);
+
+  // Adjust the result type to match the yielded value and return it.
+  auto result = constOp.getResult(0);
+  result.setType(hir::ConstType::get(builder.getContext(), value.getType()));
+  return result;
 }
