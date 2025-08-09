@@ -187,16 +187,23 @@ struct UIntType : public Type {
   static bool classof(const Type *type) { return type->kind == TypeKind::UInt; }
 };
 
+/// Call `fn` with the concrete subclass of `type` and optional `args`.
+template <typename Callable, typename... Args>
+decltype(auto) visit(ast::Type &type, Callable &&fn, Args &&...args) {
+  switch (type.kind) {
+#define AST_TYPE(NAME)                                                         \
+  case TypeKind::NAME:                                                         \
+    return fn(static_cast<NAME##Type &>(type), std::forward<Args>(args)...);
+#include "silicon/Syntax/AST.def"
+  }
+}
+
 /// Walk implementation for types.
 template <typename V, typename... Args>
 void Type::walk(V &&visitor, Args &&...args) {
-  switch (kind) {
-#define AST_TYPE(NAME)                                                         \
-  case TypeKind::NAME:                                                         \
-    return static_cast<NAME##Type *>(this)->walk(visitor,                      \
-                                                 std::forward<Args>(args)...);
-#include "silicon/Syntax/AST.def"
-  }
+  return visit(*this, [&](auto &node) {
+    node.walk(visitor, std::forward<Args>(args)...);
+  });
 }
 
 //===----------------------------------------------------------------------===//
@@ -472,34 +479,26 @@ struct Visitor {
 
   /// Dispatch concrete items.
   template <typename... Args>
-  decltype(auto) visit(ast::Item &item, Args &&...args) {
-    return ast::visit(item, [&](auto &item) {
-      return derived().visitNode(item, std::forward<Args>(args)...);
+  decltype(auto) visit(ast::Item &node, Args &&...args) {
+    return ast::visit(node, [&](auto &node) {
+      return derived().visitNode(node, std::forward<Args>(args)...);
     });
   }
 
   /// Dispatch concrete types.
   template <typename... Args>
-  decltype(auto) visit(ast::Type &type, Args &&...args) {
-    switch (type.kind) {
-#define AST_TYPE(NAME)                                                         \
-  case TypeKind::NAME:                                                         \
-    return derived().visitNode(static_cast<NAME##Type &>(type),                \
-                               std::forward<Args>(args)...);
-#include "silicon/Syntax/AST.def"
-    }
+  decltype(auto) visit(ast::Type &node, Args &&...args) {
+    return ast::visit(node, [&](auto &node) {
+      return derived().visitNode(node, std::forward<Args>(args)...);
+    });
   }
 
   /// Dispatch concrete expressions.
   template <typename... Args>
-  decltype(auto) visit(ast::Expr &expr, Args &&...args) {
-    switch (expr.kind) {
-#define AST_EXPR(NAME)                                                         \
-  case ExprKind::NAME:                                                         \
-    return derived().visitNode(static_cast<NAME##Expr &>(expr),                \
-                               std::forward<Args>(args)...);
-#include "silicon/Syntax/AST.def"
-    }
+  decltype(auto) visit(ast::Expr &node, Args &&...args) {
+    return ast::visit(node, [&](auto &node) {
+      return derived().visitNode(node, std::forward<Args>(args)...);
+    });
   }
 
   /// Dispatch concrete statements.

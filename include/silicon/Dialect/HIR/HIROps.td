@@ -42,10 +42,25 @@ def IntTypeOp : HIROp<"int_type", [Pure, ConstantLike]> {
   let assemblyFormat = "attr-dict";
 }
 
+def UIntTypeOp : HIROp<"uint_type", [Pure]> {
+  let arguments = (ins AnyType:$value);
+  let results = (outs TypeType:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+}
+
 def RefTypeOp : HIROp<"ref_type", [Pure]> {
   let arguments = (ins TypeType:$innerType);
   let results = (outs TypeType:$result);
   let assemblyFormat = "$innerType attr-dict";
+}
+
+def BinaryOp : HIROp<"binary", [
+  Pure,
+  // SameOperandsAndResultType,
+]> {
+  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
 }
 
 def LetOp : HIROp<"let", []> {
@@ -138,11 +153,22 @@ def FuncOp : HIROp<"func", [
   let assemblyFormat = "$sym_name attr-dict-with-keyword $signature $body";
 }
 
+def ArgOp : HIROp<"arg", [
+  HasParent<"FuncOp">,
+  Pure,
+]> {
+  let arguments = (ins StrAttr:$name, AnyType:$type);
+  let results = (outs TypeType:$result);
+  let assemblyFormat = "$name `:` $type `:` type($type) attr-dict";
+}
+
 def ArgsOp : HIROp<"args", [
+  HasParent<"FuncOp">,
   Pure,
   Terminator,
 ]> {
-  let assemblyFormat = "attr-dict";
+  let arguments = (ins Variadic<TypeType>:$operands);
+  let assemblyFormat = "$operands attr-dict";
 }
 
 def ReturnOp : HIROp<"return", [
@@ -151,8 +177,8 @@ def ReturnOp : HIROp<"return", [
   ReturnLike,
   Terminator,
 ]> {
-  let arguments = (ins Variadic<AnyType>:$operands);
-  let assemblyFormat = "attr-dict ($operands^ `:` type($operands))?";
+  let arguments = (ins AnyType:$value);
+  let assemblyFormat = "attr-dict $value `:` type($value)";
 }
 
 #endif // SILICON_DIALECT_HIR_HIROPS_TD

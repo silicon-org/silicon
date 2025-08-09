@@ -10,6 +10,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/DynamicAPInt.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -30,6 +31,7 @@ using llvm::DenseMap;
 using llvm::DenseSet;
 using llvm::dyn_cast;
 using llvm::dyn_cast_or_null;
+using llvm::DynamicAPInt;
 using llvm::failed;
 using llvm::failure;
 using llvm::FailureOr;

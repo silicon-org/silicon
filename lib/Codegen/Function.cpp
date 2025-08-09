@@ -22,14 +22,28 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
   // Handle the function arguments.
   auto &sigBlock = funcOp.getSignature().emplaceBlock();
   builder.setInsertionPointToStart(&sigBlock);
-  hir::ArgsOp::create(builder, funcOp.getLoc());
+  SmallVector<Value> args;
+  {
+    auto guard = BindingsScope(bindings);
+    for (auto *arg : item.args) {
+      auto type = convertType(*arg->type);
+      if (!type)
+        return failure();
+      auto argOp = hir::ArgOp::create(builder, arg->loc, arg->name, type);
+      bindings.insert(arg, argOp);
+      args.push_back(argOp);
+    }
+  }
+  hir::ArgsOp::create(builder, item.loc, args);
 
   // Handle the function body.
   auto &bodyBlock = funcOp.getBody().emplaceBlock();
   builder.setInsertionPointToStart(&bodyBlock);
-  if (!convertExpr(*item.body))
+  auto result = convertExpr(*item.body);
+  if (!result)
     return failure();
-  hir::ReturnOp::create(builder, item.body->loc, {});
 
+  // Return the result value.
+  hir::ReturnOp::create(builder, item.body->loc, result);
   return success();
 }

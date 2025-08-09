@@ -23,5 +23,6 @@ hir.int_type {x = #hir.int<42>}
 hir.func @foo {
   hir.args
 } {
-  hir.return
+  %0 = hir.constant_unit
+  hir.return %0 : !hir.type
 }
