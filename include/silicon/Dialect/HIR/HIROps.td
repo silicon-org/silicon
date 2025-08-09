@@ -119,6 +119,27 @@ def ConstCondBranchOp : HIROp<"const_cond_br", [
   }];
 }
 
+def ConstOp : HIROp<"const", [
+  RecursiveMemoryEffects,
+]> {
+  let arguments = (ins Variadic<AnyType>:$operands);
+  let results = (outs Variadic<ConstType>:$results);
+  let regions = (region AnyRegion:$body);
+  let assemblyFormat = [{
+    ($operands^ `:` type($operands))? (`->` type($results)^)?
+    attr-dict-with-keyword $body
+  }];
+}
+
+def YieldOp : HIROp<"yield", [
+  HasParent<"ConstOp">,
+  Pure,
+  Terminator,
+]> {
+  let arguments = (ins Variadic<AnyType>:$values);
+  let assemblyFormat = "($values^ `:` type($values))? attr-dict";
+}
+
 def ConstWrapOp : HIROp<"const_wrap", [
   Pure,
   TypesMatchWith<
@@ -156,9 +177,10 @@ def FuncOp : HIROp<"func", [
 def ArgOp : HIROp<"arg", [
   HasParent<"FuncOp">,
   Pure,
+  SameOperandsAndResultType,
 ]> {
   let arguments = (ins StrAttr:$name, AnyType:$type);
-  let results = (outs TypeType:$result);
+  let results = (outs AnyType:$result);
   let assemblyFormat = "$name `:` $type `:` type($type) attr-dict";
 }
 
@@ -167,8 +189,8 @@ def ArgsOp : HIROp<"args", [
   Pure,
   Terminator,
 ]> {
-  let arguments = (ins Variadic<TypeType>:$operands);
-  let assemblyFormat = "$operands attr-dict";
+  let arguments = (ins Variadic<AnyType>:$operands);
+  let assemblyFormat = "($operands^ `:` type($operands))? attr-dict";
 }
 
 def ReturnOp : HIROp<"return", [
