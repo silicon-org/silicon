@@ -14,6 +14,11 @@
 namespace silicon {
 namespace codegen {
 
+struct ConstContext {
+  OpBuilder builder;
+  Block &entry;
+};
+
 struct Context {
   ModuleOp module;
   OpBuilder builder;
@@ -30,11 +35,18 @@ struct Context {
   using BindingsScope = Bindings::ScopeTy;
   Bindings bindings;
 
+  unsigned currentConstness;
+  SmallVector<ConstContext, 0> constContexts;
+  OpBuilder &currentBuilder() {
+    return constContexts[currentConstness].builder;
+  }
+
   Context(ModuleOp module);
   LogicalResult convertAST(AST &ast);
   LogicalResult convertFnItem(ast::FnItem &item);
   Value convertExpr(ast::Expr &expr);
   Value convertType(ast::Type &type);
+  LogicalResult convertStmt(ast::Stmt &stmt);
 
   /// Call `fn` embedded within a `hir::ConstOp`.
   Value withinConst(Location loc, llvm::function_ref<Value()> fn);

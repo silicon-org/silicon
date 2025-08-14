@@ -12,6 +12,7 @@
 #include "silicon/MLIR.h"
 #include "silicon/Syntax/AST.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 
 using namespace silicon;
 using namespace codegen;
@@ -19,8 +20,8 @@ using namespace codegen;
 /// Handle number literal expressions.
 static Value convert(ast::NumLitExpr &expr, Context &cx) {
   return hir::ConstantIntOp::create(
-      cx.builder, expr.loc,
-      hir::IntAttr::get(cx.builder.getContext(), DynamicAPInt(expr.value)));
+      cx.currentBuilder(), expr.loc,
+      hir::IntAttr::get(cx.module.getContext(), DynamicAPInt(expr.value)));
 }
 
 /// Handle identifier expressions.
@@ -34,7 +35,7 @@ static Value convert(ast::IdentExpr &expr, Context &cx) {
   // Find all constant regions between the identifier and where the value is
   // defined. We'll need to thread the value through these regions.
   SmallVector<hir::ConstOp> constOps;
-  auto *region = cx.builder.getBlock()->getParent();
+  auto *region = cx.currentBuilder().getBlock()->getParent();
   auto *targetRegion = value.getParentRegion();
   while (region != targetRegion) {
     if (auto constOp = dyn_cast<hir::ConstOp>(region->getParentOp()))
@@ -66,18 +67,43 @@ static Value convert(ast::BinaryExpr &expr, Context &cx) {
   auto rhs = cx.convertExpr(*expr.rhs);
   if (!rhs)
     return {};
-  return hir::BinaryOp::create(cx.builder, expr.loc, lhs, rhs);
+  return hir::BinaryOp::create(cx.currentBuilder(), expr.loc, lhs, rhs);
 }
 
 /// Handle block expressions.
 static Value convert(ast::BlockExpr &block, Context &cx) {
-  if (!block.stmts.empty()) {
-    emitBug(block.stmts[0]->loc) << "blocks with statements not implemented";
-    return {};
-  }
+  // Create a new scope for things like let bindings declared in this scope.
+  auto guard = Context::BindingsScope(cx.bindings);
+
+  // Handle the statements in the block.
+  for (auto *stmt : block.stmts)
+    if (failed(cx.convertStmt(*stmt)))
+      return {};
+
+  // Handle the optional result, or create a unit result `()` otherwise.
   if (block.result)
     return cx.convertExpr(*block.result);
-  return hir::ConstantUnitOp::create(cx.builder, block.loc);
+  return hir::ConstantUnitOp::create(cx.currentBuilder(), block.loc);
+}
+
+/// Handle const expressions.
+static Value convert(ast::ConstExpr &expr, Context &cx) {
+  // Increase the current constness level.
+  ++cx.currentConstness;
+  auto guard = llvm::make_scope_exit([&] { --cx.currentConstness; });
+
+  // If this is the first time we reach this constness level, create the
+  // corresponding block and builder.
+  assert(cx.currentConstness <= cx.constContexts.size());
+  if (cx.currentConstness == cx.constContexts.size()) {
+    auto &region = *cx.constContexts.back().entry.getParent();
+    region.push_front(new Block);
+    cx.constContexts.push_back(
+        ConstContext{OpBuilder::atBlockBegin(&region.front()), region.front()});
+  }
+
+  // Handle the expression itself.
+  return cx.convertExpr(*expr.value);
 }
 
 /// Emit an error for unimplemented expressions.

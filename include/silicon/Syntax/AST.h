@@ -441,16 +441,23 @@ struct LetStmt : public Stmt {
   static bool classof(const Stmt *stmt) { return stmt->kind == StmtKind::Let; }
 };
 
+/// Call `fn` with the concrete subclass of `stmt` and optional `args`.
+template <typename Callable, typename... Args>
+decltype(auto) visit(ast::Stmt &stmt, Callable &&fn, Args &&...args) {
+  switch (stmt.kind) {
+#define AST_STMT(NAME)                                                         \
+  case StmtKind::NAME:                                                         \
+    return fn(static_cast<NAME##Stmt &>(stmt), std::forward<Args>(args)...);
+#include "silicon/Syntax/AST.def"
+  }
+}
+
 /// Walk implementation for statements.
 template <typename V, typename... Args>
 void Stmt::walk(V &&visitor, Args &&...args) {
-  switch (kind) {
-#define AST_STMT(NAME)                                                         \
-  case StmtKind::NAME:                                                         \
-    return static_cast<NAME##Stmt *>(this)->walk(visitor,                      \
-                                                 std::forward<Args>(args)...);
-#include "silicon/Syntax/AST.def"
-  }
+  return visit(*this, [&](auto &node) {
+    node.walk(visitor, std::forward<Args>(args)...);
+  });
 }
 
 //===----------------------------------------------------------------------===//
@@ -503,14 +510,10 @@ struct Visitor {
 
   /// Dispatch concrete statements.
   template <typename... Args>
-  decltype(auto) visit(ast::Stmt &stmt, Args &&...args) {
-    switch (stmt.kind) {
-#define AST_STMT(NAME)                                                         \
-  case StmtKind::NAME:                                                         \
-    return derived().visitNode(static_cast<NAME##Stmt &>(stmt),                \
-                               std::forward<Args>(args)...);
-#include "silicon/Syntax/AST.def"
-    }
+  decltype(auto) visit(ast::Stmt &node, Args &&...args) {
+    return ast::visit(node, [&](auto &node) {
+      return derived().visitNode(node, std::forward<Args>(args)...);
+    });
   }
 
   template <typename... Args>

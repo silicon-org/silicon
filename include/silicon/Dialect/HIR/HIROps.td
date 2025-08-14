@@ -204,7 +204,16 @@ def ReturnOp : HIROp<"return", [
   Terminator,
 ]> {
   let arguments = (ins AnyType:$value);
-  let assemblyFormat = "attr-dict $value `:` type($value)";
+  let assemblyFormat = "$value `:` type($value) attr-dict";
+}
+
+def NextPhaseOp : HIROp<"next_phase", [
+  HasParent<"FuncOp">,
+  Pure,
+  Terminator,
+]> {
+  let successors = (successor AnySuccessor:$dest);
+  let assemblyFormat = "$dest attr-dict";
 }
 
 #endif // SILICON_DIALECT_HIR_HIROPS_TD

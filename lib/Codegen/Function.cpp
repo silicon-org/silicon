@@ -8,6 +8,7 @@
 
 #include "silicon/Codegen/Context.h"
 #include "silicon/Dialect/HIR/HIROps.h"
+#include "llvm/ADT/ScopeExit.h"
 
 using namespace silicon;
 using namespace codegen;
@@ -40,11 +41,21 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
   // Handle the function body.
   auto &bodyBlock = funcOp.getBody().emplaceBlock();
   builder.setInsertionPointToStart(&bodyBlock);
+
+  auto guard2 = llvm::make_scope_exit([&] { constContexts.clear(); });
+  constContexts.push_back(ConstContext{builder, bodyBlock});
+  currentConstness = 0;
+
   auto result = convertExpr(*item.body);
   if (!result)
     return failure();
 
+  // Create terminators in all constness levels.
+  for (unsigned idx = 1; idx < constContexts.size(); ++idx)
+    hir::NextPhaseOp::create(constContexts[idx].builder, item.body->loc,
+                             &constContexts[idx - 1].entry);
+
   // Return the result value.
-  hir::ReturnOp::create(builder, item.body->loc, result);
+  hir::ReturnOp::create(constContexts[0].builder, item.body->loc, result);
   return success();
 }

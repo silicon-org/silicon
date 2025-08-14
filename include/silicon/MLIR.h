@@ -8,15 +8,21 @@
 
 #pragma once
 
+#include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/Region.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/Value.h"
 
 namespace silicon {
+using mlir::Block;
+using mlir::BlockArgument;
 using mlir::emitError;
 using mlir::emitRemark;
 using mlir::emitWarning;
@@ -26,7 +32,11 @@ using mlir::Location;
 using mlir::MLIRContext;
 using mlir::ModuleOp;
 using mlir::OpBuilder;
+using mlir::Operation;
+using mlir::OpOperand;
+using mlir::OpResult;
 using mlir::OwningOpRef;
+using mlir::Region;
 using mlir::StringAttr;
 using mlir::SymbolTable;
 using mlir::UnknownLoc;
