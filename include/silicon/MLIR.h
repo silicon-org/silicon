@@ -19,6 +19,7 @@
 #include "mlir/IR/Region.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/ValueRange.h"
 
 namespace silicon {
 using mlir::Block;
@@ -41,6 +42,7 @@ using mlir::StringAttr;
 using mlir::SymbolTable;
 using mlir::UnknownLoc;
 using mlir::Value;
+using mlir::ValueRange;
 
 /// Emit a diagnostic indicating a compiler bug at the given location.
 inline mlir::InFlightDiagnostic emitBug(Location loc, const char *func,

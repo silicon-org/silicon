@@ -17,6 +17,9 @@ namespace codegen {
 struct ConstContext {
   OpBuilder builder;
   Block &entry;
+  hir::ReturnOp returnOp;
+  std::unique_ptr<Region> createdRegion;
+  DenseMap<Value, Value> forwardedValues;
 };
 
 struct Context {
@@ -40,6 +43,11 @@ struct Context {
   OpBuilder &currentBuilder() {
     return constContexts[currentConstness].builder;
   }
+  void increaseConstness();
+  void decreaseConstness();
+
+  /// Determine the constness level of a value.
+  unsigned getValueConstness(Value value);
 
   Context(ModuleOp module);
   LogicalResult convertAST(AST &ast);
@@ -47,9 +55,6 @@ struct Context {
   Value convertExpr(ast::Expr &expr);
   Value convertType(ast::Type &type);
   LogicalResult convertStmt(ast::Stmt &stmt);
-
-  /// Call `fn` embedded within a `hir::ConstOp`.
-  Value withinConst(Location loc, llvm::function_ref<Value()> fn);
 };
 
 } // namespace codegen

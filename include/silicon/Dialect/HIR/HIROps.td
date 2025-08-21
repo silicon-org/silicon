@@ -170,8 +170,8 @@ def FuncOp : HIROp<"func", [
   IsolatedFromAbove
 ]> {
   let arguments = (ins SymbolNameAttr:$sym_name);
-  let regions = (region AnyRegion:$signature, AnyRegion:$body);
-  let assemblyFormat = "$sym_name attr-dict-with-keyword $signature $body";
+  let regions = (region VariadicRegion<AnyRegion>:$bodies);
+  let assemblyFormat = "$sym_name attr-dict-with-keyword $bodies";
 }
 
 def ArgOp : HIROp<"arg", [
@@ -198,13 +198,18 @@ def ArgsOp : HIROp<"args", [
 }
 
 def ReturnOp : HIROp<"return", [
+  AttrSizedOperandSegments,
   HasParent<"FuncOp">,
   Pure,
   ReturnLike,
   Terminator,
 ]> {
-  let arguments = (ins AnyType:$value);
-  let assemblyFormat = "$value `:` type($value) attr-dict";
+  let arguments = (ins Variadic<AnyType>:$freeze, Variadic<AnyType>:$args);
+  let assemblyFormat = [{
+    (`freeze` `(` $freeze^ `:` type($freeze) `)`)?
+    (`args` `(` $args^ `:` type($args) `)`)?
+    attr-dict
+  }];
 }
 
 def NextPhaseOp : HIROp<"next_phase", [

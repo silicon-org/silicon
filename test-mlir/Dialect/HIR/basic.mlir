@@ -19,10 +19,3 @@ func.func @Foo(%arg0: !hir.type, %arg1: !hir.type, %arg2: !hir.type, %arg3: i1, 
 }
 
 hir.int_type {x = #hir.int<42>}
-
-hir.func @foo {
-  hir.args
-} {
-  %0 = hir.constant_unit
-  hir.return %0 : !hir.value
-}

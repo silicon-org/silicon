@@ -8,11 +8,8 @@
 
 #include "silicon/Codegen/Context.h"
 #include "silicon/Dialect/HIR/HIRAttributes.h"
-#include "silicon/Dialect/HIR/HIRTypes.h"
 #include "silicon/MLIR.h"
 #include "silicon/Syntax/AST.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/ScopeExit.h"
 
 using namespace silicon;
 using namespace codegen;
@@ -32,28 +29,26 @@ static Value convert(ast::IdentExpr &expr, Context &cx) {
     return {};
   }
 
-  // Find all constant regions between the identifier and where the value is
-  // defined. We'll need to thread the value through these regions.
-  SmallVector<hir::ConstOp> constOps;
-  auto *region = cx.currentBuilder().getBlock()->getParent();
-  auto *targetRegion = value.getParentRegion();
-  while (region != targetRegion) {
-    if (auto constOp = dyn_cast<hir::ConstOp>(region->getParentOp()))
-      constOps.push_back(constOp);
-    region = region->getParentRegion();
+  // Determine the constness level of the value. If the value is less constant
+  // than the current context, emit an error.
+  unsigned valueConstness = cx.getValueConstness(value);
+  if (valueConstness < cx.currentConstness) {
+    emitError(expr.loc) << "`" << expr.name << "` is not constant here";
+    return {};
   }
 
-  // For each layer of constness, feed the value into the const op as an
-  // argument, and add the unpacked value as a block argument to the const body.
-  for (auto constOp : llvm::reverse(constOps)) {
-    auto constType = dyn_cast<hir::ConstType>(value.getType());
-    if (!constType) {
-      emitError(expr.loc) << "`" << expr.name << "` is not constant here";
-      return {};
+  // If the value is more constant than the current context, we need to pass it
+  // from one region to another until we reach the current context's region.
+  while (valueConstness > cx.currentConstness) {
+    auto &frozen = cx.constContexts[valueConstness].forwardedValues[value];
+    if (!frozen) {
+      cx.constContexts[valueConstness].returnOp.getFreezeMutable().append(
+          value);
+      frozen = cx.constContexts[valueConstness - 1].entry.addArgument(
+          value.getType(), value.getLoc());
     }
-    auto type = constType.getInnerType();
-    constOp.getOperandsMutable().append(value);
-    value = constOp.getBody().addArgument(type, expr.loc);
+    value = frozen;
+    --valueConstness;
   }
 
   return value;
@@ -88,22 +83,10 @@ static Value convert(ast::BlockExpr &block, Context &cx) {
 
 /// Handle const expressions.
 static Value convert(ast::ConstExpr &expr, Context &cx) {
-  // Increase the current constness level.
-  ++cx.currentConstness;
-  auto guard = llvm::make_scope_exit([&] { --cx.currentConstness; });
-
-  // If this is the first time we reach this constness level, create the
-  // corresponding block and builder.
-  assert(cx.currentConstness <= cx.constContexts.size());
-  if (cx.currentConstness == cx.constContexts.size()) {
-    auto &region = *cx.constContexts.back().entry.getParent();
-    region.push_front(new Block);
-    cx.constContexts.push_back(
-        ConstContext{OpBuilder::atBlockBegin(&region.front()), region.front()});
-  }
-
-  // Handle the expression itself.
-  return cx.convertExpr(*expr.value);
+  cx.increaseConstness();
+  auto value = cx.convertExpr(*expr.value);
+  cx.decreaseConstness();
+  return value;
 }
 
 /// Emit an error for unimplemented expressions.

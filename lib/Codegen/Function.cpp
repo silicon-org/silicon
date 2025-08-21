@@ -8,7 +8,6 @@
 
 #include "silicon/Codegen/Context.h"
 #include "silicon/Dialect/HIR/HIROps.h"
-#include "llvm/ADT/ScopeExit.h"
 
 using namespace silicon;
 using namespace codegen;
@@ -16,46 +15,47 @@ using namespace codegen;
 LogicalResult Context::convertFnItem(ast::FnItem &item) {
   auto funcOp = funcs.at(&item);
 
-  // Ensure we will resume insertion after the function once we're done.
-  builder.setInsertionPointAfter(funcOp);
-  OpBuilder::InsertionGuard guard(builder);
+  // Create a const context for the main function body.
+  constContexts.clear();
+  currentConstness = -1;
+  increaseConstness();
 
   // Handle the function arguments.
-  auto &sigBlock = funcOp.getSignature().emplaceBlock();
-  builder.setInsertionPointToStart(&sigBlock);
-  SmallVector<Value> args;
-  {
-    auto guard = BindingsScope(bindings);
-    for (auto *arg : item.args) {
-      auto type =
-          withinConst(arg->loc, [&] { return convertType(*arg->type); });
-      if (!type)
-        return failure();
-      auto argOp = hir::ArgOp::create(builder, arg->loc, arg->name, type);
-      bindings.insert(arg, argOp);
-      args.push_back(argOp);
-    }
+  auto guard2 = BindingsScope(bindings);
+  for (auto *arg : item.args) {
+    // Determine the type of the argument.
+    increaseConstness();
+    auto type = convertType(*arg->type);
+    decreaseConstness();
+    if (!type)
+      return failure();
+
+    // Add the argument type to the return op's list of arguments at the
+    // argument's level of constness.
+    unsigned argConstness = getValueConstness(type);
+    constContexts[argConstness].returnOp.getArgsMutable().append(type);
+
+    // Add the argument value as a block argument to the next lower level of
+    // constness.
+    auto blockArg = constContexts[argConstness - 1].entry.addArgument(
+        hir::getLowerKind(type.getType()), arg->loc);
+    bindings.insert(arg, blockArg);
   }
-  hir::ArgsOp::create(builder, item.loc, args);
 
   // Handle the function body.
-  auto &bodyBlock = funcOp.getBody().emplaceBlock();
-  builder.setInsertionPointToStart(&bodyBlock);
-
-  auto guard2 = llvm::make_scope_exit([&] { constContexts.clear(); });
-  constContexts.push_back(ConstContext{builder, bodyBlock});
-  currentConstness = 0;
-
   auto result = convertExpr(*item.body);
   if (!result)
     return failure();
 
-  // Create terminators in all constness levels.
-  for (unsigned idx = 1; idx < constContexts.size(); ++idx)
-    hir::NextPhaseOp::create(constContexts[idx].builder, item.body->loc,
-                             &constContexts[idx - 1].entry);
+  // Update the function op with the fully populated regions.
+  auto newFuncOp = hir::FuncOp::create(
+      builder, funcOp.getLoc(), funcOp.getSymNameAttr(), constContexts.size());
+  for (unsigned idx = 0; idx < constContexts.size(); ++idx) {
+    newFuncOp.getBodies()[idx].takeBody(
+        *constContexts[constContexts.size() - idx - 1].entry.getParent());
+  }
+  funcs[&item] = newFuncOp;
+  funcOp.erase();
 
-  // Return the result value.
-  hir::ReturnOp::create(constContexts[0].builder, item.body->loc, result);
   return success();
 }

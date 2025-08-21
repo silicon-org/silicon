@@ -21,7 +21,7 @@ struct DeclareItems : public ast::Visitor<DeclareItems> {
 
   void preVisitNode(ast::FnItem &item) {
     auto func = cx.builder.create<hir::FuncOp>(
-        item.loc, cx.builder.getStringAttr(item.name));
+        item.loc, cx.builder.getStringAttr(item.name), 0);
     cx.funcs.insert({&item, func});
     cx.symbolTable.insert(func);
   }
@@ -56,26 +56,31 @@ LogicalResult Context::convertAST(AST &ast) {
   return success();
 }
 
-Value Context::withinConst(Location loc, llvm::function_ref<Value()> fn) {
-  // Create a new const op to contain any ops `fn` might create.
-  auto type = hir::ConstType::get(builder.getContext(),
-                                  hir::TypeType::get(builder.getContext()));
-  auto constOp = hir::ConstOp::create(builder, loc, type, {});
+void Context::increaseConstness() {
+  ++currentConstness;
+  assert(currentConstness <= constContexts.size());
+  if (currentConstness == constContexts.size()) {
+    auto region = std::make_unique<Region>();
+    auto &entry = region->emplaceBlock();
+    OpBuilder builder(module.getContext());
+    builder.setInsertionPointToStart(&entry);
+    auto returnOp =
+        hir::ReturnOp::create(builder, UnknownLoc::get(module.getContext()),
+                              ValueRange{}, ValueRange{});
+    builder.setInsertionPoint(returnOp);
+    constContexts.push_back({builder, entry, returnOp, std::move(region),
+                             DenseMap<Value, Value>()});
+  }
+}
 
-  // Create the body block and set the insertion point to it.
-  auto guard = OpBuilder::InsertionGuard(builder);
-  builder.setInsertionPointToStart(&constOp.getBody().emplaceBlock());
+void Context::decreaseConstness() {
+  assert(currentConstness > 0);
+  --currentConstness;
+}
 
-  // Call `fn` to populate the body.
-  auto value = fn();
-  if (!value)
-    return {};
-
-  // Yield the value from the body.
-  hir::YieldOp::create(builder, loc, value);
-
-  // Adjust the result type to match the yielded value and return it.
-  auto result = constOp.getResult(0);
-  result.setType(hir::ConstType::get(builder.getContext(), value.getType()));
-  return result;
+unsigned Context::getValueConstness(Value value) {
+  for (unsigned idx = 0; idx < constContexts.size(); ++idx)
+    if (value.getParentRegion() == constContexts[idx].entry.getParent())
+      return idx;
+  llvm_unreachable("value not in any region");
 }
