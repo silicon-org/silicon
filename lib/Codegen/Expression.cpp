@@ -8,6 +8,7 @@
 
 #include "silicon/Codegen/Context.h"
 #include "silicon/Dialect/HIR/HIRAttributes.h"
+#include "silicon/Dialect/HIR/HIROps.h"
 #include "silicon/MLIR.h"
 #include "silicon/Syntax/AST.h"
 
@@ -52,6 +53,57 @@ static Value convert(ast::IdentExpr &expr, Context &cx) {
   }
 
   return value;
+}
+
+/// Handle call expressions.
+static Value convert(ast::CallExpr &expr, Context &cx) {
+  // We only support calling identifiers.
+  auto *identCallee = dyn_cast<ast::IdentExpr>(expr.callee);
+  if (!identCallee) {
+    emitBug(expr.loc) << "calls to `" << expr.callee->getTypeName()
+                      << "` not implemented";
+    return {};
+  }
+
+  // We only support calls to `FnItem`s for now.
+  auto *fnItem = dyn_cast<ast::FnItem *>(identCallee->binding);
+  if (!fnItem) {
+    emitBug(expr.loc) << "calls to non-fns not implemented";
+    return {};
+  }
+
+  // Check that we have the right number of arguments.
+  if (fnItem->args.size() != expr.args.size()) {
+    emitError(expr.loc) << "call to `" << fnItem->name << "` expects "
+                        << fnItem->args.size() << " arguments, but got "
+                        << expr.args.size();
+    return {};
+  }
+
+  // Generate the arguments for the call.
+  {
+    auto guard = Context::BindingsScope(cx.bindings);
+    for (auto [fnArg, callArg] : llvm::zip(fnItem->args, expr.args)) {
+      // Determine the type of the argument.
+      cx.increaseConstness();
+      auto type = cx.convertType(*fnArg->type);
+      cx.decreaseConstness();
+      if (!type)
+        return {};
+
+      // Handle the argument passed from the call to the function.
+      unsigned argConstness = cx.getValueConstness(type);
+      unsigned currentConstness = cx.currentConstness;
+      while (cx.currentConstness + 1 < argConstness)
+        cx.increaseConstness();
+      auto argValue = cx.convertExpr(*callArg);
+      cx.currentConstness = currentConstness;
+      if (!argValue)
+        return {};
+    }
+  }
+
+  return hir::ConstantUnitOp::create(cx.currentBuilder(), expr.loc);
 }
 
 /// Handle binary expressions.
