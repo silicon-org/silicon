@@ -18,6 +18,7 @@
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/Region.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/TypeRange.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 
@@ -40,6 +41,7 @@ using mlir::OwningOpRef;
 using mlir::Region;
 using mlir::StringAttr;
 using mlir::SymbolTable;
+using mlir::TypeRange;
 using mlir::UnknownLoc;
 using mlir::Value;
 using mlir::ValueRange;

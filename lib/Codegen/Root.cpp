@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/Codegen/Context.h"
-#include "silicon/Dialect/HIR/HIRTypes.h"
 #include "silicon/Syntax/AST.h"
 
 using namespace silicon;

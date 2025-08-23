@@ -32,4 +32,8 @@ def ConstType : HIRTypeDef<"Const"> {
   let assemblyFormat = "`<` $innerType `>`";
 }
 
+def FuncType : HIRTypeDef<"Func"> {
+  let mnemonic = "func";
+}
+
 #endif // SILICON_DIALECT_HIR_HIRTYPES_TD

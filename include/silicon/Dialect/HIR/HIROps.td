@@ -32,6 +32,12 @@ def ConstantUnitOp : HIROp<"constant_unit", [Pure, ConstantLike]> {
   let assemblyFormat = "attr-dict";
 }
 
+def ConstantFuncOp : HIROp<"constant_func", [Pure, ConstantLike]> {
+  let arguments = (ins FlatSymbolRefAttr:$value);
+  let results = (outs FuncType:$result);
+  let assemblyFormat = "$value attr-dict";
+}
+
 def InferrableOp : HIROp<"inferrable", []> {
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict `:` type($result)";
@@ -204,10 +210,10 @@ def ReturnOp : HIROp<"return", [
   ReturnLike,
   Terminator,
 ]> {
-  let arguments = (ins Variadic<AnyType>:$freeze, Variadic<AnyType>:$args);
+  let arguments = (ins Variadic<AnyType>:$args, Variadic<AnyType>:$freeze);
   let assemblyFormat = [{
-    (`freeze` `(` $freeze^ `:` type($freeze) `)`)?
     (`args` `(` $args^ `:` type($args) `)`)?
+    (`freeze` `(` $freeze^ `:` type($freeze) `)`)?
     attr-dict
   }];
 }
@@ -219,6 +225,21 @@ def NextPhaseOp : HIROp<"next_phase", [
 ]> {
   let successors = (successor AnySuccessor:$dest);
   let assemblyFormat = "$dest attr-dict";
+}
+
+def CallOp : HIROp<"call"> {
+  let arguments = (ins
+    FuncType:$callee,
+    Variadic<AnyType>:$arguments
+  );
+  let results = (outs
+    FuncType:$specialized_callee,
+    Variadic<AnyType>:$results
+  );
+  let assemblyFormat = [{
+    $callee `(` $arguments `)` attr-dict
+    `:` functional-type($arguments, $results)
+  }];
 }
 
 #endif // SILICON_DIALECT_HIR_HIROPS_TD

@@ -37,8 +37,10 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
 
     // Add the argument value as a block argument to the next lower level of
     // constness.
-    auto blockArg = constContexts[argConstness - 1].entry.addArgument(
-        hir::getLowerKind(type.getType()), arg->loc);
+    auto &constCx = constContexts[argConstness - 1];
+    auto blockArg = constCx.entry.insertArgument(
+        constCx.lastArgumentIndex++, hir::getLowerKind(type.getType()),
+        arg->loc);
     bindings.insert(arg, blockArg);
   }
 

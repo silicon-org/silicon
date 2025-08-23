@@ -15,6 +15,17 @@
 using namespace silicon;
 using namespace codegen;
 
+static Value freezeValueAcrossConstness(Value value, unsigned valueConstness,
+                                        Context &cx) {
+  auto &frozen = cx.constContexts[valueConstness].forwardedValues[value];
+  if (!frozen) {
+    cx.constContexts[valueConstness].returnOp.getFreezeMutable().append(value);
+    frozen = cx.constContexts[valueConstness - 1].entry.addArgument(
+        value.getType(), value.getLoc());
+  }
+  return frozen;
+}
+
 /// Handle number literal expressions.
 static Value convert(ast::NumLitExpr &expr, Context &cx) {
   return hir::ConstantIntOp::create(
@@ -41,14 +52,7 @@ static Value convert(ast::IdentExpr &expr, Context &cx) {
   // If the value is more constant than the current context, we need to pass it
   // from one region to another until we reach the current context's region.
   while (valueConstness > cx.currentConstness) {
-    auto &frozen = cx.constContexts[valueConstness].forwardedValues[value];
-    if (!frozen) {
-      cx.constContexts[valueConstness].returnOp.getFreezeMutable().append(
-          value);
-      frozen = cx.constContexts[valueConstness - 1].entry.addArgument(
-          value.getType(), value.getLoc());
-    }
-    value = frozen;
+    value = freezeValueAcrossConstness(value, valueConstness, cx);
     --valueConstness;
   }
 
@@ -81,6 +85,8 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
   }
 
   // Generate the arguments for the call.
+  unsigned callConstness = cx.currentConstness;
+  SmallVector<SmallVector<Value>> argsAtConstness;
   {
     auto guard = Context::BindingsScope(cx.bindings);
     for (auto [fnArg, callArg] : llvm::zip(fnItem->args, expr.args)) {
@@ -92,17 +98,38 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
         return {};
 
       // Handle the argument passed from the call to the function.
-      unsigned argConstness = cx.getValueConstness(type);
-      unsigned currentConstness = cx.currentConstness;
-      while (cx.currentConstness + 1 < argConstness)
+      unsigned argConstness = cx.getValueConstness(type) - 1;
+      while (cx.currentConstness < argConstness)
         cx.increaseConstness();
       auto argValue = cx.convertExpr(*callArg);
-      cx.currentConstness = currentConstness;
+      cx.currentConstness = callConstness;
       if (!argValue)
         return {};
+
+      // Keep track of the argument at its constness level.
+      unsigned relativeConstness = argConstness - callConstness;
+      if (argsAtConstness.size() <= relativeConstness)
+        argsAtConstness.resize(relativeConstness + 1);
+      argsAtConstness[relativeConstness].push_back(argValue);
     }
   }
 
+  // Create the call ops at the different constness levels.
+  cx.currentConstness = callConstness + argsAtConstness.size();
+  Value callee = hir::ConstantFuncOp::create(
+      cx.currentBuilder(), expr.loc, cx.funcs.lookup(fnItem).getSymNameAttr());
+
+  for (unsigned idx = 0; idx < argsAtConstness.size(); ++idx) {
+    callee = freezeValueAcrossConstness(callee, cx.currentConstness, cx);
+    unsigned revIdx = argsAtConstness.size() - idx - 1;
+    cx.currentConstness = callConstness + revIdx;
+    callee = hir::CallOp::create(cx.currentBuilder(), expr.loc,
+                                 hir::FuncType::get(cx.module.getContext()),
+                                 TypeRange{}, callee, argsAtConstness[revIdx])
+                 .getSpecializedCallee();
+  }
+
+  cx.currentConstness = callConstness;
   return hir::ConstantUnitOp::create(cx.currentBuilder(), expr.loc);
 }
 

@@ -20,6 +20,7 @@ struct ConstContext {
   hir::ReturnOp returnOp;
   std::unique_ptr<Region> createdRegion;
   DenseMap<Value, Value> forwardedValues;
+  unsigned lastArgumentIndex = 0;
 };
 
 struct Context {
