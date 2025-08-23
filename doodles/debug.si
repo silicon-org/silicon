@@ -1,80 +1,14 @@
-// mod main {
-//     input a: uint<6>;
-//     input valid: uint<1>;
-//     output ready: uint<1> = 0;
-//     handshake(a, valid, &ready);
-// }
-//
-// fn handshake<N>(data: uint<N>, valid: uint<1>, ready: &uint<1>) {
-//     *ready = valid + *ready;
-// }
-
-// mod main {
-//     let x = (0, 0);
-//     x.0 = 42;
-//     x.1 = 9001;
-// }
-
-// fn better_wire() -> (uint<42>, &uint<42>) {
-//     let tmp = wire(0);
-//     let dst;
-//     tmp.set(dst);
-//     return (tmp.get(), &dst);
-// }
-
-// mod main3 {
-//     let x = (0, 0);
-//     output y1: (uint<42>, uint<1337>) = x;
-//     x.0 = 42;
-//     x.1 = 9001;
-//     output y2: (uint<42>, uint<1337>) = x;
-//     let y1 = x;
-//     x.1 = 19;
-//     let y1 = x;
-//     x.0 = 100;
-// }
-
-// mod main {
-//     let x: (uint<42>, uint<1337>);
-//     x.0 = 42;
-//     x.1 = 9001;
-//     let y0 = x.0;
-//     let y1 = x.1;
-//     let z = x;
-// }
-
-// mod main2 {
-//     let tmp = wire(0);
-//     let tmp2;
-//     let a_rx = tmp.get();
-//     let a_tx = (&tmp2, 42);
-//     *a_tx.0 = 42;
-
-//     output k: uint<42> = a_rx;
-
-//     *a_tx.0 = 9001;
-//     tmp.set(*a_tx.0);
-// }
-
-// mod main {
-//     input reqs: uint<8>;
-//     arbiter(reqs);
-// }
-
-// fn arbiter<N>(reqs: uint<N>) {
-//     N;
-// }
-
-
-// CHECK-LABEL: si.func @ParamAsConst1
-fn ParamAsConst1(a: uint<42>, b: uint<6>) {
-    ParamAsConst2(a, b);
+fn foo() {
+  let x = const { const { 42 } };
+  let y = const { 1337 };
+  let z = 9001;
+  bar(x, y, z);
+  // const { bar(1, 2, 3) };
+  // bar(bar(4, 6, 7), 8, 9);
 }
 
-// CHECK-LABEL: si.func @ParamAsConst2_42
-fn ParamAsConst2<N, M>(a: uint<N>, b: uint<M>) where M == N.clog2() {
-    // let x = N + 5;
-    // let y = 5 + N;
-    let z: uint<M> = N.as_uint();
-    // z = M.as_uint();
+fn bar(a: const const int, b: const int, c: int) {
+  const { const { a } };
+  const { a+b };
+  a+b+c;
 }
