@@ -20,6 +20,11 @@ class MIRTypeDef<
   let mnemonic = ?;
 }
 
+def TypeType : MIRTypeDef<"Type"> {
+  let mnemonic = "type";
+  let summary = "a value representing a type";
+}
+
 def IntType : MIRTypeDef<"Int"> {
   let mnemonic = "int";
   let summary = "generic integer type";

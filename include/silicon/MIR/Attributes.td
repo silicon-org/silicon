@@ -25,6 +25,14 @@ class MIRAttrDef<
   let mnemonic = ?;
 }
 
+def MIRTypeAttr : MIRAttrDef<"Type", [
+  DeclareAttrInterfaceMethods<TypedAttrInterface>
+]> {
+  let mnemonic = "type";
+  let parameters = (ins "mlir::Type":$value);
+  let assemblyFormat = "`<` $value `>`";
+}
+
 def IntAttr : MIRAttrDef<"Int", [
   DeclareAttrInterfaceMethods<TypedAttrInterface>
 ]> {

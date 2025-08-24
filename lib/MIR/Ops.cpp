@@ -21,7 +21,7 @@ using namespace mir;
 /// Print an abbreviation of a type that can be used in an assembly name.
 static bool getTypeAbbrev(llvm::raw_ostream &os, Type type) {
   return TypeSwitch<Type, bool>(type)
-      .Case<IntType>([&](auto type) {
+      .Case<TypeType, IntType>([&](auto type) {
         os << type.getMnemonic();
         return true;
       })
@@ -35,6 +35,8 @@ static bool getAttrAbbrev(llvm::raw_ostream &os, Attribute attr) {
         os << 'c' << attr.getValue();
         return true;
       })
+      .Case<mir::TypeAttr>(
+          [&](auto attr) { return getTypeAbbrev(os, attr.getValue()); })
       .Default([](auto) { return false; });
 }
 
