@@ -8,7 +8,7 @@
 
 #include "silicon/HIR/Dialect.h"
 #include "silicon/HIR/Types.h"
-#include "silicon/Support/LLVM.h"
+#include "silicon/Support/MLIR.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "llvm/ADT/TypeSwitch.h"

@@ -8,7 +8,7 @@
 
 #include "silicon/MIR/Dialect.h"
 #include "silicon/MIR/Types.h"
-#include "silicon/Support/LLVM.h"
+#include "silicon/Support/MLIR.h"
 #include "mlir/IR/DialectImplementation.h"
 
 using namespace silicon;

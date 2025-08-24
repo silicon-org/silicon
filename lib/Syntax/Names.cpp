@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "silicon/Support/LLVM.h"
+#include "silicon/Support/MLIR.h"
 #include "silicon/Syntax/AST.h"
 #include "silicon/Syntax/Names.h"
 #include "llvm/ADT/ScopeExit.h"

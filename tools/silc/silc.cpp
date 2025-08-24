@@ -8,7 +8,6 @@
 
 #include "silicon/Codegen/Codegen.h"
 #include "silicon/RegisterAll.h"
-#include "silicon/Support/LLVM.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Syntax/AST.h"
 #include "silicon/Syntax/Lexer.h"

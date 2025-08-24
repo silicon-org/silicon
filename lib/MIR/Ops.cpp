@@ -8,6 +8,7 @@
 
 #include "silicon/MIR/Attributes.h"
 #include "silicon/MIR/Ops.h"
+#include "silicon/Support/MLIR.h"
 
 using namespace mlir;
 using namespace silicon;

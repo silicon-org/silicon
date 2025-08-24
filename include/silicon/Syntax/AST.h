@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
-#include "silicon/Support/LLVM.h"
 #include "silicon/Support/MLIR.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/Support/Allocator.h"

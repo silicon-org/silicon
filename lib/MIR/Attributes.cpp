@@ -10,7 +10,6 @@
 #include "silicon/MIR/Dialect.h"
 #include "silicon/MIR/Types.h"
 #include "silicon/Support/AsmParser.h"
-#include "silicon/Support/LLVM.h"
 #include "silicon/Support/MLIR.h"
 
 using namespace silicon;

@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
-#include "silicon/Support/LLVM.h"
+#include "silicon/Support/MLIR.h"
 
 namespace silicon {
 struct AST;
