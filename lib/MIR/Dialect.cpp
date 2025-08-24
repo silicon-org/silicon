@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/MIR/Dialect.h"
+#include "silicon/MIR/Ops.h"
 #include "mlir/IR/DialectImplementation.h"
 
 using namespace silicon;

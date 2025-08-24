@@ -11,6 +11,7 @@
 
 include "silicon/MIR/Attributes.td"
 include "silicon/MIR/Dialect.td"
+include "silicon/MIR/Ops.td"
 include "silicon/MIR/Types.td"
 
 include "mlir/IR/OpBase.td"

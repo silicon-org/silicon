@@ -11,6 +11,7 @@
 
 include "silicon/MIR/Dialect.td"
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/BuiltinAttributeInterfaces.td"
 
 def DynamicAPIntParameter : AttrOrTypeParameter<"llvm::DynamicAPInt", ""> {
   let comparator = "$_lhs == $_rhs";
@@ -24,7 +25,9 @@ class MIRAttrDef<
   let mnemonic = ?;
 }
 
-def IntAttr : MIRAttrDef<"Int"> {
+def IntAttr : MIRAttrDef<"Int", [
+  DeclareAttrInterfaceMethods<TypedAttrInterface>
+]> {
   let mnemonic = "int";
   let parameters = (ins DynamicAPIntParameter:$value);
   let assemblyFormat = "`<` $value `>`";

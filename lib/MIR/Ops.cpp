@@ -7,28 +7,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/MIR/Attributes.h"
-#include "silicon/MIR/Dialect.h"
-#include "silicon/MIR/Types.h"
-#include "silicon/Support/AsmParser.h"
-#include "silicon/Support/LLVM.h"
-#include "silicon/Support/MLIR.h"
+#include "silicon/MIR/Ops.h"
 
+using namespace mlir;
 using namespace silicon;
 using namespace mir;
 
-void MIRDialect::registerAttributes() {
-  addAttributes<
-#define GET_ATTRDEF_LIST
-#include "silicon/MIR/Attributes.cpp.inc"
-      >();
-}
-
-// Pull in the generated attribute definitions.
-#define GET_ATTRDEF_CLASSES
-#include "silicon/MIR/Attributes.cpp.inc"
+// Pull in the generated dialect definition.
+#define GET_OP_CLASSES
+#include "silicon/MIR/Ops.cpp.inc"
 
 //===----------------------------------------------------------------------===//
-// IntAttr
+// ConstantOp
 //===----------------------------------------------------------------------===//
 
-Type IntAttr::getType() const { return IntType::get(getContext()); }
+OpFoldResult ConstantOp::fold(FoldAdaptor adaptor) { return getValue(); }

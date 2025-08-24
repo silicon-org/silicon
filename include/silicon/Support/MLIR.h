@@ -41,6 +41,7 @@ using mlir::OwningOpRef;
 using mlir::Region;
 using mlir::StringAttr;
 using mlir::SymbolTable;
+using mlir::Type;
 using mlir::TypeRange;
 using mlir::UnknownLoc;
 using mlir::Value;
