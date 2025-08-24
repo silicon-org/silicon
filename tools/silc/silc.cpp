@@ -14,6 +14,8 @@
 #include "silicon/Syntax/Lexer.h"
 #include "silicon/Syntax/Names.h"
 #include "silicon/Syntax/Parser.h"
+#include "mlir/IR/AsmState.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/ToolUtilities.h"
 #include "llvm/Support/CommandLine.h"
@@ -153,6 +155,8 @@ static LogicalResult executeCompiler(MLIRContext *context) {
 
 int main(int argc, char **argv) {
   // Register pass manager command line options.
+  mlir::registerAsmPrinterCLOptions();
+  mlir::registerDefaultTimingManagerCLOptions();
   mlir::registerMLIRContextCLOptions();
   mlir::registerPassManagerCLOptions();
 

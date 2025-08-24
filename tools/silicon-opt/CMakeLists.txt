@@ -1,14 +1,7 @@
-get_property(dialect_libs GLOBAL PROPERTY SILICON_DIALECT_LIBS)
-
 set(libs
-  ${dialect_libs}
-  CIRCTComb
-  CIRCTHW
-  CIRCTSeq
-  MLIRControlFlowDialect
-  MLIRFuncDialect
-  MLIRFuncInlinerExtension
   MLIROptLib
+  SiliconRegisterDialects
+  SiliconRegisterPasses
 )
 
 add_silicon_tool(silicon-opt silicon-opt.cpp DEPENDS ${libs})
