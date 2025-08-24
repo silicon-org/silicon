@@ -10,6 +10,7 @@
 #define SILICON_MIR_OPS_TD
 
 include "mlir/IR/BuiltinAttributeInterfaces.td"
+include "mlir/IR/OpAsmInterface.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
@@ -24,6 +25,7 @@ class MIROp<string mnemonic, list<Trait> traits = []> :
 def ConstantOp : MIROp<"constant", [
   AllTypesMatch<["value", "result"]>,
   ConstantLike,
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
   Pure,
 ]> {
   let arguments = (ins TypedAttrInterface:$value);
