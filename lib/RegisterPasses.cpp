@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/Conversion/Passes.h"
 #include "silicon/HIR/Passes.h"
 #include "silicon/RegisterAll.h"
 #include "mlir/Transforms/Passes.h"
@@ -23,4 +24,5 @@ void silicon::registerAllPasses() {
 
   // Register the Silicon passes.
   silicon::hir::registerPasses();
+  silicon::registerConversionPasses();
 }

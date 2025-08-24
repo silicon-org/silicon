@@ -1,4 +1,5 @@
 add_subdirectory(Codegen)
+add_subdirectory(Conversion)
 add_subdirectory(HIR)
 add_subdirectory(MIR)
 add_subdirectory(Syntax)
@@ -26,5 +27,6 @@ add_silicon_library(SiliconRegisterPasses
   LINK_LIBS PUBLIC
   MLIRPass
   MLIRTransforms
+  SiliconConversion
   SiliconHIRTransforms
 )
