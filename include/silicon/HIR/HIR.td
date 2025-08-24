@@ -15,4 +15,7 @@ include "silicon/HIR/Ops.td"
 include "silicon/HIR/Passes.td"
 include "silicon/HIR/Types.td"
 
+include "mlir/IR/OpBase.td"
+include "mlir/Pass/PassBase.td"
+
 #endif // SILICON_HIR_HIR_TD
