@@ -8,7 +8,7 @@
 
 #include "silicon/Codegen/Context.h"
 #include "silicon/HIR/Ops.h"
-#include "silicon/MLIR.h"
+#include "silicon/Support/MLIR.h"
 #include "silicon/Syntax/AST.h"
 
 using namespace silicon;

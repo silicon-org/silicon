@@ -7,8 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
-#include "silicon/LLVM.h"
-#include "silicon/MLIR.h"
+#include "silicon/Support/LLVM.h"
+#include "silicon/Support/MLIR.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/raw_ostream.h"

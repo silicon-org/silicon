@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
-#include "silicon/MLIR.h"
+#include "silicon/Support/MLIR.h"
 #include "silicon/Syntax/Tokens.h"
 #include "llvm/ADT/StringMap.h"
 

@@ -7,9 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/Codegen/Codegen.h"
-#include "silicon/LLVM.h"
-#include "silicon/MLIR.h"
 #include "silicon/RegisterAll.h"
+#include "silicon/Support/LLVM.h"
+#include "silicon/Support/MLIR.h"
 #include "silicon/Syntax/AST.h"
 #include "silicon/Syntax/Lexer.h"
 #include "silicon/Syntax/Names.h"

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "silicon/LLVM.h"
+#include "silicon/Support/LLVM.h"
 
 namespace silicon {
 
