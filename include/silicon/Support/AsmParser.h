@@ -6,6 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#pragma once
+
 #include "mlir/IR/DialectImplementation.h"
 #include "llvm/ADT/DynamicAPInt.h"
 
@@ -15,9 +17,6 @@ struct mlir::FieldParser<llvm::DynamicAPInt> {
     APInt value;
     if (parser.parseInteger(value))
       return failure();
-    // HACK: At the time of writing there is no way to construct a DynamicAPInt
-    // from an APInt. However, the data layout of DynamicAPInt is the same as
-    // APInt, so we can just reinterpret_cast it.
-    return *reinterpret_cast<DynamicAPInt *>(&value);
+    return DynamicAPInt(value);
   }
 };

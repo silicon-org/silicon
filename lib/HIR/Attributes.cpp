@@ -6,11 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Utils.h"
 #include "silicon/HIR/Attributes.h"
 #include "silicon/HIR/Dialect.h"
+#include "silicon/Support/AsmParser.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/DialectImplementation.h"
 #include "llvm/ADT/DynamicAPInt.h"
 #include "llvm/ADT/TypeSwitch.h"
 

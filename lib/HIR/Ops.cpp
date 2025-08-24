@@ -6,9 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Utils.h"
 #include "silicon/HIR/Attributes.h"
 #include "silicon/HIR/Ops.h"
+#include "silicon/Support/AsmParser.h"
 
 using namespace mlir;
 using namespace silicon;
