@@ -6,16 +6,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SILICON_DIALECT_HIR_HIROPS_TD
-#define SILICON_DIALECT_HIR_HIROPS_TD
+#ifndef SILICON_HIR_OPS_TD
+#define SILICON_HIR_OPS_TD
 
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
-include "silicon/Dialect/HIR/HIRAttributes.td"
-include "silicon/Dialect/HIR/HIRDialect.td"
-include "silicon/Dialect/HIR/HIRTypes.td"
+include "silicon/HIR/Attributes.td"
+include "silicon/HIR/Dialect.td"
+include "silicon/HIR/Types.td"
 
 // Base class for the operations in this dialect.
 class HIROp<string mnemonic, list<Trait> traits = []> :
@@ -242,4 +242,4 @@ def CallOp : HIROp<"call"> {
   }];
 }
 
-#endif // SILICON_DIALECT_HIR_HIROPS_TD
+#endif // SILICON_HIR_OPS_TD

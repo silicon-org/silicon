@@ -8,7 +8,7 @@
 
 #include "silicon/Codegen/Codegen.h"
 #include "silicon/Codegen/Context.h"
-#include "silicon/Dialect/HIR/HIRDialect.h"
+#include "silicon/HIR/Dialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Verifier.h"
 

@@ -14,4 +14,4 @@
 #include "llvm/ADT/DynamicAPInt.h"
 
 #define GET_ATTRDEF_CLASSES
-#include "silicon/Dialect/HIR/HIRAttributes.h.inc"
+#include "silicon/HIR/Attributes.h.inc"

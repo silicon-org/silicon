@@ -6,10 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SILICON_DIALECT_HIR_HIRTYPES_TD
-#define SILICON_DIALECT_HIR_HIRTYPES_TD
+#ifndef SILICON_HIR_TYPES_TD
+#define SILICON_HIR_TYPES_TD
 
-include "silicon/Dialect/HIR/HIRDialect.td"
+include "silicon/HIR/Dialect.td"
 include "mlir/IR/AttrTypeBase.td"
 
 class HIRTypeDef<string name, list<Trait> traits = [],
@@ -36,4 +36,4 @@ def FuncType : HIRTypeDef<"Func"> {
   let mnemonic = "func";
 }
 
-#endif // SILICON_DIALECT_HIR_HIRTYPES_TD
+#endif // SILICON_HIR_TYPES_TD

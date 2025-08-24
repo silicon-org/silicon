@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "silicon/Dialect/HIR/HIRAttributes.h"
-#include "silicon/Dialect/HIR/HIRTypes.h"
+#include "silicon/HIR/Attributes.h"
+#include "silicon/HIR/Types.h"
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Dialect.h"
@@ -20,4 +20,4 @@
 
 // Pull in the generated dialect definition.
 #define GET_OP_CLASSES
-#include "silicon/Dialect/HIR/HIROps.h.inc"
+#include "silicon/HIR/Ops.h.inc"

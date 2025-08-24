@@ -8,17 +8,17 @@
 
 #pragma once
 
-#include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/Types.h"
-
-#define GET_TYPEDEF_CLASSES
-#include "silicon/Dialect/HIR/HIRTypes.h.inc"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Pass/Pass.h"
+#include <memory>
+#include <optional>
 
 namespace silicon {
 namespace hir {
 
-mlir::Type getLowerKind(mlir::Type type);
+#define GEN_PASS_DECL
+#define GEN_PASS_REGISTRATION
+#include "silicon/HIR/Passes.h.inc"
 
 } // namespace hir
 } // namespace silicon

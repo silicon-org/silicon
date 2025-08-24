@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/Codegen/Context.h"
-#include "silicon/Dialect/HIR/HIROps.h"
+#include "silicon/HIR/Ops.h"
 
 using namespace silicon;
 using namespace codegen;

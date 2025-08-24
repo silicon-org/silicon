@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SILICON_DIALECT_HIR_HIRDIALECT_TD
-#define SILICON_DIALECT_HIR_HIRDIALECT_TD
+#ifndef SILICON_HIR_DIALECT_TD
+#define SILICON_HIR_DIALECT_TD
 
 include "mlir/IR/DialectBase.td"
 
@@ -29,4 +29,4 @@ def HIRDialect : Dialect {
   }];
 }
 
-#endif // SILICON_DIALECT_HIR_HIRDIALECT_TD
+#endif // SILICON_HIR_DIALECT_TD

@@ -6,10 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "silicon/Dialect/HIR/HIRAttributes.h"
-#include "silicon/Dialect/HIR/HIRDialect.h"
-#include "silicon/Dialect/HIR/HIROps.h"
-#include "silicon/Dialect/HIR/HIRTypes.h"
+#include "silicon/HIR/Attributes.h"
+#include "silicon/HIR/Dialect.h"
+#include "silicon/HIR/Ops.h"
+#include "silicon/HIR/Types.h"
 #include "mlir/IR/DialectImplementation.h"
 
 using namespace silicon;
@@ -23,9 +23,9 @@ void HIRDialect::initialize() {
   // Register operations.
   addOperations<
 #define GET_OP_LIST
-#include "silicon/Dialect/HIR/HIROps.cpp.inc"
+#include "silicon/HIR/Ops.cpp.inc"
       >();
 }
 
 // Pull in the generated dialect definition.
-#include "silicon/Dialect/HIR/HIRDialect.cpp.inc"
+#include "silicon/HIR/Dialect.cpp.inc"

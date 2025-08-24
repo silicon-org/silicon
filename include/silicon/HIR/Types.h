@@ -6,13 +6,19 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SILICON_DIALECT_HIR_HIR_TD
-#define SILICON_DIALECT_HIR_HIR_TD
+#pragma once
 
-include "silicon/Dialect/HIR/HIRAttributes.td"
-include "silicon/Dialect/HIR/HIRDialect.td"
-include "silicon/Dialect/HIR/HIROps.td"
-include "silicon/Dialect/HIR/HIRPasses.td"
-include "silicon/Dialect/HIR/HIRTypes.td"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Types.h"
 
-#endif // SILICON_DIALECT_HIR_HIR_TD
+#define GET_TYPEDEF_CLASSES
+#include "silicon/HIR/Types.h.inc"
+
+namespace silicon {
+namespace hir {
+
+mlir::Type getLowerKind(mlir::Type type);
+
+} // namespace hir
+} // namespace silicon

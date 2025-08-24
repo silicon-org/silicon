@@ -6,9 +6,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#pragma once
+#ifndef SILICON_HIR_HIR_TD
+#define SILICON_HIR_HIR_TD
 
-#include "mlir/IR/Dialect.h"
+include "silicon/HIR/Attributes.td"
+include "silicon/HIR/Dialect.td"
+include "silicon/HIR/Ops.td"
+include "silicon/HIR/Passes.td"
+include "silicon/HIR/Types.td"
 
-// Pull in the generated dialect definition.
-#include "silicon/Dialect/HIR/HIRDialect.h.inc"
+#endif // SILICON_HIR_HIR_TD

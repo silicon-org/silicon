@@ -6,13 +6,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SILICON_DIALECT_HIR_HIRPASSES_TD
-#define SILICON_DIALECT_HIR_HIRPASSES_TD
+#ifndef SILICON_HIR_PASSES_TD
+#define SILICON_HIR_PASSES_TD
 
-include "silicon/Dialect/HIR/HIRDialect.td"
+include "silicon/HIR/Dialect.td"
 include "mlir/Pass/PassBase.td"
 
 def InferTypesPass : Pass<"infer-types">;
 def EvalConstsPass : Pass<"eval-consts", "mlir::func::FuncOp">;
 
-#endif // SILICON_DIALECT_HIR_HIRPASSES_TD
+#endif // SILICON_HIR_PASSES_TD

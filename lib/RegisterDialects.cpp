@@ -9,7 +9,7 @@
 #include "circt/Dialect/Comb/CombDialect.h"
 #include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
-#include "silicon/Dialect/HIR/HIRDialect.h"
+#include "silicon/HIR/Dialect.h"
 #include "silicon/RegisterAll.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"

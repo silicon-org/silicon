@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "silicon/Dialect/HIR/HIROps.h"
-#include "silicon/Dialect/HIR/HIRPasses.h"
+#include "silicon/HIR/Ops.h"
+#include "silicon/HIR/Passes.h"
 #include "mlir/IR/Dominance.h"
 #include "llvm/Support/Debug.h"
 
@@ -20,7 +20,7 @@ using namespace hir;
 namespace silicon {
 namespace hir {
 #define GEN_PASS_DEF_INFERTYPESPASS
-#include "silicon/Dialect/HIR/HIRPasses.h.inc"
+#include "silicon/HIR/Passes.h.inc"
 } // namespace hir
 } // namespace silicon
 

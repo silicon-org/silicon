@@ -6,10 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SILICON_DIALECT_HIR_HIRATTRIBUTES_TD
-#define SILICON_DIALECT_HIR_HIRATTRIBUTES_TD
+#ifndef SILICON_HIR_ATTRIBUTES_TD
+#define SILICON_HIR_ATTRIBUTES_TD
 
-include "silicon/Dialect/HIR/HIRDialect.td"
+include "silicon/HIR/Dialect.td"
 include "mlir/IR/AttrTypeBase.td"
 
 def DynamicAPIntParameter : AttrOrTypeParameter<"llvm::DynamicAPInt", ""> {
@@ -30,4 +30,4 @@ def IntAttr : HIRAttrDef<"Int"> {
   let assemblyFormat = "`<` $value `>`";
 }
 
-#endif // SILICON_DIALECT_HIR_HIRATTRIBUTES_TD
+#endif // SILICON_HIR_ATTRIBUTES_TD

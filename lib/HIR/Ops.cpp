@@ -7,8 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "Utils.h"
-#include "silicon/Dialect/HIR/HIRAttributes.h"
-#include "silicon/Dialect/HIR/HIROps.h"
+#include "silicon/HIR/Attributes.h"
+#include "silicon/HIR/Ops.h"
 
 using namespace mlir;
 using namespace silicon;
@@ -41,4 +41,4 @@ SuccessorOperands ConstCondBranchOp::getSuccessorOperands(unsigned index) {
 
 // Pull in the generated dialect definition.
 #define GET_OP_CLASSES
-#include "silicon/Dialect/HIR/HIROps.cpp.inc"
+#include "silicon/HIR/Ops.cpp.inc"

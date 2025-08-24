@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
-#include "silicon/Dialect/HIR/HIROps.h"
+#include "silicon/HIR/Ops.h"
 #include "silicon/Syntax/AST.h"
 #include "llvm/ADT/ScopedHashTable.h"
 

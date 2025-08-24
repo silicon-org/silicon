@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "silicon/Dialect/HIR/HIRDialect.h"
-#include "silicon/Dialect/HIR/HIRTypes.h"
+#include "silicon/HIR/Dialect.h"
+#include "silicon/HIR/Types.h"
 #include "silicon/LLVM.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
@@ -19,13 +19,13 @@ using namespace hir;
 void HIRDialect::registerTypes() {
   addTypes<
 #define GET_TYPEDEF_LIST
-#include "silicon/Dialect/HIR/HIRTypes.cpp.inc"
+#include "silicon/HIR/Types.cpp.inc"
       >();
 }
 
 // Pull in the generated type definitions.
 #define GET_TYPEDEF_CLASSES
-#include "silicon/Dialect/HIR/HIRTypes.cpp.inc"
+#include "silicon/HIR/Types.cpp.inc"
 
 mlir::Type hir::getLowerKind(mlir::Type type) {
   auto *context = type.getContext();

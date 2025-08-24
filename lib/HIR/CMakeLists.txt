@@ -1,8 +1,8 @@
 add_silicon_dialect_library(SiliconHIR
-  HIRAttributes.cpp
-  HIRDialect.cpp
-  HIROps.cpp
-  HIRTypes.cpp
+  Attributes.cpp
+  Dialect.cpp
+  Ops.cpp
+  Types.cpp
 
   LINK_LIBS PUBLIC
   MLIRFuncDialect

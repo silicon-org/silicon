@@ -1,5 +1,5 @@
 add_subdirectory(Codegen)
-add_subdirectory(Dialect)
+add_subdirectory(HIR)
 add_subdirectory(Syntax)
 
 add_silicon_library(SiliconRegisterDialects

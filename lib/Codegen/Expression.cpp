@@ -7,8 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/Codegen/Context.h"
-#include "silicon/Dialect/HIR/HIRAttributes.h"
-#include "silicon/Dialect/HIR/HIROps.h"
+#include "silicon/HIR/Attributes.h"
+#include "silicon/HIR/Ops.h"
 #include "silicon/MLIR.h"
 #include "silicon/Syntax/AST.h"
 

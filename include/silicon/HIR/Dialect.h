@@ -8,17 +8,7 @@
 
 #pragma once
 
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Pass/Pass.h"
-#include <memory>
-#include <optional>
+#include "mlir/IR/Dialect.h"
 
-namespace silicon {
-namespace hir {
-
-#define GEN_PASS_DECL
-#define GEN_PASS_REGISTRATION
-#include "silicon/Dialect/HIR/HIRPasses.h.inc"
-
-} // namespace hir
-} // namespace silicon
+// Pull in the generated dialect definition.
+#include "silicon/HIR/Dialect.h.inc"

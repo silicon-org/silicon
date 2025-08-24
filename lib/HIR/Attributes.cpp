@@ -7,8 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "Utils.h"
-#include "silicon/Dialect/HIR/HIRAttributes.h"
-#include "silicon/Dialect/HIR/HIRDialect.h"
+#include "silicon/HIR/Attributes.h"
+#include "silicon/HIR/Dialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "llvm/ADT/DynamicAPInt.h"
@@ -22,10 +22,10 @@ using llvm::DynamicAPInt;
 void HIRDialect::registerAttributes() {
   addAttributes<
 #define GET_ATTRDEF_LIST
-#include "silicon/Dialect/HIR/HIRAttributes.cpp.inc"
+#include "silicon/HIR/Attributes.cpp.inc"
       >();
 }
 
 // Pull in the generated attribute definitions.
 #define GET_ATTRDEF_CLASSES
-#include "silicon/Dialect/HIR/HIRAttributes.cpp.inc"
+#include "silicon/HIR/Attributes.cpp.inc"

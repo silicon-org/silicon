@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "silicon/Dialect/HIR/HIRPasses.h"
+#include "silicon/HIR/Passes.h"
 #include "silicon/RegisterAll.h"
 #include "mlir/Transforms/Passes.h"
 
