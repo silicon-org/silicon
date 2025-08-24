@@ -21,18 +21,18 @@ include "silicon/HIR/Types.td"
 class HIROp<string mnemonic, list<Trait> traits = []> :
   Op<HIRDialect, mnemonic, traits>;
 
-def ConstantIntOp : HIROp<"constant_int", [Pure, ConstantLike]> {
+def ConstantIntOp : HIROp<"constant_int", [Pure]> {
   let arguments = (ins IntAttr:$value);
   let results = (outs ValueType:$result);
   let assemblyFormat = "custom<IntAttr>($value) attr-dict";
 }
 
-def ConstantUnitOp : HIROp<"constant_unit", [Pure, ConstantLike]> {
+def ConstantUnitOp : HIROp<"constant_unit", [Pure]> {
   let results = (outs ValueType:$result);
   let assemblyFormat = "attr-dict";
 }
 
-def ConstantFuncOp : HIROp<"constant_func", [Pure, ConstantLike]> {
+def ConstantFuncOp : HIROp<"constant_func", [Pure]> {
   let arguments = (ins FlatSymbolRefAttr:$value);
   let results = (outs FuncType:$result);
   let assemblyFormat = "$value attr-dict";
@@ -43,7 +43,7 @@ def InferrableOp : HIROp<"inferrable", []> {
   let assemblyFormat = "attr-dict `:` type($result)";
 }
 
-def IntTypeOp : HIROp<"int_type", [Pure, ConstantLike]> {
+def IntTypeOp : HIROp<"int_type", [Pure]> {
   let results = (outs TypeType:$result);
   let assemblyFormat = "attr-dict";
 }
