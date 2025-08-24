@@ -8,7 +8,9 @@
 
 #pragma once
 
+#include "silicon/HIR/Dialect.h"
 #include "silicon/HIR/Ops.h"
+#include "silicon/MIR/Dialect.h"
 #include "mlir/Pass/Pass.h"
 #include <memory>
 #include <optional>

@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/Conversion/Passes.h"
+#include "silicon/HIR/Ops.h"
+#include "silicon/MIR/Ops.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/Support/Debug.h"
@@ -27,11 +29,26 @@ struct HIRToMIRPass : public silicon::impl::HIRToMIRPassBase<HIRToMIRPass> {
 };
 } // namespace
 
+static LogicalResult convert(hir::IntTypeOp op, PatternRewriter &rewriter) {
+  auto type = mir::IntType::get(op.getContext());
+  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
+static LogicalResult convert(hir::ConstantIntOp op, PatternRewriter &rewriter) {
+  auto attr = mir::IntAttr::get(op.getContext(), op.getValue().getValue());
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
 void HIRToMIRPass::runOnOperation() {
   LLVM_DEBUG(llvm::dbgs() << "Lowering first region of @"
                           << getOperation().getSymName() << "\n");
 
   RewritePatternSet patterns(&getContext());
+  patterns.add<hir::IntTypeOp>(convert);
+  patterns.add<hir::ConstantIntOp>(convert);
 
   if (failed(applyPatternsGreedily(getOperation().getBodies()[0],
                                    std::move(patterns))))
