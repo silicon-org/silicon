@@ -5,6 +5,7 @@ add_silicon_library(SiliconConversion
   SiliconConversionIncGen
 
   LINK_LIBS PUBLIC
+  MLIRTransformUtils
   SiliconHIR
   SiliconMIR
 )
