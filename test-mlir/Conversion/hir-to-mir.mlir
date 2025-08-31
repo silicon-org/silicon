@@ -2,10 +2,9 @@
 
 // CHECK-LABEL: hir.func @foo
 hir.func @foo {
-  // CHECK: [[INT_TYPE:%.+]] = mir.constant #mir.type<!mir.int>
+  // CHECK: [[SPEC:%.+]] = mir.constant #mir.specialized_func<@foo, [!mir.int], [], [#mir.int<42> : !mir.int]>
+  // CHECK: mir.return [[SPEC]]
   %0 = hir.int_type
-  // CHECK: [[C42_INT:%.+]] = mir.constant #mir.int<42>
   %1 = hir.constant_int 42
-  // CHECK: hir.return args([[INT_TYPE]], [[C42_INT]] : !mir.type, !mir.int)
-  hir.return args(%0, %1 : !hir.type, !hir.value)
+  hir.return args(%0 : !hir.type) freeze(%1 : !hir.value)
 }

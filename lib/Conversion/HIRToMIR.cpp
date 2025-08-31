@@ -9,6 +9,7 @@
 #include "silicon/Conversion/Passes.h"
 #include "silicon/HIR/Ops.h"
 #include "silicon/MIR/Ops.h"
+#include "silicon/Support/MLIR.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/Support/Debug.h"
@@ -42,6 +43,29 @@ static LogicalResult convert(hir::ConstantIntOp op, PatternRewriter &rewriter) {
   return success();
 }
 
+static LogicalResult convert(hir::ReturnOp op, PatternRewriter &rewriter) {
+  auto func = op->getParentOfType<hir::FuncOp>();
+  assert(func);
+
+  auto specFunc = mir::SpecializeFuncOp::create(
+      rewriter, op.getLoc(), FlatSymbolRefAttr::get(func.getSymNameAttr()),
+      op.getArgs(), ValueRange{}, op.getFreeze());
+
+  // auto attr = mir::IntAttr::get(op.getContext(), op.getValue().getValue());
+  rewriter.replaceOpWithNewOp<mir::ReturnOp>(op, ValueRange{specFunc});
+  return success();
+}
+
+static LogicalResult convert(hir::CallOp op, PatternRewriter &rewriter) {
+  auto constCallee = op.getCallee().getDefiningOp<hir::ConstantFuncOp>();
+  if (!constCallee)
+    return failure();
+  rewriter.replaceOpWithNewOp<mir::CallOp>(
+      op, TypeRange{mir::SpecializedFuncType::get(rewriter.getContext())},
+      constCallee.getValue(), op.getArguments());
+  return success();
+}
+
 void HIRToMIRPass::runOnOperation() {
   LLVM_DEBUG(llvm::dbgs() << "Lowering first region of @"
                           << getOperation().getSymName() << "\n");
@@ -49,8 +73,13 @@ void HIRToMIRPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   patterns.add<hir::IntTypeOp>(convert);
   patterns.add<hir::ConstantIntOp>(convert);
+  patterns.add<hir::ReturnOp>(convert);
+  patterns.add<hir::CallOp>(convert);
 
   if (failed(applyPatternsGreedily(getOperation().getBodies()[0],
-                                   std::move(patterns))))
+                                   std::move(patterns)))) {
+    emitBug(getOperation().getLoc()) << "HIR-to-MIR lowering failed to "
+                                        "converge";
     return signalPassFailure();
+  }
 }
