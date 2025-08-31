@@ -30,4 +30,9 @@ def IntType : MIRTypeDef<"Int"> {
   let summary = "generic integer type";
 }
 
+def SpecializedFuncType : MIRTypeDef<"SpecializedFunc"> {
+  let mnemonic = "specialized_func";
+  let summary = "specialized function";
+}
+
 #endif // SILICON_MIR_TYPES_TD

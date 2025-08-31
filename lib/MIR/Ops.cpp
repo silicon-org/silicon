@@ -57,3 +57,37 @@ void ConstantOp::getAsmResultNames(
     buffer.pop_back();
   setNameFn(getResult(), buffer);
 }
+
+//===----------------------------------------------------------------------===//
+// SpecializeFuncOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult SpecializeFuncOp::fold(FoldAdaptor adaptor) {
+  SmallVector<Type> typeOfArgs;
+  SmallVector<Type> typeOfResults;
+
+  typeOfArgs.reserve(adaptor.getTypeOfArgs().size());
+  typeOfResults.reserve(adaptor.getTypeOfResults().size());
+
+  for (auto attr : adaptor.getTypeOfArgs()) {
+    auto typeAttr = dyn_cast_or_null<TypeAttr>(attr);
+    if (!typeAttr)
+      return {};
+    typeOfArgs.push_back(typeAttr.getValue());
+  }
+
+  for (auto attr : adaptor.getTypeOfResults()) {
+    auto typeAttr = dyn_cast_or_null<TypeAttr>(attr);
+    if (!typeAttr)
+      return {};
+    typeOfResults.push_back(typeAttr.getValue());
+  }
+
+  for (auto attr : adaptor.getConsts())
+    if (!attr)
+      return {};
+
+  return SpecializedFuncAttr::get(getContext(), adaptor.getFuncAttr(),
+                                  typeOfArgs, typeOfResults,
+                                  adaptor.getConsts());
+}

@@ -41,4 +41,19 @@ def IntAttr : MIRAttrDef<"Int", [
   let assemblyFormat = "`<` $value `>`";
 }
 
+def SpecializedFuncAttr : MIRAttrDef<"SpecializedFunc", [
+  DeclareAttrInterfaceMethods<TypedAttrInterface>
+]> {
+  let mnemonic = "specialized_func";
+  let parameters = (ins
+    "mlir::FlatSymbolRefAttr":$func,
+    ArrayRefParameter<"mlir::Type">:$args,
+    ArrayRefParameter<"mlir::Type">:$results,
+    ArrayRefParameter<"mlir::Attribute">:$consts
+  );
+  let assemblyFormat = [{
+    `<` $func `,` `[` $args `]` `,` `[` $results `]` `,` `[` $consts `]` `>`
+  }];
+}
+
 #endif // SILICON_MIR_ATTRIBUTES_TD
