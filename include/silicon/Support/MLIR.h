@@ -63,6 +63,7 @@ using llvm::StringRef;
 using llvm::succeeded;
 using llvm::success;
 using llvm::Twine;
+using mlir::Attribute;
 using mlir::Block;
 using mlir::BlockArgument;
 using mlir::emitError;

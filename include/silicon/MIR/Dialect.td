@@ -23,6 +23,7 @@ def MIRDialect : Dialect {
 
   let useDefaultAttributePrinterParser = 1;
   let useDefaultTypePrinterParser = 1;
+  let hasConstantMaterializer = 1;
   let extraClassDeclaration = [{
     void registerTypes();
     void registerAttributes();

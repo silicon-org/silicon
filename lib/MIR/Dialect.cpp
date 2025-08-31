@@ -8,6 +8,7 @@
 
 #include "silicon/MIR/Dialect.h"
 #include "silicon/MIR/Ops.h"
+#include "silicon/Support/MLIR.h"
 #include "mlir/IR/DialectImplementation.h"
 
 using namespace silicon;
@@ -23,6 +24,14 @@ void MIRDialect::initialize() {
 #define GET_OP_LIST
 #include "silicon/MIR/Ops.cpp.inc"
       >();
+}
+
+Operation *MIRDialect::materializeConstant(OpBuilder &builder, Attribute value,
+                                           Type type, Location loc) {
+  if (auto typedValue = dyn_cast<mlir::TypedAttr>(value);
+      typedValue && type == typedValue.getType())
+    return ConstantOp::create(builder, loc, type, typedValue);
+  return nullptr;
 }
 
 // Pull in the generated dialect definition.
