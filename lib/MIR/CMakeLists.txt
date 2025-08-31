@@ -6,6 +6,7 @@ add_silicon_dialect_library(SiliconMIR
 
   LINK_LIBS PUBLIC
   MLIRIR
+  MLIRControlFlowInterfaces
   MLIRInferTypeOpInterface
   MLIRSideEffectInterfaces
 )

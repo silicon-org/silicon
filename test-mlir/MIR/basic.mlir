@@ -19,3 +19,17 @@ unrealized_conversion_cast to index {attr = #mir.specialized_func<@foo, [!mir.in
 mir.specialize_func @foo() -> ()
 mir.specialize_func @foo(%int_type) -> (%int_type)
 mir.specialize_func @foo(%int_type) -> (%int_type), %c42_int : !mir.int
+
+func.func @Return0() {
+  mir.return
+}
+func.func @Return1(%arg0: !mir.type) {
+  mir.return %arg0 : !mir.type
+}
+func.func @Return2(%arg0: !mir.type, %arg1: !mir.int) {
+  mir.return %arg0, %arg1 : !mir.type, !mir.int
+}
+
+mir.call @foo() : () -> ()
+mir.call @foo(%int_type) : (!mir.type) -> (!mir.type)
+mir.call @foo(%int_type, %c42_int) : (!mir.type, !mir.int) -> (!mir.type, !mir.int)

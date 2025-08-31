@@ -12,6 +12,7 @@
 include "mlir/IR/BuiltinAttributeInterfaces.td"
 include "mlir/IR/OpAsmInterface.td"
 include "mlir/IR/OpBase.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "silicon/MIR/Attributes.td"
@@ -51,6 +52,25 @@ def SpecializeFuncOp : MIROp<"specialize_func", [
     attr-dict
   }];
   let hasFolder = 1;
+}
+
+def ReturnOp : MIROp<"return", [Pure, ReturnLike, Terminator]> {
+  let arguments = (ins Variadic<AnyType>:$operands);
+  let assemblyFormat = [{
+    ($operands^ `:` type($operands))? attr-dict
+  }];
+}
+
+def CallOp : MIROp<"call"> {
+  let arguments = (ins
+    FlatSymbolRefAttr:$callee,
+    Variadic<AnyType>:$arguments
+  );
+  let results = (outs Variadic<AnyType>);
+  let assemblyFormat = [{
+    $callee `(` $arguments `)` attr-dict
+    `:` functional-type($arguments, results)
+  }];
 }
 
 #endif // SILICON_MIR_OPS_TD
