@@ -118,6 +118,10 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
   cx.currentConstness = callConstness + argsAtConstness.size();
   Value callee = hir::ConstantFuncOp::create(
       cx.currentBuilder(), expr.loc, cx.funcs.lookup(fnItem).getSymNameAttr());
+  callee = hir::CallOp::create(cx.currentBuilder(), expr.loc,
+                               hir::FuncType::get(cx.module.getContext()),
+                               TypeRange{}, callee, ValueRange{})
+               .getSpecializedCallee();
 
   for (unsigned idx = 0; idx < argsAtConstness.size(); ++idx) {
     callee = freezeValueAcrossConstness(callee, cx.currentConstness, cx);
