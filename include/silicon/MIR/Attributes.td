@@ -47,12 +47,17 @@ def SpecializedFuncAttr : MIRAttrDef<"SpecializedFunc", [
   let mnemonic = "specialized_func";
   let parameters = (ins
     "mlir::FlatSymbolRefAttr":$func,
-    ArrayRefParameter<"mlir::Type">:$args,
-    ArrayRefParameter<"mlir::Type">:$results,
-    ArrayRefParameter<"mlir::Attribute">:$consts
+    OptionalArrayRefParameter<"mlir::Type">:$args,
+    OptionalArrayRefParameter<"mlir::Type">:$results,
+    OptionalArrayRefParameter<"mlir::Attribute">:$consts
   );
+  // The quirky syntax is necessary since `ArrayRefParameters` don't parse
+  // properly if they are empty.
   let assemblyFormat = [{
-    `<` $func `,` `[` $args `]` `,` `[` $results `]` `,` `[` $consts `]` `>`
+    `<` $func `,`
+    `[` (`]`) : ($args^ `]`)? `,`
+    `[` (`]`) : ($results^ `]`)? `,`
+    `[` (`]`) : ($consts^ `]`)? `>`
   }];
 }
 
