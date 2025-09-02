@@ -62,7 +62,7 @@ void ConstantOp::getAsmResultNames(
 // SpecializeFuncOp
 //===----------------------------------------------------------------------===//
 
-OpFoldResult SpecializeFuncOp::fold(FoldAdaptor adaptor) {
+SpecializedFuncAttr SpecializeFuncOp::interpret(FoldAdaptor adaptor) {
   SmallVector<Type> typeOfArgs;
   SmallVector<Type> typeOfResults;
 
@@ -90,4 +90,10 @@ OpFoldResult SpecializeFuncOp::fold(FoldAdaptor adaptor) {
   return SpecializedFuncAttr::get(getContext(), adaptor.getFuncAttr(),
                                   typeOfArgs, typeOfResults,
                                   adaptor.getConsts());
+}
+
+OpFoldResult SpecializeFuncOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = interpret(adaptor))
+    return attr;
+  return {};
 }

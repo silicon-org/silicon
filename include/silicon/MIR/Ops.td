@@ -52,6 +52,9 @@ def SpecializeFuncOp : MIROp<"specialize_func", [
     attr-dict
   }];
   let hasFolder = 1;
+  let extraClassDeclaration = [{
+    SpecializedFuncAttr interpret(FoldAdaptor adaptor);
+  }];
 }
 
 def ReturnOp : MIROp<"return", [Pure, ReturnLike, Terminator]> {

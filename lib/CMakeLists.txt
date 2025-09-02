@@ -3,6 +3,7 @@ add_subdirectory(Conversion)
 add_subdirectory(HIR)
 add_subdirectory(MIR)
 add_subdirectory(Syntax)
+add_subdirectory(Transforms)
 
 add_silicon_library(SiliconRegisterDialects
   RegisterDialects.cpp
@@ -29,4 +30,5 @@ add_silicon_library(SiliconRegisterPasses
   MLIRTransforms
   SiliconConversion
   SiliconHIRTransforms
+  SiliconTransforms
 )
