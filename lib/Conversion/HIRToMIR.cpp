@@ -8,6 +8,7 @@
 
 #include "silicon/Conversion/Passes.h"
 #include "silicon/HIR/Ops.h"
+#include "silicon/HIR/Types.h"
 #include "silicon/MIR/Ops.h"
 #include "silicon/Support/MLIR.h"
 #include "mlir/IR/PatternMatch.h"
@@ -66,6 +67,18 @@ static LogicalResult convert(hir::CallOp op, PatternRewriter &rewriter) {
   return success();
 }
 
+static LogicalResult convert(UnrealizedConversionCastOp op,
+                             PatternRewriter &rewriter) {
+  if (op.getNumResults() != 1 || op.getNumOperands() != 1)
+    return failure();
+  if (!isa<hir::ValueType, hir::TypeType, hir::FuncType>(
+          op.getResult(0).getType()) ||
+      !isa<mir::MIRDialect>(op.getOperand(0).getType().getDialect()))
+    return failure();
+  rewriter.replaceOp(op, op.getOperands());
+  return success();
+}
+
 void HIRToMIRPass::runOnOperation() {
   LLVM_DEBUG(llvm::dbgs() << "Lowering first region of @"
                           << getOperation().getSymName() << "\n");
@@ -75,6 +88,7 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::ConstantIntOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
   patterns.add<hir::CallOp>(convert);
+  patterns.add<UnrealizedConversionCastOp>(convert);
 
   if (failed(applyPatternsGreedily(getOperation().getBodies()[0],
                                    std::move(patterns)))) {
