@@ -11,7 +11,6 @@
 #include "silicon/Support/MLIR.h"
 #include "silicon/Transforms/Passes.h"
 #include "llvm/Support/Debug.h"
-#include <mlir/IR/SymbolTable.h>
 
 using namespace mlir;
 using namespace silicon;
