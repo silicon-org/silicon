@@ -18,4 +18,11 @@ def InterpretPass : Pass<"interpret", "mlir::ModuleOp"> {
   ];
 }
 
+def SpecializeFuncsPass : Pass<"specialize-funcs", "mlir::ModuleOp"> {
+  let dependentDialects = [
+    "hir::HIRDialect",
+    "mir::MIRDialect",
+  ];
+}
+
 #endif // SILICON_TRANSFORMS_PASSES_TD
