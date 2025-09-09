@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/Codegen/Context.h"
+#include "silicon/HIR/Ops.h"
+#include "silicon/Support/MLIR.h"
 #include "silicon/Syntax/AST.h"
 
 using namespace silicon;
@@ -20,7 +22,7 @@ struct DeclareItems : public ast::Visitor<DeclareItems> {
 
   void preVisitNode(ast::FnItem &item) {
     auto func = cx.builder.create<hir::FuncOp>(
-        item.loc, cx.builder.getStringAttr(item.name), 0);
+        item.loc, cx.builder.getStringAttr(item.name));
     cx.funcs.insert({&item, func});
     cx.symbolTable.insert(func);
   }
@@ -53,28 +55,6 @@ LogicalResult Context::convertAST(AST &ast) {
       return failure();
 
   return success();
-}
-
-void Context::increaseConstness() {
-  ++currentConstness;
-  assert(currentConstness <= constContexts.size());
-  if (currentConstness == constContexts.size()) {
-    auto region = std::make_unique<Region>();
-    auto &entry = region->emplaceBlock();
-    OpBuilder builder(module.getContext());
-    builder.setInsertionPointToStart(&entry);
-    auto returnOp =
-        hir::ReturnOp::create(builder, UnknownLoc::get(module.getContext()),
-                              ValueRange{}, ValueRange{});
-    builder.setInsertionPoint(returnOp);
-    constContexts.push_back({builder, entry, returnOp, std::move(region),
-                             DenseMap<Value, Value>()});
-  }
-}
-
-void Context::decreaseConstness() {
-  assert(currentConstness > 0);
-  --currentConstness;
 }
 
 unsigned Context::getValueConstness(Value value) {

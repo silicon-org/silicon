@@ -70,16 +70,9 @@ void SpecializeFuncsPass::runOnOperation() {
 
 hir::FuncOp SpecializeFuncsPass::specialize(hir::FuncOp originalFunc,
                                             mir::SpecializedFuncAttr spec) {
-  // Make sure we have enough regions.
-  if (originalFunc.getNumRegions() < 2) {
-    emitBug(originalFunc.getLoc())
-        << "function does not have a second region to specialize";
-    return {};
-  }
-
   // Make sure we have the correct number of arguments.
   auto argsExpected = spec.getArgs().size() + spec.getConsts().size();
-  auto argsActual = originalFunc.getRegion(1).getNumArguments();
+  auto argsActual = originalFunc.getBody().getNumArguments();
   if (argsExpected != argsActual) {
     emitBug(originalFunc.getLoc())
         << "function has " << argsActual
@@ -89,21 +82,13 @@ hir::FuncOp SpecializeFuncsPass::specialize(hir::FuncOp originalFunc,
     return {};
   }
 
-  // Create a clone of the function with the first region dropped.
+  // Create a clone of the function.
   OpBuilder builder(originalFunc);
   builder.setInsertionPointAfter(originalFunc);
-  auto func = builder.create<hir::FuncOp>(originalFunc.getLoc(),
-                                          originalFunc.getSymNameAttr(),
-                                          originalFunc.getNumRegions() - 1);
-  for (unsigned regionIdx = 0; regionIdx < func.getNumRegions(); ++regionIdx) {
-    auto &srcRegion = originalFunc.getRegion(regionIdx + 1);
-    auto &dstRegion = func.getRegion(regionIdx);
-    IRMapping mapper;
-    srcRegion.cloneInto(&dstRegion, mapper);
-  }
+  auto func = cast<hir::FuncOp>(builder.clone(*originalFunc));
 
   // Apply argument type specialization.
-  auto &block = func.getRegion(0).front();
+  auto &block = func.getBody().front();
   builder.setInsertionPointToStart(&block);
   unsigned argIdx = 0;
   for (auto type : spec.getArgs()) {

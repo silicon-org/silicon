@@ -6,5 +6,6 @@ hir.func @foo {
   // CHECK: mir.return [[SPEC]]
   %0 = hir.int_type
   %1 = hir.constant_int 42
-  hir.return args(%0 : !hir.type) freeze(%1 : !hir.value)
+  %2 = hir.specialize_func @foo(%0) -> (), %1 : !hir.value
+  hir.return %2 : !hir.func
 }

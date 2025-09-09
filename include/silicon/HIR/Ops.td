@@ -176,8 +176,8 @@ def FuncOp : HIROp<"func", [
   IsolatedFromAbove
 ]> {
   let arguments = (ins SymbolNameAttr:$sym_name);
-  let regions = (region VariadicRegion<AnyRegion>:$bodies);
-  let assemblyFormat = "$sym_name attr-dict-with-keyword $bodies";
+  let regions = (region AnyRegion:$body);
+  let assemblyFormat = "$sym_name attr-dict-with-keyword $body";
 }
 
 def ArgOp : HIROp<"arg", [
@@ -204,17 +204,14 @@ def ArgsOp : HIROp<"args", [
 }
 
 def ReturnOp : HIROp<"return", [
-  AttrSizedOperandSegments,
-  HasParent<"FuncOp">,
   Pure,
   ReturnLike,
   Terminator,
+  HasParent<"FuncOp">,
 ]> {
-  let arguments = (ins Variadic<AnyType>:$args, Variadic<AnyType>:$freeze);
+  let arguments = (ins Variadic<AnyType>:$operands);
   let assemblyFormat = [{
-    (`args` `(` $args^ `:` type($args) `)`)?
-    (`freeze` `(` $freeze^ `:` type($freeze) `)`)?
-    attr-dict
+    ($operands^ `:` type($operands))? attr-dict
   }];
 }
 
@@ -232,13 +229,28 @@ def CallOp : HIROp<"call"> {
     FuncType:$callee,
     Variadic<AnyType>:$arguments
   );
-  let results = (outs
-    FuncType:$specialized_callee,
-    Variadic<AnyType>:$results
-  );
+  let results = (outs Variadic<AnyType>:$results);
   let assemblyFormat = [{
     $callee `(` $arguments `)` attr-dict
     `:` functional-type($arguments, $results)
+  }];
+}
+
+def SpecializeFuncOp : HIROp<"specialize_func", [
+  AttrSizedOperandSegments,
+  Pure,
+]> {
+  let arguments = (ins
+    FlatSymbolRefAttr:$func,
+    Variadic<TypeType>:$typeOfArgs,
+    Variadic<TypeType>:$typeOfResults,
+    Variadic<AnyType>:$consts
+  );
+  let results = (outs FuncType);
+  let assemblyFormat = [{
+    $func `(` $typeOfArgs `)` `->` `(` $typeOfResults `)`
+    (`,` $consts^ `:` type($consts))?
+    attr-dict
   }];
 }
 

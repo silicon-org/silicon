@@ -71,6 +71,7 @@ using mlir::emitRemark;
 using mlir::emitWarning;
 using mlir::FileLineColLoc;
 using mlir::FileLineColRange;
+using mlir::FlatSymbolRefAttr;
 using mlir::Location;
 using mlir::MLIRContext;
 using mlir::ModuleOp;

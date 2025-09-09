@@ -14,11 +14,12 @@ using namespace codegen;
 
 LogicalResult Context::convertFnItem(ast::FnItem &item) {
   auto funcOp = funcs.at(&item);
+  funcOp.getBody().emplaceBlock();
 
   // Create a const context for the main function body.
   constContexts.clear();
-  currentConstness = -1;
-  increaseConstness();
+  constContexts.push_back(ConstContext(funcOp));
+  currentConstness = 0;
 
   // Handle the function arguments.
   auto guard2 = BindingsScope(bindings);
@@ -33,7 +34,8 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
     // Add the argument type to the return op's list of arguments at the
     // argument's level of constness.
     unsigned argConstness = getValueConstness(type);
-    constContexts[argConstness].returnOp.getArgsMutable().append(type);
+    constContexts[argConstness].specializeOp.getTypeOfArgsMutable().append(
+        type);
 
     // Add the argument value as a block argument to the next lower level of
     // constness.
@@ -49,15 +51,43 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
   if (!result)
     return failure();
 
-  // Update the function op with the fully populated regions.
-  auto newFuncOp = hir::FuncOp::create(
-      builder, funcOp.getLoc(), funcOp.getSymNameAttr(), constContexts.size());
-  for (unsigned idx = 0; idx < constContexts.size(); ++idx) {
-    newFuncOp.getBodies()[idx].takeBody(
-        *constContexts[constContexts.size() - idx - 1].entry.getParent());
-  }
-  funcs[&item] = newFuncOp;
-  funcOp.erase();
-
+  // Return the result of the function body.
+  hir::ReturnOp::create(currentBuilder(), item.loc, result);
   return success();
+}
+
+ConstContext::ConstContext(hir::FuncOp funcOp)
+    : builder(funcOp.getContext()), entry(funcOp.getBody().front()),
+      funcOp(funcOp) {
+  builder.setInsertionPointToStart(&entry);
+}
+
+void Context::increaseConstness() {
+  ++currentConstness;
+  assert(currentConstness <= constContexts.size());
+  if (currentConstness == constContexts.size()) {
+    auto baseFuncOp = constContexts.front().funcOp;
+    auto prevFuncOp = constContexts.back().funcOp;
+    OpBuilder builder(prevFuncOp);
+    auto funcOp = hir::FuncOp::create(
+        builder, baseFuncOp.getLoc(),
+        builder.getStringAttr(baseFuncOp.getSymName() + ".const" +
+                              Twine(currentConstness)));
+    symbolTable.insert(funcOp);
+    funcOp.getBody().emplaceBlock();
+    ConstContext cx(funcOp);
+    cx.specializeOp = hir::SpecializeFuncOp::create(
+        cx.builder, baseFuncOp.getLoc(),
+        FlatSymbolRefAttr::get(prevFuncOp.getSymNameAttr()), ValueRange{},
+        ValueRange{}, ValueRange{});
+    hir::ReturnOp::create(cx.builder, baseFuncOp.getLoc(),
+                          ValueRange{cx.specializeOp});
+    cx.builder.setInsertionPoint(cx.specializeOp);
+    constContexts.push_back(std::move(cx));
+  }
+}
+
+void Context::decreaseConstness() {
+  assert(currentConstness > 0);
+  --currentConstness;
 }

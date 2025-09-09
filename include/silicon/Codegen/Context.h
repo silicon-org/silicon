@@ -17,10 +17,12 @@ namespace codegen {
 struct ConstContext {
   OpBuilder builder;
   Block &entry;
-  hir::ReturnOp returnOp;
-  std::unique_ptr<Region> createdRegion;
+  hir::FuncOp funcOp;
+  hir::SpecializeFuncOp specializeOp;
   DenseMap<Value, Value> forwardedValues;
   unsigned lastArgumentIndex = 0;
+
+  ConstContext(hir::FuncOp funcOp);
 };
 
 struct Context {

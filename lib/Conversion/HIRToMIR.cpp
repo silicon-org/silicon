@@ -9,10 +9,12 @@
 #include "silicon/Conversion/Passes.h"
 #include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Types.h"
+#include "silicon/MIR/Dialect.h"
 #include "silicon/MIR/Ops.h"
 #include "silicon/Support/MLIR.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 
 using namespace mlir;
@@ -44,16 +46,16 @@ static LogicalResult convert(hir::ConstantIntOp op, PatternRewriter &rewriter) {
   return success();
 }
 
+static LogicalResult convert(hir::SpecializeFuncOp op,
+                             PatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<mir::SpecializeFuncOp>(
+      op, op.getFuncAttr(), op.getTypeOfArgs(), op.getTypeOfResults(),
+      op.getConsts());
+  return success();
+}
+
 static LogicalResult convert(hir::ReturnOp op, PatternRewriter &rewriter) {
-  auto func = op->getParentOfType<hir::FuncOp>();
-  assert(func);
-
-  auto specFunc = mir::SpecializeFuncOp::create(
-      rewriter, op.getLoc(), FlatSymbolRefAttr::get(func.getSymNameAttr()),
-      op.getArgs(), ValueRange{}, op.getFreeze());
-
-  // auto attr = mir::IntAttr::get(op.getContext(), op.getValue().getValue());
-  rewriter.replaceOpWithNewOp<mir::ReturnOp>(op, ValueRange{specFunc});
+  rewriter.replaceOpWithNewOp<mir::ReturnOp>(op, op.getOperands());
   return success();
 }
 
@@ -80,17 +82,22 @@ static LogicalResult convert(UnrealizedConversionCastOp op,
 }
 
 void HIRToMIRPass::runOnOperation() {
-  LLVM_DEBUG(llvm::dbgs() << "Lowering first region of @"
-                          << getOperation().getSymName() << "\n");
+  if (llvm::any_of(getOperation().getBody().getArgumentTypes(), [](auto type) {
+        return !isa<mir::MIRDialect>(type.getDialect());
+      }))
+    return;
+  LLVM_DEBUG(llvm::dbgs() << "Lowering @" << getOperation().getSymName()
+                          << "\n");
 
   RewritePatternSet patterns(&getContext());
   patterns.add<hir::IntTypeOp>(convert);
   patterns.add<hir::ConstantIntOp>(convert);
+  patterns.add<hir::SpecializeFuncOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
   patterns.add<hir::CallOp>(convert);
   patterns.add<UnrealizedConversionCastOp>(convert);
 
-  if (failed(applyPatternsGreedily(getOperation().getBodies()[0],
+  if (failed(applyPatternsGreedily(getOperation().getBody(),
                                    std::move(patterns)))) {
     emitBug(getOperation().getLoc()) << "HIR-to-MIR lowering failed to "
                                         "converge";

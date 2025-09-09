@@ -57,9 +57,9 @@ LogicalResult Interpreter::run() {
     if (auto callOp = dyn_cast<mir::CallOp>(op)) {
       auto calleeOp = symbolTable.lookup<hir::FuncOp>(callOp.getCallee());
       auto &newFrame = callStack.emplace_back();
-      newFrame.currentOp = &calleeOp.getBodies()[0].front().front();
+      newFrame.currentOp = &calleeOp.getBody().front().front();
       for (auto [arg, attr] :
-           llvm::zip(calleeOp.getBodies()[0].getArguments(), operands))
+           llvm::zip(calleeOp.getBody().getArguments(), operands))
         newFrame.values[arg] = attr;
       continue;
     }
@@ -125,13 +125,12 @@ void InterpretPass::runOnOperation() {
 
   // Interpret all `hir.func`s that take no arguments.
   for (auto func : getOperation().getOps<hir::FuncOp>()) {
-    if (func.getBodies().empty() || func.getBodies()[0].getNumArguments() > 0)
+    if (func.getBody().getNumArguments() > 0)
       continue;
     LLVM_DEBUG(llvm::dbgs() << "Interpreting @" << func.getSymName() << "\n");
     Interpreter interpreter(symbolTable);
     interpreter.callStack.emplace_back();
-    interpreter.callStack.back().currentOp =
-        &func.getBodies()[0].front().front();
+    interpreter.callStack.back().currentOp = &func.getBody().front().front();
     if (failed(interpreter.run()))
       return signalPassFailure();
   }
