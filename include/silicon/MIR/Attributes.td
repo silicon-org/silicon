@@ -41,6 +41,14 @@ def IntAttr : MIRAttrDef<"Int", [
   let assemblyFormat = "`<` $value `>`";
 }
 
+def FuncAttr : MIRAttrDef<"Func", [
+  DeclareAttrInterfaceMethods<TypedAttrInterface>
+]> {
+  let mnemonic = "func";
+  let parameters = (ins "mlir::FlatSymbolRefAttr":$func);
+  let assemblyFormat = "`<` $func `>`";
+}
+
 def SpecializedFuncAttr : MIRAttrDef<"SpecializedFunc", [
   DeclareAttrInterfaceMethods<TypedAttrInterface>
 ]> {

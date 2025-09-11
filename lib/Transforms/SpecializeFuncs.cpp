@@ -55,8 +55,9 @@ void SpecializeFuncsPass::runOnOperation() {
         worklist.push_back(func);
       }
       OpBuilder builder(op);
-      auto newOp = hir::ConstantFuncOp::create(builder, op.getLoc(),
-                                               func.getSymNameAttr());
+      auto newAttr = mir::FuncAttr::get(
+          &getContext(), FlatSymbolRefAttr::get(func.getSymNameAttr()));
+      auto newOp = mir::ConstantOp::create(builder, op.getLoc(), newAttr);
       LLVM_DEBUG(llvm::dbgs()
                  << "Replacing " << op << " with " << newOp << "\n");
       op.getResult().replaceAllUsesWith(newOp);
