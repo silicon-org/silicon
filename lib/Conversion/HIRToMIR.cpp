@@ -86,8 +86,23 @@ static LogicalResult convert(hir::CallOp op, hir::CallOp::Adaptor adaptor,
     return failure();
   rewriter.replaceOpWithNewOp<mir::CallOp>(
       op, TypeRange{mir::SpecializedFuncType::get(rewriter.getContext())},
-      calleeAttr.getFunc(), op.getArguments());
+      calleeAttr.getFunc(), adaptor.getArguments());
   return success();
+}
+
+static LogicalResult convert(UnrealizedConversionCastOp op,
+                             UnrealizedConversionCastOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  // Map MIR-to-HIR casts to the MIR input value directly.
+  if (op.getNumOperands() == 1 && op.getNumResults() == 1) {
+    if (isa<hir::HIRDialect>(op.getResult(0).getType().getDialect())) {
+      if (isa<mir::MIRDialect>(op.getOperand(0).getType().getDialect())) {
+        rewriter.replaceOp(op, adaptor.getOperands()[0]);
+        return success();
+      }
+    }
+  }
+  return failure();
 }
 
 void HIRToMIRPass::runOnOperation() {
@@ -100,6 +115,13 @@ void HIRToMIRPass::runOnOperation() {
 
   // Setup the type conversion.
   TypeConverter converter;
+
+  // All MIR types are fine.
+  converter.addConversion([](Type type) -> std::optional<Type> {
+    if (isa<mir::MIRDialect>(type.getDialect()))
+      return type;
+    return std::nullopt;
+  });
 
   // Allow any casts from MIR types. This is very relaxed, but allows us to get
   // something up and running quickly. In the future, we'll want to take the MIR
@@ -124,6 +146,7 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::SpecializeFuncOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
   patterns.add<hir::CallOp>(convert);
+  patterns.add<UnrealizedConversionCastOp>(convert);
 
   // Setup the legal ops.
   ConversionTarget target(getContext());

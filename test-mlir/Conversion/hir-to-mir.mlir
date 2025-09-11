@@ -13,3 +13,12 @@ hir.func @foo {
   // CHECK: mir.return [[SPEC]]
   hir.return %3 : !hir.func
 }
+
+// CHECK-LABEL: hir.func @Cast
+hir.func @Cast {
+  // CHECK-NEXT: [[TMP:%.+]] = mir.constant
+  %0 = mir.constant #mir.int<42>
+  %1 = builtin.unrealized_conversion_cast %0 : !mir.int to !hir.value
+  // CHECK-NEXT: mir.return [[TMP]]
+  hir.return %1 : !hir.value
+}
