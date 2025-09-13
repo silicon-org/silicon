@@ -5,6 +5,7 @@ add_silicon_dialect_library(SiliconHIR
   Types.cpp
 
   LINK_LIBS PUBLIC
+  SiliconSupport
   MLIRFuncDialect
   MLIRIR
   MLIRControlFlowInterfaces

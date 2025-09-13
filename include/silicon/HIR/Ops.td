@@ -10,6 +10,7 @@
 #define SILICON_HIR_OPS_TD
 
 include "mlir/IR/OpBase.td"
+include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
@@ -173,11 +174,18 @@ def ConstUnwrapOp : HIROp<"const_unwrap", [
 }
 
 def FuncOp : HIROp<"func", [
-  IsolatedFromAbove
+  IsolatedFromAbove,
+  Symbol,
 ]> {
-  let arguments = (ins SymbolNameAttr:$sym_name);
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<StrAttr>:$sym_visibility
+  );
   let regions = (region AnyRegion:$body);
-  let assemblyFormat = "$sym_name attr-dict-with-keyword $body";
+  let assemblyFormat = [{
+    custom<SymbolVisibility>($sym_visibility) ``
+    $sym_name attr-dict-with-keyword $body
+  }];
 }
 
 def ArgOp : HIROp<"arg", [

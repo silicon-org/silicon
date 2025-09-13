@@ -31,3 +31,9 @@ hir.specialize_func @foo(%int_type) -> (%int_type), %int_type, %c42_int : !hir.t
 hir.call %foo() : () -> ()
 hir.call %foo(%int_type) : (!hir.type) -> (!hir.type)
 hir.call %foo(%int_type, %c42_int) : (!hir.type, !hir.value) -> (!hir.type, !hir.value)
+
+// Test HIR function operations with symbol visibility
+hir.func @public_visibility1 {}
+hir.func public @public_visibility2 {}
+hir.func private @private_visibility {}
+hir.func nested @nested_visibility {}

@@ -22,7 +22,8 @@ struct DeclareItems : public ast::Visitor<DeclareItems> {
 
   void preVisitNode(ast::FnItem &item) {
     auto func = cx.builder.create<hir::FuncOp>(
-        item.loc, cx.builder.getStringAttr(item.name));
+        item.loc, cx.builder.getStringAttr(item.name),
+        cx.builder.getStringAttr("private"));
     cx.funcs.insert({&item, func});
     cx.symbolTable.insert(func);
   }

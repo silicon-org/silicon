@@ -2,6 +2,7 @@ add_subdirectory(Codegen)
 add_subdirectory(Conversion)
 add_subdirectory(HIR)
 add_subdirectory(MIR)
+add_subdirectory(Support)
 add_subdirectory(Syntax)
 add_subdirectory(Transforms)
 

@@ -53,6 +53,12 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
 
   // Return the result of the function body.
   hir::ReturnOp::create(currentBuilder(), item.loc, result);
+
+  // Mark all but the highest constness level as private, since that is the only
+  // thing external functions can call directly. All other levels of constness
+  // are returned from the call to the previous level.
+  SymbolTable::setSymbolVisibility(constContexts.back().funcOp,
+                                   SymbolTable::Visibility::Public);
   return success();
 }
 
@@ -72,7 +78,8 @@ void Context::increaseConstness() {
     auto funcOp = hir::FuncOp::create(
         builder, baseFuncOp.getLoc(),
         builder.getStringAttr(baseFuncOp.getSymName() + ".const" +
-                              Twine(currentConstness)));
+                              Twine(currentConstness)),
+        builder.getStringAttr("private"));
     symbolTable.insert(funcOp);
     funcOp.getBody().emplaceBlock();
     ConstContext cx(funcOp);
