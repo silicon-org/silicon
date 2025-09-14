@@ -25,6 +25,10 @@ static bool getTypeAbbrev(llvm::raw_ostream &os, Type type) {
         os << type.getMnemonic();
         return true;
       })
+      .Case<UIntType>([&](auto type) {
+        os << type.getMnemonic() << type.getWidth();
+        return true;
+      })
       .Default([](auto) { return false; });
 }
 

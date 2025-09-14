@@ -10,13 +10,16 @@
 #include "silicon/HIR/Dialect.h"
 #include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Types.h"
+#include "silicon/MIR/Attributes.h"
 #include "silicon/MIR/Dialect.h"
 #include "silicon/MIR/Ops.h"
 #include "silicon/Support/MLIR.h"
 #include "circt/Support/ConversionPatternSet.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 
 using namespace mlir;
@@ -36,13 +39,9 @@ struct HIRToMIRPass : public silicon::impl::HIRToMIRPassBase<HIRToMIRPass> {
 };
 } // namespace
 
-static LogicalResult convert(hir::IntTypeOp op, hir::IntTypeOp::Adaptor adaptor,
-                             ConversionPatternRewriter &rewriter) {
-  auto type = mir::IntType::get(op.getContext());
-  auto attr = mir::TypeAttr::get(op.getContext(), type);
-  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
-  return success();
-}
+//===----------------------------------------------------------------------===//
+// Constants
+//===----------------------------------------------------------------------===//
 
 static LogicalResult convert(hir::ConstantIntOp op,
                              hir::ConstantIntOp::Adaptor adaptor,
@@ -60,6 +59,46 @@ static LogicalResult convert(hir::ConstantFuncOp op,
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
+
+//===----------------------------------------------------------------------===//
+// Type Constructors
+//===----------------------------------------------------------------------===//
+
+static LogicalResult convert(hir::IntTypeOp op, hir::IntTypeOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  auto type = mir::IntType::get(op.getContext());
+  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
+static LogicalResult convert(hir::UIntTypeOp op,
+                             hir::UIntTypeOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  auto widthOperand = adaptor.getWidth();
+  mir::IntAttr widthAttr;
+  if (!matchPattern(widthOperand, m_Constant(&widthAttr)))
+    return emitBug(op.getLoc()) << "non-constant uint width";
+  const auto &width = widthAttr.getValue();
+
+  // Make sure the width is zero or positive.
+  if (width < 0)
+    return emitBug(op.getLoc()) << "negative uint width " << width;
+
+  // Make sure the width is not too large.
+  if (width >= std::numeric_limits<int64_t>::max())
+    return emitBug(op.getLoc()) << "excessive uint width " << width;
+
+  // Materialize the constant uint type.
+  auto type = mir::UIntType::get(op.getContext(), static_cast<int64_t>(width));
+  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Other Operations
+//===----------------------------------------------------------------------===//
 
 static LogicalResult convert(hir::SpecializeFuncOp op,
                              hir::SpecializeFuncOp::Adaptor adaptor,
@@ -140,9 +179,10 @@ void HIRToMIRPass::runOnOperation() {
 
   // Gather the conversion patterns.
   ConversionPatternSet patterns(&getContext(), converter);
-  patterns.add<hir::IntTypeOp>(convert);
   patterns.add<hir::ConstantIntOp>(convert);
   patterns.add<hir::ConstantFuncOp>(convert);
+  patterns.add<hir::IntTypeOp>(convert);
+  patterns.add<hir::UIntTypeOp>(convert);
   patterns.add<hir::SpecializeFuncOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
   patterns.add<hir::CallOp>(convert);

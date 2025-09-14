@@ -1,7 +1,20 @@
 // RUN: silicon-opt --lower-hir-to-mir %s | FileCheck %s
 
-// CHECK-LABEL: hir.func @foo
-hir.func @foo {
+// CHECK-LABEL: @Types
+hir.func @Types {
+  // CHECK-NEXT: mir.constant #mir.type<!mir.int>
+  %int_type = hir.int_type
+
+  // CHECK-NEXT: mir.constant #mir.int<42>
+  // CHECK-NEXT: mir.constant #mir.type<!mir.uint<42>>
+  %c42_int = hir.constant_int 42
+  %uint42_type = hir.uint_type %c42_int
+
+  hir.return
+}
+
+// CHECK-LABEL: @FunctionSpecialization
+hir.func @FunctionSpecialization {
   // CHECK-NEXT: [[TYPE:%.+]] = mir.constant #mir.type<!mir.int>
   %0 = hir.int_type
   // CHECK-NEXT: [[VALUE:%.+]] = mir.constant #mir.int<42>
@@ -14,7 +27,7 @@ hir.func @foo {
   hir.return %3 : !hir.func
 }
 
-// CHECK-LABEL: hir.func @Cast
+// CHECK-LABEL: @Cast
 hir.func @Cast {
   // CHECK-NEXT: [[TMP:%.+]] = mir.constant
   %0 = mir.constant #mir.int<42>

@@ -104,3 +104,14 @@ inline mlir::InFlightDiagnostic emitBug(Location loc, const char *func,
 #define emitBug(loc) ::silicon::emitBug(loc, __PRETTY_FUNCTION__, __LINE__)
 
 } // namespace silicon
+
+namespace mlir {
+/// Support printing DynamicAPInt in diagnostics.
+inline mlir::Diagnostic &operator<<(mlir::Diagnostic &d,
+                                    const llvm::DynamicAPInt &value) {
+  SmallString<64> buffer;
+  llvm::raw_svector_ostream(buffer) << value;
+  d << buffer;
+  return d;
+}
+} // namespace mlir

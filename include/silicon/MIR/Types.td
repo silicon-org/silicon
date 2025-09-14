@@ -30,6 +30,13 @@ def IntType : MIRTypeDef<"Int"> {
   let summary = "generic integer type";
 }
 
+def UIntType : MIRTypeDef<"UInt"> {
+  let mnemonic = "uint";
+  let summary = "sized unsigned integer type";
+  let parameters = (ins "uint64_t":$width);
+  let assemblyFormat = "`<` $width `>`";
+}
+
 def SpecializedFuncType : MIRTypeDef<"SpecializedFunc"> {
   let mnemonic = "specialized_func";
   let summary = "specialized function";

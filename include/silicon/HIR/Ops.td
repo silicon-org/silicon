@@ -22,6 +22,10 @@ include "silicon/HIR/Types.td"
 class HIROp<string mnemonic, list<Trait> traits = []> :
   Op<HIRDialect, mnemonic, traits>;
 
+//===----------------------------------------------------------------------===//
+// Constants
+//===----------------------------------------------------------------------===//
+
 def ConstantIntOp : HIROp<"constant_int", [Pure]> {
   let arguments = (ins IntAttr:$value);
   let results = (outs ValueType:$result);
@@ -39,10 +43,9 @@ def ConstantFuncOp : HIROp<"constant_func", [Pure]> {
   let assemblyFormat = "$value attr-dict";
 }
 
-def InferrableOp : HIROp<"inferrable", []> {
-  let results = (outs AnyType:$result);
-  let assemblyFormat = "attr-dict `:` type($result)";
-}
+//===----------------------------------------------------------------------===//
+// Type Constructors
+//===----------------------------------------------------------------------===//
 
 def IntTypeOp : HIROp<"int_type", [Pure]> {
   let results = (outs TypeType:$result);
@@ -50,15 +53,24 @@ def IntTypeOp : HIROp<"int_type", [Pure]> {
 }
 
 def UIntTypeOp : HIROp<"uint_type", [Pure]> {
-  let arguments = (ins ValueType:$value);
+  let arguments = (ins ValueType:$width);
   let results = (outs TypeType:$result);
-  let assemblyFormat = "$value attr-dict";
+  let assemblyFormat = "$width attr-dict";
 }
 
 def RefTypeOp : HIROp<"ref_type", [Pure]> {
   let arguments = (ins TypeType:$innerType);
   let results = (outs TypeType:$result);
   let assemblyFormat = "$innerType attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Operations
+//===----------------------------------------------------------------------===//
+
+def InferrableOp : HIROp<"inferrable", []> {
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
 }
 
 def BinaryOp : HIROp<"binary", [

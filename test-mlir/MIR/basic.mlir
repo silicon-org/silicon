@@ -3,6 +3,7 @@
 // Types
 unrealized_conversion_cast to !mir.type
 unrealized_conversion_cast to !mir.int
+unrealized_conversion_cast to !mir.uint<42>
 unrealized_conversion_cast to !mir.specialized_func
 
 // Attributes
