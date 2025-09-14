@@ -264,12 +264,13 @@ def NextPhaseOp : HIROp<"next_phase", [
 def CallOp : HIROp<"call"> {
   let arguments = (ins
     FuncType:$callee,
+    TypeType:$calleeType,
     Variadic<AnyType>:$arguments
   );
   let results = (outs Variadic<AnyType>:$results);
   let assemblyFormat = [{
     $callee `(` $arguments `)` attr-dict
-    `:` functional-type($arguments, $results)
+    `:` $calleeType `,` functional-type($arguments, $results)
   }];
 }
 

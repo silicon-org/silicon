@@ -18,6 +18,25 @@ hir.func @Types {
   hir.return
 }
 
+// CHECK-LABEL: @Calls
+hir.func @Calls {
+  // CHECK: mir.call @foo() : () -> ()
+  %a0 = hir.constant_func @foo
+  %a1 = hir.func_type () -> ()
+  hir.call %a0() : %a1, () -> ()
+
+  // CHECK: [[TMP:%.+]] = mir.constant #mir.int<42>
+  // CHECK: mir.call @foo([[TMP]]) : (!mir.int) -> !mir.uint<42>
+  %b0 = hir.constant_func @foo
+  %b1 = hir.int_type
+  %b2 = hir.constant_int 42
+  %b3 = hir.uint_type %b2
+  %b4 = hir.func_type (%b1 : !hir.type) -> (%b3 : !hir.type)
+  hir.call %b0(%b2) : %b4, (!hir.value) -> (!hir.value)
+
+  hir.return
+}
+
 // CHECK-LABEL: @FunctionSpecialization
 hir.func @FunctionSpecialization {
   // CHECK-NEXT: [[TYPE:%.+]] = mir.constant #mir.type<!mir.int>

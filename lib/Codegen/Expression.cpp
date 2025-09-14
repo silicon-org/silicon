@@ -123,19 +123,23 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
   auto firstCallee =
       hir::ConstantFuncOp::create(cx.currentBuilder(), expr.loc, funcName);
   auto funcType = hir::FuncType::get(cx.module.getContext());
+  auto calleeType = hir::FuncTypeOp::create(cx.currentBuilder(), expr.loc,
+                                            ValueRange{}, ValueRange{});
   auto prevCall =
       hir::CallOp::create(cx.currentBuilder(), expr.loc, TypeRange{funcType},
-                          firstCallee, ValueRange{});
+                          firstCallee, calleeType, ValueRange{});
 
   for (unsigned idx = 0; idx < argsAtConstness.size(); ++idx) {
     auto callee = freezeValueAcrossConstness(prevCall.getResults()[0],
                                              cx.currentConstness, cx);
     unsigned revIdx = argsAtConstness.size() - idx - 1;
     cx.currentConstness = callConstness + revIdx;
+    calleeType = hir::FuncTypeOp::create(cx.currentBuilder(), expr.loc,
+                                         ValueRange{}, ValueRange{});
     prevCall =
         hir::CallOp::create(cx.currentBuilder(), expr.loc,
                             revIdx > 0 ? TypeRange{funcType} : TypeRange{},
-                            callee, argsAtConstness[revIdx]);
+                            callee, calleeType, argsAtConstness[revIdx]);
   }
 
   cx.currentConstness = callConstness;

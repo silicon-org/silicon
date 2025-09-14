@@ -147,15 +147,48 @@ static LogicalResult convert(hir::ReturnOp op, hir::ReturnOp::Adaptor adaptor,
 
 static LogicalResult convert(hir::CallOp op, hir::CallOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  auto constCallee = adaptor.getCallee().getDefiningOp<mir::ConstantOp>();
-  if (!constCallee)
-    return failure();
-  auto calleeAttr = dyn_cast<mir::FuncAttr>(constCallee.getValue());
-  if (!calleeAttr)
-    return failure();
-  rewriter.replaceOpWithNewOp<mir::CallOp>(
-      op, TypeRange{mir::SpecializedFuncType::get(rewriter.getContext())},
-      calleeAttr.getFunc(), adaptor.getArguments());
+  // Determine the callee.
+  mir::FuncAttr calleeAttr;
+  if (!matchPattern(adaptor.getCallee(), m_Constant(&calleeAttr)))
+    return emitBug(op.getLoc()) << "non-constant callee";
+
+  // TODO: Migrate this to the `hir.constant_func` lowering, and use the type of
+  // the `mir::FuncAttr` directly.
+
+  // Determine the callee type.
+  mir::TypeAttr calleeTypeAttr;
+  if (!matchPattern(adaptor.getCalleeType(), m_Constant(&calleeTypeAttr)))
+    return emitBug(op.getLoc()) << "non-constant callee type";
+
+  auto calleeType = dyn_cast<FunctionType>(calleeTypeAttr.getValue());
+  if (!calleeType)
+    return emitBug(op.getLoc())
+           << "non-function callee type " << calleeTypeAttr.getValue();
+
+  // Check the argument types.
+  if (calleeType.getNumInputs() != adaptor.getArguments().size())
+    return emitBug(op.getLoc())
+           << "callee expects " << calleeType.getNumInputs()
+           << " arguments, but call provides " << adaptor.getArguments().size();
+
+  for (auto [arg, expectedType] : llvm::zip(
+           adaptor.getArguments(), llvm::enumerate(calleeType.getInputs()))) {
+    if (arg.getType() != expectedType.value())
+      return emitBug(op.getLoc())
+             << "callee expects argument #" << expectedType.index() << " type "
+             << expectedType.value() << ", but call provides " << arg.getType();
+  }
+
+  // Check the result types.
+  if (calleeType.getNumResults() != op.getNumResults())
+    return emitBug(op.getLoc())
+           << "callee provides " << calleeType.getNumResults()
+           << " results, but call expects " << op.getNumResults();
+
+  // Create the call op.
+  rewriter.replaceOpWithNewOp<mir::CallOp>(op, calleeType.getResults(),
+                                           calleeAttr.getFunc(),
+                                           adaptor.getArguments());
   return success();
 }
 
