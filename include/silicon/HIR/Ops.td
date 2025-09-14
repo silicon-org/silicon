@@ -64,6 +64,23 @@ def RefTypeOp : HIROp<"ref_type", [Pure]> {
   let assemblyFormat = "$innerType attr-dict";
 }
 
+def FuncTypeOp : HIROp<"func_type", [
+  AttrSizedOperandSegments,
+  Pure,
+]> {
+  let arguments = (ins
+    Variadic<AnyType>:$typeOfArgs,
+    Variadic<AnyType>:$typeOfResults
+  );
+  let results = (outs TypeType:$result);
+  let assemblyFormat = [{
+    ` `
+    `(` ($typeOfArgs^ `:` type($typeOfArgs))? `)` `->`
+    `(` ($typeOfResults^ `:` type($typeOfResults))? `)`
+    attr-dict
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Operations
 //===----------------------------------------------------------------------===//

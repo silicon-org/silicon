@@ -96,6 +96,36 @@ static LogicalResult convert(hir::UIntTypeOp op,
   return success();
 }
 
+static LogicalResult convert(hir::FuncTypeOp op,
+                             hir::FuncTypeOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  // Gather the argument types.
+  SmallVector<Type> argTypes;
+  argTypes.reserve(adaptor.getTypeOfArgs().size());
+  for (auto value : adaptor.getTypeOfArgs()) {
+    mir::TypeAttr attr;
+    if (!matchPattern(value, m_Constant(&attr)))
+      return emitBug(op.getLoc()) << "non-constant argument type";
+    argTypes.push_back(attr.getValue());
+  }
+
+  // Gather the result types.
+  SmallVector<Type> resultTypes;
+  resultTypes.reserve(adaptor.getTypeOfResults().size());
+  for (auto value : adaptor.getTypeOfResults()) {
+    mir::TypeAttr attr;
+    if (!matchPattern(value, m_Constant(&attr)))
+      return emitBug(op.getLoc()) << "non-constant result type";
+    resultTypes.push_back(attr.getValue());
+  }
+
+  // Materialize the constant function type.
+  auto type = FunctionType::get(op.getContext(), argTypes, resultTypes);
+  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // Other Operations
 //===----------------------------------------------------------------------===//
@@ -183,6 +213,7 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::ConstantFuncOp>(convert);
   patterns.add<hir::IntTypeOp>(convert);
   patterns.add<hir::UIntTypeOp>(convert);
+  patterns.add<hir::FuncTypeOp>(convert);
   patterns.add<hir::SpecializeFuncOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
   patterns.add<hir::CallOp>(convert);
