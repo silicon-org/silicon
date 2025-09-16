@@ -54,8 +54,19 @@ static LogicalResult convert(hir::ConstantIntOp op,
 static LogicalResult convert(hir::ConstantFuncOp op,
                              hir::ConstantFuncOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
+  // Determine the function type.
+  mir::TypeAttr funcTypeAttr;
+  if (!matchPattern(adaptor.getFuncType(), m_Constant(&funcTypeAttr)))
+    return emitBug(op.getLoc()) << "non-constant function type";
+
+  auto funcType = dyn_cast<FunctionType>(funcTypeAttr.getValue());
+  if (!funcType)
+    return emitBug(op.getLoc()) << "non-function type";
+
+  // Materialize the constant function.
   auto attr = mir::FuncAttr::get(
-      op.getContext(), FlatSymbolRefAttr::get(op.getContext(), op.getValue()));
+      op.getContext(), funcType,
+      FlatSymbolRefAttr::get(op.getContext(), op.getValue()));
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -151,19 +162,10 @@ static LogicalResult convert(hir::CallOp op, hir::CallOp::Adaptor adaptor,
   mir::FuncAttr calleeAttr;
   if (!matchPattern(adaptor.getCallee(), m_Constant(&calleeAttr)))
     return emitBug(op.getLoc()) << "non-constant callee";
+  auto calleeType = calleeAttr.getType();
 
   // TODO: Migrate this to the `hir.constant_func` lowering, and use the type of
   // the `mir::FuncAttr` directly.
-
-  // Determine the callee type.
-  mir::TypeAttr calleeTypeAttr;
-  if (!matchPattern(adaptor.getCalleeType(), m_Constant(&calleeTypeAttr)))
-    return emitBug(op.getLoc()) << "non-constant callee type";
-
-  auto calleeType = dyn_cast<FunctionType>(calleeTypeAttr.getValue());
-  if (!calleeType)
-    return emitBug(op.getLoc())
-           << "non-function callee type " << calleeTypeAttr.getValue();
 
   // Check the argument types.
   if (calleeType.getNumInputs() != adaptor.getArguments().size())
@@ -218,9 +220,9 @@ void HIRToMIRPass::runOnOperation() {
   // Setup the type conversion.
   TypeConverter converter;
 
-  // All MIR types are fine.
+  // All MIR types and a handful of builtin types are fine.
   converter.addConversion([](Type type) -> std::optional<Type> {
-    if (isa<mir::MIRDialect>(type.getDialect()))
+    if (isa<mir::MIRDialect>(type.getDialect()) || isa<FunctionType>(type))
       return type;
     return std::nullopt;
   });
@@ -233,7 +235,7 @@ void HIRToMIRPass::runOnOperation() {
     if (auto castOp = value.getDefiningOp<UnrealizedConversionCastOp>()) {
       if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
         auto type = castOp.getOperand(0).getType();
-        if (isa<mir::MIRDialect>(type.getDialect()))
+        if (isa<mir::MIRDialect>(type.getDialect()) || isa<FunctionType>(type))
           return type;
       }
     }

@@ -2,8 +2,8 @@
 
 func.func private @use_value(%arg0: !hir.value)
 
-// CHECK: mir.constant #mir.func<[[SIMPLE_SPEC:@Simple_.+]]>
-// CHECK: mir.constant #mir.func<[[SIMPLE_SPEC]]>
+// CHECK: mir.constant #mir.func<[[SIMPLE_SPEC:@Simple_.+]]> :
+// CHECK: mir.constant #mir.func<[[SIMPLE_SPEC]]> :
 mir.constant #mir.specialized_func<@Simple, [!mir.int], [], [#mir.int<42>]>
 mir.constant #mir.specialized_func<@Simple, [!mir.int], [], [#mir.int<42>]>
 
@@ -23,8 +23,8 @@ hir.func @Simple {
   mir.return
 }
 
-// CHECK: mir.constant #mir.func<[[NESTED_OUTER_SPEC:@NestedOuter_.+]]>
-// CHECK: mir.constant #mir.func<[[NESTED_OUTER_SPEC]]>
+// CHECK: mir.constant #mir.func<[[NESTED_OUTER_SPEC:@NestedOuter_.+]]> :
+// CHECK: mir.constant #mir.func<[[NESTED_OUTER_SPEC]]> :
 mir.constant #mir.specialized_func<@NestedOuter, [], [], [#mir.specialized_func<@NestedInner, [], [], [#mir.int<1337>]>]>
 mir.constant #mir.specialized_func<@NestedOuter, [], [], [#mir.specialized_func<@NestedInner, [], [], [#mir.int<1337>]>]>
 
@@ -32,7 +32,7 @@ mir.constant #mir.specialized_func<@NestedOuter, [], [], [#mir.specialized_func<
 // CHECK: hir.func [[NESTED_OUTER_SPEC]]
 hir.func @NestedOuter {
 ^bb0(%arg0: !hir.func):
-  // CHECK-NEXT: mir.constant #mir.func<[[NESTED_INNER_SPEC:@NestedInner_.+]]>
+  // CHECK-NEXT: mir.constant #mir.func<[[NESTED_INNER_SPEC:@NestedInner_.+]]> :
   mir.return
 }
 

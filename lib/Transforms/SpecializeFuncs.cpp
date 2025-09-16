@@ -56,7 +56,9 @@ void SpecializeFuncsPass::runOnOperation() {
       }
       OpBuilder builder(op);
       auto newAttr = mir::FuncAttr::get(
-          &getContext(), FlatSymbolRefAttr::get(func.getSymNameAttr()));
+          &getContext(),
+          FunctionType::get(&getContext(), attr.getArgs(), attr.getResults()),
+          FlatSymbolRefAttr::get(func.getSymNameAttr()));
       auto newOp = mir::ConstantOp::create(builder, op.getLoc(), newAttr);
       LLVM_DEBUG(llvm::dbgs()
                  << "Replacing " << op << " with " << newOp << "\n");

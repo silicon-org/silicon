@@ -39,14 +39,6 @@ Type TypeAttr::getType() const { return TypeType::get(getContext()); }
 Type IntAttr::getType() const { return IntType::get(getContext()); }
 
 //===----------------------------------------------------------------------===//
-// FuncAttr
-//===----------------------------------------------------------------------===//
-
-Type FuncAttr::getType() const {
-  return SpecializedFuncType::get(getContext());
-}
-
-//===----------------------------------------------------------------------===//
 // SpecializedFuncAttr
 //===----------------------------------------------------------------------===//
 

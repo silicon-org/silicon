@@ -120,26 +120,24 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
   auto funcName = StringAttr::get(cx.module.getContext(),
                                   cx.funcs.lookup(fnItem).getSymName() +
                                       ".const" + Twine(cx.currentConstness));
-  auto firstCallee =
-      hir::ConstantFuncOp::create(cx.currentBuilder(), expr.loc, funcName);
   auto funcType = hir::FuncType::get(cx.module.getContext());
   auto calleeType = hir::FuncTypeOp::create(cx.currentBuilder(), expr.loc,
                                             ValueRange{}, ValueRange{});
+  auto firstCallee = hir::ConstantFuncOp::create(cx.currentBuilder(), expr.loc,
+                                                 funcName, calleeType);
   auto prevCall =
       hir::CallOp::create(cx.currentBuilder(), expr.loc, TypeRange{funcType},
-                          firstCallee, calleeType, ValueRange{});
+                          firstCallee, ValueRange{});
 
   for (unsigned idx = 0; idx < argsAtConstness.size(); ++idx) {
     auto callee = freezeValueAcrossConstness(prevCall.getResults()[0],
                                              cx.currentConstness, cx);
     unsigned revIdx = argsAtConstness.size() - idx - 1;
     cx.currentConstness = callConstness + revIdx;
-    calleeType = hir::FuncTypeOp::create(cx.currentBuilder(), expr.loc,
-                                         ValueRange{}, ValueRange{});
     prevCall =
         hir::CallOp::create(cx.currentBuilder(), expr.loc,
                             revIdx > 0 ? TypeRange{funcType} : TypeRange{},
-                            callee, calleeType, argsAtConstness[revIdx]);
+                            callee, argsAtConstness[revIdx]);
   }
 
   cx.currentConstness = callConstness;

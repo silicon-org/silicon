@@ -38,9 +38,9 @@ def ConstantUnitOp : HIROp<"constant_unit", [Pure]> {
 }
 
 def ConstantFuncOp : HIROp<"constant_func", [Pure]> {
-  let arguments = (ins FlatSymbolRefAttr:$value);
+  let arguments = (ins FlatSymbolRefAttr:$value, TypeType:$funcType);
   let results = (outs FuncType:$result);
-  let assemblyFormat = "$value attr-dict";
+  let assemblyFormat = "$value `:` $funcType attr-dict";
 }
 
 //===----------------------------------------------------------------------===//
@@ -264,13 +264,12 @@ def NextPhaseOp : HIROp<"next_phase", [
 def CallOp : HIROp<"call"> {
   let arguments = (ins
     FuncType:$callee,
-    TypeType:$calleeType,
     Variadic<AnyType>:$arguments
   );
   let results = (outs Variadic<AnyType>:$results);
   let assemblyFormat = [{
-    $callee `(` $arguments `)` attr-dict
-    `:` $calleeType `,` functional-type($arguments, $results)
+    $callee `(` $arguments `)` `:` functional-type($arguments, $results)
+    attr-dict
   }];
 }
 

@@ -27,11 +27,11 @@ hir.specialize_func @foo() -> ()
 hir.specialize_func @foo(%int_type) -> (%int_type)
 hir.specialize_func @foo(%int_type) -> (%int_type), %int_type, %c42_int : !hir.type, !hir.value
 
-%foo = hir.constant_func @foo
 %foo_type = hir.func_type () -> ()
-hir.call %foo() : %foo_type, () -> ()
-hir.call %foo(%int_type) : %foo_type, (!hir.type) -> (!hir.type)
-hir.call %foo(%int_type, %c42_int) : %foo_type, (!hir.type, !hir.value) -> (!hir.type, !hir.value)
+%foo = hir.constant_func @foo : %foo_type
+hir.call %foo() : () -> ()
+hir.call %foo(%int_type) : (!hir.type) -> (!hir.type)
+hir.call %foo(%int_type, %c42_int) : (!hir.type, !hir.value) -> (!hir.type, !hir.value)
 
 // Test HIR function operations with symbol visibility
 hir.func @public_visibility1 {}
