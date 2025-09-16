@@ -31,9 +31,8 @@ namespace cl = llvm::cl;
 //===----------------------------------------------------------------------===//
 
 struct Opt {
-  cl::opt<std::string> inputFilename{
-      cl::Positional, cl::value_desc("filename"), cl::init("-"),
-      cl::desc("Input filename (`-` for stdin)")};
+  cl::opt<std::string> inputFilename{cl::Positional, cl::init("-"),
+                                     cl::desc("[input]")};
 
   cl::opt<std::string> outputFilename{
       "o", cl::value_desc("filename"), cl::init("-"),
