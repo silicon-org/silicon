@@ -10,6 +10,9 @@ hir.func @Types {
   %c42_int = hir.constant_int 42
   %uint42_type = hir.uint_type %c42_int
 
+  // CHECK-NEXT: mir.constant #mir.type<!mir.anyfunc>
+  %anyfunc_type = hir.anyfunc_type
+
   // CHECK-NEXT: mir.constant #mir.type<() -> ()>
   hir.func_type () -> ()
   // CHECK-NEXT: mir.constant #mir.type<(!mir.int) -> !mir.uint<42>>

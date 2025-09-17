@@ -8,6 +8,7 @@
 
 #include "silicon/MIR/Attributes.h"
 #include "silicon/MIR/Ops.h"
+#include "silicon/MIR/Types.h"
 #include "silicon/Support/MLIR.h"
 
 using namespace mlir;
@@ -21,7 +22,7 @@ using namespace mir;
 /// Print an abbreviation of a type that can be used in an assembly name.
 static bool getTypeAbbrev(llvm::raw_ostream &os, Type type) {
   return TypeSwitch<Type, bool>(type)
-      .Case<TypeType, IntType>([&](auto type) {
+      .Case<TypeType, IntType, AnyfuncType>([&](auto type) {
         os << type.getMnemonic();
         return true;
       })
