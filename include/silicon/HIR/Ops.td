@@ -58,6 +58,11 @@ def UIntTypeOp : HIROp<"uint_type", [Pure]> {
   let assemblyFormat = "$width attr-dict";
 }
 
+def AnyfuncTypeOp : HIROp<"anyfunc_type", [Pure]> {
+  let results = (outs TypeType:$result);
+  let assemblyFormat = "attr-dict";
+}
+
 def RefTypeOp : HIROp<"ref_type", [Pure]> {
   let arguments = (ins TypeType:$innerType);
   let results = (outs TypeType:$result);

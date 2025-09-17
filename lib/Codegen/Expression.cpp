@@ -121,8 +121,10 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
                                   cx.funcs.lookup(fnItem).getSymName() +
                                       ".const" + Twine(cx.currentConstness));
   auto funcType = hir::FuncType::get(cx.module.getContext());
-  auto calleeType = hir::FuncTypeOp::create(cx.currentBuilder(), expr.loc,
-                                            ValueRange{}, ValueRange{});
+  auto anyfuncTypeOp =
+      hir::AnyfuncTypeOp::create(cx.currentBuilder(), expr.loc);
+  auto calleeType = hir::FuncTypeOp::create(
+      cx.currentBuilder(), expr.loc, ValueRange{}, ValueRange{anyfuncTypeOp});
   auto firstCallee = hir::ConstantFuncOp::create(cx.currentBuilder(), expr.loc,
                                                  funcName, calleeType);
   auto prevCall =
