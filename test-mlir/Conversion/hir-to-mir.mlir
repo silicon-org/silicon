@@ -56,11 +56,16 @@ hir.func @FunctionSpecialization {
   hir.return %4 : !hir.func
 }
 
-// CHECK-LABEL: @Cast
-hir.func @Cast {
-  // CHECK-NEXT: [[TMP:%.+]] = mir.constant
-  %0 = mir.constant #mir.int<42>
-  %1 = builtin.unrealized_conversion_cast %0 : !mir.int to !hir.value
-  // CHECK-NEXT: mir.return [[TMP]]
-  hir.return %1 : !hir.value
+// CHECK-LABEL: @Casts
+hir.func @Casts {
+  // CHECK-NEXT: [[TMP1:%.+]] = mir.constant
+  %a0 = mir.constant #mir.int<42>
+  %a1 = builtin.unrealized_conversion_cast %a0 : !mir.int to !hir.value
+
+  // CHECK-NEXT: [[TMP2:%.+]] = mir.constant
+  %b0 = mir.constant #mir.func<@foo> : () -> ()
+  %b1 = builtin.unrealized_conversion_cast %b0 : () -> () to !hir.func
+
+  // CHECK-NEXT: mir.return [[TMP1]], [[TMP2]]
+  hir.return %a1, %b1 : !hir.value, !hir.func
 }

@@ -208,8 +208,11 @@ static LogicalResult convert(UnrealizedConversionCastOp op,
                              ConversionPatternRewriter &rewriter) {
   // Map MIR-to-HIR casts to the MIR input value directly.
   if (op.getNumOperands() == 1 && op.getNumResults() == 1) {
-    if (isa<hir::HIRDialect>(op.getResult(0).getType().getDialect())) {
-      if (isa<mir::MIRDialect>(op.getOperand(0).getType().getDialect())) {
+    auto input = op.getOperand(0).getType();
+    auto output = op.getResult(0).getType();
+    if (isa<hir::HIRDialect>(output.getDialect())) {
+      if (isa<mir::MIRDialect>(input.getDialect()) ||
+          isa<FunctionType>(input)) {
         rewriter.replaceOp(op, adaptor.getOperands()[0]);
         return success();
       }

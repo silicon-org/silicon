@@ -83,10 +83,14 @@ void Context::increaseConstness() {
     symbolTable.insert(funcOp);
     funcOp.getBody().emplaceBlock();
     ConstContext cx(funcOp);
+    SmallVector<Value, 1> typeOfResults;
+    if (baseFuncOp != prevFuncOp)
+      typeOfResults.push_back(
+          hir::AnyfuncTypeOp::create(cx.builder, baseFuncOp.getLoc()));
     cx.specializeOp = hir::SpecializeFuncOp::create(
         cx.builder, baseFuncOp.getLoc(),
         FlatSymbolRefAttr::get(prevFuncOp.getSymNameAttr()), ValueRange{},
-        ValueRange{}, ValueRange{});
+        typeOfResults, ValueRange{});
     hir::ReturnOp::create(cx.builder, baseFuncOp.getLoc(),
                           ValueRange{cx.specializeOp});
     cx.builder.setInsertionPoint(cx.specializeOp);
