@@ -37,6 +37,11 @@ def UIntType : MIRTypeDef<"UInt"> {
   let assemblyFormat = "`<` $width `>`";
 }
 
+def UnitType : MIRTypeDef<"Unit"> {
+  let mnemonic = "unit";
+  let summary = "unit type";
+}
+
 def AnyfuncType : MIRTypeDef<"Anyfunc"> {
   let mnemonic = "anyfunc";
   let summary = "any function type";

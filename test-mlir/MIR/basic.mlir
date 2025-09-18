@@ -4,12 +4,14 @@
 unrealized_conversion_cast to !mir.type
 unrealized_conversion_cast to !mir.int
 unrealized_conversion_cast to !mir.uint<42>
+unrealized_conversion_cast to !mir.unit
 unrealized_conversion_cast to !mir.anyfunc
 unrealized_conversion_cast to !mir.specialized_func
 
 // Attributes
 unrealized_conversion_cast to index {attr = #mir.type<!mir.int>}
 unrealized_conversion_cast to index {attr = #mir.int<98765432109876543210987654321>}
+unrealized_conversion_cast to index {attr = #mir.unit}
 unrealized_conversion_cast to index {attr = #mir.func<@foo> : (i42) -> (index)}
 unrealized_conversion_cast to index {attr = #mir.specialized_func<@foo, [], [], []>}
 unrealized_conversion_cast to index {attr = #mir.specialized_func<@foo, [!mir.int], [!mir.type], [#mir.int<42> : !mir.int]>}

@@ -41,6 +41,13 @@ def IntAttr : MIRAttrDef<"Int", [
   let assemblyFormat = "`<` $value `>`";
 }
 
+def MIRUnitAttr : MIRAttrDef<"Unit", [
+  DeclareAttrInterfaceMethods<TypedAttrInterface>
+]> {
+  let mnemonic = "unit";
+  let assemblyFormat = "";
+}
+
 def FuncAttr : MIRAttrDef<"Func", [
   TypedAttrInterface
 ]> {

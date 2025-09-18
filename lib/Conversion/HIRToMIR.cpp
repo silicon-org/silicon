@@ -51,6 +51,14 @@ static LogicalResult convert(hir::ConstantIntOp op,
   return success();
 }
 
+static LogicalResult convert(hir::ConstantUnitOp op,
+                             hir::ConstantUnitOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  auto attr = mir::UnitAttr::get(op.getContext());
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
 static LogicalResult convert(hir::ConstantFuncOp op,
                              hir::ConstantFuncOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
@@ -257,6 +265,7 @@ void HIRToMIRPass::runOnOperation() {
   // Gather the conversion patterns.
   ConversionPatternSet patterns(&getContext(), converter);
   patterns.add<hir::ConstantIntOp>(convert);
+  patterns.add<hir::ConstantUnitOp>(convert);
   patterns.add<hir::ConstantFuncOp>(convert);
   patterns.add<hir::IntTypeOp>(convert);
   patterns.add<hir::UIntTypeOp>(convert);

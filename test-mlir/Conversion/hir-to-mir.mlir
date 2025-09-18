@@ -21,6 +21,19 @@ hir.func @Types {
   hir.return
 }
 
+// CHECK-LABEL: @Constants
+hir.func @Constants {
+  // CHECK-NEXT: mir.constant #mir.int<42>
+  hir.constant_int 42
+  // CHECK-NEXT: mir.constant #mir.unit
+  hir.constant_unit
+  // CHECK-NEXT: mir.constant #mir.type
+  // CHECK-NEXT: mir.constant #mir.func<@foo> : () -> ()
+  %0 = hir.func_type () -> ()
+  hir.constant_func @foo : %0
+  hir.return
+}
+
 // CHECK-LABEL: @Calls
 hir.func @Calls {
   // CHECK: mir.call @foo() : () -> ()
