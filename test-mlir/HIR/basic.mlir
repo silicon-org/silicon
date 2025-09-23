@@ -44,3 +44,21 @@ hir.func @public_visibility1 {}
 hir.func public @public_visibility2 {}
 hir.func private @private_visibility {}
 hir.func nested @nested_visibility {}
+
+hir.unchecked_func @UncheckedSimple {
+  %0 = hir.int_type
+  %1 = hir.unchecked_arg "a", %0 : !hir.type
+  %2 = hir.unchecked_arg "b", %0 : !hir.type
+  hir.unchecked_signature (%1, %2 : !hir.value, !hir.value) -> (%0 : !hir.type)
+} {
+  hir.unchecked_return
+}
+
+hir.unchecked_const {
+  hir.unchecked_yield
+}
+hir.unchecked_const : !hir.type, !hir.type {
+  %0 = hir.int_type
+  %1 = hir.anyfunc_type
+  hir.unchecked_yield %0, %1 : !hir.type, !hir.type
+}

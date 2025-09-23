@@ -27,12 +27,16 @@ void HIRDialect::registerTypes() {
 #define GET_TYPEDEF_CLASSES
 #include "silicon/HIR/Types.cpp.inc"
 
+mlir::Type hir::getHigherKind(mlir::Type type) {
+  auto *context = type.getContext();
+  if (isa<ValueType>(type))
+    return TypeType::get(context);
+  return {};
+}
+
 mlir::Type hir::getLowerKind(mlir::Type type) {
   auto *context = type.getContext();
-  if (auto constType = dyn_cast<ConstType>(type))
-    return ConstType::get(context, getLowerKind(constType.getInnerType()));
   if (isa<TypeType>(type))
     return ValueType::get(context);
-  assert(false && "no lower kind");
   return {};
 }

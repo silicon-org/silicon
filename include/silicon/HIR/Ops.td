@@ -160,27 +160,6 @@ def ConstCondBranchOp : HIROp<"const_cond_br", [
   }];
 }
 
-def ConstOp : HIROp<"const", [
-  RecursiveMemoryEffects,
-]> {
-  let arguments = (ins Variadic<ConstType>:$operands);
-  let results = (outs Variadic<ConstType>:$results);
-  let regions = (region AnyRegion:$body);
-  let assemblyFormat = [{
-    ($operands^ `:` type($operands))? (`->` type($results)^)?
-    attr-dict-with-keyword $body
-  }];
-}
-
-def YieldOp : HIROp<"yield", [
-  HasParent<"ConstOp">,
-  Pure,
-  Terminator,
-]> {
-  let arguments = (ins Variadic<AnyType>:$values);
-  let assemblyFormat = "($values^ `:` type($values))? attr-dict";
-}
-
 def ConstWrapOp : HIROp<"const_wrap", [
   Pure,
   TypesMatchWith<
@@ -220,29 +199,6 @@ def FuncOp : HIROp<"func", [
     custom<SymbolVisibility>($sym_visibility) ``
     $sym_name attr-dict-with-keyword $body
   }];
-}
-
-def ArgOp : HIROp<"arg", [
-  HasParent<"FuncOp">,
-  Pure,
-  TypesMatchWith<
-    "input must be const type of result",
-    "type", "result",
-    [{ getLowerKind(cast<ConstType>($_self).getInnerType()) }]
-  >,
-]> {
-  let arguments = (ins StrAttr:$name, ConstType:$type);
-  let results = (outs AnyType:$result);
-  let assemblyFormat = "$name `:` $type `:` type($type) attr-dict";
-}
-
-def ArgsOp : HIROp<"args", [
-  HasParent<"FuncOp">,
-  Pure,
-  Terminator,
-]> {
-  let arguments = (ins Variadic<AnyType>:$operands);
-  let assemblyFormat = "($operands^ `:` type($operands))? attr-dict";
 }
 
 def ReturnOp : HIROp<"return", [
@@ -293,6 +249,99 @@ def SpecializeFuncOp : HIROp<"specialize_func", [
     $func `(` $typeOfArgs `)` `->` `(` $typeOfResults `)`
     (`,` $consts^ `:` type($consts))?
     attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// Constless Functions and Calls
+//===----------------------------------------------------------------------===//
+
+def UncheckedFuncOp : HIROp<"unchecked_func", [
+  IsolatedFromAbove,
+  Symbol,
+]> {
+  let summary = "A function not yet split into constness levels";
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<StrAttr>:$sym_visibility
+  );
+  let regions = (region
+    MinSizedRegion<1>:$signature,
+    MinSizedRegion<1>:$body
+  );
+  let assemblyFormat = [{
+    custom<SymbolVisibility>($sym_visibility) ``
+    $sym_name attr-dict-with-keyword $signature $body
+  }];
+}
+
+def UncheckedArgOp : HIROp<"unchecked_arg", [
+  HasParent<"UncheckedFuncOp">,
+  Pure,
+  TypesMatchWith<
+    "result kind must be one lower than type operand kind",
+    "typeOperand", "result",
+    [{ hir::getLowerKind($_self) }]
+  >,
+]> {
+  let summary = "A function argument or result before const inference";
+  let arguments = (ins StrAttr:$name, AnyType:$typeOperand);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = [{
+    $name `,` $typeOperand `:` type($typeOperand) attr-dict
+  }];
+}
+
+def UncheckedSignatureOp : HIROp<"unchecked_signature", [
+  AttrSizedOperandSegments,
+  HasParent<"UncheckedFuncOp">,
+  Pure,
+  Terminator,
+]> {
+  let summary = "Terminator for the signature region of an unchecked function";
+  let arguments = (ins
+    Variadic<AnyType>:$argValues,
+    Variadic<AnyType>:$typeOfResults
+  );
+  let assemblyFormat = [{
+    ` ` `(` ($argValues^ `:` type($argValues))? `)`
+    `->` `(` ($typeOfResults^ `:` type($typeOfResults))? `)`
+    attr-dict
+  }];
+}
+
+def UncheckedReturnOp : HIROp<"unchecked_return", [
+  HasParent<"UncheckedFuncOp">,
+  Pure,
+  ReturnLike,
+  Terminator,
+]> {
+  let summary = "Terminator for the body region of an unchecked function";
+  let arguments = (ins Variadic<AnyType>:$operands);
+  let assemblyFormat = [{
+    ($operands^ `:` type($operands))? attr-dict
+  }];
+}
+
+def UncheckedConstOp : HIROp<"unchecked_const", [
+  RecursiveMemoryEffects,
+]> {
+  let summary = "Region to execute one constness higher than its parent";
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region MinSizedRegion<1>:$body);
+  let assemblyFormat = [{
+    (`:` type($results)^)? attr-dict-with-keyword $body
+  }];
+}
+
+def UncheckedYieldOp : HIROp<"unchecked_yield", [
+  HasParent<"UncheckedConstOp">,
+  Pure,
+  Terminator,
+]> {
+  let arguments = (ins Variadic<AnyType>:$operands);
+  let assemblyFormat = [{
+    ($operands^ `:` type($operands))? attr-dict
   }];
 }
 

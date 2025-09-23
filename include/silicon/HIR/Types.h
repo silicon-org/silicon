@@ -18,6 +18,10 @@
 namespace silicon {
 namespace hir {
 
+/// Return the next higher HIR type kind after `type`.
+mlir::Type getHigherKind(mlir::Type type);
+
+/// Return the next lower HIR type kind after `type`.
 mlir::Type getLowerKind(mlir::Type type);
 
 } // namespace hir
