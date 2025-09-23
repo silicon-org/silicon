@@ -14,91 +14,56 @@ using namespace codegen;
 
 LogicalResult Context::convertFnItem(ast::FnItem &item) {
   auto funcOp = funcs.at(&item);
-  funcOp.getBody().emplaceBlock();
 
-  // Create a const context for the main function body.
-  constContexts.clear();
-  constContexts.push_back(ConstContext(funcOp));
-  currentConstness = 0;
+  // Handle the function signature.
+  {
+    // Create the entry block in the signature region.
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(&funcOp.getSignature().emplaceBlock());
 
-  // Handle the function arguments.
-  auto guard2 = BindingsScope(bindings);
-  for (auto *arg : item.args) {
-    // Determine the type of the argument.
-    increaseConstness();
-    auto type = convertType(*arg->type);
-    decreaseConstness();
-    if (!type)
-      return failure();
+    // Handle the function arguments.
+    SmallVector<Value, 4> argValues;
+    auto guard2 = BindingsScope(bindings);
+    for (auto *arg : item.args) {
+      // Compute the type of the argument.
+      auto type = withinConst([&] { return convertType(*arg->type); });
+      if (!type)
+        return failure();
 
-    // Add the argument type to the return op's list of arguments at the
-    // argument's level of constness.
-    unsigned argConstness = getValueConstness(type);
-    constContexts[argConstness].specializeOp.getTypeOfArgsMutable().append(
-        type);
+      // Create an op for the argument.
+      auto argName = StringAttr::get(module.getContext(), arg->name);
+      auto argOp =
+          hir::UncheckedArgOp::create(builder, arg->loc, argName, type);
+      bindings.insert(arg, argOp);
+      argValues.push_back(argOp);
+    }
 
-    // Add the argument value as a block argument to the next lower level of
-    // constness.
-    auto &constCx = constContexts[argConstness - 1];
-    auto blockArg = constCx.entry.insertArgument(
-        constCx.lastArgumentIndex++, hir::getLowerKind(type.getType()),
-        arg->loc);
-    bindings.insert(arg, blockArg);
+    // Handle the function result.
+    SmallVector<Value, 4> resultTypes;
+    if (item.returnType) {
+      auto type = withinConst([&] { return convertType(*item.returnType); });
+      if (!type)
+        return failure();
+      resultTypes.push_back(type);
+    }
+
+    // Create the signature terminator.
+    hir::UncheckedSignatureOp::create(builder, item.loc, argValues,
+                                      resultTypes);
   }
 
   // Handle the function body.
-  auto result = convertExpr(*item.body);
-  if (!result)
-    return failure();
+  {
+    // Create the entry block in the body region.
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(&funcOp.getBody().emplaceBlock());
 
-  // Return the result of the function body.
-  hir::ReturnOp::create(currentBuilder(), item.loc, result);
+    // Return the result of the function body.
+    hir::UncheckedReturnOp::create(currentBuilder(), item.loc, ValueRange{});
+  }
 
-  // Mark all but the highest constness level as private, since that is the only
-  // thing external functions can call directly. All other levels of constness
-  // are returned from the call to the previous level.
-  SymbolTable::setSymbolVisibility(constContexts.back().funcOp,
-                                   SymbolTable::Visibility::Public);
   return success();
 }
 
-ConstContext::ConstContext(hir::FuncOp funcOp)
-    : builder(funcOp.getContext()), entry(funcOp.getBody().front()),
-      funcOp(funcOp) {
-  builder.setInsertionPointToStart(&entry);
-}
-
-void Context::increaseConstness() {
-  ++currentConstness;
-  assert(currentConstness <= constContexts.size());
-  if (currentConstness == constContexts.size()) {
-    auto baseFuncOp = constContexts.front().funcOp;
-    auto prevFuncOp = constContexts.back().funcOp;
-    OpBuilder builder(prevFuncOp);
-    auto funcOp = hir::FuncOp::create(
-        builder, baseFuncOp.getLoc(),
-        builder.getStringAttr(baseFuncOp.getSymName() + ".const" +
-                              Twine(currentConstness)),
-        builder.getStringAttr("private"));
-    symbolTable.insert(funcOp);
-    funcOp.getBody().emplaceBlock();
-    ConstContext cx(funcOp);
-    SmallVector<Value, 1> typeOfResults;
-    if (baseFuncOp != prevFuncOp)
-      typeOfResults.push_back(
-          hir::AnyfuncTypeOp::create(cx.builder, baseFuncOp.getLoc()));
-    cx.specializeOp = hir::SpecializeFuncOp::create(
-        cx.builder, baseFuncOp.getLoc(),
-        FlatSymbolRefAttr::get(prevFuncOp.getSymNameAttr()), ValueRange{},
-        typeOfResults, ValueRange{});
-    hir::ReturnOp::create(cx.builder, baseFuncOp.getLoc(),
-                          ValueRange{cx.specializeOp});
-    cx.builder.setInsertionPoint(cx.specializeOp);
-    constContexts.push_back(std::move(cx));
-  }
-}
-
-void Context::decreaseConstness() {
-  assert(currentConstness > 0);
-  --currentConstness;
-}
+void Context::increaseConstness() { assert(false && "deprecated"); }
+void Context::decreaseConstness() { assert(false && "deprecated"); }

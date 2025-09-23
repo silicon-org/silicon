@@ -21,8 +21,6 @@ struct ConstContext {
   hir::SpecializeFuncOp specializeOp;
   DenseMap<Value, Value> forwardedValues;
   unsigned lastArgumentIndex = 0;
-
-  ConstContext(hir::FuncOp funcOp);
 };
 
 struct Context {
@@ -33,7 +31,7 @@ struct Context {
   /// The IR function generated for each AST function. This is populated before
   /// real code generation begins, such that we can always map from an AST
   /// function to an IR function.
-  DenseMap<ast::FnItem *, hir::FuncOp> funcs;
+  DenseMap<ast::FnItem *, hir::UncheckedFuncOp> funcs;
 
   /// The SSA values generated for each binding. Identifiers use this to resolve
   /// their binding to a value in the IR they can return.
@@ -43,13 +41,14 @@ struct Context {
 
   unsigned currentConstness;
   SmallVector<ConstContext, 0> constContexts;
-  OpBuilder &currentBuilder() {
-    return constContexts[currentConstness].builder;
-  }
+  OpBuilder &currentBuilder() { return builder; }
+  [[deprecated]]
   void increaseConstness();
+  [[deprecated]]
   void decreaseConstness();
 
   /// Determine the constness level of a value.
+  [[deprecated]]
   unsigned getValueConstness(Value value);
 
   Context(ModuleOp module);
@@ -58,6 +57,9 @@ struct Context {
   Value convertExpr(ast::Expr &expr);
   Value convertType(ast::Type &type);
   LogicalResult convertStmt(ast::Stmt &stmt);
+
+  /// Execute a function with the builder positioned inside a const op.
+  Value withinConst(llvm::function_ref<Value()> fn);
 };
 
 } // namespace codegen

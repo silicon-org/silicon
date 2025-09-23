@@ -41,22 +41,6 @@ static Value convert(ast::IdentExpr &expr, Context &cx) {
     emitBug(expr.loc) << "no value generated for identifier";
     return {};
   }
-
-  // Determine the constness level of the value. If the value is less constant
-  // than the current context, emit an error.
-  unsigned valueConstness = cx.getValueConstness(value);
-  if (valueConstness < cx.currentConstness) {
-    emitError(expr.loc) << "`" << expr.name << "` is not constant here";
-    return {};
-  }
-
-  // If the value is more constant than the current context, we need to pass it
-  // from one region to another until we reach the current context's region.
-  while (valueConstness > cx.currentConstness) {
-    value = freezeValueAcrossConstness(value, valueConstness, cx);
-    --valueConstness;
-  }
-
   return value;
 }
 

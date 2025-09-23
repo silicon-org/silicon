@@ -21,9 +21,8 @@ struct DeclareItems : public ast::Visitor<DeclareItems> {
   using Visitor::preVisitNode;
 
   void preVisitNode(ast::FnItem &item) {
-    auto func = cx.builder.create<hir::FuncOp>(
-        item.loc, cx.builder.getStringAttr(item.name),
-        cx.builder.getStringAttr("private"));
+    auto func = cx.builder.create<hir::UncheckedFuncOp>(
+        item.loc, cx.builder.getStringAttr(item.name), StringAttr{});
     cx.funcs.insert({&item, func});
     cx.symbolTable.insert(func);
   }
@@ -63,4 +62,52 @@ unsigned Context::getValueConstness(Value value) {
     if (value.getParentRegion() == constContexts[idx].entry.getParent())
       return idx;
   llvm_unreachable("value not in any region");
+}
+
+Value Context::withinConst(llvm::function_ref<Value()> fn) {
+  // Populate a region with ops.
+  Region region;
+  auto ip = builder.saveInsertionPoint();
+  builder.setInsertionPointToStart(&region.emplaceBlock());
+  auto value = fn();
+  if (!value)
+    return {};
+
+  // If all operations in the region are side-effect free, we can just inline
+  // them into the parent. The const op is only needed to accurately place
+  // side-effecting ops into a level of constness. All other ops will have their
+  // level of constness determined by a later lowering pass.
+  bool allSideEffectFree = llvm::all_of(region, [](auto &block) {
+    return llvm::all_of(block,
+                        [](auto &op) { return mlir::isMemoryEffectFree(&op); });
+  });
+  if (allSideEffectFree) {
+    // Inline the first block at the location where we would put the const op.
+    auto &firstBlock = region.front();
+    ip.getBlock()->getOperations().splice(ip.getPoint(),
+                                          firstBlock.getOperations());
+    region.getBlocks().pop_front();
+
+    // Append the remaining blocks after this block.
+    if (!region.empty()) {
+      auto &parentRegion = *ip.getBlock()->getParent();
+      parentRegion.getBlocks().splice(parentRegion.end(), region.getBlocks());
+      // Don't restore the insertion point, since the builder already
+      // conveniently points to the end of the last block we spliced in.
+    } else {
+      // Since there are no other blocks in the region, restore the insertion
+      // point to the end of the first block.
+      builder.restoreInsertionPoint(ip);
+    }
+    return value;
+  }
+
+  // Otherwise create a yield op to return the value from the region and wrap
+  // the region in a const op.
+  hir::UncheckedYieldOp::create(builder, value.getLoc(), value);
+  builder.restoreInsertionPoint(ip);
+  auto op =
+      hir::UncheckedConstOp::create(builder, value.getLoc(), value.getType());
+  op.getRegion().takeBody(region);
+  return op.getResult(0);
 }

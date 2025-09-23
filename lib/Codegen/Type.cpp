@@ -21,10 +21,7 @@ static Value convert(ast::IntType &type, Context &cx) {
 
 /// Handle const types.
 static Value convert(ast::ConstType &type, Context &cx) {
-  cx.increaseConstness();
-  auto result = cx.convertType(*type.type);
-  cx.decreaseConstness();
-  return result;
+  return cx.withinConst([&] { return cx.convertType(*type.type); });
 }
 
 /// Handle the uint type.
