@@ -58,8 +58,9 @@ struct Context {
   Value convertType(ast::Type &type);
   LogicalResult convertStmt(ast::Stmt &stmt);
 
-  /// Execute a function with the builder positioned inside a const op.
-  Value withinConst(llvm::function_ref<Value()> fn);
+  /// Execute a function with the builder positioned inside an expression
+  /// wrapper op.
+  Value withinExpr(llvm::function_ref<Value()> fn);
 };
 
 } // namespace codegen

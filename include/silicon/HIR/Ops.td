@@ -93,6 +93,33 @@ def FuncTypeOp : HIROp<"func_type", [
 }
 
 //===----------------------------------------------------------------------===//
+// Lexical Grouping
+//===----------------------------------------------------------------------===//
+
+def ExprOp : HIROp<"expr", [
+  RecursiveMemoryEffects,
+]> {
+  let summary = "Region to execute as a single expression";
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region MinSizedRegion<1>:$body);
+  let assemblyFormat = [{
+    (`:` type($results)^)? attr-dict-with-keyword $body
+  }];
+}
+
+def YieldOp : HIROp<"yield", [
+  HasParent<"ExprOp">,
+  Pure,
+  Terminator,
+]> {
+  let summary = "Yield result values from an expression op";
+  let arguments = (ins Variadic<AnyType>:$operands);
+  let assemblyFormat = [{
+    ($operands^ `:` type($operands))? attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Operations
 //===----------------------------------------------------------------------===//
 
@@ -323,28 +350,6 @@ def UncheckedReturnOp : HIROp<"unchecked_return", [
   Terminator,
 ]> {
   let summary = "Terminator for the body region of an unchecked function";
-  let arguments = (ins Variadic<AnyType>:$operands);
-  let assemblyFormat = [{
-    ($operands^ `:` type($operands))? attr-dict
-  }];
-}
-
-def UncheckedConstOp : HIROp<"unchecked_const", [
-  RecursiveMemoryEffects,
-]> {
-  let summary = "Region to execute one constness higher than its parent";
-  let results = (outs Variadic<AnyType>:$results);
-  let regions = (region MinSizedRegion<1>:$body);
-  let assemblyFormat = [{
-    (`:` type($results)^)? attr-dict-with-keyword $body
-  }];
-}
-
-def UncheckedYieldOp : HIROp<"unchecked_yield", [
-  HasParent<"UncheckedConstOp">,
-  Pure,
-  Terminator,
-]> {
   let arguments = (ins Variadic<AnyType>:$operands);
   let assemblyFormat = [{
     ($operands^ `:` type($operands))? attr-dict

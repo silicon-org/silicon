@@ -55,11 +55,11 @@ hir.unchecked_func @UncheckedSimple {
   hir.unchecked_return
 }
 
-hir.unchecked_const {
-  hir.unchecked_yield
+hir.expr {
+  hir.yield
 }
-hir.unchecked_const : !hir.type, !hir.type {
+hir.expr : !hir.type, !hir.type {
   %0 = hir.int_type
   %1 = hir.anyfunc_type
-  hir.unchecked_yield %0, %1 : !hir.type, !hir.type
+  hir.yield %0, %1 : !hir.type, !hir.type
 }

@@ -26,7 +26,7 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
     auto guard2 = BindingsScope(bindings);
     for (auto *arg : item.args) {
       // Compute the type of the argument.
-      auto type = withinConst([&] { return convertType(*arg->type); });
+      auto type = withinExpr([&] { return convertType(*arg->type); });
       if (!type)
         return failure();
 
@@ -41,7 +41,7 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
     // Handle the function result.
     SmallVector<Value, 4> resultTypes;
     if (item.returnType) {
-      auto type = withinConst([&] { return convertType(*item.returnType); });
+      auto type = withinExpr([&] { return convertType(*item.returnType); });
       if (!type)
         return failure();
       resultTypes.push_back(type);

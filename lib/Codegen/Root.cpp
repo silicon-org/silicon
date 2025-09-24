@@ -64,7 +64,7 @@ unsigned Context::getValueConstness(Value value) {
   llvm_unreachable("value not in any region");
 }
 
-Value Context::withinConst(llvm::function_ref<Value()> fn) {
+Value Context::withinExpr(llvm::function_ref<Value()> fn) {
   // Populate a region with ops.
   Region region;
   auto ip = builder.saveInsertionPoint();
@@ -104,10 +104,9 @@ Value Context::withinConst(llvm::function_ref<Value()> fn) {
 
   // Otherwise create a yield op to return the value from the region and wrap
   // the region in a const op.
-  hir::UncheckedYieldOp::create(builder, value.getLoc(), value);
+  hir::YieldOp::create(builder, value.getLoc(), value);
   builder.restoreInsertionPoint(ip);
-  auto op =
-      hir::UncheckedConstOp::create(builder, value.getLoc(), value.getType());
+  auto op = hir::ExprOp::create(builder, value.getLoc(), value.getType());
   op.getRegion().takeBody(region);
   return op.getResult(0);
 }
