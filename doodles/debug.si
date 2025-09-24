@@ -1,14 +1,21 @@
-fn foo() {
-  let x = const { const { 42 } };
-  let y = const { 1337 };
-  let z = 9001;
-  bar(x, y, z);
-  // const { bar(1, 2, 3) };
-  // bar(bar(4, 6, 7), 8, 9);
-}
+// fn foo() {
+//   let x = const { const { 42 } };
+//   let y = const { 1337 };
+//   let z = 9001;
+//   bar(x, y, z);
+//   // const { bar(1, 2, 3) };
+//   // bar(bar(4, 6, 7), 8, 9);
+// }
+//
+// fn bar(a: const const int, b: const int, c: int) {
+//   const { const { a } };
+//   const { a+b };
+//   a+b+c;
+// }
 
-fn bar(a: const const int, b: const int, c: int) {
-  const { const { a } };
-  const { a+b };
-  a+b+c;
+fn foo() -> int {
+  bar(bar(42, 1337), 9001)
+}
+fn bar(a: const int, b: int) -> int {
+  a + b
 }
