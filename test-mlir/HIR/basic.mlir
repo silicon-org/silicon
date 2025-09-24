@@ -5,6 +5,7 @@ func.func @TypeConstructors(%value: !hir.value, %type: !hir.type) {
   hir.uint_type %value
   hir.anyfunc_type
   hir.ref_type %type
+  hir.const_type %type
   return
 }
 

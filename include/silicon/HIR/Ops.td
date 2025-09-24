@@ -69,6 +69,12 @@ def RefTypeOp : HIROp<"ref_type", [Pure]> {
   let assemblyFormat = "$innerType attr-dict";
 }
 
+def ConstTypeOp : HIROp<"const_type", [Pure]> {
+  let arguments = (ins TypeType:$innerType);
+  let results = (outs TypeType:$result);
+  let assemblyFormat = "$innerType attr-dict";
+}
+
 def FuncTypeOp : HIROp<"func_type", [
   AttrSizedOperandSegments,
   Pure,
