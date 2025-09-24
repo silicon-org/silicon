@@ -62,7 +62,7 @@ jobs:
       # Run clang-format against the changes.
       - name: Run clang-format
         run: |
-          git clang-format $DIFF_COMMIT
+          git clang-format $DIFF_COMMIT || true
           git diff --ignore-submodules > clang-format.patch
           if [ -s clang-format.patch ]; then
             echo "clang-format found formatting problems:"
