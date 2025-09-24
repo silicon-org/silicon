@@ -42,14 +42,6 @@ struct Context {
   unsigned currentConstness;
   SmallVector<ConstContext, 0> constContexts;
   OpBuilder &currentBuilder() { return builder; }
-  [[deprecated]]
-  void increaseConstness();
-  [[deprecated]]
-  void decreaseConstness();
-
-  /// Determine the constness level of a value.
-  [[deprecated]]
-  unsigned getValueConstness(Value value);
 
   Context(ModuleOp module);
   LogicalResult convertAST(AST &ast);

@@ -356,4 +356,17 @@ def UncheckedReturnOp : HIROp<"unchecked_return", [
   }];
 }
 
+def UncheckedCallOp : HIROp<"unchecked_call"> {
+  let arguments = (ins
+    FlatSymbolRefAttr:$callee,
+    Variadic<AnyType>:$arguments
+  );
+  let summary = "A call not yet split into constness levels";
+  let results = (outs Variadic<AnyType>:$results);
+  let assemblyFormat = [{
+    $callee `(` $arguments `)` `:` functional-type($arguments, $results)
+    attr-dict
+  }];
+}
+
 #endif // SILICON_HIR_OPS_TD

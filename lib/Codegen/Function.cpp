@@ -16,6 +16,10 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
   auto funcOp = funcs.at(&item);
 
   // Handle the function signature.
+  SmallVector<Type> argTypes;
+  SmallVector<Location> argLocs;
+  argTypes.reserve(item.args.size());
+  argLocs.reserve(item.args.size());
   {
     // Create the entry block in the signature region.
     OpBuilder::InsertionGuard guard(builder);
@@ -36,6 +40,8 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
           hir::UncheckedArgOp::create(builder, arg->loc, argName, type);
       bindings.insert(arg, argOp);
       argValues.push_back(argOp);
+      argTypes.push_back(argOp.getType());
+      argLocs.push_back(argOp.getLoc());
     }
 
     // Handle the function result.
@@ -56,14 +62,23 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
   {
     // Create the entry block in the body region.
     OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(&funcOp.getBody().emplaceBlock());
+    auto &entry = funcOp.getBody().emplaceBlock();
+    builder.setInsertionPointToStart(&entry);
+
+    // Add arguments to the entry block.
+    auto guard2 = BindingsScope(bindings);
+    entry.addArguments(argTypes, argLocs);
+    for (auto [arg, value] : llvm::zip(item.args, entry.getArguments()))
+      bindings.insert(arg, value);
+
+    // Handle the function body.
+    auto value = convertExpr(*item.body);
+    if (!value)
+      return failure();
 
     // Return the result of the function body.
-    hir::UncheckedReturnOp::create(currentBuilder(), item.loc, ValueRange{});
+    hir::UncheckedReturnOp::create(currentBuilder(), item.loc, value);
   }
 
   return success();
 }
-
-void Context::increaseConstness() { assert(false && "deprecated"); }
-void Context::decreaseConstness() { assert(false && "deprecated"); }

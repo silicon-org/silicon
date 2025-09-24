@@ -57,13 +57,6 @@ LogicalResult Context::convertAST(AST &ast) {
   return success();
 }
 
-unsigned Context::getValueConstness(Value value) {
-  for (unsigned idx = 0; idx < constContexts.size(); ++idx)
-    if (value.getParentRegion() == constContexts[idx].entry.getParent())
-      return idx;
-  llvm_unreachable("value not in any region");
-}
-
 Value Context::withinExpr(llvm::function_ref<Value()> fn) {
   // Populate a region with ops.
   Region region;
@@ -74,7 +67,7 @@ Value Context::withinExpr(llvm::function_ref<Value()> fn) {
     return {};
 
   // If all operations in the region are side-effect free, we can just inline
-  // them into the parent. The const op is only needed to accurately place
+  // them into the parent. The expr op is only needed to accurately place
   // side-effecting ops into a level of constness. All other ops will have their
   // level of constness determined by a later lowering pass.
   bool allSideEffectFree = llvm::all_of(region, [](auto &block) {
@@ -82,7 +75,7 @@ Value Context::withinExpr(llvm::function_ref<Value()> fn) {
                         [](auto &op) { return mlir::isMemoryEffectFree(&op); });
   });
   if (allSideEffectFree) {
-    // Inline the first block at the location where we would put the const op.
+    // Inline the first block at the location where we would put the expr op.
     auto &firstBlock = region.front();
     ip.getBlock()->getOperations().splice(ip.getPoint(),
                                           firstBlock.getOperations());
@@ -103,7 +96,7 @@ Value Context::withinExpr(llvm::function_ref<Value()> fn) {
   }
 
   // Otherwise create a yield op to return the value from the region and wrap
-  // the region in a const op.
+  // the region in an expr op.
   hir::YieldOp::create(builder, value.getLoc(), value);
   builder.restoreInsertionPoint(ip);
   auto op = hir::ExprOp::create(builder, value.getLoc(), value.getType());

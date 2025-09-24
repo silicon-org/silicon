@@ -9,23 +9,12 @@
 #include "silicon/Codegen/Context.h"
 #include "silicon/HIR/Attributes.h"
 #include "silicon/HIR/Ops.h"
+#include "silicon/HIR/Types.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Syntax/AST.h"
 
 using namespace silicon;
 using namespace codegen;
-
-static Value freezeValueAcrossConstness(Value value, unsigned valueConstness,
-                                        Context &cx) {
-  auto &frozen = cx.constContexts[valueConstness].forwardedValues[value];
-  if (!frozen) {
-    cx.constContexts[valueConstness].specializeOp.getConstsMutable().append(
-        value);
-    frozen = cx.constContexts[valueConstness - 1].entry.addArgument(
-        value.getType(), value.getLoc());
-  }
-  return frozen;
-}
 
 /// Handle number literal expressions.
 static Value convert(ast::NumLitExpr &expr, Context &cx) {
@@ -70,64 +59,23 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
   }
 
   // Generate the arguments for the call.
-  unsigned callConstness = cx.currentConstness;
-  SmallVector<SmallVector<Value>> argsAtConstness;
-  {
-    auto guard = Context::BindingsScope(cx.bindings);
-    for (auto [fnArg, callArg] : llvm::zip(fnItem->args, expr.args)) {
-      // Determine the type of the argument.
-      cx.increaseConstness();
-      auto type = cx.convertType(*fnArg->type);
-      cx.decreaseConstness();
-      if (!type)
-        return {};
-
-      // Handle the argument passed from the call to the function.
-      unsigned argConstness = cx.getValueConstness(type) - 1;
-      while (cx.currentConstness < argConstness)
-        cx.increaseConstness();
-      auto argValue = cx.convertExpr(*callArg);
-      cx.currentConstness = callConstness;
-      if (!argValue)
-        return {};
-
-      // Keep track of the argument at its constness level.
-      unsigned relativeConstness = argConstness - callConstness;
-      if (argsAtConstness.size() <= relativeConstness)
-        argsAtConstness.resize(relativeConstness + 1);
-      argsAtConstness[relativeConstness].push_back(argValue);
-    }
+  SmallVector<Value> argValues;
+  argValues.reserve(expr.args.size());
+  for (auto *arg : expr.args) {
+    auto argValue = cx.withinExpr([&] { return cx.convertExpr(*arg); });
+    if (!argValue)
+      return {};
+    argValues.push_back(argValue);
   }
 
-  // Create the call ops at the different constness levels.
-  cx.currentConstness = callConstness + argsAtConstness.size();
-  auto funcName = StringAttr::get(cx.module.getContext(),
-                                  cx.funcs.lookup(fnItem).getSymName() +
-                                      ".const" + Twine(cx.currentConstness));
-  auto funcType = hir::FuncType::get(cx.module.getContext());
-  auto anyfuncTypeOp =
-      hir::AnyfuncTypeOp::create(cx.currentBuilder(), expr.loc);
-  auto calleeType = hir::FuncTypeOp::create(
-      cx.currentBuilder(), expr.loc, ValueRange{}, ValueRange{anyfuncTypeOp});
-  auto firstCallee = hir::ConstantFuncOp::create(cx.currentBuilder(), expr.loc,
-                                                 funcName, calleeType);
-  auto prevCall =
-      hir::CallOp::create(cx.currentBuilder(), expr.loc, TypeRange{funcType},
-                          firstCallee, ValueRange{});
-
-  for (unsigned idx = 0; idx < argsAtConstness.size(); ++idx) {
-    auto callee = freezeValueAcrossConstness(prevCall.getResults()[0],
-                                             cx.currentConstness, cx);
-    unsigned revIdx = argsAtConstness.size() - idx - 1;
-    cx.currentConstness = callConstness + revIdx;
-    prevCall =
-        hir::CallOp::create(cx.currentBuilder(), expr.loc,
-                            revIdx > 0 ? TypeRange{funcType} : TypeRange{},
-                            callee, argsAtConstness[revIdx]);
-  }
-
-  cx.currentConstness = callConstness;
-  return hir::ConstantUnitOp::create(cx.currentBuilder(), expr.loc);
+  // Create the call op.
+  // TODO: Figure out the return type kind and number of results.
+  return hir::UncheckedCallOp::create(
+             cx.currentBuilder(), expr.loc,
+             hir::ValueType::get(cx.module.getContext()),
+             FlatSymbolRefAttr::get(cx.funcs.lookup(fnItem).getSymNameAttr()),
+             argValues)
+      .getResult(0);
 }
 
 /// Handle binary expressions.
@@ -159,10 +107,7 @@ static Value convert(ast::BlockExpr &block, Context &cx) {
 
 /// Handle const expressions.
 static Value convert(ast::ConstExpr &expr, Context &cx) {
-  cx.increaseConstness();
-  auto value = cx.convertExpr(*expr.value);
-  cx.decreaseConstness();
-  return value;
+  return cx.withinExpr([&] { return cx.convertExpr(*expr.value); });
 }
 
 /// Emit an error for unimplemented expressions.
