@@ -14,15 +14,6 @@
 namespace silicon {
 namespace codegen {
 
-struct ConstContext {
-  OpBuilder builder;
-  Block &entry;
-  hir::FuncOp funcOp;
-  hir::SpecializeFuncOp specializeOp;
-  DenseMap<Value, Value> forwardedValues;
-  unsigned lastArgumentIndex = 0;
-};
-
 struct Context {
   ModuleOp module;
   OpBuilder builder;
@@ -38,10 +29,6 @@ struct Context {
   using Bindings = llvm::ScopedHashTable<ast::Binding, Value>;
   using BindingsScope = Bindings::ScopeTy;
   Bindings bindings;
-
-  unsigned currentConstness;
-  SmallVector<ConstContext, 0> constContexts;
-  OpBuilder &currentBuilder() { return builder; }
 
   Context(ModuleOp module);
   LogicalResult convertAST(AST &ast);

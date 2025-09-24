@@ -19,7 +19,7 @@ using namespace codegen;
 /// Handle number literal expressions.
 static Value convert(ast::NumLitExpr &expr, Context &cx) {
   return hir::ConstantIntOp::create(
-      cx.currentBuilder(), expr.loc,
+      cx.builder, expr.loc,
       hir::IntAttr::get(cx.module.getContext(), DynamicAPInt(expr.value)));
 }
 
@@ -71,8 +71,7 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
   // Create the call op.
   // TODO: Figure out the return type kind and number of results.
   return hir::UncheckedCallOp::create(
-             cx.currentBuilder(), expr.loc,
-             hir::ValueType::get(cx.module.getContext()),
+             cx.builder, expr.loc, hir::ValueType::get(cx.module.getContext()),
              FlatSymbolRefAttr::get(cx.funcs.lookup(fnItem).getSymNameAttr()),
              argValues)
       .getResult(0);
@@ -86,7 +85,7 @@ static Value convert(ast::BinaryExpr &expr, Context &cx) {
   auto rhs = cx.convertExpr(*expr.rhs);
   if (!rhs)
     return {};
-  return hir::BinaryOp::create(cx.currentBuilder(), expr.loc, lhs, rhs);
+  return hir::BinaryOp::create(cx.builder, expr.loc, lhs, rhs);
 }
 
 /// Handle block expressions.
@@ -102,7 +101,7 @@ static Value convert(ast::BlockExpr &block, Context &cx) {
   // Handle the optional result, or create a unit result `()` otherwise.
   if (block.result)
     return cx.convertExpr(*block.result);
-  return hir::ConstantUnitOp::create(cx.currentBuilder(), block.loc);
+  return hir::ConstantUnitOp::create(cx.builder, block.loc);
 }
 
 /// Handle const expressions.

@@ -77,7 +77,7 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
       return failure();
 
     // Return the result of the function body.
-    hir::UncheckedReturnOp::create(currentBuilder(), item.loc, value);
+    hir::UncheckedReturnOp::create(builder, item.loc, value);
   }
 
   return success();
