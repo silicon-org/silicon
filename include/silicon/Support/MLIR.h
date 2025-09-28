@@ -21,6 +21,7 @@
 #include "mlir/IR/TypeRange.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
+#include "mlir/Pass/PassManager.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/DynamicAPInt.h"
@@ -83,6 +84,8 @@ using mlir::OpOperand;
 using mlir::OpResult;
 using mlir::OwningOpRef;
 using mlir::ParseResult;
+using mlir::Pass;
+using mlir::PassManager;
 using mlir::Region;
 using mlir::StringAttr;
 using mlir::SymbolTable;

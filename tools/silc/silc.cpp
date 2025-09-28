@@ -17,6 +17,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/ToolUtilities.h"
+#include "mlir/Transforms/Passes.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
@@ -29,6 +30,8 @@ namespace cl = llvm::cl;
 //===----------------------------------------------------------------------===//
 // Command Line Options
 //===----------------------------------------------------------------------===//
+
+enum class LoweringMode { Parse, Full };
 
 struct Opt {
   cl::opt<std::string> inputFilename{cl::Positional, cl::init("-"),
@@ -52,8 +55,27 @@ struct Opt {
   cl::opt<bool> splitInputFile{
       "split-input-file", cl::init(false), cl::Hidden,
       cl::desc("Split the input file into chunks and process each separately")};
+
+  cl::opt<LoweringMode> loweringMode{
+      cl::desc("Specify how to process the input:"),
+      cl::values(clEnumValN(LoweringMode::Parse, "parse-only",
+                            "Emit the IR immediately after parsing")),
+      cl::init(LoweringMode::Full)};
 };
 static Opt opt;
+
+//===----------------------------------------------------------------------===//
+// Pass Pipeline
+//===----------------------------------------------------------------------===//
+
+static void populatePasses(PassManager &pm) {
+  // Perform an initial cleanup after parsing.
+  {
+    auto &anyPM = pm.nestAny();
+    anyPM.addPass(mlir::createCSEPass());
+    anyPM.addPass(mlir::createCanonicalizerPass());
+  }
+}
 
 //===----------------------------------------------------------------------===//
 // Driver
@@ -96,6 +118,18 @@ static LogicalResult process(MLIRContext *context, llvm::SourceMgr &sourceMgr,
   auto module = convertToIR(context, ast);
   if (!module)
     return failure();
+
+  // If the user requested anything besides simply parsing the input, run the
+  // appropriate transformation passes according to the command line options.
+  if (opt.loweringMode != LoweringMode::Parse) {
+    PassManager pm(context);
+    pm.enableVerifier(true);
+    if (failed(applyPassManagerCLOptions(pm)))
+      return failure();
+    populatePasses(pm);
+    if (failed(pm.run(*module)))
+      return failure();
+  }
 
   // Print the final MLIR.
   module->print(os);

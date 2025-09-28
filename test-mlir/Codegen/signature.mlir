@@ -1,4 +1,4 @@
-// RUN: silc %s | FileCheck %s
+// RUN: silc --parse-only %s | FileCheck %s
 
 // CHECK-LABEL: hir.unchecked_func @empty
 // CHECK-NEXT: hir.unchecked_signature () -> ()
