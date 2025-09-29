@@ -1,4 +1,5 @@
 add_silicon_dialect_library(SiliconHIRTransforms
+  CheckCalls.cpp
   EvalConsts.cpp
   InferTypes.cpp
 

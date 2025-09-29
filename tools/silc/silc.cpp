@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/Codegen/Codegen.h"
+#include "silicon/HIR/Passes.h"
 #include "silicon/RegisterAll.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Syntax/AST.h"
@@ -70,6 +71,14 @@ static Opt opt;
 
 static void populatePasses(PassManager &pm) {
   // Perform an initial cleanup after parsing.
+  {
+    auto &anyPM = pm.nestAny();
+    anyPM.addPass(mlir::createCSEPass());
+    anyPM.addPass(mlir::createCanonicalizerPass());
+  }
+
+  // Check function calls against their function signatures.
+  pm.addPass(hir::createCheckCallsPass());
   {
     auto &anyPM = pm.nestAny();
     anyPM.addPass(mlir::createCSEPass());

@@ -15,4 +15,8 @@ include "mlir/Pass/PassBase.td"
 def InferTypesPass : Pass<"infer-types">;
 def EvalConstsPass : Pass<"eval-consts", "mlir::func::FuncOp">;
 
+def CheckCallsPass : Pass<"check-calls", "mlir::ModuleOp"> {
+  let summary = "Move function signature constraints to call sites";
+}
+
 #endif // SILICON_HIR_PASSES_TD
