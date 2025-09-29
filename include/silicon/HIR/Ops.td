@@ -120,6 +120,47 @@ def YieldOp : HIROp<"yield", [
 }
 
 //===----------------------------------------------------------------------===//
+// Value Typing
+//===----------------------------------------------------------------------===//
+
+def TypeOfOp : HIROp<"type_of", [
+  Pure,
+  TypesMatchWith<
+    "result kind must be one higher than input kind",
+    "input", "result",
+    [{ hir::getHigherKind($_self) }]
+  >,
+]> {
+  let summary = "Determine the type of a value";
+  let arguments = (ins AnyType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = [{
+    $input `:` type($input) attr-dict
+  }];
+}
+
+def CoerceTypeOp : HIROp<"coerce_type", [
+  Pure,
+  TypesMatchWith<
+    "result kind must be one lower than type operand kind",
+    "result", "typeOperand",
+    [{ hir::getHigherKind($_self) }]
+  >,
+  TypesMatchWith<
+    "result type must match input type",
+    "input", "result",
+    [{ $_self }]
+  >,
+]> {
+  let summary = "Coerce a value to a given type";
+  let arguments = (ins AnyType:$input, TypeType:$typeOperand);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = [{
+    $input `,` $typeOperand `:` type($input) attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Operations
 //===----------------------------------------------------------------------===//
 

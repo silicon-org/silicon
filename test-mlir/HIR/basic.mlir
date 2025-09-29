@@ -9,6 +9,14 @@ func.func @TypeConstructors(%value: !hir.value, %type: !hir.type) {
   return
 }
 
+func.func @ValueTyping() {
+  %0 = hir.constant_int 42
+  %1 = hir.type_of %0 : !hir.value
+  %2 = hir.int_type
+  %3 = hir.coerce_type %0, %2 : !hir.value
+  return
+}
+
 func.func @Foo(%arg0: !hir.type, %arg1: !hir.type, %arg2: !hir.type, %arg3: i1, %arg4: !hir.const<!hir.type>) {
   hir.constant_int 42
   hir.constant_unit
