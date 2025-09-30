@@ -1,4 +1,4 @@
-// RUN: silicon-opt --canonicalize %s
+// RUN: silicon-opt --canonicalize %s | FileCheck %s
 
 // Constants must be foldable.
 mir.constant #mir.int<42>
