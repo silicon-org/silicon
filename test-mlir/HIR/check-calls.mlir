@@ -27,7 +27,7 @@ hir.unchecked_func @SimpleFoo {
 // CHECK-LABEL: hir.unchecked_func @SimpleBar
 hir.unchecked_func @SimpleBar {
   %0 = hir.int_type {a}
-  %1 = hir.unchecked_arg "a", %0 : !hir.type
+  %1 = hir.unchecked_arg "a", %0, 0 : !hir.type
   %2 = hir.int_type {b}
   hir.unchecked_signature (%1 : !hir.value) -> (%2 : !hir.type)
 } {
@@ -53,7 +53,7 @@ hir.unchecked_func @NestedFoo {
 // CHECK-LABEL: hir.unchecked_func @NestedBar
 hir.unchecked_func @NestedBar {
   %0 = hir.int_type {a}
-  %1 = hir.unchecked_arg "a", %0 : !hir.type
+  %1 = hir.unchecked_arg "a", %0, 0 : !hir.type
   %2 = hir.int_type {b}
   hir.unchecked_signature (%1 : !hir.value) -> (%2 : !hir.type)
 } {

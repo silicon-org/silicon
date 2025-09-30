@@ -8,6 +8,7 @@
 
 #include "silicon/Codegen/Context.h"
 #include "silicon/HIR/Ops.h"
+#include "silicon/Syntax/AST.h"
 
 using namespace silicon;
 using namespace codegen;
@@ -30,14 +31,20 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
     auto guard2 = BindingsScope(bindings);
     for (auto *arg : item.args) {
       // Compute the type of the argument.
-      auto type = withinExpr([&] { return convertType(*arg->type); });
+      unsigned constness = 0;
+      auto *argType = arg->type;
+      while (auto *constType = dyn_cast<ast::ConstType>(argType)) {
+        argType = constType->type;
+        ++constness;
+      }
+      auto type = withinExpr([&] { return convertType(*argType); });
       if (!type)
         return failure();
 
       // Create an op for the argument.
       auto argName = StringAttr::get(module.getContext(), arg->name);
-      auto argOp =
-          hir::UncheckedArgOp::create(builder, arg->loc, argName, type);
+      auto argOp = hir::UncheckedArgOp::create(builder, arg->loc, argName, type,
+                                               constness);
       bindings.insert(arg, argOp);
       argValues.push_back(argOp);
       argTypes.push_back(argOp.getType());

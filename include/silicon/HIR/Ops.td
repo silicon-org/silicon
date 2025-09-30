@@ -362,10 +362,10 @@ def UncheckedArgOp : HIROp<"unchecked_arg", [
   >,
 ]> {
   let summary = "A function argument or result before const inference";
-  let arguments = (ins StrAttr:$name, AnyType:$typeOperand);
+  let arguments = (ins StrAttr:$name, AnyType:$typeOperand, I32Attr:$constness);
   let results = (outs AnyType:$result);
   let assemblyFormat = [{
-    $name `,` $typeOperand `:` type($typeOperand) attr-dict
+    $name `,` $typeOperand `,` $constness `:` type($typeOperand) attr-dict
   }];
 }
 

@@ -56,8 +56,8 @@ hir.func nested @nested_visibility {}
 
 hir.unchecked_func @UncheckedSimple {
   %0 = hir.int_type
-  %1 = hir.unchecked_arg "a", %0 : !hir.type
-  %2 = hir.unchecked_arg "b", %0 : !hir.type
+  %1 = hir.unchecked_arg "a", %0, 0 : !hir.type
+  %2 = hir.unchecked_arg "b", %0, 1 : !hir.type
   hir.unchecked_signature (%1, %2 : !hir.value, !hir.value) -> (%0 : !hir.type)
 } {
   hir.unchecked_return
