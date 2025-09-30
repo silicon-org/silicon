@@ -137,6 +137,8 @@ def TypeOfOp : HIROp<"type_of", [
   let assemblyFormat = [{
     $input `:` type($input) attr-dict
   }];
+  let hasFolder = 1;
+  let hasCanonicalizeMethod = 1;
 }
 
 def CoerceTypeOp : HIROp<"coerce_type", [
@@ -191,6 +193,7 @@ def UnifyOp : HIROp<"unify", [
   let arguments = (ins AnyType:$lhs, AnyType:$rhs);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+  let hasFolder = 1;
 }
 
 def StoreOp : HIROp<"store", []> {

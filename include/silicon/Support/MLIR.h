@@ -16,6 +16,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Region.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/TypeRange.h"
@@ -90,6 +91,7 @@ using mlir::OwningOpRef;
 using mlir::ParseResult;
 using mlir::Pass;
 using mlir::PassManager;
+using mlir::PatternRewriter;
 using mlir::Region;
 using mlir::StringAttr;
 using mlir::SymbolTable;
