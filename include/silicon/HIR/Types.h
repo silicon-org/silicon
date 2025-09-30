@@ -24,5 +24,11 @@ mlir::Type getHigherKind(mlir::Type type);
 /// Return the next lower HIR type kind after `type`.
 mlir::Type getLowerKind(mlir::Type type);
 
+/// Return the next higher HIR type kind after each of a range of `types`.
+llvm::SmallVector<mlir::Type> getHigherKindRange(mlir::TypeRange types);
+
+/// Return the next lower HIR type kind after each of a range of `types`.
+llvm::SmallVector<mlir::Type> getLowerKindRange(mlir::TypeRange types);
+
 } // namespace hir
 } // namespace silicon

@@ -402,10 +402,39 @@ def UncheckedCallOp : HIROp<"unchecked_call"> {
     FlatSymbolRefAttr:$callee,
     Variadic<AnyType>:$arguments
   );
-  let summary = "A call not yet split into constness levels";
+  let summary = "A typeless call not yet split into constness levels";
   let results = (outs Variadic<AnyType>:$results);
   let assemblyFormat = [{
     $callee `(` $arguments `)` `:` functional-type($arguments, $results)
+    attr-dict
+  }];
+}
+
+def CheckedCallOp : HIROp<"checked_call", [
+  AttrSizedOperandSegments,
+  TypesMatchWith<
+    "result kind must be one lower than result type operand kind",
+    "typeOfResults", "results",
+    [{ hir::getLowerKindRange($_self) }]
+  >,
+  TypesMatchWith<
+    "argument kind must be one lower than argument type operand kind",
+    "typeOfArgs", "arguments",
+    [{ hir::getLowerKindRange($_self) }]
+  >,
+]> {
+  let arguments = (ins
+    FlatSymbolRefAttr:$callee,
+    Variadic<AnyType>:$arguments,
+    Variadic<AnyType>:$typeOfArgs,
+    Variadic<AnyType>:$typeOfResults
+  );
+  let summary = "A typed call not yet split into constness levels";
+  let results = (outs Variadic<AnyType>:$results);
+  let assemblyFormat = [{
+    $callee `(` $arguments `)` `:`
+    `(` ($typeOfArgs^ `:` type($typeOfArgs))? `)` `->`
+    `(` ($typeOfResults^ `:` type($typeOfResults))? `)`
     attr-dict
   }];
 }

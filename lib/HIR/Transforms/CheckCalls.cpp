@@ -8,6 +8,7 @@
 
 #include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Passes.h"
+#include "silicon/HIR/Types.h"
 #include "silicon/Support/MLIR.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Threading.h"
@@ -171,36 +172,34 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
     OpBuilder builder(callOp);
     auto terminatorOp =
         cast<UncheckedSignatureOp>(signature.back().getTerminator());
+    SmallVector<Value> argTypes;
+    argTypes.reserve(callOp.getArguments().size());
     for (auto [fnArg, callArg] :
          llvm::zip(terminatorOp.getArgValues(), callOp.getArguments())) {
       auto fnArgOp = cast<UncheckedArgOp>(fnArg.getDefiningOp());
       builder.setInsertionPoint(fnArgOp);
       auto callArgType = TypeOfOp::create(builder, callArg.getLoc(), callArg);
-      UnifyOp::create(builder, callOp.getLoc(), fnArgOp.getTypeOperand(),
-                      callArgType);
+      auto unifiedType = UnifyOp::create(builder, callOp.getLoc(),
+                                         fnArgOp.getTypeOperand(), callArgType);
+      argTypes.push_back(unifiedType);
       fnArgOp.replaceAllUsesWith(callArg);
       fnArgOp.erase();
     }
 
-    // Coerce the return values of the call to the return values specified by
-    // the function signature.
-    builder.setInsertionPointAfter(callOp);
-    for (auto [fnResult, callResult] :
-         llvm::zip(terminatorOp.getTypeOfResults(), callOp.getResults())) {
-      auto coerced =
-          CoerceTypeOp::create(builder, callOp.getLoc(), callResult, fnResult);
-      callResult.replaceAllUsesExcept(coerced, coerced);
-    }
+    // Replace the call op with a variant that encodes the exact argument and
+    // result types.
+    builder.setInsertionPoint(callOp);
+    auto newCallOp = CheckedCallOp::create(
+        builder, callOp.getLoc(),
+        getLowerKindRange(terminatorOp.getTypeOfResults().getTypes()),
+        callOp.getCallee(), callOp.getArguments(), argTypes,
+        terminatorOp.getTypeOfResults());
+    callOp.replaceAllUsesWith(newCallOp);
+    callOp.erase();
     terminatorOp.erase();
 
     // Inline the signature into the call site.
-    inlineRegion(signature, *callOp->getBlock(), callOp->getIterator());
-
-    // TODO: Replace the call op with something like a `hir.checked_call`, which
-    // probably should carry the argument and result types of the call as
-    // operands. This will allow us to lower such calls to MIR pretty easily. It
-    // also gives subsequent `hir.type_of` operations a type to resolve to,
-    // which makes the `hir.coerce_type` unnecessary.
+    inlineRegion(signature, *newCallOp->getBlock(), newCallOp->getIterator());
   });
   return success();
 }
