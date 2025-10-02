@@ -400,7 +400,9 @@ def UncheckedReturnOp : HIROp<"unchecked_return", [
   }];
 }
 
-def UncheckedCallOp : HIROp<"unchecked_call"> {
+def UncheckedCallOp : HIROp<"unchecked_call", [
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+]> {
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
     Variadic<AnyType>:$arguments

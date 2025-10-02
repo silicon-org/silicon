@@ -76,3 +76,32 @@ OpFoldResult UnifyOp::fold(FoldAdaptor adaptor) {
     return getOperands().front();
   return {};
 }
+
+//===----------------------------------------------------------------------===//
+// UncheckedCallOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+UncheckedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto callee = getCalleeAttr();
+  auto func = symbolTable.lookupNearestSymbolFrom<UncheckedFuncOp>(
+      getOperation(), callee);
+  if (!func)
+    return emitOpError() << "callee " << callee
+                         << " does not reference a valid `hir.unchecked_func`";
+
+  auto sigOp = cast<UncheckedSignatureOp>(
+      func.getSignature().getBlocks().back().getTerminator());
+
+  if (getArguments().size() != sigOp.getArgValues().size())
+    return emitOpError() << "has " << getArguments().size()
+                         << " arguments, but " << callee << " expects "
+                         << sigOp.getArgValues().size();
+
+  if (getResults().size() != sigOp.getTypeOfResults().size())
+    return emitOpError() << "has " << getResults().size() << " results, but "
+                         << callee << " expects "
+                         << sigOp.getTypeOfResults().size();
+
+  return success();
+}
