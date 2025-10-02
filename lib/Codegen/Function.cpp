@@ -58,6 +58,9 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
       if (!type)
         return failure();
       resultTypes.push_back(type);
+    } else {
+      auto type = hir::UnitTypeOp::create(builder, item.loc);
+      resultTypes.push_back(type);
     }
 
     // Create the signature terminator.
