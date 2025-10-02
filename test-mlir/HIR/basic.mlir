@@ -1,6 +1,7 @@
 // RUN: silicon-opt --verify-roundtrip --verify-diagnostics %s
 
 func.func @TypeConstructors(%value: !hir.value, %type: !hir.type) {
+  hir.unit_type
   hir.int_type
   hir.uint_type %value
   hir.anyfunc_type

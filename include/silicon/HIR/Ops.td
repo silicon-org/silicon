@@ -47,6 +47,11 @@ def ConstantFuncOp : HIROp<"constant_func", [Pure]> {
 // Type Constructors
 //===----------------------------------------------------------------------===//
 
+def UnitTypeOp : HIROp<"unit_type", [Pure]> {
+  let results = (outs TypeType:$result);
+  let assemblyFormat = "attr-dict";
+}
+
 def IntTypeOp : HIROp<"int_type", [Pure]> {
   let results = (outs TypeType:$result);
   let assemblyFormat = "attr-dict";

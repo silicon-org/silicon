@@ -9,8 +9,17 @@ func.func @Unify() -> !hir.type {
   return %1 : !hir.type
 }
 
-// CHECK-LABEL: @TypeOfConstant
-func.func @TypeOfConstant() -> !hir.type {
+// CHECK-LABEL: @TypeOfConstantUnit
+func.func @TypeOfConstantUnit() -> !hir.type {
+  // CHECK: [[TY:%.+]] = hir.unit_type
+  %0 = hir.constant_unit
+  %1 = hir.type_of %0 : !hir.value
+  // CHECK: return [[TY]]
+  return %1 : !hir.type
+}
+
+// CHECK-LABEL: @TypeOfConstantInt
+func.func @TypeOfConstantInt() -> !hir.type {
   // CHECK: [[TY:%.+]] = hir.int_type
   %0 = hir.constant_int 42
   %1 = hir.type_of %0 : !hir.value

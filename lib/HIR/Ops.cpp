@@ -64,6 +64,11 @@ LogicalResult TypeOfOp::canonicalize(TypeOfOp op, PatternRewriter &rewriter) {
     rewriter.replaceOpWithNewOp<IntTypeOp>(op);
     return success();
   }
+  // type_of(constant_unit) -> unit_type
+  if (op.getInput().getDefiningOp<ConstantUnitOp>()) {
+    rewriter.replaceOpWithNewOp<UnitTypeOp>(op);
+    return success();
+  }
   return failure();
 }
 
