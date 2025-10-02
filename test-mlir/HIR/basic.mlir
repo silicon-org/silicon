@@ -63,7 +63,7 @@ hir.unchecked_func @UncheckedSimple {
   hir.unchecked_return
 }
 hir.unchecked_call @UncheckedSimple(%c42_int, %c42_int) : (!hir.value, !hir.value) -> (!hir.value)
-hir.checked_call @UncheckedSimple(%c42_int, %c42_int) : (%int_type, %int_type : !hir.type, !hir.type) -> (%int_type : !hir.type)
+hir.checked_call @UncheckedSimple(%c42_int, %c42_int) : (%int_type, %int_type : !hir.type, !hir.type) -> (%int_type : !hir.type) [0, 1] [0]
 
 hir.expr {
   hir.yield

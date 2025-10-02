@@ -25,7 +25,7 @@ func.func @TypeOfCallResults() -> (!hir.type, !hir.type) {
   %1 = hir.constant_int 42
   // CHECK: [[UINT_TY:%.+]] = hir.uint_type
   %2 = hir.uint_type %1
-  %3:2 = hir.checked_call @dummy() : () -> (%0, %2 : !hir.type, !hir.type)
+  %3:2 = hir.checked_call @dummy() : () -> (%0, %2 : !hir.type, !hir.type) [] []
   %4 = hir.type_of %3#0 : !hir.value
   %5 = hir.type_of %3#1 : !hir.value
   // CHECK: return [[INT_TY]], [[UINT_TY]]

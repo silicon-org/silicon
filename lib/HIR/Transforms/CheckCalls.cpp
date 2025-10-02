@@ -11,9 +11,9 @@
 #include "silicon/HIR/Types.h"
 #include "silicon/Support/MLIR.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Threading.h"
 #include "llvm/Support/Debug.h"
-#include <mlir/IR/IRMapping.h>
 
 using namespace mlir;
 using namespace silicon;
@@ -173,7 +173,11 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
     auto terminatorOp =
         cast<UncheckedSignatureOp>(signature.back().getTerminator());
     SmallVector<Value> argTypes;
+    SmallVector<int32_t> constnessOfArgs;
+    SmallVector<int32_t> constnessOfResults;
     argTypes.reserve(callOp.getArguments().size());
+    constnessOfArgs.reserve(callOp.getArguments().size());
+    constnessOfResults.reserve(callOp.getResults().size());
     for (auto [fnArg, callArg] :
          llvm::zip(terminatorOp.getArgValues(), callOp.getArguments())) {
       auto fnArgOp = cast<UncheckedArgOp>(fnArg.getDefiningOp());
@@ -182,9 +186,16 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
       auto unifiedType = UnifyOp::create(builder, callOp.getLoc(),
                                          fnArgOp.getTypeOperand(), callArgType);
       argTypes.push_back(unifiedType);
+      constnessOfArgs.push_back(fnArgOp.getConstness());
       fnArgOp.replaceAllUsesWith(callArg);
       fnArgOp.erase();
     }
+
+    // Results can only be at constness 0 for now. We may want to allow results
+    // to be returned from the function at different phases of the execution in
+    // the future.
+    for (auto _ : terminatorOp.getTypeOfResults())
+      constnessOfResults.push_back(0);
 
     // Replace the call op with a variant that encodes the exact argument and
     // result types.
@@ -193,7 +204,7 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
         builder, callOp.getLoc(),
         getLowerKindRange(terminatorOp.getTypeOfResults().getTypes()),
         callOp.getCallee(), callOp.getArguments(), argTypes,
-        terminatorOp.getTypeOfResults());
+        terminatorOp.getTypeOfResults(), constnessOfArgs, constnessOfResults);
     callOp.replaceAllUsesWith(newCallOp);
     callOp.erase();
     terminatorOp.erase();

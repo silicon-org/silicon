@@ -19,7 +19,7 @@ hir.unchecked_func @SimpleFoo {
   // CHECK: [[UNI_TY:%.+]] = hir.unify [[ARG_TY]], [[TMP_TY]]
   %0 = builtin.unrealized_conversion_cast to !hir.value
   // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
-  // CHECK: [[RET:%.+]] = hir.checked_call @SimpleBar([[TMP]]) : ([[UNI_TY]] : !hir.type) -> ([[RET_TY]] : !hir.type)
+  // CHECK: [[RET:%.+]] = hir.checked_call @SimpleBar([[TMP]]) : ([[UNI_TY]] : !hir.type) -> ([[RET_TY]] : !hir.type) [0] [0]
   %1 = hir.unchecked_call @SimpleBar(%0) : (!hir.value) -> (!hir.value)
   hir.unchecked_return
 }
@@ -43,7 +43,7 @@ hir.unchecked_func @NestedFoo {
   // CHECK: [[UNI_TY:%.+]] = hir.unify [[ARG_TY]], [[TMP_TY]]
   %0 = builtin.unrealized_conversion_cast to !hir.value
   // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
-  // CHECK: [[RET:%.+]] = hir.checked_call @NestedBar([[TMP]]) : ([[UNI_TY]] : !hir.type) -> ([[RET_TY]] : !hir.type)
+  // CHECK: [[RET:%.+]] = hir.checked_call @NestedBar([[TMP]]) : ([[UNI_TY]] : !hir.type) -> ([[RET_TY]] : !hir.type) [0] [0]
   %1 = hir.unchecked_call @NestedBar(%0) : (!hir.value) -> (!hir.value)
   hir.unchecked_signature () -> ()
 } {

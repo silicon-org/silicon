@@ -430,7 +430,9 @@ def CheckedCallOp : HIROp<"checked_call", [
     FlatSymbolRefAttr:$callee,
     Variadic<AnyType>:$arguments,
     Variadic<AnyType>:$typeOfArgs,
-    Variadic<AnyType>:$typeOfResults
+    Variadic<AnyType>:$typeOfResults,
+    DenseI32ArrayAttr:$constnessOfArgs,
+    DenseI32ArrayAttr:$constnessOfResults
   );
   let summary = "A typed call not yet split into constness levels";
   let results = (outs Variadic<AnyType>:$results);
@@ -438,6 +440,8 @@ def CheckedCallOp : HIROp<"checked_call", [
     $callee `(` $arguments `)` `:`
     `(` ($typeOfArgs^ `:` type($typeOfArgs))? `)` `->`
     `(` ($typeOfResults^ `:` type($typeOfResults))? `)`
+    $constnessOfArgs
+    $constnessOfResults
     attr-dict
   }];
 }
