@@ -199,16 +199,16 @@ static LogicalResult executeCompiler(MLIRContext *context) {
 }
 
 int main(int argc, char **argv) {
+  // Register dialects and passes.
+  mlir::DialectRegistry registry;
+  silicon::registerAllDialects(registry);
+  silicon::registerAllPasses();
+
   // Register pass manager command line options.
   mlir::registerAsmPrinterCLOptions();
   mlir::registerDefaultTimingManagerCLOptions();
   mlir::registerMLIRContextCLOptions();
   mlir::registerPassManagerCLOptions();
-
-  // Register dialects and passes.
-  mlir::DialectRegistry registry;
-  silicon::registerAllDialects(registry);
-  silicon::registerAllPasses();
 
   // Parse command line options.
   cl::ParseCommandLineOptions(argc, argv,
