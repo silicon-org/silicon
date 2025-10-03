@@ -355,6 +355,7 @@ def UncheckedFuncOp : HIROp<"unchecked_func", [
     custom<SymbolVisibility>($sym_visibility) ``
     $sym_name attr-dict-with-keyword $signature $body
   }];
+  let hasRegionVerifier = 1;
 }
 
 def UncheckedArgOp : HIROp<"unchecked_arg", [

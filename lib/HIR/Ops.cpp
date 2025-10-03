@@ -83,6 +83,32 @@ OpFoldResult UnifyOp::fold(FoldAdaptor adaptor) {
 }
 
 //===----------------------------------------------------------------------===//
+// UncheckedFuncOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult UncheckedFuncOp::verifyRegions() {
+  // Make sure there are no signature/return terminators in the middle of the
+  // signature or body region.
+  for (auto *region : getRegions())
+    for (auto &block : llvm::drop_end(*region))
+      if (isa<UncheckedSignatureOp, UncheckedReturnOp>(block.getTerminator()))
+        return block.getTerminator()->emitOpError()
+               << "can only appear in the last block";
+
+  // Check the signature terminator.
+  if (!isa<UncheckedSignatureOp>(getSignature().back().getTerminator()))
+    return emitOpError() << "requires `hir.unchecked_signature` terminator in "
+                            "the signature";
+
+  // Check the body terminator.
+  if (!isa<UncheckedReturnOp>(getBody().back().getTerminator()))
+    return emitOpError() << "requires `hir.unchecked_return` terminator in "
+                            "the body";
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // UncheckedCallOp
 //===----------------------------------------------------------------------===//
 
