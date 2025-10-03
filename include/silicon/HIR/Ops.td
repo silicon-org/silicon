@@ -356,6 +356,10 @@ def UncheckedFuncOp : HIROp<"unchecked_func", [
     $sym_name attr-dict-with-keyword $signature $body
   }];
   let hasRegionVerifier = 1;
+  let extraClassDeclaration = [{
+    UncheckedSignatureOp getSignatureOp();
+    UncheckedReturnOp getReturnOp();
+  }];
 }
 
 def UncheckedArgOp : HIROp<"unchecked_arg", [

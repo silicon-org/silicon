@@ -108,6 +108,14 @@ LogicalResult UncheckedFuncOp::verifyRegions() {
   return success();
 }
 
+UncheckedSignatureOp UncheckedFuncOp::getSignatureOp() {
+  return cast<UncheckedSignatureOp>(getSignature().back().getTerminator());
+}
+
+UncheckedReturnOp UncheckedFuncOp::getReturnOp() {
+  return cast<UncheckedReturnOp>(getBody().back().getTerminator());
+}
+
 //===----------------------------------------------------------------------===//
 // UncheckedCallOp
 //===----------------------------------------------------------------------===//
@@ -121,8 +129,7 @@ UncheckedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
     return emitOpError() << "callee " << callee
                          << " does not reference a valid `hir.unchecked_func`";
 
-  auto sigOp = cast<UncheckedSignatureOp>(
-      func.getSignature().getBlocks().back().getTerminator());
+  auto sigOp = func.getSignatureOp();
 
   if (getArguments().size() != sigOp.getArgValues().size())
     return emitOpError() << "has " << getArguments().size()
