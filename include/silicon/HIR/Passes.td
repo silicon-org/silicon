@@ -19,4 +19,8 @@ def CheckCallsPass : Pass<"check-calls", "mlir::ModuleOp"> {
   let summary = "Move function signature constraints to call sites";
 }
 
+def SplitPhasesPass : Pass<"split-phases", "mlir::ModuleOp"> {
+  let summary = "Split functions into multiple phases based on constness";
+}
+
 #endif // SILICON_HIR_PASSES_TD
