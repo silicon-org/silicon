@@ -3,5 +3,4 @@
 !.editorconfig
 !.clang-format
 !.clang-tidy
-__pycache__
 /build
