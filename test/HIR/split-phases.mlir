@@ -69,3 +69,30 @@ hir.unchecked_func @ValueUseAcrossPhases {
   %2 = hir.binary %0, %1
   hir.unchecked_return
 }
+
+//===----------------------------------------------------------------------===//
+// Constness-aware split: a const argument flows from the const phase to the
+// runtime phase.
+
+// CHECK-LABEL: hir.func private @ConstArg.const1
+// CHECK-NEXT: ^bb0([[A:%.+]]: !hir.any):
+// CHECK-NEXT: hir.return [[A]]
+
+// CHECK-LABEL: hir.func private @ConstArg.const0
+// CHECK-NEXT: ^bb0([[B:%.+]]: !hir.any, [[A:%.+]]: !hir.any):
+// CHECK-NEXT: [[R:%.+]] = hir.binary [[A]], [[B]]
+// CHECK-NEXT: hir.return [[R]]
+
+// CHECK-NOT: hir.unchecked_func
+hir.unchecked_func @ConstArg {
+  %0 = hir.int_type
+  %1 = hir.unchecked_arg "a", %0, 1
+  %2 = hir.int_type
+  %3 = hir.unchecked_arg "b", %2, 0
+  %4 = hir.int_type
+  hir.unchecked_signature (%1, %3) -> (%4)
+} {
+^bb0(%a: !hir.any, %b: !hir.any):
+  %0 = hir.binary %a, %b
+  hir.unchecked_return %0
+}

@@ -46,12 +46,31 @@ struct PhaseAnalysis {
   DenseSet<Operation *> seenOps;
   SmallVector<Item, 0> worklist;
   DenseMap<Operation *, int16_t> opPhases;
+
+  /// Phases assigned to body block arguments based on constness of the
+  /// corresponding UncheckedArgOp in the signature.
+  DenseMap<Value, int16_t> argPhases;
 };
 } // namespace
 
 void PhaseAnalysis::analyze() {
   LLVM_DEBUG(llvm::dbgs() << "Analyzing phases in " << funcOp.getSymNameAttr()
                           << "\n");
+
+  // Determine which body block arguments are const based on the constness of
+  // the corresponding UncheckedArgOp in the signature.
+  auto sigTerminator = funcOp.getSignatureOp();
+  auto bodyArgs = funcOp.getBody().getArguments();
+  for (auto [idx, argValue] : llvm::enumerate(sigTerminator.getArgValues())) {
+    auto argOp = cast<UncheckedArgOp>(argValue.getDefiningOp());
+    int16_t constness = argOp.getConstness();
+    if (constness > 0) {
+      argPhases[bodyArgs[idx]] = constness;
+      LLVM_DEBUG(llvm::dbgs() << "- Arg " << idx << " has constness "
+                               << constness << "\n");
+    }
+  }
+
   opPhases.insert({funcOp, 0});
   funcOp.getBody().walk<WalkOrder::PreOrder>([&](Operation *op) {
     addToWorklist(op);
@@ -147,9 +166,13 @@ struct PhaseSplitter {
 void PhaseSplitter::run() {
   LLVM_DEBUG(llvm::dbgs() << "Splitting " << funcOp.getSymNameAttr() << "\n");
 
-  // Determine the maximum phase number.
+  // Determine the maximum phase number, considering both operation phases and
+  // argument constness levels.
   int16_t maxPhase = 0;
   for (auto &[op, phase] : analysis.opPhases)
+    if (maxPhase < phase)
+      maxPhase = phase;
+  for (auto &[value, phase] : analysis.argPhases)
     if (maxPhase < phase)
       maxPhase = phase;
   LLVM_DEBUG(llvm::dbgs() << "- Phases range [0, " << maxPhase << "]\n");
@@ -172,9 +195,11 @@ void PhaseSplitter::run() {
     split.phase = phase;
   }
 
-  // Handle the return operation.
+  // Handle the return operation. Return values are added to phase 0's return
+  // values. The return op itself is erased since each phase will get its own.
   auto returnOp = funcOp.getReturnOp();
-  assert(returnOp.getNumOperands() == 0 && "return operands not supported");
+  for (auto operand : returnOp.getOperands())
+    splits[0].returnValues.push_back(operand);
   returnOp.erase();
 
   // Move all operations to phase 0 initially.
@@ -183,6 +208,49 @@ void PhaseSplitter::run() {
     worklist.push_back({0, block.begin(), block.end()});
 
   splits[0].funcOp.getBody().takeBody(funcOp.getBody());
+
+  // Move const body block arguments to their respective const-phase functions.
+  // For each const arg, we create a block arg in the const-phase function, add
+  // it to that phase's return values, create a receiving block arg in phase 0,
+  // and replace all uses of the original body block arg.
+  {
+    auto &phase0Block = splits[0].funcOp.getBody().front();
+
+    // Collect const args and their phases first to avoid iterator invalidation.
+    SmallVector<std::pair<unsigned, int16_t>> constArgs;
+    for (auto &[value, phase] : analysis.argPhases) {
+      auto bodyArg = cast<BlockArgument>(value);
+      constArgs.push_back({bodyArg.getArgNumber(), phase});
+    }
+    llvm::sort(constArgs);
+
+    // Process each const arg.
+    SmallVector<unsigned> argsToErase;
+    for (auto [idx, argPhase] : constArgs) {
+      auto bodyArg = phase0Block.getArgument(idx);
+      LLVM_DEBUG(llvm::dbgs() << "- Moving body arg " << idx << " to phase "
+                               << argPhase << "\n");
+
+      // Create a block arg in the const-phase function to receive this value.
+      auto &constBlock = splits[argPhase].funcOp.getBody().front();
+      auto constArg =
+          constBlock.addArgument(bodyArg.getType(), bodyArg.getLoc());
+
+      // The const-phase function returns this value so it flows to phase 0.
+      splits[argPhase].returnValues.push_back(constArg);
+
+      // Create a new block arg in phase 0 to receive the value from the const
+      // phase, and replace all uses of the old body block arg.
+      auto newPhase0Arg =
+          phase0Block.addArgument(bodyArg.getType(), bodyArg.getLoc());
+      bodyArg.replaceAllUsesWith(newPhase0Arg);
+      argsToErase.push_back(idx);
+    }
+
+    // Erase old body block args in reverse order.
+    for (auto idx : llvm::reverse(argsToErase))
+      phase0Block.eraseArgument(idx);
+  }
 
   // Move operations into their respective phase functions.
   while (!worklist.empty()) {
