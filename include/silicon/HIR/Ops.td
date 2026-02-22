@@ -28,18 +28,18 @@ class HIROp<string mnemonic, list<Trait> traits = []> :
 
 def ConstantIntOp : HIROp<"constant_int", [Pure]> {
   let arguments = (ins IntAttr:$value);
-  let results = (outs ValueType:$result);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = "custom<IntAttr>($value) attr-dict";
 }
 
 def ConstantUnitOp : HIROp<"constant_unit", [Pure]> {
-  let results = (outs ValueType:$result);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def ConstantFuncOp : HIROp<"constant_func", [Pure]> {
-  let arguments = (ins FlatSymbolRefAttr:$value, TypeType:$funcType);
-  let results = (outs FuncType:$result);
+  let arguments = (ins FlatSymbolRefAttr:$value, AnyHIRType:$funcType);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = "$value `:` $funcType attr-dict";
 }
 
@@ -48,35 +48,35 @@ def ConstantFuncOp : HIROp<"constant_func", [Pure]> {
 //===----------------------------------------------------------------------===//
 
 def UnitTypeOp : HIROp<"unit_type", [Pure]> {
-  let results = (outs TypeType:$result);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def IntTypeOp : HIROp<"int_type", [Pure]> {
-  let results = (outs TypeType:$result);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def UIntTypeOp : HIROp<"uint_type", [Pure]> {
-  let arguments = (ins ValueType:$width);
-  let results = (outs TypeType:$result);
+  let arguments = (ins AnyHIRType:$width);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = "$width attr-dict";
 }
 
 def AnyfuncTypeOp : HIROp<"anyfunc_type", [Pure]> {
-  let results = (outs TypeType:$result);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def RefTypeOp : HIROp<"ref_type", [Pure]> {
-  let arguments = (ins TypeType:$innerType);
-  let results = (outs TypeType:$result);
+  let arguments = (ins AnyHIRType:$innerType);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = "$innerType attr-dict";
 }
 
 def ConstTypeOp : HIROp<"const_type", [Pure]> {
-  let arguments = (ins TypeType:$innerType);
-  let results = (outs TypeType:$result);
+  let arguments = (ins AnyHIRType:$innerType);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = "$innerType attr-dict";
 }
 
@@ -85,15 +85,12 @@ def FuncTypeOp : HIROp<"func_type", [
   Pure,
 ]> {
   let arguments = (ins
-    Variadic<AnyType>:$typeOfArgs,
-    Variadic<AnyType>:$typeOfResults
+    Variadic<AnyHIRType>:$typeOfArgs,
+    Variadic<AnyHIRType>:$typeOfResults
   );
-  let results = (outs TypeType:$result);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = [{
-    ` `
-    `(` ($typeOfArgs^ `:` type($typeOfArgs))? `)` `->`
-    `(` ($typeOfResults^ `:` type($typeOfResults))? `)`
-    attr-dict
+    ` ` `(` $typeOfArgs `)` `->` `(` $typeOfResults `)` attr-dict
   }];
 }
 
@@ -128,42 +125,23 @@ def YieldOp : HIROp<"yield", [
 // Value Typing
 //===----------------------------------------------------------------------===//
 
-def TypeOfOp : HIROp<"type_of", [
-  Pure,
-  TypesMatchWith<
-    "result kind must be one higher than input kind",
-    "input", "result",
-    [{ hir::getHigherKind($_self) }]
-  >,
-]> {
+def TypeOfOp : HIROp<"type_of", [Pure]> {
   let summary = "Determine the type of a value";
-  let arguments = (ins AnyType:$input);
-  let results = (outs AnyType:$result);
+  let arguments = (ins AnyHIRType:$input);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = [{
-    $input `:` type($input) attr-dict
+    $input attr-dict
   }];
   let hasFolder = 1;
   let hasCanonicalizeMethod = 1;
 }
 
-def CoerceTypeOp : HIROp<"coerce_type", [
-  Pure,
-  TypesMatchWith<
-    "result kind must be one lower than type operand kind",
-    "result", "typeOperand",
-    [{ hir::getHigherKind($_self) }]
-  >,
-  TypesMatchWith<
-    "result type must match input type",
-    "input", "result",
-    [{ $_self }]
-  >,
-]> {
+def CoerceTypeOp : HIROp<"coerce_type", [Pure]> {
   let summary = "Coerce a value to a given type";
-  let arguments = (ins AnyType:$input, TypeType:$typeOperand);
-  let results = (outs AnyType:$result);
+  let arguments = (ins AnyHIRType:$input, AnyHIRType:$typeOperand);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = [{
-    $input `,` $typeOperand `:` type($input) attr-dict
+    $input `,` $typeOperand attr-dict
   }];
 }
 
@@ -172,22 +150,22 @@ def CoerceTypeOp : HIROp<"coerce_type", [
 //===----------------------------------------------------------------------===//
 
 def InferrableOp : HIROp<"inferrable", []> {
-  let results = (outs AnyType:$result);
-  let assemblyFormat = "attr-dict `:` type($result)";
+  let results = (outs AnyHIRType:$result);
+  let assemblyFormat = "attr-dict";
 }
 
 def BinaryOp : HIROp<"binary", [
   Pure,
   SameOperandsAndResultType,
 ]> {
-  let arguments = (ins ValueType:$lhs, ValueType:$rhs);
-  let results = (outs ValueType:$result);
+  let arguments = (ins AnyHIRType:$lhs, AnyHIRType:$rhs);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict";
 }
 
 def LetOp : HIROp<"let", []> {
-  let arguments = (ins StrAttr:$name, TypeType:$type);
-  let results = (outs TypeType:$result);
+  let arguments = (ins StrAttr:$name, AnyHIRType:$type);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = "$name `:` $type attr-dict";
 }
 
@@ -195,14 +173,14 @@ def UnifyOp : HIROp<"unify", [
   SameOperandsAndResultType,
   Commutative,
 ]> {
-  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
-  let results = (outs AnyType:$result);
-  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+  let arguments = (ins AnyHIRType:$lhs, AnyHIRType:$rhs);
+  let results = (outs AnyHIRType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
   let hasFolder = 1;
 }
 
 def StoreOp : HIROp<"store", []> {
-  let arguments = (ins TypeType:$target, TypeType:$value, TypeType:$valueType);
+  let arguments = (ins AnyHIRType:$target, AnyHIRType:$value, AnyHIRType:$valueType);
   let assemblyFormat = "$target `,` $value `:` $valueType attr-dict";
 }
 
@@ -242,30 +220,16 @@ def ConstCondBranchOp : HIROp<"const_cond_br", [
   }];
 }
 
-def ConstWrapOp : HIROp<"const_wrap", [
-  Pure,
-  TypesMatchWith<
-    "result must be !hir.const of input type",
-    "input", "result",
-    [{ ConstType::get($_self.getContext(), $_self) }]
-  >
-]> {
-  let arguments = (ins AnyType:$input);
-  let results = (outs ConstType:$result);
-  let assemblyFormat = "$input attr-dict `:` type($input)";
+def ConstWrapOp : HIROp<"const_wrap", [Pure]> {
+  let arguments = (ins AnyHIRType:$input);
+  let results = (outs AnyHIRType:$result);
+  let assemblyFormat = "$input attr-dict";
 }
 
-def ConstUnwrapOp : HIROp<"const_unwrap", [
-  Pure,
-  TypesMatchWith<
-    "input must be !hir.const of result type",
-    "input", "result",
-    [{ cast<ConstType>($_self).getInnerType() }]
-  >
-]> {
-  let arguments = (ins ConstType:$input);
-  let results = (outs AnyType:$result);
-  let assemblyFormat = "$input attr-dict `:` type($input)";
+def ConstUnwrapOp : HIROp<"const_unwrap", [Pure]> {
+  let arguments = (ins AnyHIRType:$input);
+  let results = (outs AnyHIRType:$result);
+  let assemblyFormat = "$input attr-dict";
 }
 
 def FuncOp : HIROp<"func", [
@@ -289,9 +253,9 @@ def ReturnOp : HIROp<"return", [
   Terminator,
   HasParent<"FuncOp">,
 ]> {
-  let arguments = (ins Variadic<AnyType>:$operands);
+  let arguments = (ins Variadic<AnyHIRType>:$operands);
   let assemblyFormat = [{
-    ($operands^ `:` type($operands))? attr-dict
+    ($operands^)? attr-dict
   }];
 }
 
@@ -306,12 +270,12 @@ def NextPhaseOp : HIROp<"next_phase", [
 
 def CallOp : HIROp<"call"> {
   let arguments = (ins
-    FuncType:$callee,
+    AnyHIRType:$callee,
     Variadic<AnyType>:$arguments
   );
   let results = (outs Variadic<AnyType>:$results);
   let assemblyFormat = [{
-    $callee `(` $arguments `)` `:` functional-type($arguments, $results)
+    $callee `(` $arguments `)` `:` functional-type($arguments, results)
     attr-dict
   }];
 }
@@ -322,14 +286,14 @@ def SpecializeFuncOp : HIROp<"specialize_func", [
 ]> {
   let arguments = (ins
     FlatSymbolRefAttr:$func,
-    Variadic<TypeType>:$typeOfArgs,
-    Variadic<TypeType>:$typeOfResults,
-    Variadic<AnyType>:$consts
+    Variadic<AnyHIRType>:$typeOfArgs,
+    Variadic<AnyHIRType>:$typeOfResults,
+    Variadic<AnyHIRType>:$consts
   );
-  let results = (outs FuncType);
+  let results = (outs AnyHIRType);
   let assemblyFormat = [{
     $func `(` $typeOfArgs `)` `->` `(` $typeOfResults `)`
-    (`,` $consts^ `:` type($consts))?
+    (`,` $consts^)?
     attr-dict
   }];
 }
@@ -365,17 +329,12 @@ def UncheckedFuncOp : HIROp<"unchecked_func", [
 def UncheckedArgOp : HIROp<"unchecked_arg", [
   HasParent<"UncheckedFuncOp">,
   Pure,
-  TypesMatchWith<
-    "result kind must be one lower than type operand kind",
-    "typeOperand", "result",
-    [{ hir::getLowerKind($_self) }]
-  >,
 ]> {
   let summary = "A function argument or result before const inference";
-  let arguments = (ins StrAttr:$name, AnyType:$typeOperand, I32Attr:$constness);
-  let results = (outs AnyType:$result);
+  let arguments = (ins StrAttr:$name, AnyHIRType:$typeOperand, I32Attr:$constness);
+  let results = (outs AnyHIRType:$result);
   let assemblyFormat = [{
-    $name `,` $typeOperand `,` $constness `:` type($typeOperand) attr-dict
+    $name `,` $typeOperand `,` $constness attr-dict
   }];
 }
 
@@ -387,13 +346,11 @@ def UncheckedSignatureOp : HIROp<"unchecked_signature", [
 ]> {
   let summary = "Terminator for the signature region of an unchecked function";
   let arguments = (ins
-    Variadic<AnyType>:$argValues,
-    Variadic<AnyType>:$typeOfResults
+    Variadic<AnyHIRType>:$argValues,
+    Variadic<AnyHIRType>:$typeOfResults
   );
   let assemblyFormat = [{
-    ` ` `(` ($argValues^ `:` type($argValues))? `)`
-    `->` `(` ($typeOfResults^ `:` type($typeOfResults))? `)`
-    attr-dict
+    ` ` `(` $argValues `)` `->` `(` $typeOfResults `)` attr-dict
   }];
 }
 
@@ -404,9 +361,9 @@ def UncheckedReturnOp : HIROp<"unchecked_return", [
   Terminator,
 ]> {
   let summary = "Terminator for the body region of an unchecked function";
-  let arguments = (ins Variadic<AnyType>:$operands);
+  let arguments = (ins Variadic<AnyHIRType>:$operands);
   let assemblyFormat = [{
-    ($operands^ `:` type($operands))? attr-dict
+    ($operands^)? attr-dict
   }];
 }
 
@@ -420,29 +377,19 @@ def UncheckedCallOp : HIROp<"unchecked_call", [
   let summary = "A typeless call not yet split into constness levels";
   let results = (outs Variadic<AnyType>:$results);
   let assemblyFormat = [{
-    $callee `(` $arguments `)` `:` functional-type($arguments, $results)
+    $callee `(` $arguments `)` `:` functional-type($arguments, results)
     attr-dict
   }];
 }
 
 def CheckedCallOp : HIROp<"checked_call", [
   AttrSizedOperandSegments,
-  TypesMatchWith<
-    "result kind must be one lower than result type operand kind",
-    "typeOfResults", "results",
-    [{ hir::getLowerKindRange($_self) }]
-  >,
-  TypesMatchWith<
-    "argument kind must be one lower than argument type operand kind",
-    "typeOfArgs", "arguments",
-    [{ hir::getLowerKindRange($_self) }]
-  >,
 ]> {
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
-    Variadic<AnyType>:$arguments,
-    Variadic<AnyType>:$typeOfArgs,
-    Variadic<AnyType>:$typeOfResults,
+    Variadic<AnyHIRType>:$arguments,
+    Variadic<AnyHIRType>:$typeOfArgs,
+    Variadic<AnyHIRType>:$typeOfResults,
     DenseI32ArrayAttr:$constnessOfArgs,
     DenseI32ArrayAttr:$constnessOfResults
   );
@@ -450,8 +397,9 @@ def CheckedCallOp : HIROp<"checked_call", [
   let results = (outs Variadic<AnyType>:$results);
   let assemblyFormat = [{
     $callee `(` $arguments `)` `:`
-    `(` ($typeOfArgs^ `:` type($typeOfArgs))? `)` `->`
-    `(` ($typeOfResults^ `:` type($typeOfResults))? `)`
+    `(` $typeOfArgs `)` `->`
+    `(` $typeOfResults `)`
+    `->` `(` type($results) `)`
     $constnessOfArgs
     $constnessOfResults
     attr-dict

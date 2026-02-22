@@ -8,7 +8,6 @@
 
 #include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Passes.h"
-#include "silicon/HIR/Types.h"
 #include "silicon/Support/MLIR.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
@@ -200,11 +199,13 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
     // Replace the call op with a variant that encodes the exact argument and
     // result types.
     builder.setInsertionPoint(callOp);
+    // With !hir.any, result types are the same as the type operand types.
+    SmallVector<Type> resultTypes(terminatorOp.getTypeOfResults().size(),
+                                  AnyType::get(callOp.getContext()));
     auto newCallOp = CheckedCallOp::create(
-        builder, callOp.getLoc(),
-        getLowerKindRange(terminatorOp.getTypeOfResults().getTypes()),
-        callOp.getCallee(), callOp.getArguments(), argTypes,
-        terminatorOp.getTypeOfResults(), constnessOfArgs, constnessOfResults);
+        builder, callOp.getLoc(), resultTypes, callOp.getCallee(),
+        callOp.getArguments(), argTypes, terminatorOp.getTypeOfResults(),
+        constnessOfArgs, constnessOfResults);
     callOp.replaceAllUsesWith(newCallOp);
     callOp.erase();
     terminatorOp.erase();

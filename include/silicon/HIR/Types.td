@@ -18,22 +18,8 @@ class HIRTypeDef<string name, list<Trait> traits = [],
   let mnemonic = ?;
 }
 
-def TypeType : HIRTypeDef<"Type"> {
-  let mnemonic = "type";
-}
-
-def ValueType : HIRTypeDef<"Value"> {
-  let mnemonic = "value";
-}
-
-def ConstType : HIRTypeDef<"Const"> {
-  let mnemonic = "const";
-  let parameters = (ins "mlir::Type":$innerType);
-  let assemblyFormat = "`<` $innerType `>`";
-}
-
-def FuncType : HIRTypeDef<"Func"> {
-  let mnemonic = "func";
+def AnyHIRType : HIRTypeDef<"Any"> {
+  let mnemonic = "any";
 }
 
 #endif // SILICON_HIR_TYPES_TD

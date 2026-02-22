@@ -71,7 +71,7 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
   // Create the call op.
   // TODO: Figure out the return type kind and number of results.
   return hir::UncheckedCallOp::create(
-             cx.builder, expr.loc, hir::ValueType::get(cx.module.getContext()),
+             cx.builder, expr.loc, hir::AnyType::get(cx.module.getContext()),
              FlatSymbolRefAttr::get(cx.funcs.lookup(fnItem).getSymNameAttr()),
              argValues)
       .getResult(0);

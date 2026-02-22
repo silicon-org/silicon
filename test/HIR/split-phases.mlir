@@ -52,7 +52,7 @@ hir.unchecked_func @TwoUnrelatedPhases {
 // CHECK-NEXT: hir.return [[TMP]]
 
 // CHECK-LABEL: hir.func private @ValueUseAcrossPhases.const0
-// CHECK-NEXT: ^bb0([[TMP1:%.+]]: !hir.value):
+// CHECK-NEXT: ^bb0([[TMP1:%.+]]: !hir.any):
 // CHECK-NEXT: [[TMP0:%.+]] = hir.constant_int 42
 // CHECK-NEXT: hir.binary [[TMP0]], [[TMP1]]
 // CHECK-NEXT: hir.return
@@ -62,9 +62,9 @@ hir.unchecked_func @ValueUseAcrossPhases {
   hir.unchecked_signature () -> ()
 } {
   %0 = hir.constant_int 42
-  %1 = hir.expr : !hir.value attributes {const = 1} {
+  %1 = hir.expr : !hir.any attributes {const = 1} {
     %3 = hir.constant_int 1337
-    hir.yield %3 : !hir.value
+    hir.yield %3 : !hir.any
   }
   %2 = hir.binary %0, %1
   hir.unchecked_return

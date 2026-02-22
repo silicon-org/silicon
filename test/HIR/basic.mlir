@@ -1,6 +1,6 @@
 // RUN: silicon-opt --verify-roundtrip --verify-diagnostics %s
 
-func.func @TypeConstructors(%value: !hir.value, %type: !hir.type) {
+func.func @TypeConstructors(%value: !hir.any, %type: !hir.any) {
   hir.unit_type
   hir.int_type
   hir.uint_type %value
@@ -12,24 +12,24 @@ func.func @TypeConstructors(%value: !hir.value, %type: !hir.type) {
 
 func.func @ValueTyping() {
   %0 = hir.constant_int 42
-  %1 = hir.type_of %0 : !hir.value
+  %1 = hir.type_of %0
   %2 = hir.int_type
-  %3 = hir.coerce_type %0, %2 : !hir.value
+  %3 = hir.coerce_type %0, %2
   return
 }
 
-func.func @Foo(%arg0: !hir.type, %arg1: !hir.type, %arg2: !hir.type, %arg3: i1, %arg4: !hir.const<!hir.type>) {
+func.func @Foo(%arg0: !hir.any, %arg1: !hir.any, %arg2: !hir.any, %arg3: i1) {
   hir.constant_int 42
   hir.constant_unit
-  hir.inferrable : !hir.type
-  hir.unify %arg0, %arg1 : !hir.type
+  hir.inferrable
+  hir.unify %arg0, %arg1
   hir.let "x" : %arg0
   hir.store %arg0, %arg1 : %arg2
-  hir.const_wrap %arg0 : !hir.type
-  hir.const_unwrap %arg4 : <!hir.type>
-  hir.const_br ^bb1(%arg0 : !hir.type)
-^bb1(%0: !hir.type):
-  hir.const_cond_br %arg3, ^bb1(%0 : !hir.type), ^bb2
+  hir.const_wrap %arg0
+  hir.const_unwrap %arg0
+  hir.const_br ^bb1(%arg0 : !hir.any)
+^bb1(%0: !hir.any):
+  hir.const_cond_br %arg3, ^bb1(%0 : !hir.any), ^bb2
 ^bb2:
   return
 }
@@ -41,13 +41,13 @@ hir.int_type {x = #hir.int<42>}
 
 hir.specialize_func @foo() -> ()
 hir.specialize_func @foo(%int_type) -> (%int_type)
-hir.specialize_func @foo(%int_type) -> (%int_type), %int_type, %c42_int : !hir.type, !hir.value
+hir.specialize_func @foo(%int_type) -> (%int_type), %int_type, %c42_int
 
 %foo_type = hir.func_type () -> ()
 %foo = hir.constant_func @foo : %foo_type
 hir.call %foo() : () -> ()
-hir.call %foo(%int_type) : (!hir.type) -> (!hir.type)
-hir.call %foo(%int_type, %c42_int) : (!hir.type, !hir.value) -> (!hir.type, !hir.value)
+hir.call %foo(%int_type) : (!hir.any) -> (!hir.any)
+hir.call %foo(%int_type, %c42_int) : (!hir.any, !hir.any) -> (!hir.any, !hir.any)
 
 // Test HIR function operations with symbol visibility
 hir.func @public_visibility1 {}
@@ -57,20 +57,20 @@ hir.func nested @nested_visibility {}
 
 hir.unchecked_func @UncheckedSimple {
   %0 = hir.int_type
-  %1 = hir.unchecked_arg "a", %0, 0 : !hir.type
-  %2 = hir.unchecked_arg "b", %0, 1 : !hir.type
-  hir.unchecked_signature (%1, %2 : !hir.value, !hir.value) -> (%0 : !hir.type)
+  %1 = hir.unchecked_arg "a", %0, 0
+  %2 = hir.unchecked_arg "b", %0, 1
+  hir.unchecked_signature (%1, %2) -> (%0)
 } {
   hir.unchecked_return
 }
-hir.unchecked_call @UncheckedSimple(%c42_int, %c42_int) : (!hir.value, !hir.value) -> (!hir.value)
-hir.checked_call @UncheckedSimple(%c42_int, %c42_int) : (%int_type, %int_type : !hir.type, !hir.type) -> (%int_type : !hir.type) [0, 1] [0]
+hir.unchecked_call @UncheckedSimple(%c42_int, %c42_int) : (!hir.any, !hir.any) -> (!hir.any)
+hir.checked_call @UncheckedSimple(%c42_int, %c42_int) : (%int_type, %int_type) -> (%int_type) -> (!hir.any) [0, 1] [0]
 
 hir.expr {
   hir.yield
 }
-hir.expr : !hir.type, !hir.type {
+hir.expr : !hir.any, !hir.any {
   %0 = hir.int_type
   %1 = hir.anyfunc_type
-  hir.yield %0, %1 : !hir.type, !hir.type
+  hir.yield %0, %1 : !hir.any, !hir.any
 }

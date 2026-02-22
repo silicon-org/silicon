@@ -1,6 +1,6 @@
 // RUN: silicon-opt --specialize-funcs %s | FileCheck %s
 
-func.func private @use_value(%arg0: !hir.value)
+func.func private @use_value(%arg0: !hir.any)
 
 // CHECK: mir.constant #mir.func<[[SIMPLE_SPEC:@Simple_.+]]> :
 // CHECK: mir.constant #mir.func<[[SIMPLE_SPEC]]> :
@@ -11,14 +11,14 @@ mir.constant #mir.specialized_func<@Simple, [!mir.int], [], [#mir.int<42>]>
 // CHECK: hir.func [[SIMPLE_SPEC]]
 hir.func @Simple {
 // CHECK-NEXT: ^bb0(%arg0: !mir.int):
-^bb0(%arg0: !hir.value, %arg1: !hir.value):
-  // CHECK-NEXT: [[ARG0:%.+]] = builtin.unrealized_conversion_cast %arg0 : !mir.int to !hir.value
+^bb0(%arg0: !hir.any, %arg1: !hir.any):
+  // CHECK-NEXT: [[ARG0:%.+]] = builtin.unrealized_conversion_cast %arg0 : !mir.int to !hir.any
   // CHECK-NEXT: [[TMP:%.+]] = mir.constant #mir.int<42>
-  // CHECK-NEXT: [[ARG1:%.+]] = builtin.unrealized_conversion_cast [[TMP]] : !mir.int to !hir.value
-  // CHECK-NEXT: func.call @use_value([[ARG0]]) : (!hir.value) -> ()
-  func.call @use_value(%arg0) : (!hir.value) -> ()
-  // CHECK-NEXT: func.call @use_value([[ARG1]]) : (!hir.value) -> ()
-  func.call @use_value(%arg1) : (!hir.value) -> ()
+  // CHECK-NEXT: [[ARG1:%.+]] = builtin.unrealized_conversion_cast [[TMP]] : !mir.int to !hir.any
+  // CHECK-NEXT: func.call @use_value([[ARG0]]) : (!hir.any) -> ()
+  func.call @use_value(%arg0) : (!hir.any) -> ()
+  // CHECK-NEXT: func.call @use_value([[ARG1]]) : (!hir.any) -> ()
+  func.call @use_value(%arg1) : (!hir.any) -> ()
   // CHECK-NEXT: mir.return
   mir.return
 }
@@ -31,7 +31,7 @@ mir.constant #mir.specialized_func<@NestedOuter, [], [], [#mir.specialized_func<
 // CHECK-LABEL: hir.func @NestedOuter
 // CHECK: hir.func [[NESTED_OUTER_SPEC]]
 hir.func @NestedOuter {
-^bb0(%arg0: !hir.func):
+^bb0(%arg0: !hir.any):
   // CHECK-NEXT: mir.constant #mir.func<[[NESTED_INNER_SPEC:@NestedInner_.+]]> :
   mir.return
 }
@@ -39,10 +39,10 @@ hir.func @NestedOuter {
 // CHECK-LABEL: hir.func @NestedInner
 // CHECK: hir.func [[NESTED_INNER_SPEC]]
 hir.func @NestedInner {
-^bb0(%arg0: !hir.value):
+^bb0(%arg0: !hir.any):
   // CHECK-NEXT: [[TMP:%.+]] = mir.constant #mir.int<1337>
-  // CHECK-NEXT: [[ARG0:%.+]] = builtin.unrealized_conversion_cast [[TMP]] : !mir.int to !hir.value
-  // CHECK-NEXT: func.call @use_value([[ARG0]]) : (!hir.value) -> ()
-  func.call @use_value(%arg0) : (!hir.value) -> ()
+  // CHECK-NEXT: [[ARG0:%.+]] = builtin.unrealized_conversion_cast [[TMP]] : !mir.int to !hir.any
+  // CHECK-NEXT: func.call @use_value([[ARG0]]) : (!hir.any) -> ()
+  func.call @use_value(%arg0) : (!hir.any) -> ()
   mir.return
 }
