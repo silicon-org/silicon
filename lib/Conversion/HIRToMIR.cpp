@@ -158,6 +158,13 @@ static LogicalResult convert(hir::FuncTypeOp op,
 // Other Operations
 //===----------------------------------------------------------------------===//
 
+static LogicalResult convert(hir::BinaryOp op, hir::BinaryOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<mir::BinaryOp>(op, adaptor.getLhs(),
+                                             adaptor.getRhs());
+  return success();
+}
+
 static LogicalResult convert(hir::SpecializeFuncOp op,
                              hir::SpecializeFuncOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
@@ -271,6 +278,7 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::UIntTypeOp>(convert);
   patterns.add<hir::AnyfuncTypeOp>(convert);
   patterns.add<hir::FuncTypeOp>(convert);
+  patterns.add<hir::BinaryOp>(convert);
   patterns.add<hir::SpecializeFuncOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
   patterns.add<hir::CallOp>(convert);

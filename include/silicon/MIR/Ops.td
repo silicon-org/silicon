@@ -57,6 +57,15 @@ def SpecializeFuncOp : MIROp<"specialize_func", [
   }];
 }
 
+def BinaryOp : MIROp<"binary", [
+  Pure,
+  SameOperandsAndResultType,
+]> {
+  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+}
+
 def ReturnOp : MIROp<"return", [Pure, ReturnLike, Terminator]> {
   let arguments = (ins Variadic<AnyType>:$operands);
   let assemblyFormat = [{
