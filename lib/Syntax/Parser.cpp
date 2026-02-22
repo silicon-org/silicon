@@ -122,6 +122,11 @@ ast::FnItem *Parser::parseFnItem(Token kw) {
 }
 
 ast::FnArg *Parser::parseFnArg() {
+  // Parse an optional `const` modifier on the argument.
+  unsigned constness = 0;
+  while (consumeIf(TokenKind::Kw_const))
+    ++constness;
+
   // Parse the argument name.
   auto name = require(TokenKind::Ident, "argument name");
   if (!name)
@@ -134,23 +139,14 @@ ast::FnArg *Parser::parseFnArg() {
   if (!type)
     return {};
 
-  return ast.create<ast::FnArg>({loc(name), name.spelling, type});
+  return ast.create<ast::FnArg>({loc(name), name.spelling, type, constness});
 }
 
 //===----------------------------------------------------------------------===//
 // Types
 //===----------------------------------------------------------------------===//
 
-// NOLINTNEXTLINE(misc-no-recursion)
 ast::Type *Parser::parseType() {
-  // Parse the `const` type.
-  if (auto kw = consumeIf(TokenKind::Kw_const)) {
-    auto *type = parseType();
-    if (!type)
-      return {};
-    return ast.create<ast::ConstType>({{ast::TypeKind::Const, loc(kw)}, type});
-  }
-
   // Parse the `int` type.
   if (auto kw = consumeIf(TokenKind::Kw_int))
     return ast.create<ast::IntType>({{ast::TypeKind::Int, loc(kw)}});

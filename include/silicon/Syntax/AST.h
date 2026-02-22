@@ -121,6 +121,7 @@ struct FnArg {
   Location loc;
   StringRef name;
   Type *type;
+  unsigned constness;
 
   AST_VISIT_DEF(FnArg) {
     AST_VISIT(name);
@@ -162,15 +163,6 @@ struct Type {
   const TypeKind kind;
   Location loc;
   AST_VISIT_DECL();
-};
-
-/// A constant type, which wraps another type.
-struct ConstType : public Type {
-  Type *type;
-  AST_VISIT_DEF(ConstType) { AST_VISIT(type); }
-  static bool classof(const Type *type) {
-    return type->kind == TypeKind::Const;
-  }
 };
 
 /// A generic integer type.

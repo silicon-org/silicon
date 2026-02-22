@@ -21,4 +21,4 @@ fn simple(a: int) -> int { 0 }
 // CHECK-NEXT: [[C:%.+]] = hir.unchecked_arg "c", [[UINT_TYPE]], 0
 // CHECK-NEXT: [[UNIT_TYPE:%.+]] = hir.unit_type
 // CHECK-NEXT: hir.unchecked_signature ([[A]], [[B]], [[C]]) -> ([[UNIT_TYPE]])
-fn dependent_types(a: int, b: const int, c: uint<b>) {}
+fn dependent_types(a: int, const b: int, c: uint<b>) {}

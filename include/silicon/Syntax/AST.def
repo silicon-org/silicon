@@ -26,7 +26,6 @@ AST_ITEM(Fn)
 #define AST_TYPE(NAME)
 #endif
 
-AST_TYPE(Const)
 AST_TYPE(Int)
 AST_TYPE(UInt)
 

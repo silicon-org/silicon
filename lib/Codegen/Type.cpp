@@ -19,14 +19,6 @@ static Value convert(ast::IntType &type, Context &cx) {
   return hir::IntTypeOp::create(cx.builder, type.loc);
 }
 
-/// Handle const types.
-static Value convert(ast::ConstType &type, Context &cx) {
-  auto inner = cx.convertType(*type.type);
-  if (!inner)
-    return {};
-  return hir::ConstTypeOp::create(cx.builder, type.loc, inner);
-}
-
 /// Handle the uint type.
 static Value convert(ast::UIntType &type, Context &cx) {
   auto width = cx.convertExpr(*type.width);
