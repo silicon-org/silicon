@@ -1,5 +1,6 @@
 - Add argument and result names to `hir.func`. These indicate how many arguments and results there are. Under the hood they all have MLIR type `!hir.any`. Use custom parser and printers if necessary to print these as outlined in CLAUDE.md.
 - Add argument and result names to `hir.unified_func`, which must match the corresponding number of phases. These should print as outliend in CLAUDE.md.
+- Make codegen use `hir.type_of` for unified call argument types instead of `hir.inferrable`.
 - Replace `hir.binary` with dedicated ops like `hir.add`. Same for `mir.binary`.
 - `rewriteUnifiedCalls` is prototype code; type operands for the const call use `hir.inferrable` placeholders (lowered to `!hir.any`) rather than the actual types. When the phase-split pipeline matures, these should be replaced with real type values.
 - Several call sites still use the deprecated `builder.create<Op>()` form instead of `Op::create(builder, ...)` (warnings emitted during compilation).

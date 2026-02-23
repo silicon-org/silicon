@@ -207,15 +207,12 @@ UnifiedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   if (getResultPhases() != func.getResultPhases())
     return emitOpError() << "resultPhases do not match callee " << callee;
 
-  // When type operands are populated (by CheckCalls), verify their arity.
-  if (!getTypeOfArgs().empty() &&
-      getTypeOfArgs().size() != getArguments().size())
+  if (getTypeOfArgs().size() != getArguments().size())
     return emitOpError() << "typeOfArgs has " << getTypeOfArgs().size()
                          << " entries but call has " << getArguments().size()
                          << " arguments";
 
-  if (!getTypeOfResults().empty() &&
-      getTypeOfResults().size() != getResults().size())
+  if (getTypeOfResults().size() != getResults().size())
     return emitOpError() << "typeOfResults has " << getTypeOfResults().size()
                          << " entries but call has " << getResults().size()
                          << " results";

@@ -101,8 +101,9 @@ hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
   hir.unified_return
 }
 %arg = hir.constant_int 42
+%int_type = hir.int_type
 // expected-error @below {{argPhases has 0 entries but call has 1 arguments}}
-hir.unified_call @foo(%arg) : () -> () (!hir.any) -> !hir.any [] -> [0]
+hir.unified_call @foo(%arg) : (%int_type) -> (%int_type) (!hir.any) -> !hir.any [] -> [0]
 
 // -----
 
@@ -115,8 +116,9 @@ hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
   hir.unified_return
 }
 %arg = hir.constant_int 42
+%int_type = hir.int_type
 // expected-error @below {{resultPhases has 0 entries but call has 1 results}}
-hir.unified_call @foo(%arg) : () -> () (!hir.any) -> !hir.any [0] -> []
+hir.unified_call @foo(%arg) : (%int_type) -> (%int_type) (!hir.any) -> !hir.any [0] -> []
 
 // -----
 
@@ -129,8 +131,9 @@ hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
   hir.unified_return
 }
 %arg = hir.constant_int 42
+%int_type = hir.int_type
 // expected-error @below {{argPhases do not match callee @foo}}
-hir.unified_call @foo(%arg) : () -> () (!hir.any) -> !hir.any [-1] -> [0]
+hir.unified_call @foo(%arg) : (%int_type) -> (%int_type) (!hir.any) -> !hir.any [-1] -> [0]
 
 // -----
 
@@ -143,5 +146,36 @@ hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
   hir.unified_return
 }
 %arg = hir.constant_int 42
+%int_type = hir.int_type
 // expected-error @below {{resultPhases do not match callee @foo}}
-hir.unified_call @foo(%arg) : () -> () (!hir.any) -> !hir.any [0] -> [-1]
+hir.unified_call @foo(%arg) : (%int_type) -> (%int_type) (!hir.any) -> !hir.any [0] -> [-1]
+
+// -----
+
+hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
+^bb0(%a: !hir.any):
+  %0 = hir.int_type
+  %1 = hir.int_type
+  hir.unified_signature (%0) -> (%1)
+} {
+  hir.unified_return
+}
+%arg = hir.constant_int 42
+%int_type = hir.int_type
+// expected-error @below {{typeOfArgs has 0 entries but call has 1 arguments}}
+%2 = hir.unified_call @foo(%arg) : () -> (%int_type) (!hir.any) -> !hir.any [0] -> [0]
+
+// -----
+
+hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
+^bb0(%a: !hir.any):
+  %0 = hir.int_type
+  %1 = hir.int_type
+  hir.unified_signature (%0) -> (%1)
+} {
+  hir.unified_return
+}
+%arg = hir.constant_int 42
+%int_type = hir.int_type
+// expected-error @below {{typeOfResults has 0 entries but call has 1 results}}
+%2 = hir.unified_call @foo(%arg) : (%int_type) -> () (!hir.any) -> !hir.any [0] -> [0]

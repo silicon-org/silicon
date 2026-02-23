@@ -20,7 +20,9 @@ hir.unified_func @SimpleFoo [] -> [] attributes {argNames = []} {
   // CHECK: [[UNI_TY:%.+]] = hir.unify [[ARG_TY]], [[TMP_TY]]
   %0 = builtin.unrealized_conversion_cast to !hir.any
   // CHECK: hir.unified_call @SimpleBar([[TMP]]) : ([[UNI_TY]]) -> ([[RET_TY]]) (!hir.any) -> !hir.any [0] -> [0]
-  %1 = hir.unified_call @SimpleBar(%0) : () -> () (!hir.any) -> !hir.any [0] -> [0]
+  %infer0 = hir.inferrable
+  %infer1 = hir.inferrable
+  %1 = hir.unified_call @SimpleBar(%0) : (%infer0) -> (%infer1) (!hir.any) -> !hir.any [0] -> [0]
   hir.unified_return
 }
 
@@ -44,7 +46,9 @@ hir.unified_func @NestedFoo [] -> [] attributes {argNames = []} {
   // CHECK: [[UNI_TY:%.+]] = hir.unify [[ARG_TY]], [[TMP_TY]]
   %0 = builtin.unrealized_conversion_cast to !hir.any
   // CHECK: hir.unified_call @NestedBar([[TMP]]) : ([[UNI_TY]]) -> ([[RET_TY]]) (!hir.any) -> !hir.any [0] -> [0]
-  %1 = hir.unified_call @NestedBar(%0) : () -> () (!hir.any) -> !hir.any [0] -> [0]
+  %infer2 = hir.inferrable
+  %infer3 = hir.inferrable
+  %1 = hir.unified_call @NestedBar(%0) : (%infer2) -> (%infer3) (!hir.any) -> !hir.any [0] -> [0]
   hir.unified_signature () -> ()
 } {
   hir.unified_return
