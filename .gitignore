@@ -4,3 +4,4 @@
 !.clang-format
 !.clang-tidy
 /build
+/tmp
