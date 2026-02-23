@@ -105,6 +105,9 @@ struct FnItem : public Item {
   StringRef name;
   ArrayRef<FnArg *> args;
   Type *returnType; // optional
+  /// Phase offset of the return type relative to the call site. Negative means
+  /// `const` (earlier phase), positive means `dyn` (later phase).
+  int resultPhase = 0;
   BlockExpr *body;
 
   AST_VISIT_DEF(FnItem) {
@@ -121,7 +124,10 @@ struct FnArg {
   Location loc;
   StringRef name;
   Type *type;
-  unsigned constness;
+  /// Phase offset relative to the function's call site. Negative values
+  /// (`const`) mean the argument is evaluated in an earlier phase; positive
+  /// values (`dyn`) mean a later phase; zero is the default (same phase).
+  int phase;
 
   AST_VISIT_DEF(FnArg) {
     AST_VISIT(name);

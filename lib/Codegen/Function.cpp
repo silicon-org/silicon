@@ -17,34 +17,48 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
   auto funcOp = funcs.at(&item);
 
   // Handle the function signature.
+  //
+  // The signature region has a single block whose arguments carry the function
+  // argument values. These block arguments can be referenced by dependent-type
+  // expressions (e.g. `uint<b>`). We also store argument names as an attribute
+  // on the func op so downstream passes can display meaningful names.
   SmallVector<Type> argTypes;
   SmallVector<Location> argLocs;
   argTypes.reserve(item.args.size());
   argLocs.reserve(item.args.size());
   {
-    // Create the entry block in the signature region.
+    // Create the entry block in the signature region with one !hir.any block
+    // argument per function argument.
     OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(&funcOp.getSignature().emplaceBlock());
+    auto *ctx = module.getContext();
+    auto &sigEntry = funcOp.getSignature().emplaceBlock();
+    SmallVector<Type> anyTypes(item.args.size(), hir::AnyType::get(ctx));
+    SmallVector<Location> sigArgLocs;
+    for (auto *arg : item.args)
+      sigArgLocs.push_back(arg->loc);
+    sigEntry.addArguments(anyTypes, sigArgLocs);
+    builder.setInsertionPointToStart(&sigEntry);
 
-    // Handle the function arguments.
-    SmallVector<Value, 4> argValues;
+    // Bind each block argument so dependent-type expressions like `uint<b>`
+    // can refer to the corresponding argument value.
     auto guard2 = BindingsScope(bindings);
+    for (auto [arg, blockArg] :
+         llvm::zip(item.args, sigEntry.getArguments())) {
+      bindings.insert(arg, blockArg);
+      argTypes.push_back(blockArg.getType());
+      argLocs.push_back(blockArg.getLoc());
+    }
+
+    // Compute the type of each argument.
+    SmallVector<Value, 4> typeSSAValues;
     for (auto *arg : item.args) {
-      // Compute the type of the argument.
       auto type = withinExpr([&] { return convertType(*arg->type); });
       if (!type)
         return failure();
-
-      // Create an op for the argument.
-      auto argName = StringAttr::get(module.getContext(), arg->name);
-      auto argOp = hir::UnifiedArgOp::create(builder, arg->loc, argName, type);
-      bindings.insert(arg, argOp);
-      argValues.push_back(argOp);
-      argTypes.push_back(argOp.getType());
-      argLocs.push_back(argOp.getLoc());
+      typeSSAValues.push_back(type);
     }
 
-    // Handle the function result.
+    // Compute the return type.
     SmallVector<Value, 4> resultTypes;
     if (item.returnType) {
       auto type = withinExpr([&] { return convertType(*item.returnType); });
@@ -56,9 +70,16 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
       resultTypes.push_back(type);
     }
 
-    // Create the signature terminator.
-    hir::UnifiedSignatureOp::create(builder, item.loc, argValues, resultTypes);
+    // Emit the signature terminator with computed argument and result types.
+    hir::UnifiedSignatureOp::create(builder, item.loc, typeSSAValues,
+                                    resultTypes);
   }
+
+  // Record argument names as an attribute on the func op.
+  SmallVector<Attribute> argNameAttrs;
+  for (auto *arg : item.args)
+    argNameAttrs.push_back(StringAttr::get(module.getContext(), arg->name));
+  funcOp.setArgNamesAttr(mlir::ArrayAttr::get(module.getContext(), argNameAttrs));
 
   // Handle the function body.
   {

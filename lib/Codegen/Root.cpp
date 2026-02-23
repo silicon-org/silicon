@@ -25,13 +25,14 @@ struct DeclareItems : public ast::Visitor<DeclareItems> {
     // codegen can read them from the symbol table.
     SmallVector<int32_t> argPhases, resultPhases;
     for (auto *arg : item.args)
-      argPhases.push_back(arg->constness);
-    resultPhases.push_back(0); // placeholder: one result at phase 0
+      argPhases.push_back(arg->phase);
+    resultPhases.push_back(item.resultPhase);
     auto *ctx = cx.module.getContext();
     auto func = hir::UnifiedFuncOp::create(
         cx.builder, item.loc, cx.builder.getStringAttr(item.name), StringAttr{},
         mlir::DenseI32ArrayAttr::get(ctx, argPhases),
-        mlir::DenseI32ArrayAttr::get(ctx, resultPhases));
+        mlir::DenseI32ArrayAttr::get(ctx, resultPhases),
+        mlir::ArrayAttr::get(ctx, {}));
     cx.funcs.insert({&item, func});
     cx.symbolTable.insert(func);
   }

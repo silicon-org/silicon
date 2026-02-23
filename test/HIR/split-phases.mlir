@@ -10,7 +10,7 @@ func.func private @dummyB()
 // CHECK-NEXT: hir.return
 
 // CHECK-NOT: hir.unified_func
-hir.unified_func @SinglePhase [] -> [] {
+hir.unified_func @SinglePhase [] -> [] attributes {argNames = []} {
   hir.unified_signature () -> ()
 } {
   func.call @dummyA() : () -> ()
@@ -31,11 +31,11 @@ hir.unified_func @SinglePhase [] -> [] {
 // CHECK-NEXT: hir.return
 
 // CHECK-NOT: hir.unified_func
-hir.unified_func @TwoUnrelatedPhases [] -> [] {
+hir.unified_func @TwoUnrelatedPhases [] -> [] attributes {argNames = []} {
   hir.unified_signature () -> ()
 } {
   func.call @dummyB() : () -> ()
-  hir.expr attributes {const = 1} {
+  hir.expr attributes {const = -1} {
     func.call @dummyA() : () -> ()
     hir.yield
   }
@@ -58,11 +58,11 @@ hir.unified_func @TwoUnrelatedPhases [] -> [] {
 // CHECK-NEXT: hir.return
 
 // CHECK-NOT: hir.unified_func
-hir.unified_func @ValueUseAcrossPhases [] -> [] {
+hir.unified_func @ValueUseAcrossPhases [] -> [] attributes {argNames = []} {
   hir.unified_signature () -> ()
 } {
   %0 = hir.constant_int 42
-  %1 = hir.expr : !hir.any attributes {const = 1} {
+  %1 = hir.expr : !hir.any attributes {const = -1} {
     %3 = hir.constant_int 1337
     hir.yield %3 : !hir.any
   }
@@ -84,13 +84,12 @@ hir.unified_func @ValueUseAcrossPhases [] -> [] {
 // CHECK-NEXT: hir.return [[R]]
 
 // CHECK-NOT: hir.unified_func
-hir.unified_func @ConstArg [1, 0] -> [0] {
+hir.unified_func @ConstArg [-1, 0] -> [0] attributes {argNames = ["a", "b"]} {
+^bb0(%a: !hir.any, %b: !hir.any):
   %0 = hir.int_type
-  %1 = hir.unified_arg "a", %0
+  %1 = hir.int_type
   %2 = hir.int_type
-  %3 = hir.unified_arg "b", %2
-  %4 = hir.int_type
-  hir.unified_signature (%1, %3) -> (%4)
+  hir.unified_signature (%0, %1) -> (%2)
 } {
 ^bb0(%a: !hir.any, %b: !hir.any):
   %0 = hir.binary %a, %b

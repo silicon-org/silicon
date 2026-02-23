@@ -57,15 +57,16 @@ void PhaseAnalysis::analyze() {
   LLVM_DEBUG(llvm::dbgs() << "Analyzing phases in " << funcOp.getSymNameAttr()
                           << "\n");
 
-  // Determine which body block arguments are const based on the argPhases
-  // attribute on the unified function op.
+  // Determine which body block arguments have a non-zero (shifted) phase based
+  // on the argPhases attribute. Negative phases are const (earlier), positive
+  // phases are dyn (later).
   auto bodyArgs = funcOp.getBody().getArguments();
   for (auto [idx, phase] : llvm::enumerate(funcOp.getArgPhases())) {
-    int16_t constness = static_cast<int16_t>(phase);
-    if (constness > 0) {
-      argPhases[bodyArgs[idx]] = constness;
-      LLVM_DEBUG(llvm::dbgs() << "- Arg " << idx << " has constness "
-                               << constness << "\n");
+    int16_t argPhase = static_cast<int16_t>(phase);
+    if (argPhase < 0) {
+      argPhases[bodyArgs[idx]] = argPhase;
+      LLVM_DEBUG(llvm::dbgs() << "- Arg " << idx << " has phase "
+                               << argPhase << "\n");
     }
   }
 
@@ -127,9 +128,9 @@ void PhaseAnalysis::drainWorklist() {
       phase += constAttr.getInt();
     }
 
-    // If this op has no side-effects, shift its phase to accommodate all users.
-    if ((isa<ExprOp>(item.op) && !constAttr) ||
-        mlir::isMemoryEffectFree(item.op))
+    // If this op has no side-effects (and is not an ExprOp with an explicit
+    // phase attribute), shift its phase to accommodate all users.
+    if (!constAttr && (isa<ExprOp>(item.op) || mlir::isMemoryEffectFree(item.op)))
       for (auto *user : item.op->getUsers())
         phase = std::max(phase, opPhases.at(user));
 
@@ -164,55 +165,62 @@ struct PhaseSplitter {
 void PhaseSplitter::run() {
   LLVM_DEBUG(llvm::dbgs() << "Splitting " << funcOp.getSymNameAttr() << "\n");
 
-  // Determine the maximum phase number, considering both operation phases and
-  // argument constness levels.
-  int16_t maxPhase = 0;
-  for (auto &[op, phase] : analysis.opPhases)
-    if (maxPhase < phase)
-      maxPhase = phase;
-  for (auto &[value, phase] : analysis.argPhases)
-    if (maxPhase < phase)
-      maxPhase = phase;
-  LLVM_DEBUG(llvm::dbgs() << "- Phases range [0, " << maxPhase << "]\n");
+  // Determine the phase range, considering both operation phases and argument
+  // phases. Negative phases are const (run earlier), positive are dyn (later).
+  int16_t minPhase = 0, maxPhase = 0;
+  for (auto &[op, phase] : analysis.opPhases) {
+    minPhase = std::min(minPhase, phase);
+    maxPhase = std::max(maxPhase, phase);
+  }
+  for (auto &[value, phase] : analysis.argPhases) {
+    minPhase = std::min(minPhase, phase);
+    maxPhase = std::max(maxPhase, phase);
+  }
+  LLVM_DEBUG(llvm::dbgs() << "- Phases range [" << minPhase << ", "
+                           << maxPhase << "]\n");
 
-  // Create a separate function for each phase.
+  // Create a separate function for each phase. Phases ≤ 0 are named
+  // `.constN` (N = -phase); phases > 0 are named `.dynN`. We iterate in
+  // reverse execution order so each new insertion goes before the previous,
+  // resulting in the earlier-executing (more-const) phases appearing first
+  // in the module.
   OpBuilder builder(funcOp);
   auto privateAttr = builder.getStringAttr("private");
-  SmallVector<PhaseSplit> splits;
-  for (int16_t phase = 0; phase <= maxPhase; ++phase) {
-    auto name =
-        builder.getStringAttr(funcOp.getSymName() + ".const" + Twine(phase));
+  SmallVector<PhaseSplit> splits(maxPhase - minPhase + 1);
+  for (int16_t phase = maxPhase; phase >= minPhase; --phase) {
+    auto name = phase <= 0
+        ? builder.getStringAttr(funcOp.getSymName() + ".const" + Twine(-phase))
+        : builder.getStringAttr(funcOp.getSymName() + ".dyn" + Twine(phase));
     auto phaseFuncOp =
         FuncOp::create(builder, funcOp.getLoc(), name, privateAttr);
     if (phase != 0)
       phaseFuncOp.getBody().emplaceBlock();
     symbolTable.insert(phaseFuncOp);
     builder.setInsertionPoint(phaseFuncOp);
-    auto &split = splits.emplace_back();
-    split.funcOp = phaseFuncOp;
-    split.phase = phase;
+    splits[phase - minPhase].funcOp = phaseFuncOp;
+    splits[phase - minPhase].phase = phase;
   }
 
   // Handle the return operation. Return values are added to phase 0's return
   // values. The return op itself is erased since each phase will get its own.
   auto returnOp = funcOp.getReturnOp();
   for (auto operand : returnOp.getOperands())
-    splits[0].returnValues.push_back(operand);
+    splits[0 - minPhase].returnValues.push_back(operand);
   returnOp.erase();
 
-  // Move all operations to phase 0 initially.
+  // Move all operations to phase 0 initially (using index 0 - minPhase).
   SmallVector<std::tuple<int16_t, Block::iterator, Block::iterator>> worklist;
   for (auto &block : llvm::reverse(funcOp.getBody()))
     worklist.push_back({0, block.begin(), block.end()});
 
-  splits[0].funcOp.getBody().takeBody(funcOp.getBody());
+  splits[0 - minPhase].funcOp.getBody().takeBody(funcOp.getBody());
 
-  // Move const body block arguments to their respective const-phase functions.
-  // For each const arg, we create a block arg in the const-phase function, add
+  // Move shifted-phase body block arguments to their respective phase functions.
+  // For each shifted arg, we create a block arg in that phase's function, add
   // it to that phase's return values, create a receiving block arg in phase 0,
   // and replace all uses of the original body block arg.
   {
-    auto &phase0Block = splits[0].funcOp.getBody().front();
+    auto &phase0Block = splits[0 - minPhase].funcOp.getBody().front();
 
     // Collect const args and their phases first to avoid iterator invalidation.
     SmallVector<std::pair<unsigned, int16_t>> constArgs;
@@ -229,13 +237,13 @@ void PhaseSplitter::run() {
       LLVM_DEBUG(llvm::dbgs() << "- Moving body arg " << idx << " to phase "
                                << argPhase << "\n");
 
-      // Create a block arg in the const-phase function to receive this value.
-      auto &constBlock = splits[argPhase].funcOp.getBody().front();
+      // Create a block arg in the shifted-phase function to receive this value.
+      auto &constBlock = splits[argPhase - minPhase].funcOp.getBody().front();
       auto constArg =
           constBlock.addArgument(bodyArg.getType(), bodyArg.getLoc());
 
-      // The const-phase function returns this value so it flows to phase 0.
-      splits[argPhase].returnValues.push_back(constArg);
+      // The shifted-phase function returns this value so it flows to phase 0.
+      splits[argPhase - minPhase].returnValues.push_back(constArg);
 
       // Create a new block arg in phase 0 to receive the value from the const
       // phase, and replace all uses of the old body block arg.
@@ -269,7 +277,7 @@ void PhaseSplitter::run() {
         op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
         llvm::dbgs() << "\n";
       });
-      auto &split = splits[opPhase];
+      auto &split = splits[opPhase - minPhase];
       auto *block = &split.funcOp.getBody().back();
       op->moveBefore(block, block->end());
     }
@@ -291,11 +299,13 @@ void PhaseSplitter::run() {
   }
 
   // Add return operations to all phase functions and plumb values from earlier
-  // phases to later phases.
+  // phases to later phases. We iterate in reverse execution order (most-runtime
+  // first, most-const last) so that thread-through adds values to later splits
+  // before their return ops are emitted.
   DenseMap<Value, Value> mapping;
   SmallDenseSet<Operation *, 4> closedFuncs;
-  for (int16_t phase = 0; phase <= maxPhase; ++phase) {
-    auto &split = splits[phase];
+  for (int16_t phase = maxPhase; phase >= minPhase; --phase) {
+    auto &split = splits[phase - minPhase];
     closedFuncs.insert(split.funcOp);
 
     // Add a return operation to this split.
@@ -337,9 +347,10 @@ void PhaseSplitter::run() {
             value = split.funcOp.getBody().front().addArgument(
                 operand.get().getType(), operand.get().getLoc());
 
-            // Add the value as a result to the earlier phase function.
-            assert(phase < maxPhase);
-            splits[phase + 1].returnValues.push_back(operand.get());
+            // Add the value as a result to the one-earlier phase function so
+            // it flows into the current phase as a block argument.
+            assert(phase > minPhase);
+            splits[phase - 1 - minPhase].returnValues.push_back(operand.get());
           }
         }
         operand.set(value);
@@ -383,7 +394,7 @@ static void rewriteCheckedCalls(ModuleOp moduleOp, SymbolTable &symbolTable) {
     SmallVector<Value> constTypeOfArgs, runtimeTypeOfArgs;
     for (auto [arg, type, constness] : llvm::zip(
              callOp.getArguments(), callOp.getTypeOfArgs(), constnessOfArgs)) {
-      if (constness > 0) {
+      if (constness < 0) {
         constArgs.push_back(arg);
         constTypeOfArgs.push_back(type);
       } else {

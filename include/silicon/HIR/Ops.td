@@ -74,12 +74,6 @@ def RefTypeOp : HIROp<"ref_type", [Pure]> {
   let assemblyFormat = "$innerType attr-dict";
 }
 
-def ConstTypeOp : HIROp<"const_type", [Pure]> {
-  let arguments = (ins AnyHIRType:$innerType);
-  let results = (outs AnyHIRType:$result);
-  let assemblyFormat = "$innerType attr-dict";
-}
-
 def FuncTypeOp : HIROp<"func_type", [
   AttrSizedOperandSegments,
   Pure,
@@ -220,18 +214,6 @@ def ConstCondBranchOp : HIROp<"const_cond_br", [
   }];
 }
 
-def ConstWrapOp : HIROp<"const_wrap", [Pure]> {
-  let arguments = (ins AnyHIRType:$input);
-  let results = (outs AnyHIRType:$result);
-  let assemblyFormat = "$input attr-dict";
-}
-
-def ConstUnwrapOp : HIROp<"const_unwrap", [Pure]> {
-  let arguments = (ins AnyHIRType:$input);
-  let results = (outs AnyHIRType:$result);
-  let assemblyFormat = "$input attr-dict";
-}
-
 def FuncOp : HIROp<"func", [
   IsolatedFromAbove,
   Symbol,
@@ -319,7 +301,8 @@ def UnifiedFuncOp : HIROp<"unified_func", [
     SymbolNameAttr:$sym_name,
     OptionalAttr<StrAttr>:$sym_visibility,
     DenseI32ArrayAttr:$argPhases,
-    DenseI32ArrayAttr:$resultPhases
+    DenseI32ArrayAttr:$resultPhases,
+    ArrayAttr:$argNames
   );
   let regions = (region
     MinSizedRegion<1>:$signature,
@@ -337,18 +320,6 @@ def UnifiedFuncOp : HIROp<"unified_func", [
   }];
 }
 
-def UnifiedArgOp : HIROp<"unified_arg", [
-  HasParent<"UnifiedFuncOp">,
-  Pure,
-]> {
-  let summary = "A function argument before phase splitting";
-  let arguments = (ins StrAttr:$name, AnyHIRType:$typeOperand);
-  let results = (outs AnyHIRType:$result);
-  let assemblyFormat = [{
-    $name `,` $typeOperand attr-dict
-  }];
-}
-
 def UnifiedSignatureOp : HIROp<"unified_signature", [
   AttrSizedOperandSegments,
   HasParent<"UnifiedFuncOp">,
@@ -357,11 +328,11 @@ def UnifiedSignatureOp : HIROp<"unified_signature", [
 ]> {
   let summary = "Terminator for the signature region of a unified function";
   let arguments = (ins
-    Variadic<AnyHIRType>:$argValues,
+    Variadic<AnyHIRType>:$typeOfArgs,
     Variadic<AnyHIRType>:$typeOfResults
   );
   let assemblyFormat = [{
-    ` ` `(` $argValues `)` `->` `(` $typeOfResults `)` attr-dict
+    ` ` `(` $typeOfArgs `)` `->` `(` $typeOfResults `)` attr-dict
   }];
 }
 

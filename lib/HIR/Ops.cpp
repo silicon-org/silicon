@@ -112,12 +112,18 @@ LogicalResult UnifiedFuncOp::verify() {
   if (!sigOp)
     return success();
 
-  auto numArgs = sigOp.getArgValues().size();
+  auto numArgs = sigOp.getTypeOfArgs().size();
   auto numResults = sigOp.getTypeOfResults().size();
 
   if (getArgPhases().size() != numArgs)
     return emitOpError() << "argPhases has " << getArgPhases().size()
                          << " entries but function has " << numArgs
+                         << " arguments";
+
+  if (getSignature().front().getNumArguments() != numArgs)
+    return emitOpError() << "signature region has "
+                         << getSignature().front().getNumArguments()
+                         << " block arguments but function has " << numArgs
                          << " arguments";
 
   if (getResultPhases().size() != numResults)
@@ -173,10 +179,10 @@ UnifiedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 
   auto sigOp = func.getSignatureOp();
 
-  if (getArguments().size() != sigOp.getArgValues().size())
+  if (getArguments().size() != sigOp.getTypeOfArgs().size())
     return emitOpError() << "has " << getArguments().size()
                          << " arguments, but " << callee << " expects "
-                         << sigOp.getArgValues().size();
+                         << sigOp.getTypeOfArgs().size();
 
   if (getResults().size() != sigOp.getTypeOfResults().size())
     return emitOpError() << "has " << getResults().size() << " results, but "

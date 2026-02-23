@@ -168,6 +168,11 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
 
     // Replace function arguments in the signature with the concrete values
     // provided by the call, and insert type unification as necessary.
+    //
+    // The cloned signature region has block arguments (one per function arg)
+    // that stand in for the argument values in dependent-type expressions. We
+    // replace those block arguments with the actual call arguments before
+    // unifying the declared argument types with the call argument types.
     OpBuilder builder(callOp);
     auto terminatorOp =
         cast<UnifiedSignatureOp>(signature.back().getTerminator());
@@ -177,27 +182,30 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
     argTypes.reserve(callOp.getArguments().size());
     constnessOfArgs.reserve(callOp.getArguments().size());
     constnessOfResults.reserve(callOp.getResults().size());
-    // Phases come from the call op's argPhases, which mirror the callee's.
+
+    // Replace the signature's block arguments with the actual call arguments.
+    auto &sigBlock = signature.front();
+    for (auto [blockArg, callArg] :
+         llvm::zip(sigBlock.getArguments(), callOp.getArguments()))
+      blockArg.replaceAllUsesWith(callArg);
+    sigBlock.eraseArguments(0, sigBlock.getNumArguments());
+
+    // Unify the declared argument types with the call argument types.
     auto argPhasesFromCall = callOp.getArgPhases();
     unsigned argIdx = 0;
-    for (auto [fnArg, callArg] :
-         llvm::zip(terminatorOp.getArgValues(), callOp.getArguments())) {
-      auto fnArgOp = cast<UnifiedArgOp>(fnArg.getDefiningOp());
-      builder.setInsertionPoint(fnArgOp);
+    for (auto [argType, callArg] :
+         llvm::zip(terminatorOp.getTypeOfArgs(), callOp.getArguments())) {
+      builder.setInsertionPoint(terminatorOp);
       auto callArgType = TypeOfOp::create(builder, callArg.getLoc(), callArg);
-      auto unifiedType = UnifyOp::create(builder, callOp.getLoc(),
-                                         fnArgOp.getTypeOperand(), callArgType);
+      auto unifiedType =
+          UnifyOp::create(builder, callOp.getLoc(), argType, callArgType);
       argTypes.push_back(unifiedType);
       constnessOfArgs.push_back(argPhasesFromCall[argIdx++]);
-      fnArgOp.replaceAllUsesWith(callArg);
-      fnArgOp.erase();
     }
 
-    // Results can only be at constness 0 for now. We may want to allow results
-    // to be returned from the function at different phases of the execution in
-    // the future.
-    for (auto _ : terminatorOp.getTypeOfResults())
-      constnessOfResults.push_back(0);
+    // Results carry phase annotations from the callee's resultPhases.
+    for (auto phase : callOp.getResultPhases())
+      constnessOfResults.push_back(phase);
 
     // Replace the call op with a variant that encodes the exact argument and
     // result types.

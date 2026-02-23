@@ -101,9 +101,16 @@ ast::FnItem *Parser::parseFnItem(Token kw) {
   if (!require(TokenKind::RParen))
     return {};
 
-  // Parse the optional function return type.
+  // Parse the optional function return type with optional phase modifiers.
+  // Each `const` shifts the result one phase earlier (−1); `dyn` one later.
   ast::Type *returnType = {};
+  int resultPhase = 0;
   if (consumeIf(TokenKind::Arrow)) {
+    while (true) {
+      if (consumeIf(TokenKind::Kw_const)) { --resultPhase; continue; }
+      if (consumeIf(TokenKind::Kw_dyn))   { ++resultPhase; continue; }
+      break;
+    }
     returnType = parseType();
     if (!returnType)
       return {};
@@ -118,14 +125,19 @@ ast::FnItem *Parser::parseFnItem(Token kw) {
                                   name.spelling,
                                   ast.array(args),
                                   returnType,
+                                  resultPhase,
                                   body});
 }
 
 ast::FnArg *Parser::parseFnArg() {
-  // Parse an optional `const` modifier on the argument.
-  unsigned constness = 0;
-  while (consumeIf(TokenKind::Kw_const))
-    ++constness;
+  // Parse optional `const`/`dyn` phase modifiers. Each `const` shifts the
+  // argument one phase earlier (−1), each `dyn` one phase later (+1).
+  int phase = 0;
+  while (true) {
+    if (consumeIf(TokenKind::Kw_const)) { --phase; continue; }
+    if (consumeIf(TokenKind::Kw_dyn))   { ++phase; continue; }
+    break;
+  }
 
   // Parse the argument name.
   auto name = require(TokenKind::Ident, "argument name");
@@ -139,7 +151,7 @@ ast::FnArg *Parser::parseFnArg() {
   if (!type)
     return {};
 
-  return ast.create<ast::FnArg>({loc(name), name.spelling, type, constness});
+  return ast.create<ast::FnArg>({loc(name), name.spelling, type, phase});
 }
 
 //===----------------------------------------------------------------------===//

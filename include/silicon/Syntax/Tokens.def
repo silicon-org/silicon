@@ -74,6 +74,7 @@ TOK_SYMBOL1(Mod, "%")
 
 // Keywords (alphabetical)
 TOK_KEYWORD(const)
+TOK_KEYWORD(dyn)
 TOK_KEYWORD(else)
 TOK_KEYWORD(fn)
 TOK_KEYWORD(for)
