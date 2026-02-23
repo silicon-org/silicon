@@ -10,12 +10,12 @@
 #include "silicon/Conversion/Passes.h"
 #include "silicon/HIR/Passes.h"
 #include "silicon/RegisterAll.h"
-#include "silicon/Transforms/Passes.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Syntax/AST.h"
 #include "silicon/Syntax/Lexer.h"
 #include "silicon/Syntax/Names.h"
 #include "silicon/Syntax/Parser.h"
+#include "silicon/Transforms/Passes.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
@@ -105,7 +105,8 @@ static void populatePasses(PassManager &pm) {
   pm.addNestedPass<hir::FuncOp>(createHIRToMIRPass());
   addCleanup(pm);
 
-  // Execute the const phase to produce concrete constants.
+  // Execute the const phase to produce concrete constants. This also chains
+  // multi-phase callers by threading return values into the next phase.
   pm.addPass(createInterpretPass());
   addCleanup(pm);
 

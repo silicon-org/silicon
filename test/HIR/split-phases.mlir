@@ -126,13 +126,19 @@ hir.unified_func @ThreePhase [-2, -1, 0] -> [0] attributes {argNames = ["a", "b"
 }
 
 //===----------------------------------------------------------------------===//
-// Three-phase call rewriting: a unified_call to a 3-phase function gets
-// rewritten into 3 chained hir.call ops. The phase -2 and -1 arguments are
-// constants (available at any phase), and the phase 0 argument is a func arg.
+// Three-phase call rewriting: a unified_call to a 3-phase function causes the
+// caller to be split into matching phases. Each split function hosts a single
+// per-phase call to the corresponding callee split function.
+
+// CHECK-LABEL: hir.func private @ThreePhaseCaller.const2
+// CHECK: hir.call @ThreePhase.const2(
+// CHECK: hir.return
+
+// CHECK-LABEL: hir.func private @ThreePhaseCaller.const1
+// CHECK: hir.call @ThreePhase.const1(
+// CHECK: hir.return
 
 // CHECK-LABEL: hir.func private @ThreePhaseCaller.const0
-// CHECK: hir.call @ThreePhase.const2(
-// CHECK: hir.call @ThreePhase.const1(
 // CHECK: hir.call @ThreePhase.const0(
 // CHECK: hir.return
 

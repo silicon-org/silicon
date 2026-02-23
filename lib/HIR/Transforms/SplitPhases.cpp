@@ -166,6 +166,21 @@ void PhaseSplitter::run() {
     minPhase = std::min(minPhase, phase);
     maxPhase = std::max(maxPhase, phase);
   }
+
+  // Extend the phase range based on UnifiedCallOps in the body. The call's
+  // arg/result phases are absolute in the caller's frame, so the caller needs
+  // split functions covering those phases.
+  funcOp.getBody().walk([&](UnifiedCallOp callOp) {
+    for (auto p : callOp.getArgPhases()) {
+      minPhase = std::min(minPhase, static_cast<int16_t>(p));
+      maxPhase = std::max(maxPhase, static_cast<int16_t>(p));
+    }
+    for (auto p : callOp.getResultPhases()) {
+      minPhase = std::min(minPhase, static_cast<int16_t>(p));
+      maxPhase = std::max(maxPhase, static_cast<int16_t>(p));
+    }
+  });
+
   LLVM_DEBUG(llvm::dbgs() << "- Phases range [" << minPhase << ", " << maxPhase
                           << "]\n");
 
@@ -199,11 +214,7 @@ void PhaseSplitter::run() {
     splits[0 - minPhase].returnValues.push_back(operand);
   returnOp.erase();
 
-  // Move all operations to phase 0 initially (using index 0 - minPhase).
-  SmallVector<std::tuple<int16_t, Block::iterator, Block::iterator>> worklist;
-  for (auto &block : llvm::reverse(funcOp.getBody()))
-    worklist.push_back({0, block.begin(), block.end()});
-
+  // Move all operations to phase 0 initially.
   splits[0 - minPhase].funcOp.getBody().takeBody(funcOp.getBody());
 
   // Move shifted-phase body block arguments to their respective phase
@@ -247,6 +258,153 @@ void PhaseSplitter::run() {
     for (auto idx : llvm::reverse(argsToErase))
       phase0Block.eraseArgument(idx);
   }
+
+  // Decompose UnifiedCallOps into per-phase CallOps. Each per-phase call is
+  // registered in the analysis at the appropriate phase, so the distribution
+  // worklist moves it to the correct split function.
+  {
+    auto &phase0Body = splits[0 - minPhase].funcOp.getBody();
+    SmallVector<UnifiedCallOp> unifiedCalls;
+    phase0Body.walk([&](UnifiedCallOp op) { unifiedCalls.push_back(op); });
+
+    for (auto callOp : unifiedCalls) {
+      auto calleeName = callOp.getCallee();
+      auto argPhases = callOp.getArgPhases();
+      auto resultPhases = callOp.getResultPhases();
+
+      // Compute the callee's phase range.
+      int16_t calleeMinPhase = 0, calleeMaxPhase = 0;
+      for (auto p : argPhases) {
+        calleeMinPhase = std::min(calleeMinPhase, static_cast<int16_t>(p));
+        calleeMaxPhase = std::max(calleeMaxPhase, static_cast<int16_t>(p));
+      }
+      for (auto p : resultPhases) {
+        calleeMinPhase = std::min(calleeMinPhase, static_cast<int16_t>(p));
+        calleeMaxPhase = std::max(calleeMaxPhase, static_cast<int16_t>(p));
+      }
+
+      // Discover all split functions by name. If any are missing, the callee
+      // wasn't split; skip this call.
+      SmallVector<std::pair<int16_t, FuncOp>> splitFuncs;
+      for (int16_t phase = calleeMinPhase; phase <= calleeMaxPhase; ++phase) {
+        auto name = phase <= 0 ? (calleeName + ".const" + Twine(-phase)).str()
+                               : (calleeName + ".dyn" + Twine(phase)).str();
+        auto func = symbolTable.lookup<FuncOp>(name);
+        if (!func) {
+          splitFuncs.clear();
+          break;
+        }
+        splitFuncs.push_back({phase, func});
+      }
+      if (splitFuncs.empty())
+        continue;
+
+      OpBuilder callBuilder(callOp);
+      auto loc = callOp.getLoc();
+
+      // Update phases of existing type operands so they land in the correct
+      // split function during distribution. Use std::min since a single value
+      // may be shared across multiple phases (e.g., the same int_type used for
+      // both a const and a runtime argument); the earliest phase ensures the
+      // value is available everywhere it's needed, with value threading
+      // handling forwarding to later phases.
+      for (auto [type, phase] : llvm::zip(callOp.getTypeOfArgs(), argPhases)) {
+        int16_t p = static_cast<int16_t>(phase);
+        if (auto *defOp = type.getDefiningOp()) {
+          auto &opPhase = analysis.opPhases[defOp];
+          opPhase = std::min(opPhase, p);
+          auto &valPhase = analysis.valuePhases[type];
+          valPhase = std::min(valPhase, p);
+        }
+      }
+      for (auto [type, phase] :
+           llvm::zip(callOp.getTypeOfResults(), resultPhases)) {
+        int16_t p = static_cast<int16_t>(phase);
+        if (auto *defOp = type.getDefiningOp()) {
+          auto &opPhase = analysis.opPhases[defOp];
+          opPhase = std::min(opPhase, p);
+          auto &valPhase = analysis.valuePhases[type];
+          valPhase = std::min(valPhase, p);
+        }
+      }
+
+      // Partition arguments and their type operands by phase.
+      DenseMap<int16_t, SmallVector<Value>> phaseArgs, phaseTypeOfArgs;
+      for (auto [arg, type, phase] : llvm::zip(
+               callOp.getArguments(), callOp.getTypeOfArgs(), argPhases)) {
+        phaseArgs[static_cast<int16_t>(phase)].push_back(arg);
+        phaseTypeOfArgs[static_cast<int16_t>(phase)].push_back(type);
+      }
+
+      // Chain calls from earliest phase to latest. Each call gets its own
+      // phase's arguments plus all results from the previous phase's call.
+      SmallVector<Value> prevResults;
+      for (auto &[phase, splitFunc] : splitFuncs) {
+        SmallVector<Value> callArgs(phaseArgs[phase]);
+        SmallVector<Value> callTypeOfArgs(phaseTypeOfArgs[phase]);
+
+        // Thread results from the previous phase.
+        for (auto result : prevResults) {
+          callArgs.push_back(result);
+          auto inferrable = InferrableOp::create(callBuilder, loc);
+          analysis.opPhases[inferrable] = phase;
+          analysis.valuePhases[inferrable.getResult()] = phase;
+          callTypeOfArgs.push_back(inferrable.getResult());
+        }
+
+        // The final phase uses the original unified_call's result types.
+        // Intermediate phases determine their result count from the split
+        // function's return op.
+        bool isFinal = (phase == calleeMaxPhase);
+        SmallVector<Value> callTypeOfResults;
+        SmallVector<Type> resultTypes;
+        if (isFinal) {
+          callTypeOfResults.append(callOp.getTypeOfResults().begin(),
+                                   callOp.getTypeOfResults().end());
+          resultTypes.append(callOp.getResultTypes().begin(),
+                             callOp.getResultTypes().end());
+        } else {
+          auto retOp =
+              cast<ReturnOp>(splitFunc.getBody().front().getTerminator());
+          for (unsigned i = 0; i < retOp.getNumOperands(); ++i) {
+            auto inferrable = InferrableOp::create(callBuilder, loc);
+            analysis.opPhases[inferrable] = phase;
+            analysis.valuePhases[inferrable.getResult()] = phase;
+            callTypeOfResults.push_back(inferrable.getResult());
+            resultTypes.push_back(retOp.getOperand(i).getType());
+          }
+        }
+
+        auto call =
+            CallOp::create(callBuilder, loc, resultTypes,
+                           callBuilder.getStringAttr(splitFunc.getSymName()),
+                           callArgs, callTypeOfArgs, callTypeOfResults);
+        analysis.opPhases[call] = phase;
+        for (auto result : call.getResults())
+          analysis.valuePhases[result] = phase;
+        prevResults.assign(call.getResults().begin(), call.getResults().end());
+      }
+
+      // Update any return values that reference the old unified call's results.
+      // These are not IR uses (the unified_return was already erased), so
+      // replaceAllUsesWith won't touch them.
+      for (auto &rv : splits[0 - minPhase].returnValues)
+        for (auto [oldResult, newResult] :
+             llvm::zip(callOp.getResults(), prevResults))
+          if (rv == oldResult)
+            rv = newResult;
+
+      callOp.replaceAllUsesWith(prevResults);
+      callOp.erase();
+    }
+  }
+
+  // Set up worklist to move operations into their respective phase functions.
+  // This is done after unified call decomposition so the worklist sees the new
+  // per-phase call ops.
+  SmallVector<std::tuple<int16_t, Block::iterator, Block::iterator>> worklist;
+  for (auto &block : llvm::reverse(splits[0 - minPhase].funcOp.getBody()))
+    worklist.push_back({0, block.begin(), block.end()});
 
   // Move operations into their respective phase functions.
   while (!worklist.empty()) {
@@ -329,20 +487,40 @@ void PhaseSplitter::run() {
               return;
             }
 
-            // Add an argument to the current split function.
-            LLVM_DEBUG({
-              llvm::dbgs() << "- Creating arg in phase " << phase << " for ";
-              operand.get().print(llvm::dbgs(),
-                                  OpPrintingFlags().skipRegions());
-              llvm::dbgs() << "\n";
-            });
-            value = split.funcOp.getBody().front().addArgument(
-                operand.get().getType(), operand.get().getLoc());
+            // Pure ops with no operands (constants, type constructors) can be
+            // cloned into the current split instead of threading through block
+            // args. This keeps type constants like `hir.int_type` local to
+            // each phase, which is needed by the HIR-to-MIR lowering.
+            auto *defOp = operand.get().getDefiningOp();
+            if (defOp && mlir::isMemoryEffectFree(defOp) &&
+                defOp->getNumOperands() == 0) {
+              LLVM_DEBUG({
+                llvm::dbgs() << "- Cloning into phase " << phase << ": ";
+                defOp->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
+                llvm::dbgs() << "\n";
+              });
+              auto &block = split.funcOp.getBody().front();
+              OpBuilder cloneBuilder(&block, block.begin());
+              auto *cloned = cloneBuilder.clone(*defOp);
+              value = cloned->getResult(
+                  cast<OpResult>(operand.get()).getResultNumber());
+            } else {
+              // Add an argument to the current split function.
+              LLVM_DEBUG({
+                llvm::dbgs() << "- Creating arg in phase " << phase << " for ";
+                operand.get().print(llvm::dbgs(),
+                                    OpPrintingFlags().skipRegions());
+                llvm::dbgs() << "\n";
+              });
+              value = split.funcOp.getBody().front().addArgument(
+                  operand.get().getType(), operand.get().getLoc());
 
-            // Add the value as a result to the one-earlier phase function so
-            // it flows into the current phase as a block argument.
-            assert(phase > minPhase);
-            splits[phase - 1 - minPhase].returnValues.push_back(operand.get());
+              // Add the value as a result to the one-earlier phase function so
+              // it flows into the current phase as a block argument.
+              assert(phase > minPhase);
+              splits[phase - 1 - minPhase].returnValues.push_back(
+                  operand.get());
+            }
           }
         }
         operand.set(value);
@@ -359,97 +537,13 @@ struct SplitPhasesPass
 };
 } // namespace
 
-/// Rewrite UnifiedCallOps to call the split phase functions directly.
-///
-/// For each unified call, we discover the split functions for the callee,
-/// partition arguments by phase, and emit a chain of calls from the earliest
-/// phase to the latest. Each call receives its own phase's arguments plus all
-/// results from the previous phase's call.
-static void rewriteUnifiedCalls(ModuleOp moduleOp, SymbolTable &symbolTable) {
-  moduleOp.walk([&](UnifiedCallOp callOp) {
-    auto calleeName = callOp.getCallee();
-    auto argPhases = callOp.getArgPhases();
-    auto resultPhases = callOp.getResultPhases();
-
-    // Compute the phase range from argument and result phases.
-    int16_t minPhase = 0, maxPhase = 0;
-    for (auto p : argPhases) {
-      minPhase = std::min(minPhase, static_cast<int16_t>(p));
-      maxPhase = std::max(maxPhase, static_cast<int16_t>(p));
-    }
-    for (auto p : resultPhases) {
-      minPhase = std::min(minPhase, static_cast<int16_t>(p));
-      maxPhase = std::max(maxPhase, static_cast<int16_t>(p));
-    }
-
-    // Discover all split functions by name. If any are missing, this callee
-    // wasn't split.
-    SmallVector<std::pair<int16_t, FuncOp>> splitFuncs;
-    for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
-      auto name = phase <= 0 ? (calleeName + ".const" + Twine(-phase)).str()
-                             : (calleeName + ".dyn" + Twine(phase)).str();
-      auto func = symbolTable.lookup<FuncOp>(name);
-      if (!func)
-        return;
-      splitFuncs.push_back({phase, func});
-    }
-
-    OpBuilder builder(callOp);
-    auto loc = callOp.getLoc();
-
-    // Partition arguments and their type operands by phase.
-    DenseMap<int16_t, SmallVector<Value>> phaseArgs, phaseTypeOfArgs;
-    for (auto [arg, type, phase] :
-         llvm::zip(callOp.getArguments(), callOp.getTypeOfArgs(), argPhases)) {
-      phaseArgs[static_cast<int16_t>(phase)].push_back(arg);
-      phaseTypeOfArgs[static_cast<int16_t>(phase)].push_back(type);
-    }
-
-    // Chain calls from earliest phase to latest. Each call gets its own
-    // phase's arguments plus all results from the previous phase's call.
-    SmallVector<Value> prevResults;
-    for (auto &[phase, splitFunc] : splitFuncs) {
-      SmallVector<Value> callArgs(phaseArgs[phase]);
-      SmallVector<Value> callTypeOfArgs(phaseTypeOfArgs[phase]);
-
-      // Thread results from the previous phase.
-      for (auto result : prevResults) {
-        callArgs.push_back(result);
-        callTypeOfArgs.push_back(
-            InferrableOp::create(builder, loc).getResult());
-      }
-
-      // The final phase uses the original unified_call's result types.
-      // Intermediate phases determine their result count from the split
-      // function's return op.
-      bool isFinal = (phase == maxPhase);
-      SmallVector<Value> callTypeOfResults;
-      SmallVector<Type> resultTypes;
-      if (isFinal) {
-        callTypeOfResults.append(callOp.getTypeOfResults().begin(),
-                                 callOp.getTypeOfResults().end());
-        resultTypes.append(callOp.getResultTypes().begin(),
-                           callOp.getResultTypes().end());
-      } else {
-        auto returnOp =
-            cast<ReturnOp>(splitFunc.getBody().front().getTerminator());
-        for (unsigned i = 0; i < returnOp.getNumOperands(); ++i) {
-          callTypeOfResults.push_back(
-              InferrableOp::create(builder, loc).getResult());
-          resultTypes.push_back(returnOp.getOperand(i).getType());
-        }
-      }
-
-      auto call = CallOp::create(builder, loc, resultTypes,
-                                 builder.getStringAttr(splitFunc.getSymName()),
-                                 callArgs, callTypeOfArgs, callTypeOfResults);
-      prevResults.assign(call.getResults().begin(), call.getResults().end());
-    }
-
-    callOp.replaceAllUsesWith(prevResults);
-    callOp.erase();
-  });
-}
+//===----------------------------------------------------------------------===//
+// Topological Sort and Pass Entry Point
+//
+// Process unified functions in dependency order (callees before callers). This
+// ensures callee split functions exist when we decompose a caller's
+// unified_call during splitting.
+//===----------------------------------------------------------------------===//
 
 void SplitPhasesPass::runOnOperation() {
   auto &symbolTable = getAnalysis<SymbolTable>();
@@ -466,13 +560,50 @@ void SplitPhasesPass::runOnOperation() {
   if (anyErrors)
     return signalPassFailure();
 
-  // Split each function using its pre-computed analysis.
-  for (auto &[funcOp, analysis] : analyses) {
+  // Build a call graph to topologically sort functions. For each function,
+  // record which other unified functions it calls.
+  DenseMap<StringRef, unsigned> nameToIndex;
+  for (auto [idx, entry] : llvm::enumerate(analyses))
+    nameToIndex[entry.first.getSymName()] = idx;
+
+  SmallVector<SmallVector<unsigned>> deps(analyses.size());
+  for (unsigned i = 0; i < analyses.size(); ++i) {
+    analyses[i].first.getBody().walk([&](UnifiedCallOp callOp) {
+      auto it = nameToIndex.find(callOp.getCallee());
+      if (it != nameToIndex.end())
+        deps[i].push_back(it->second);
+    });
+  }
+
+  // Post-order DFS for topological sort. Callees appear before callers.
+  SmallVector<unsigned> topoOrder;
+  SmallVector<uint8_t> visited(analyses.size(), 0);
+  bool hasCycle = false;
+  std::function<void(unsigned)> visit = [&](unsigned idx) {
+    if (visited[idx] == 2)
+      return;
+    if (visited[idx] == 1) {
+      emitError(analyses[idx].first.getLoc())
+          << "recursive call cycle detected";
+      hasCycle = true;
+      return;
+    }
+    visited[idx] = 1;
+    for (unsigned dep : deps[idx])
+      visit(dep);
+    visited[idx] = 2;
+    topoOrder.push_back(idx);
+  };
+  for (unsigned i = 0; i < analyses.size(); ++i)
+    visit(i);
+  if (hasCycle)
+    return signalPassFailure();
+
+  // Split each function in topological order (callees first).
+  for (unsigned idx : topoOrder) {
+    auto &[funcOp, analysis] = analyses[idx];
     PhaseSplitter splitter(analysis, symbolTable);
     splitter.run();
     funcOp.erase();
   }
-
-  // Rewrite unified calls to use the split phase functions.
-  rewriteUnifiedCalls(getOperation(), symbolTable);
 }
