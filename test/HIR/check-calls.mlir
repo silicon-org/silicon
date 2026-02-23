@@ -19,8 +19,8 @@ hir.unified_func @SimpleFoo [] -> [] attributes {argNames = []} {
   // CHECK: [[TMP_TY:%.+]] = hir.type_of [[TMP]]
   // CHECK: [[UNI_TY:%.+]] = hir.unify [[ARG_TY]], [[TMP_TY]]
   %0 = builtin.unrealized_conversion_cast to !hir.any
-  // CHECK: hir.checked_call @SimpleBar([[TMP]]) : ([[UNI_TY]]) -> ([[RET_TY]]) -> (!hir.any) [0] [0]
-  %1 = hir.unified_call @SimpleBar(%0) : (!hir.any) -> (!hir.any) [0] -> [0]
+  // CHECK: hir.unified_call @SimpleBar([[TMP]]) : ([[UNI_TY]]) -> ([[RET_TY]]) (!hir.any) -> !hir.any [0] -> [0]
+  %1 = hir.unified_call @SimpleBar(%0) : () -> () (!hir.any) -> !hir.any [0] -> [0]
   hir.unified_return
 }
 
@@ -43,8 +43,8 @@ hir.unified_func @NestedFoo [] -> [] attributes {argNames = []} {
   // CHECK: [[TMP_TY:%.+]] = hir.type_of [[TMP]]
   // CHECK: [[UNI_TY:%.+]] = hir.unify [[ARG_TY]], [[TMP_TY]]
   %0 = builtin.unrealized_conversion_cast to !hir.any
-  // CHECK: hir.checked_call @NestedBar([[TMP]]) : ([[UNI_TY]]) -> ([[RET_TY]]) -> (!hir.any) [0] [0]
-  %1 = hir.unified_call @NestedBar(%0) : (!hir.any) -> (!hir.any) [0] -> [0]
+  // CHECK: hir.unified_call @NestedBar([[TMP]]) : ([[UNI_TY]]) -> ([[RET_TY]]) (!hir.any) -> !hir.any [0] -> [0]
+  %1 = hir.unified_call @NestedBar(%0) : () -> () (!hir.any) -> !hir.any [0] -> [0]
   hir.unified_signature () -> ()
 } {
   hir.unified_return

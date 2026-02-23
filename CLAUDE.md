@@ -59,6 +59,7 @@ tools/             command line utilities
 - Code lives in the `silicon` C++ namespace
 - One sentence per line in Markdown files; don't break long lines
 - When you add new IR ops, add parsing tests to the corresponding basic.mlir file, and check that the verifier catches errors by adding to the corresponding errors.mlir.
+- Run clang format on changed files before git add and git commit
 
 ## Compilation Flow
 

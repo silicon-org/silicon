@@ -1,7 +1,7 @@
 // RUN: silicon-opt --split-input-file --verify-diagnostics %s
 
 // expected-error @below {{does not reference a valid `hir.unified_func`}}
-hir.unified_call @foo() : () -> () [] -> []
+hir.unified_call @foo() : () -> () () -> () [] -> []
 
 // -----
 
@@ -13,7 +13,7 @@ hir.unified_func @foo [0] -> [] attributes {argNames = ["a"]} {
   hir.unified_return
 }
 // expected-error @below {{has 0 arguments, but @foo expects 1}}
-hir.unified_call @foo() : () -> () [] -> []
+hir.unified_call @foo() : () -> () () -> () [] -> []
 
 // -----
 
@@ -24,7 +24,7 @@ hir.unified_func @foo [] -> [0] attributes {argNames = []} {
   hir.unified_return
 }
 // expected-error @below {{has 0 results, but @foo expects 1}}
-hir.unified_call @foo() : () -> () [] -> []
+hir.unified_call @foo() : () -> () () -> () [] -> []
 
 // -----
 
@@ -102,7 +102,7 @@ hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
 }
 %arg = hir.constant_int 42
 // expected-error @below {{argPhases has 0 entries but call has 1 arguments}}
-hir.unified_call @foo(%arg) : (!hir.any) -> (!hir.any) [] -> [0]
+hir.unified_call @foo(%arg) : () -> () (!hir.any) -> !hir.any [] -> [0]
 
 // -----
 
@@ -116,7 +116,7 @@ hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
 }
 %arg = hir.constant_int 42
 // expected-error @below {{resultPhases has 0 entries but call has 1 results}}
-hir.unified_call @foo(%arg) : (!hir.any) -> (!hir.any) [0] -> []
+hir.unified_call @foo(%arg) : () -> () (!hir.any) -> !hir.any [0] -> []
 
 // -----
 
@@ -130,7 +130,7 @@ hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
 }
 %arg = hir.constant_int 42
 // expected-error @below {{argPhases do not match callee @foo}}
-hir.unified_call @foo(%arg) : (!hir.any) -> (!hir.any) [-1] -> [0]
+hir.unified_call @foo(%arg) : () -> () (!hir.any) -> !hir.any [-1] -> [0]
 
 // -----
 
@@ -144,4 +144,4 @@ hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
 }
 %arg = hir.constant_int 42
 // expected-error @below {{resultPhases do not match callee @foo}}
-hir.unified_call @foo(%arg) : (!hir.any) -> (!hir.any) [0] -> [-1]
+hir.unified_call @foo(%arg) : () -> () (!hir.any) -> !hir.any [0] -> [-1]

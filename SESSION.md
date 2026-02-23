@@ -1,1 +1,3 @@
 - MLIR format caveat: `$variadic` in a custom assembly format fails for empty lists if the variadic is not surrounded by a delimiter like `(...)`, because the internal `parseCommaSeparatedList` with `Delimiter::None` tries to parse at least one element. The fix is to put the variadic inside a delimiter, like `` `(` $variadic `)` ``.
+- MLIR `functional-type($args, $results)` prints single results without parentheses (e.g., `(!hir.any) -> !hir.any` not `(!hir.any) -> (!hir.any)`).
+- When CheckCalls inlines signature ops before a call, the inlined ops appear after any inferrable placeholders created by codegen. This causes InferTypes to fail dominance checks. The fix is to have CheckCalls replace inferrables directly rather than creating a unify with them.

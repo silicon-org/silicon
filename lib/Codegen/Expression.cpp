@@ -68,13 +68,22 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
     argValues.push_back(argValue);
   }
 
-  // Create the call op, threading through the phase arrays from the callee.
-  // TODO: Figure out the return type kind and number of results.
+  // Create inferrable type placeholders for each argument and result type.
+  // These will be resolved by the CheckCalls pass which inlines callee
+  // signatures and unifies argument/result types.
   auto calleeFuncOp = cx.funcs.lookup(fnItem);
+  SmallVector<Value> typeOfArgs, typeOfResults;
+  for (size_t i = 0; i < argValues.size(); ++i)
+    typeOfArgs.push_back(
+        hir::InferrableOp::create(cx.builder, expr.loc).getResult());
+  // TODO: Figure out the return type kind and number of results.
+  typeOfResults.push_back(
+      hir::InferrableOp::create(cx.builder, expr.loc).getResult());
+
   return hir::UnifiedCallOp::create(
              cx.builder, expr.loc, hir::AnyType::get(cx.module.getContext()),
              FlatSymbolRefAttr::get(calleeFuncOp.getSymNameAttr()), argValues,
-             calleeFuncOp.getArgPhasesAttr(),
+             typeOfArgs, typeOfResults, calleeFuncOp.getArgPhasesAttr(),
              calleeFuncOp.getResultPhasesAttr())
       .getResult(0);
 }

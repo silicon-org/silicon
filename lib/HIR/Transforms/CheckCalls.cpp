@@ -176,12 +176,6 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
     OpBuilder builder(callOp);
     auto terminatorOp =
         cast<UnifiedSignatureOp>(signature.back().getTerminator());
-    SmallVector<Value> argTypes;
-    SmallVector<int32_t> constnessOfArgs;
-    SmallVector<int32_t> constnessOfResults;
-    argTypes.reserve(callOp.getArguments().size());
-    constnessOfArgs.reserve(callOp.getArguments().size());
-    constnessOfResults.reserve(callOp.getResults().size());
 
     // Replace the signature's block arguments with the actual call arguments.
     auto &sigBlock = signature.front();
@@ -190,39 +184,64 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
       blockArg.replaceAllUsesWith(callArg);
     sigBlock.eraseArguments(0, sigBlock.getNumArguments());
 
-    // Unify the declared argument types with the call argument types.
-    auto argPhasesFromCall = callOp.getArgPhases();
-    unsigned argIdx = 0;
-    for (auto [argType, callArg] :
-         llvm::zip(terminatorOp.getTypeOfArgs(), callOp.getArguments())) {
+    // Unify the declared argument types with the types of the call arguments.
+    // If the call already carries type-of-arg operands (e.g., from codegen),
+    // we also unify those with the signature types. Inferrable placeholders
+    // are replaced directly rather than unified, since they carry no type
+    // information.
+    SmallVector<Value> unifiedArgTypes;
+    unifiedArgTypes.reserve(callOp.getArguments().size());
+    auto callTypeOfArgs = callOp.getTypeOfArgs();
+    for (auto [idx, pair] : llvm::enumerate(
+             llvm::zip(terminatorOp.getTypeOfArgs(), callOp.getArguments()))) {
+      auto [sigArgType, callArg] = pair;
       builder.setInsertionPoint(terminatorOp);
       auto callArgType = TypeOfOp::create(builder, callArg.getLoc(), callArg);
-      auto unifiedType =
-          UnifyOp::create(builder, callOp.getLoc(), argType, callArgType);
-      argTypes.push_back(unifiedType);
-      constnessOfArgs.push_back(argPhasesFromCall[argIdx++]);
+      Value unified =
+          UnifyOp::create(builder, callOp.getLoc(), sigArgType, callArgType);
+      if (idx < callTypeOfArgs.size()) {
+        if (auto inferrable =
+                callTypeOfArgs[idx].getDefiningOp<InferrableOp>()) {
+          inferrable.replaceAllUsesWith(unified);
+          inferrable.erase();
+        } else {
+          unified = UnifyOp::create(builder, callOp.getLoc(), unified,
+                                    callTypeOfArgs[idx]);
+        }
+      }
+      unifiedArgTypes.push_back(unified);
     }
 
-    // Results carry phase annotations from the callee's resultPhases.
-    for (auto phase : callOp.getResultPhases())
-      constnessOfResults.push_back(phase);
+    // Unify the declared result types. If the call already carries
+    // type-of-result operands, we also unify those. Inferrable placeholders
+    // are replaced directly.
+    SmallVector<Value> unifiedResultTypes;
+    unifiedResultTypes.reserve(terminatorOp.getTypeOfResults().size());
+    auto callTypeOfResults = callOp.getTypeOfResults();
+    for (auto [idx, sigResultType] :
+         llvm::enumerate(terminatorOp.getTypeOfResults())) {
+      builder.setInsertionPoint(terminatorOp);
+      Value unified = sigResultType;
+      if (idx < callTypeOfResults.size()) {
+        if (auto inferrable =
+                callTypeOfResults[idx].getDefiningOp<InferrableOp>()) {
+          inferrable.replaceAllUsesWith(unified);
+          inferrable.erase();
+        } else {
+          unified = UnifyOp::create(builder, callOp.getLoc(), sigResultType,
+                                    callTypeOfResults[idx]);
+        }
+      }
+      unifiedResultTypes.push_back(unified);
+    }
 
-    // Replace the call op with a variant that encodes the exact argument and
-    // result types.
-    builder.setInsertionPoint(callOp);
-    // With !hir.any, result types are the same as the type operand types.
-    SmallVector<Type> resultTypes(terminatorOp.getTypeOfResults().size(),
-                                  AnyType::get(callOp.getContext()));
-    auto newCallOp = CheckedCallOp::create(
-        builder, callOp.getLoc(), resultTypes, callOp.getCallee(),
-        callOp.getArguments(), argTypes, terminatorOp.getTypeOfResults(),
-        constnessOfArgs, constnessOfResults);
-    callOp.replaceAllUsesWith(newCallOp);
-    callOp.erase();
+    // Update the call's type operands in-place.
+    callOp.getTypeOfArgsMutable().assign(unifiedArgTypes);
+    callOp.getTypeOfResultsMutable().assign(unifiedResultTypes);
+
+    // Erase the signature terminator and inline the signature region.
     terminatorOp.erase();
-
-    // Inline the signature into the call site.
-    inlineRegion(signature, *newCallOp->getBlock(), newCallOp->getIterator());
+    inlineRegion(signature, *callOp->getBlock(), callOp->getIterator());
   });
   return success();
 }

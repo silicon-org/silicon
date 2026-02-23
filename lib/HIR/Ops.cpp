@@ -52,10 +52,11 @@ SuccessorOperands ConstCondBranchOp::getSuccessorOperands(unsigned index) {
 /// Infer result types for `hir.call`: one `!hir.any` result per element of
 /// `typeOfResults`, so the parser can reconstruct the result count without
 /// needing an explicit `type($results)` directive in the assembly format.
-LogicalResult CallOp::inferReturnTypes(
-    MLIRContext *ctx, std::optional<Location>, ValueRange operands,
-    DictionaryAttr attrs, OpaqueProperties props, RegionRange,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
+LogicalResult
+CallOp::inferReturnTypes(MLIRContext *ctx, std::optional<Location>,
+                         ValueRange operands, DictionaryAttr attrs,
+                         OpaqueProperties props, RegionRange,
+                         SmallVectorImpl<Type> &inferredReturnTypes) {
   CallOp::Adaptor adaptor(operands, attrs, props);
   auto anyType = AnyType::get(ctx);
   for (size_t i = 0; i < adaptor.getTypeOfResults().size(); ++i)
@@ -69,9 +70,10 @@ LogicalResult CallOp::inferReturnTypes(
 
 OpFoldResult TypeOfOp::fold(FoldAdaptor adaptor) {
   if (auto result = dyn_cast<OpResult>(getInput())) {
-    // type_of(checked_call(..., resultTypes)) -> resultTypes[resultNumber]
-    if (auto callOp = dyn_cast<CheckedCallOp>(result.getOwner()))
-      return callOp.getTypeOfResults()[result.getResultNumber()];
+    // type_of(unified_call(..., resultTypes)) -> resultTypes[resultNumber]
+    if (auto callOp = dyn_cast<UnifiedCallOp>(result.getOwner()))
+      if (result.getResultNumber() < callOp.getTypeOfResults().size())
+        return callOp.getTypeOfResults()[result.getResultNumber()];
   }
   return {};
 }
@@ -171,8 +173,8 @@ UnifiedReturnOp UnifiedFuncOp::getReturnOp() {
 LogicalResult
 UnifiedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   auto callee = getCalleeAttr();
-  auto func = symbolTable.lookupNearestSymbolFrom<UnifiedFuncOp>(
-      getOperation(), callee);
+  auto func = symbolTable.lookupNearestSymbolFrom<UnifiedFuncOp>(getOperation(),
+                                                                 callee);
   if (!func)
     return emitOpError() << "callee " << callee
                          << " does not reference a valid `hir.unified_func`";
@@ -204,6 +206,19 @@ UnifiedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 
   if (getResultPhases() != func.getResultPhases())
     return emitOpError() << "resultPhases do not match callee " << callee;
+
+  // When type operands are populated (by CheckCalls), verify their arity.
+  if (!getTypeOfArgs().empty() &&
+      getTypeOfArgs().size() != getArguments().size())
+    return emitOpError() << "typeOfArgs has " << getTypeOfArgs().size()
+                         << " entries but call has " << getArguments().size()
+                         << " arguments";
+
+  if (!getTypeOfResults().empty() &&
+      getTypeOfResults().size() != getResults().size())
+    return emitOpError() << "typeOfResults has " << getTypeOfResults().size()
+                         << " entries but call has " << getResults().size()
+                         << " results";
 
   return success();
 }

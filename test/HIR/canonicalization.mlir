@@ -27,6 +27,14 @@ func.func @TypeOfConstantInt() -> !hir.any {
   return %1 : !hir.any
 }
 
+hir.unified_func @dummy [] -> [0, 0] attributes {argNames = []} {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  hir.unified_signature () -> (%0, %1)
+} {
+  hir.unified_return
+}
+
 // CHECK-LABEL: @TypeOfCallResults
 func.func @TypeOfCallResults() -> (!hir.any, !hir.any) {
   // CHECK: [[INT_TY:%.+]] = hir.int_type
@@ -34,7 +42,7 @@ func.func @TypeOfCallResults() -> (!hir.any, !hir.any) {
   %1 = hir.constant_int 42
   // CHECK: [[UINT_TY:%.+]] = hir.uint_type
   %2 = hir.uint_type %1
-  %3:2 = hir.checked_call @dummy() : () -> (%0, %2) -> (!hir.any, !hir.any) [] []
+  %3:2 = hir.unified_call @dummy() : () -> (%0, %2) () -> (!hir.any, !hir.any) [] -> [0, 0]
   %4 = hir.type_of %3#0
   %5 = hir.type_of %3#1
   // CHECK: return [[INT_TY]], [[UINT_TY]]

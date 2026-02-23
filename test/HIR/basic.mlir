@@ -57,8 +57,8 @@ hir.unified_func @UnifiedSimple [0, -1] -> [0] attributes {argNames = ["a", "b"]
 } {
   hir.unified_return
 }
-hir.unified_call @UnifiedSimple(%c42_int, %c42_int) : (!hir.any, !hir.any) -> (!hir.any) [0, -1] -> [0]
-hir.checked_call @UnifiedSimple(%c42_int, %c42_int) : (%int_type, %int_type) -> (%int_type) -> (!hir.any) [0, -1] [0]
+hir.unified_call @UnifiedSimple(%c42_int, %c42_int) : () -> () (!hir.any, !hir.any) -> !hir.any [0, -1] -> [0]
+hir.unified_call @UnifiedSimple(%c42_int, %c42_int) : (%int_type, %int_type) -> (%int_type) (!hir.any, !hir.any) -> !hir.any [0, -1] -> [0]
 
 hir.expr {
   hir.yield

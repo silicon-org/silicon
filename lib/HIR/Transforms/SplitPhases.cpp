@@ -65,8 +65,8 @@ void PhaseAnalysis::analyze() {
     int16_t argPhase = static_cast<int16_t>(phase);
     if (argPhase < 0) {
       argPhases[bodyArgs[idx]] = argPhase;
-      LLVM_DEBUG(llvm::dbgs() << "- Arg " << idx << " has phase "
-                               << argPhase << "\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "- Arg " << idx << " has phase " << argPhase << "\n");
     }
   }
 
@@ -130,7 +130,8 @@ void PhaseAnalysis::drainWorklist() {
 
     // If this op has no side-effects (and is not an ExprOp with an explicit
     // phase attribute), shift its phase to accommodate all users.
-    if (!constAttr && (isa<ExprOp>(item.op) || mlir::isMemoryEffectFree(item.op)))
+    if (!constAttr &&
+        (isa<ExprOp>(item.op) || mlir::isMemoryEffectFree(item.op)))
       for (auto *user : item.op->getUsers())
         phase = std::max(phase, opPhases.at(user));
 
@@ -176,8 +177,8 @@ void PhaseSplitter::run() {
     minPhase = std::min(minPhase, phase);
     maxPhase = std::max(maxPhase, phase);
   }
-  LLVM_DEBUG(llvm::dbgs() << "- Phases range [" << minPhase << ", "
-                           << maxPhase << "]\n");
+  LLVM_DEBUG(llvm::dbgs() << "- Phases range [" << minPhase << ", " << maxPhase
+                          << "]\n");
 
   // Create a separate function for each phase. Phases ≤ 0 are named
   // `.constN` (N = -phase); phases > 0 are named `.dynN`. We iterate in
@@ -188,9 +189,10 @@ void PhaseSplitter::run() {
   auto privateAttr = builder.getStringAttr("private");
   SmallVector<PhaseSplit> splits(maxPhase - minPhase + 1);
   for (int16_t phase = maxPhase; phase >= minPhase; --phase) {
-    auto name = phase <= 0
-        ? builder.getStringAttr(funcOp.getSymName() + ".const" + Twine(-phase))
-        : builder.getStringAttr(funcOp.getSymName() + ".dyn" + Twine(phase));
+    auto name = phase <= 0 ? builder.getStringAttr(funcOp.getSymName() +
+                                                   ".const" + Twine(-phase))
+                           : builder.getStringAttr(funcOp.getSymName() +
+                                                   ".dyn" + Twine(phase));
     auto phaseFuncOp =
         FuncOp::create(builder, funcOp.getLoc(), name, privateAttr);
     if (phase != 0)
@@ -215,10 +217,10 @@ void PhaseSplitter::run() {
 
   splits[0 - minPhase].funcOp.getBody().takeBody(funcOp.getBody());
 
-  // Move shifted-phase body block arguments to their respective phase functions.
-  // For each shifted arg, we create a block arg in that phase's function, add
-  // it to that phase's return values, create a receiving block arg in phase 0,
-  // and replace all uses of the original body block arg.
+  // Move shifted-phase body block arguments to their respective phase
+  // functions. For each shifted arg, we create a block arg in that phase's
+  // function, add it to that phase's return values, create a receiving block
+  // arg in phase 0, and replace all uses of the original body block arg.
   {
     auto &phase0Block = splits[0 - minPhase].funcOp.getBody().front();
 
@@ -235,7 +237,7 @@ void PhaseSplitter::run() {
     for (auto [idx, argPhase] : constArgs) {
       auto bodyArg = phase0Block.getArgument(idx);
       LLVM_DEBUG(llvm::dbgs() << "- Moving body arg " << idx << " to phase "
-                               << argPhase << "\n");
+                              << argPhase << "\n");
 
       // Create a block arg in the shifted-phase function to receive this value.
       auto &constBlock = splits[argPhase - minPhase].funcOp.getBody().front();
@@ -367,12 +369,12 @@ struct SplitPhasesPass
 };
 } // namespace
 
-/// Rewrite CheckedCallOps to call the split phase functions directly. For each
-/// checked call, the const arguments go to the const-phase function and the
+/// Rewrite UnifiedCallOps to call the split phase functions directly. For each
+/// unified call, the const arguments go to the const-phase function and the
 /// runtime arguments go to the runtime-phase function. The const-phase results
 /// are threaded through to the runtime-phase call.
-static void rewriteCheckedCalls(ModuleOp moduleOp, SymbolTable &symbolTable) {
-  moduleOp.walk([&](CheckedCallOp callOp) {
+static void rewriteUnifiedCalls(ModuleOp moduleOp, SymbolTable &symbolTable) {
+  moduleOp.walk([&](UnifiedCallOp callOp) {
     auto calleeName = callOp.getCallee();
 
     // Look up the split functions. If the const-phase function doesn't exist,
@@ -386,15 +388,15 @@ static void rewriteCheckedCalls(ModuleOp moduleOp, SymbolTable &symbolTable) {
 
     OpBuilder builder(callOp);
     auto loc = callOp.getLoc();
-    auto constnessOfArgs = callOp.getConstnessOfArgs();
+    auto argPhases = callOp.getArgPhases();
 
     // Partition arguments and their types into const and runtime based on
-    // the constness annotations from the checked call.
+    // the phase annotations from the unified call.
     SmallVector<Value> constArgs, runtimeArgs;
     SmallVector<Value> constTypeOfArgs, runtimeTypeOfArgs;
-    for (auto [arg, type, constness] : llvm::zip(
-             callOp.getArguments(), callOp.getTypeOfArgs(), constnessOfArgs)) {
-      if (constness < 0) {
+    for (auto [arg, type, phase] :
+         llvm::zip(callOp.getArguments(), callOp.getTypeOfArgs(), argPhases)) {
+      if (phase < 0) {
         constArgs.push_back(arg);
         constTypeOfArgs.push_back(type);
       } else {
@@ -410,10 +412,10 @@ static void rewriteCheckedCalls(ModuleOp moduleOp, SymbolTable &symbolTable) {
           InferrableOp::create(builder, loc).getResult());
 
     // Call the const-phase function with the const arguments.
-    auto constCall = CallOp::create(
-        builder, loc, callOp.getResultTypes(),
-        builder.getStringAttr(constFuncName), constArgs, constTypeOfArgs,
-        constCallTypeOfResults);
+    auto constCall =
+        CallOp::create(builder, loc, callOp.getResultTypes(),
+                       builder.getStringAttr(constFuncName), constArgs,
+                       constTypeOfArgs, constCallTypeOfResults);
 
     // The const-phase function returns values that the runtime phase needs.
     // Thread them through as additional arguments to the runtime-phase call,
@@ -427,10 +429,10 @@ static void rewriteCheckedCalls(ModuleOp moduleOp, SymbolTable &symbolTable) {
     }
 
     // Call the runtime-phase function with the combined argument list.
-    auto runtimeCall = CallOp::create(
-        builder, loc, callOp.getResultTypes(),
-        builder.getStringAttr(runtimeFuncName), fullRuntimeArgs,
-        fullRuntimeTypeOfArgs, callOp.getTypeOfResults());
+    auto runtimeCall =
+        CallOp::create(builder, loc, callOp.getResultTypes(),
+                       builder.getStringAttr(runtimeFuncName), fullRuntimeArgs,
+                       fullRuntimeTypeOfArgs, callOp.getTypeOfResults());
 
     callOp.replaceAllUsesWith(runtimeCall.getResults());
     callOp.erase();
@@ -448,6 +450,6 @@ void SplitPhasesPass::runOnOperation() {
     op.erase();
   }
 
-  // Rewrite checked calls to use the split phase functions.
-  rewriteCheckedCalls(getOperation(), symbolTable);
+  // Rewrite unified calls to use the split phase functions.
+  rewriteUnifiedCalls(getOperation(), symbolTable);
 }

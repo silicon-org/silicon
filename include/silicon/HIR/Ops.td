@@ -350,43 +350,24 @@ def UnifiedReturnOp : HIROp<"unified_return", [
 }
 
 def UnifiedCallOp : HIROp<"unified_call", [
+  AttrSizedOperandSegments,
   DeclareOpInterfaceMethods<SymbolUserOpInterface>,
 ]> {
+  let summary = "A call not yet split into phases";
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
     Variadic<AnyType>:$arguments,
+    Variadic<AnyHIRType>:$typeOfArgs,
+    Variadic<AnyHIRType>:$typeOfResults,
     DenseI32ArrayAttr:$argPhases,
     DenseI32ArrayAttr:$resultPhases
   );
-  let summary = "A typeless call not yet split into phases";
-  let results = (outs Variadic<AnyType>:$results);
-  let assemblyFormat = [{
-    $callee `(` $arguments `)` `:` functional-type($arguments, results)
-    $argPhases `->` $resultPhases
-    attr-dict
-  }];
-}
-
-def CheckedCallOp : HIROp<"checked_call", [
-  AttrSizedOperandSegments,
-]> {
-  let arguments = (ins
-    FlatSymbolRefAttr:$callee,
-    Variadic<AnyHIRType>:$arguments,
-    Variadic<AnyHIRType>:$typeOfArgs,
-    Variadic<AnyHIRType>:$typeOfResults,
-    DenseI32ArrayAttr:$constnessOfArgs,
-    DenseI32ArrayAttr:$constnessOfResults
-  );
-  let summary = "A typed call not yet split into constness levels";
   let results = (outs Variadic<AnyType>:$results);
   let assemblyFormat = [{
     $callee `(` $arguments `)` `:`
-    `(` $typeOfArgs `)` `->`
-    `(` $typeOfResults `)`
-    `->` `(` type($results) `)`
-    $constnessOfArgs
-    $constnessOfResults
+    `(` $typeOfArgs `)` `->` `(` $typeOfResults `)`
+    functional-type($arguments, results)
+    $argPhases `->` $resultPhases
     attr-dict
   }];
 }

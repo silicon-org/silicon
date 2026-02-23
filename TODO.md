@@ -1,6 +1,9 @@
 - Add argument and result names to `hir.func`. These indicate how many arguments and results there are. Under the hood they all have MLIR type `!hir.any`. Use custom parser and printers if necessary to print these as outlined in CLAUDE.md.
 - Add argument and result names to `hir.unified_func`, which must match the corresponding number of phases. These should print as outliend in CLAUDE.md.
 - Replace `hir.binary` with dedicated ops like `hir.add`. Same for `mir.binary`.
-- `rewriteCheckedCalls` is prototype code; type operands for the const call use `hir.inferrable` placeholders (lowered to `!hir.any`) rather than the actual types. When the phase-split pipeline matures, these should be replaced with real type values.
+- `rewriteUnifiedCalls` is prototype code; type operands for the const call use `hir.inferrable` placeholders (lowered to `!hir.any`) rather than the actual types. When the phase-split pipeline matures, these should be replaced with real type values.
 - Several call sites still use the deprecated `builder.create<Op>()` form instead of `Op::create(builder, ...)` (warnings emitted during compilation).
-- Print `hir.unified_call @foo(%arg) : (!hir.any) -> (!hir.any) [0] -> [1]` as `hir.unified_call @foo(%arg) : [0] -> [1]`
+- Multi-phase call expansion with >2 phases (e.g., argPhases [-2, -1, 0]).
+- Dependent types in signatures (type depends on argument value).
+- Value threading when a const call returns values needed by multiple later phases.
+- Call chains: function A calls B which calls C, each with const args.
