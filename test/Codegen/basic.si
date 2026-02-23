@@ -2,8 +2,9 @@
 
 // Ensure we can call functions without result.
 // CHECK-LABEL: @unitResult1
+// CHECK-SAME: [] -> [0]
 // CHECK-NEXT: [[UNIT:%.+]] = hir.unit_type
-// CHECK-NEXT: hir.unchecked_signature () -> ([[UNIT]])
+// CHECK-NEXT: hir.unified_signature () -> ([[UNIT]])
 fn unitResult1() {}
 fn unitResult2() {
   unitResult1();

@@ -32,7 +32,7 @@ namespace {
 /// A helper struct to analyze the phase split of a function and assign concrete
 /// phase numbers to individual operations.
 struct PhaseAnalysis {
-  PhaseAnalysis(UncheckedFuncOp funcOp) : funcOp(funcOp) {}
+  PhaseAnalysis(UnifiedFuncOp funcOp) : funcOp(funcOp) {}
   void analyze();
   void addToWorklist(Operation *op);
   void drainWorklist();
@@ -42,13 +42,13 @@ struct PhaseAnalysis {
     bool checkParent;
     Operation::user_iterator userIt;
   };
-  UncheckedFuncOp funcOp;
+  UnifiedFuncOp funcOp;
   DenseSet<Operation *> seenOps;
   SmallVector<Item, 0> worklist;
   DenseMap<Operation *, int16_t> opPhases;
 
   /// Phases assigned to body block arguments based on constness of the
-  /// corresponding UncheckedArgOp in the signature.
+  /// corresponding UnifiedArgOp in the signature.
   DenseMap<Value, int16_t> argPhases;
 };
 } // namespace
@@ -57,13 +57,11 @@ void PhaseAnalysis::analyze() {
   LLVM_DEBUG(llvm::dbgs() << "Analyzing phases in " << funcOp.getSymNameAttr()
                           << "\n");
 
-  // Determine which body block arguments are const based on the constness of
-  // the corresponding UncheckedArgOp in the signature.
-  auto sigTerminator = funcOp.getSignatureOp();
+  // Determine which body block arguments are const based on the argPhases
+  // attribute on the unified function op.
   auto bodyArgs = funcOp.getBody().getArguments();
-  for (auto [idx, argValue] : llvm::enumerate(sigTerminator.getArgValues())) {
-    auto argOp = cast<UncheckedArgOp>(argValue.getDefiningOp());
-    int16_t constness = argOp.getConstness();
+  for (auto [idx, phase] : llvm::enumerate(funcOp.getArgPhases())) {
+    int16_t constness = static_cast<int16_t>(phase);
     if (constness > 0) {
       argPhases[bodyArgs[idx]] = constness;
       LLVM_DEBUG(llvm::dbgs() << "- Arg " << idx << " has constness "
@@ -159,7 +157,7 @@ struct PhaseSplitter {
 
   PhaseAnalysis &analysis;
   SymbolTable &symbolTable;
-  UncheckedFuncOp funcOp;
+  UnifiedFuncOp funcOp;
 };
 } // namespace
 
@@ -431,7 +429,7 @@ static void rewriteCheckedCalls(ModuleOp moduleOp, SymbolTable &symbolTable) {
 void SplitPhasesPass::runOnOperation() {
   auto &symbolTable = getAnalysis<SymbolTable>();
   for (auto op :
-       llvm::make_early_inc_range(getOperation().getOps<UncheckedFuncOp>())) {
+       llvm::make_early_inc_range(getOperation().getOps<UnifiedFuncOp>())) {
     PhaseAnalysis analysis(op);
     analysis.analyze();
     PhaseSplitter splitter(analysis, symbolTable);

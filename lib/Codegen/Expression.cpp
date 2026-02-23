@@ -68,12 +68,14 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
     argValues.push_back(argValue);
   }
 
-  // Create the call op.
+  // Create the call op, threading through the phase arrays from the callee.
   // TODO: Figure out the return type kind and number of results.
-  return hir::UncheckedCallOp::create(
+  auto calleeFuncOp = cx.funcs.lookup(fnItem);
+  return hir::UnifiedCallOp::create(
              cx.builder, expr.loc, hir::AnyType::get(cx.module.getContext()),
-             FlatSymbolRefAttr::get(cx.funcs.lookup(fnItem).getSymNameAttr()),
-             argValues)
+             FlatSymbolRefAttr::get(calleeFuncOp.getSymNameAttr()), argValues,
+             calleeFuncOp.getArgPhasesAttr(),
+             calleeFuncOp.getResultPhasesAttr())
       .getResult(0);
 }
 

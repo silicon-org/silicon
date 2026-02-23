@@ -101,51 +101,75 @@ OpFoldResult UnifyOp::fold(FoldAdaptor adaptor) {
 }
 
 //===----------------------------------------------------------------------===//
-// UncheckedFuncOp
+// UnifiedFuncOp
 //===----------------------------------------------------------------------===//
 
-LogicalResult UncheckedFuncOp::verifyRegions() {
+LogicalResult UnifiedFuncOp::verify() {
+  // Guard against a malformed signature region: verifyRegions() will report
+  // the missing terminator, so we just skip phase-count validation here.
+  auto sigOp =
+      dyn_cast<UnifiedSignatureOp>(getSignature().back().getTerminator());
+  if (!sigOp)
+    return success();
+
+  auto numArgs = sigOp.getArgValues().size();
+  auto numResults = sigOp.getTypeOfResults().size();
+
+  if (getArgPhases().size() != numArgs)
+    return emitOpError() << "argPhases has " << getArgPhases().size()
+                         << " entries but function has " << numArgs
+                         << " arguments";
+
+  if (getResultPhases().size() != numResults)
+    return emitOpError() << "resultPhases has " << getResultPhases().size()
+                         << " entries but function has " << numResults
+                         << " results";
+
+  return success();
+}
+
+LogicalResult UnifiedFuncOp::verifyRegions() {
   // Make sure there are no signature/return terminators in the middle of the
   // signature or body region.
   for (auto *region : getRegions())
     for (auto &block : llvm::drop_end(*region))
-      if (isa<UncheckedSignatureOp, UncheckedReturnOp>(block.getTerminator()))
+      if (isa<UnifiedSignatureOp, UnifiedReturnOp>(block.getTerminator()))
         return block.getTerminator()->emitOpError()
                << "can only appear in the last block";
 
   // Check the signature terminator.
-  if (!isa<UncheckedSignatureOp>(getSignature().back().getTerminator()))
-    return emitOpError() << "requires `hir.unchecked_signature` terminator in "
+  if (!isa<UnifiedSignatureOp>(getSignature().back().getTerminator()))
+    return emitOpError() << "requires `hir.unified_signature` terminator in "
                             "the signature";
 
   // Check the body terminator.
-  if (!isa<UncheckedReturnOp>(getBody().back().getTerminator()))
-    return emitOpError() << "requires `hir.unchecked_return` terminator in "
+  if (!isa<UnifiedReturnOp>(getBody().back().getTerminator()))
+    return emitOpError() << "requires `hir.unified_return` terminator in "
                             "the body";
 
   return success();
 }
 
-UncheckedSignatureOp UncheckedFuncOp::getSignatureOp() {
-  return cast<UncheckedSignatureOp>(getSignature().back().getTerminator());
+UnifiedSignatureOp UnifiedFuncOp::getSignatureOp() {
+  return cast<UnifiedSignatureOp>(getSignature().back().getTerminator());
 }
 
-UncheckedReturnOp UncheckedFuncOp::getReturnOp() {
-  return cast<UncheckedReturnOp>(getBody().back().getTerminator());
+UnifiedReturnOp UnifiedFuncOp::getReturnOp() {
+  return cast<UnifiedReturnOp>(getBody().back().getTerminator());
 }
 
 //===----------------------------------------------------------------------===//
-// UncheckedCallOp
+// UnifiedCallOp
 //===----------------------------------------------------------------------===//
 
 LogicalResult
-UncheckedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+UnifiedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   auto callee = getCalleeAttr();
-  auto func = symbolTable.lookupNearestSymbolFrom<UncheckedFuncOp>(
+  auto func = symbolTable.lookupNearestSymbolFrom<UnifiedFuncOp>(
       getOperation(), callee);
   if (!func)
     return emitOpError() << "callee " << callee
-                         << " does not reference a valid `hir.unchecked_func`";
+                         << " does not reference a valid `hir.unified_func`";
 
   auto sigOp = func.getSignatureOp();
 
@@ -158,6 +182,22 @@ UncheckedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
     return emitOpError() << "has " << getResults().size() << " results, but "
                          << callee << " expects "
                          << sigOp.getTypeOfResults().size();
+
+  if (getArgPhases().size() != getArguments().size())
+    return emitOpError() << "argPhases has " << getArgPhases().size()
+                         << " entries but call has " << getArguments().size()
+                         << " arguments";
+
+  if (getResultPhases().size() != getResults().size())
+    return emitOpError() << "resultPhases has " << getResultPhases().size()
+                         << " entries but call has " << getResults().size()
+                         << " results";
+
+  if (getArgPhases() != func.getArgPhases())
+    return emitOpError() << "argPhases do not match callee " << callee;
+
+  if (getResultPhases() != func.getResultPhases())
+    return emitOpError() << "resultPhases do not match callee " << callee;
 
   return success();
 }

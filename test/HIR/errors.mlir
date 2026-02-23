@@ -1,67 +1,147 @@
 // RUN: silicon-opt --split-input-file --verify-diagnostics %s
 
-// expected-error @below {{does not reference a valid `hir.unchecked_func`}}
-hir.unchecked_call @foo() : () -> ()
+// expected-error @below {{does not reference a valid `hir.unified_func`}}
+hir.unified_call @foo() : () -> () [] -> []
 
 // -----
 
-hir.unchecked_func @foo {
+hir.unified_func @foo [0] -> [] {
   %0 = hir.int_type
-  %1 = hir.unchecked_arg "a", %0, 0
-  hir.unchecked_signature (%1) -> ()
+  %1 = hir.unified_arg "a", %0
+  hir.unified_signature (%1) -> ()
 } {
-  hir.unchecked_return
+  hir.unified_return
 }
 // expected-error @below {{has 0 arguments, but @foo expects 1}}
-hir.unchecked_call @foo() : () -> ()
+hir.unified_call @foo() : () -> () [] -> []
 
 // -----
 
-hir.unchecked_func @foo {
+hir.unified_func @foo [] -> [0] {
   %0 = hir.int_type
-  hir.unchecked_signature () -> (%0)
+  hir.unified_signature () -> (%0)
 } {
-  hir.unchecked_return
+  hir.unified_return
 }
 // expected-error @below {{has 0 results, but @foo expects 1}}
-hir.unchecked_call @foo() : () -> ()
+hir.unified_call @foo() : () -> () [] -> []
 
 // -----
 
-hir.unchecked_func @foo {
+hir.unified_func @foo [] -> [] {
   // expected-error @below {{can only appear in the last block}}
-  hir.unchecked_signature () -> ()
+  hir.unified_signature () -> ()
 ^bb1:
-  hir.unchecked_signature () -> ()
+  hir.unified_signature () -> ()
 } {
-  hir.unchecked_return
+  hir.unified_return
 }
 
 // -----
 
-hir.unchecked_func @foo {
-  hir.unchecked_signature () -> ()
+hir.unified_func @foo [] -> [] {
+  hir.unified_signature () -> ()
 } {
   // expected-error @below {{can only appear in the last block}}
-  hir.unchecked_return
+  hir.unified_return
 ^bb1:
-  hir.unchecked_return
+  hir.unified_return
 }
 
 // -----
 
-// expected-error @below {{requires `hir.unchecked_return` terminator in the body}}
-hir.unchecked_func @foo {
-  hir.unchecked_signature () -> ()
+// expected-error @below {{requires `hir.unified_return` terminator in the body}}
+hir.unified_func @foo [] -> [] {
+  hir.unified_signature () -> ()
 } {
-  hir.unchecked_signature () -> ()
+  hir.unified_signature () -> ()
 }
 
 // -----
 
-// expected-error @below {{requires `hir.unchecked_signature` terminator in the signature}}
-hir.unchecked_func @foo {
-  hir.unchecked_return
+// expected-error @below {{requires `hir.unified_signature` terminator in the signature}}
+hir.unified_func @foo [] -> [] {
+  hir.unified_return
 } {
-  hir.unchecked_return
+  hir.unified_return
 }
+
+// -----
+
+// expected-error @below {{argPhases has 2 entries but function has 1 arguments}}
+hir.unified_func @foo [0, 1] -> [0] {
+  %0 = hir.int_type
+  %1 = hir.unified_arg "a", %0
+  %2 = hir.int_type
+  hir.unified_signature (%1) -> (%2)
+} {
+  hir.unified_return
+}
+
+// -----
+
+// expected-error @below {{resultPhases has 2 entries but function has 1 results}}
+hir.unified_func @foo [0] -> [0, 1] {
+  %0 = hir.int_type
+  %1 = hir.unified_arg "a", %0
+  %2 = hir.int_type
+  hir.unified_signature (%1) -> (%2)
+} {
+  hir.unified_return
+}
+
+// -----
+
+hir.unified_func @foo [0] -> [0] {
+  %0 = hir.int_type
+  %1 = hir.unified_arg "a", %0
+  %2 = hir.int_type
+  hir.unified_signature (%1) -> (%2)
+} {
+  hir.unified_return
+}
+%arg = hir.constant_int 42
+// expected-error @below {{argPhases has 0 entries but call has 1 arguments}}
+hir.unified_call @foo(%arg) : (!hir.any) -> (!hir.any) [] -> [0]
+
+// -----
+
+hir.unified_func @foo [0] -> [0] {
+  %0 = hir.int_type
+  %1 = hir.unified_arg "a", %0
+  %2 = hir.int_type
+  hir.unified_signature (%1) -> (%2)
+} {
+  hir.unified_return
+}
+%arg = hir.constant_int 42
+// expected-error @below {{resultPhases has 0 entries but call has 1 results}}
+hir.unified_call @foo(%arg) : (!hir.any) -> (!hir.any) [0] -> []
+
+// -----
+
+hir.unified_func @foo [0] -> [0] {
+  %0 = hir.int_type
+  %1 = hir.unified_arg "a", %0
+  %2 = hir.int_type
+  hir.unified_signature (%1) -> (%2)
+} {
+  hir.unified_return
+}
+%arg = hir.constant_int 42
+// expected-error @below {{argPhases do not match callee @foo}}
+hir.unified_call @foo(%arg) : (!hir.any) -> (!hir.any) [1] -> [0]
+
+// -----
+
+hir.unified_func @foo [0] -> [0] {
+  %0 = hir.int_type
+  %1 = hir.unified_arg "a", %0
+  %2 = hir.int_type
+  hir.unified_signature (%1) -> (%2)
+} {
+  hir.unified_return
+}
+%arg = hir.constant_int 42
+// expected-error @below {{resultPhases do not match callee @foo}}
+hir.unified_call @foo(%arg) : (!hir.any) -> (!hir.any) [0] -> [1]

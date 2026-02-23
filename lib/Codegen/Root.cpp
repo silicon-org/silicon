@@ -21,8 +21,17 @@ struct DeclareItems : public ast::Visitor<DeclareItems> {
   using Visitor::preVisitNode;
 
   void preVisitNode(ast::FnItem &item) {
-    auto func = cx.builder.create<hir::UncheckedFuncOp>(
-        item.loc, cx.builder.getStringAttr(item.name), StringAttr{});
+    // Collect phases from AST before creating the func op so that call
+    // codegen can read them from the symbol table.
+    SmallVector<int32_t> argPhases, resultPhases;
+    for (auto *arg : item.args)
+      argPhases.push_back(arg->constness);
+    resultPhases.push_back(0); // placeholder: one result at phase 0
+    auto *ctx = cx.module.getContext();
+    auto func = hir::UnifiedFuncOp::create(
+        cx.builder, item.loc, cx.builder.getStringAttr(item.name), StringAttr{},
+        mlir::DenseI32ArrayAttr::get(ctx, argPhases),
+        mlir::DenseI32ArrayAttr::get(ctx, resultPhases));
     cx.funcs.insert({&item, func});
     cx.symbolTable.insert(func);
   }

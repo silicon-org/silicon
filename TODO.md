@@ -1,5 +1,5 @@
-- Rename `hir.unchecked_*` ops to `hir.unified_*`. Track phase for each argument and result on `hir.unified_func` and `hir.unified_call` as an array of integers. The call verifier should check that the phases on the call are identical to the phases on the function. The verifiers also need to check that the number of argument and result phases exactly matches the number of arguments and results.
-- `hir.checked_call` should just be `hir.call`. No phase ("constness") annotation should be needed at this point, since we split `hir.unified_call` up into separate `hir.call`, one per phase.
+- Add argument and result names to `hir.func`. These indicate how many arguments and results there are. Under the hood they all have MLIR type `!hir.any`. Use custom parser and printers if necessary to print these as outlined in CLAUDE.md.
+- Add argument and result names to `hir.unified_func`, which must match the corresponding number of phases. These should print as outliend in CLAUDE.md.
 - Rename "constness" in the AST to "phase", and make it signed such that `const` can decrease the phase and `dyn` can increase the phase.
 - Remove `hir.const_type`, `hir.const_wrap`, and `hir.const_unwrap`.
 - Make the parser accept multiple const and dyn modifiers on function arguments.
@@ -7,3 +7,5 @@
 - Replace `hir.binary` with dedicated ops like `hir.add`. Same for `mir.binary`.
 - `rewriteCheckedCalls` is prototype code; type operands for the const call use `hir.inferrable` placeholders (lowered to `!hir.any`) rather than the actual types. When the phase-split pipeline matures, these should be replaced with real type values.
 - Several call sites still use the deprecated `builder.create<Op>()` form instead of `Op::create(builder, ...)` (warnings emitted during compilation).
+- Drop `hir.unified_arg` in favor of carrying argument information as attributes on the `hir.unified_func` directly.
+- Print `hir.unified_call @foo(%arg) : (!hir.any) -> (!hir.any) [0] -> [1]` as `hir.unified_call @foo(%arg) : [0] -> [1]`

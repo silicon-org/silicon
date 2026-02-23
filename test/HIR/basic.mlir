@@ -53,16 +53,16 @@ hir.func public @public_visibility2 {}
 hir.func private @private_visibility {}
 hir.func nested @nested_visibility {}
 
-hir.unchecked_func @UncheckedSimple {
+hir.unified_func @UnifiedSimple [0, 1] -> [0] {
   %0 = hir.int_type
-  %1 = hir.unchecked_arg "a", %0, 0
-  %2 = hir.unchecked_arg "b", %0, 1
-  hir.unchecked_signature (%1, %2) -> (%0)
+  %1 = hir.unified_arg "a", %0
+  %2 = hir.unified_arg "b", %0
+  hir.unified_signature (%1, %2) -> (%0)
 } {
-  hir.unchecked_return
+  hir.unified_return
 }
-hir.unchecked_call @UncheckedSimple(%c42_int, %c42_int) : (!hir.any, !hir.any) -> (!hir.any)
-hir.checked_call @UncheckedSimple(%c42_int, %c42_int) : (%int_type, %int_type) -> (%int_type) -> (!hir.any) [0, 1] [0]
+hir.unified_call @UnifiedSimple(%c42_int, %c42_int) : (!hir.any, !hir.any) -> (!hir.any) [0, 1] -> [0]
+hir.checked_call @UnifiedSimple(%c42_int, %c42_int) : (%int_type, %int_type) -> (%int_type) -> (!hir.any) [0, 1] [0]
 
 hir.expr {
   hir.yield

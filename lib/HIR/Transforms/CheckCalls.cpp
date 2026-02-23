@@ -43,19 +43,19 @@ void CheckCallsPass::runOnOperation() {
   // traversal of the call graph in the function signatures, and we detect and
   // report recursions as we find them.
   struct WorklistItem {
-    UncheckedFuncOp funcOp;
+    UnifiedFuncOp funcOp;
     Location callLoc;
-    SmallVector<UncheckedCallOp, 1> calls;
+    SmallVector<UnifiedCallOp, 1> calls;
   };
   SmallVector<WorklistItem> worklist;
-  SmallDenseSet<UncheckedFuncOp> callStack;
-  DenseSet<UncheckedFuncOp> checkedFuncs;
+  SmallDenseSet<UnifiedFuncOp> callStack;
+  DenseSet<UnifiedFuncOp> checkedFuncs;
 
-  auto addToWorklist = [&](UncheckedFuncOp funcOp, Location callLoc) {
-    SmallDenseSet<UncheckedFuncOp, 1> seenCallees;
-    SmallVector<UncheckedCallOp, 1> calls;
-    funcOp.getSignature().walk([&](UncheckedCallOp op) {
-      auto callee = symbolTable.lookup<UncheckedFuncOp>(op.getCallee());
+  auto addToWorklist = [&](UnifiedFuncOp funcOp, Location callLoc) {
+    SmallDenseSet<UnifiedFuncOp, 1> seenCallees;
+    SmallVector<UnifiedCallOp, 1> calls;
+    funcOp.getSignature().walk([&](UnifiedCallOp op) {
+      auto callee = symbolTable.lookup<UnifiedFuncOp>(op.getCallee());
       if (callee && !checkedFuncs.contains(callee))
         if (seenCallees.insert(callee).second)
           calls.push_back(op);
@@ -64,7 +64,7 @@ void CheckCallsPass::runOnOperation() {
   };
 
   bool anyErrors = false;
-  for (auto funcOp : getOperation().getOps<UncheckedFuncOp>()) {
+  for (auto funcOp : getOperation().getOps<UnifiedFuncOp>()) {
     if (checkedFuncs.contains(funcOp))
       continue;
     addToWorklist(funcOp, funcOp.getLoc());
@@ -87,7 +87,7 @@ void CheckCallsPass::runOnOperation() {
       // Add the next call in the function's signature to the worklist. Uses the
       // call stack set to detect recursion.
       auto call = item.calls.pop_back_val();
-      auto callee = symbolTable.lookup<UncheckedFuncOp>(call.getCallee());
+      auto callee = symbolTable.lookup<UnifiedFuncOp>(call.getCallee());
       if (!callee || checkedFuncs.contains(callee))
         continue;
       if (callStack.insert(callee).second) {
@@ -123,8 +123,8 @@ void CheckCallsPass::runOnOperation() {
   // Process the function bodies in parallel.
   std::atomic<bool> anyBodyErrors = false;
   mlir::parallelForEach(
-      &getContext(), getOperation().getOps<UncheckedFuncOp>(),
-      [&](UncheckedFuncOp funcOp) {
+      &getContext(), getOperation().getOps<UnifiedFuncOp>(),
+      [&](UnifiedFuncOp funcOp) {
         if (failed(checkRegion(funcOp.getBody(), symbolTable)))
           anyBodyErrors = true;
       });
@@ -151,13 +151,13 @@ static void inlineRegion(Region &region, Block &into,
 
 LogicalResult CheckCallsPass::checkRegion(Region &region,
                                           const SymbolTable &symbolTable) {
-  auto funcOp = cast<UncheckedFuncOp>(region.getParentOp());
+  auto funcOp = cast<UnifiedFuncOp>(region.getParentOp());
   LLVM_DEBUG({
     llvm::dbgs() << "Checking "
                  << (&funcOp.getSignature() == &region ? "signature" : "body")
                  << " of " << funcOp.getSymNameAttr() << "\n";
   });
-  region.walk([&](UncheckedCallOp callOp) {
+  region.walk([&](UnifiedCallOp callOp) {
     LLVM_DEBUG(llvm::dbgs() << "- " << callOp << "\n");
 
     // Clone the signature of the called function.
@@ -170,22 +170,25 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
     // provided by the call, and insert type unification as necessary.
     OpBuilder builder(callOp);
     auto terminatorOp =
-        cast<UncheckedSignatureOp>(signature.back().getTerminator());
+        cast<UnifiedSignatureOp>(signature.back().getTerminator());
     SmallVector<Value> argTypes;
     SmallVector<int32_t> constnessOfArgs;
     SmallVector<int32_t> constnessOfResults;
     argTypes.reserve(callOp.getArguments().size());
     constnessOfArgs.reserve(callOp.getArguments().size());
     constnessOfResults.reserve(callOp.getResults().size());
+    // Phases come from the call op's argPhases, which mirror the callee's.
+    auto argPhasesFromCall = callOp.getArgPhases();
+    unsigned argIdx = 0;
     for (auto [fnArg, callArg] :
          llvm::zip(terminatorOp.getArgValues(), callOp.getArguments())) {
-      auto fnArgOp = cast<UncheckedArgOp>(fnArg.getDefiningOp());
+      auto fnArgOp = cast<UnifiedArgOp>(fnArg.getDefiningOp());
       builder.setInsertionPoint(fnArgOp);
       auto callArgType = TypeOfOp::create(builder, callArg.getLoc(), callArg);
       auto unifiedType = UnifyOp::create(builder, callOp.getLoc(),
                                          fnArgOp.getTypeOperand(), callArgType);
       argTypes.push_back(unifiedType);
-      constnessOfArgs.push_back(fnArgOp.getConstness());
+      constnessOfArgs.push_back(argPhasesFromCall[argIdx++]);
       fnArgOp.replaceAllUsesWith(callArg);
       fnArgOp.erase();
     }

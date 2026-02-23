@@ -37,8 +37,7 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
 
       // Create an op for the argument.
       auto argName = StringAttr::get(module.getContext(), arg->name);
-      auto argOp = hir::UncheckedArgOp::create(builder, arg->loc, argName, type,
-                                               arg->constness);
+      auto argOp = hir::UnifiedArgOp::create(builder, arg->loc, argName, type);
       bindings.insert(arg, argOp);
       argValues.push_back(argOp);
       argTypes.push_back(argOp.getType());
@@ -58,8 +57,7 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
     }
 
     // Create the signature terminator.
-    hir::UncheckedSignatureOp::create(builder, item.loc, argValues,
-                                      resultTypes);
+    hir::UnifiedSignatureOp::create(builder, item.loc, argValues, resultTypes);
   }
 
   // Handle the function body.
@@ -81,7 +79,7 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
       return failure();
 
     // Return the result of the function body.
-    hir::UncheckedReturnOp::create(builder, item.loc, value);
+    hir::UnifiedReturnOp::create(builder, item.loc, value);
   }
 
   return success();

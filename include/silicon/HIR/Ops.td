@@ -307,17 +307,19 @@ def SpecializeFuncOp : HIROp<"specialize_func", [
 }
 
 //===----------------------------------------------------------------------===//
-// Constless Functions and Calls
+// Unified Functions and Calls
 //===----------------------------------------------------------------------===//
 
-def UncheckedFuncOp : HIROp<"unchecked_func", [
+def UnifiedFuncOp : HIROp<"unified_func", [
   IsolatedFromAbove,
   Symbol,
 ]> {
-  let summary = "A function not yet split into constness levels";
+  let summary = "A function combining all phases before splitting";
   let arguments = (ins
     SymbolNameAttr:$sym_name,
-    OptionalAttr<StrAttr>:$sym_visibility
+    OptionalAttr<StrAttr>:$sym_visibility,
+    DenseI32ArrayAttr:$argPhases,
+    DenseI32ArrayAttr:$resultPhases
   );
   let regions = (region
     MinSizedRegion<1>:$signature,
@@ -325,34 +327,35 @@ def UncheckedFuncOp : HIROp<"unchecked_func", [
   );
   let assemblyFormat = [{
     custom<SymbolVisibility>($sym_visibility) ``
-    $sym_name attr-dict-with-keyword $signature $body
+    $sym_name $argPhases `->` $resultPhases attr-dict-with-keyword $signature $body
   }];
+  let hasVerifier = 1;
   let hasRegionVerifier = 1;
   let extraClassDeclaration = [{
-    UncheckedSignatureOp getSignatureOp();
-    UncheckedReturnOp getReturnOp();
+    UnifiedSignatureOp getSignatureOp();
+    UnifiedReturnOp getReturnOp();
   }];
 }
 
-def UncheckedArgOp : HIROp<"unchecked_arg", [
-  HasParent<"UncheckedFuncOp">,
+def UnifiedArgOp : HIROp<"unified_arg", [
+  HasParent<"UnifiedFuncOp">,
   Pure,
 ]> {
-  let summary = "A function argument or result before const inference";
-  let arguments = (ins StrAttr:$name, AnyHIRType:$typeOperand, I32Attr:$constness);
+  let summary = "A function argument before phase splitting";
+  let arguments = (ins StrAttr:$name, AnyHIRType:$typeOperand);
   let results = (outs AnyHIRType:$result);
   let assemblyFormat = [{
-    $name `,` $typeOperand `,` $constness attr-dict
+    $name `,` $typeOperand attr-dict
   }];
 }
 
-def UncheckedSignatureOp : HIROp<"unchecked_signature", [
+def UnifiedSignatureOp : HIROp<"unified_signature", [
   AttrSizedOperandSegments,
-  HasParent<"UncheckedFuncOp">,
+  HasParent<"UnifiedFuncOp">,
   Pure,
   Terminator,
 ]> {
-  let summary = "Terminator for the signature region of an unchecked function";
+  let summary = "Terminator for the signature region of a unified function";
   let arguments = (ins
     Variadic<AnyHIRType>:$argValues,
     Variadic<AnyHIRType>:$typeOfResults
@@ -362,30 +365,33 @@ def UncheckedSignatureOp : HIROp<"unchecked_signature", [
   }];
 }
 
-def UncheckedReturnOp : HIROp<"unchecked_return", [
-  HasParent<"UncheckedFuncOp">,
+def UnifiedReturnOp : HIROp<"unified_return", [
+  HasParent<"UnifiedFuncOp">,
   Pure,
   ReturnLike,
   Terminator,
 ]> {
-  let summary = "Terminator for the body region of an unchecked function";
+  let summary = "Terminator for the body region of a unified function";
   let arguments = (ins Variadic<AnyHIRType>:$operands);
   let assemblyFormat = [{
     ($operands^)? attr-dict
   }];
 }
 
-def UncheckedCallOp : HIROp<"unchecked_call", [
+def UnifiedCallOp : HIROp<"unified_call", [
   DeclareOpInterfaceMethods<SymbolUserOpInterface>,
 ]> {
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
-    Variadic<AnyType>:$arguments
+    Variadic<AnyType>:$arguments,
+    DenseI32ArrayAttr:$argPhases,
+    DenseI32ArrayAttr:$resultPhases
   );
-  let summary = "A typeless call not yet split into constness levels";
+  let summary = "A typeless call not yet split into phases";
   let results = (outs Variadic<AnyType>:$results);
   let assemblyFormat = [{
     $callee `(` $arguments `)` `:` functional-type($arguments, results)
+    $argPhases `->` $resultPhases
     attr-dict
   }];
 }

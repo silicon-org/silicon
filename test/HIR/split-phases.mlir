@@ -9,12 +9,12 @@ func.func private @dummyB()
 // CHECK-NEXT: func.call @dummyA
 // CHECK-NEXT: hir.return
 
-// CHECK-NOT: hir.unchecked_func
-hir.unchecked_func @SinglePhase {
-  hir.unchecked_signature () -> ()
+// CHECK-NOT: hir.unified_func
+hir.unified_func @SinglePhase [] -> [] {
+  hir.unified_signature () -> ()
 } {
   func.call @dummyA() : () -> ()
-  hir.unchecked_return
+  hir.unified_return
 }
 
 //===----------------------------------------------------------------------===//
@@ -30,16 +30,16 @@ hir.unchecked_func @SinglePhase {
 // CHECK-NEXT: func.call @dummyB
 // CHECK-NEXT: hir.return
 
-// CHECK-NOT: hir.unchecked_func
-hir.unchecked_func @TwoUnrelatedPhases {
-  hir.unchecked_signature () -> ()
+// CHECK-NOT: hir.unified_func
+hir.unified_func @TwoUnrelatedPhases [] -> [] {
+  hir.unified_signature () -> ()
 } {
   func.call @dummyB() : () -> ()
   hir.expr attributes {const = 1} {
     func.call @dummyA() : () -> ()
     hir.yield
   }
-  hir.unchecked_return
+  hir.unified_return
 }
 
 //===----------------------------------------------------------------------===//
@@ -57,9 +57,9 @@ hir.unchecked_func @TwoUnrelatedPhases {
 // CHECK-NEXT: hir.binary [[TMP0]], [[TMP1]]
 // CHECK-NEXT: hir.return
 
-// CHECK-NOT: hir.unchecked_func
-hir.unchecked_func @ValueUseAcrossPhases {
-  hir.unchecked_signature () -> ()
+// CHECK-NOT: hir.unified_func
+hir.unified_func @ValueUseAcrossPhases [] -> [] {
+  hir.unified_signature () -> ()
 } {
   %0 = hir.constant_int 42
   %1 = hir.expr : !hir.any attributes {const = 1} {
@@ -67,7 +67,7 @@ hir.unchecked_func @ValueUseAcrossPhases {
     hir.yield %3 : !hir.any
   }
   %2 = hir.binary %0, %1
-  hir.unchecked_return
+  hir.unified_return
 }
 
 //===----------------------------------------------------------------------===//
@@ -83,16 +83,16 @@ hir.unchecked_func @ValueUseAcrossPhases {
 // CHECK-NEXT: [[R:%.+]] = hir.binary [[A]], [[B]]
 // CHECK-NEXT: hir.return [[R]]
 
-// CHECK-NOT: hir.unchecked_func
-hir.unchecked_func @ConstArg {
+// CHECK-NOT: hir.unified_func
+hir.unified_func @ConstArg [1, 0] -> [0] {
   %0 = hir.int_type
-  %1 = hir.unchecked_arg "a", %0, 1
+  %1 = hir.unified_arg "a", %0
   %2 = hir.int_type
-  %3 = hir.unchecked_arg "b", %2, 0
+  %3 = hir.unified_arg "b", %2
   %4 = hir.int_type
-  hir.unchecked_signature (%1, %3) -> (%4)
+  hir.unified_signature (%1, %3) -> (%4)
 } {
 ^bb0(%a: !hir.any, %b: !hir.any):
   %0 = hir.binary %a, %b
-  hir.unchecked_return %0
+  hir.unified_return %0
 }
