@@ -376,33 +376,52 @@ static void rewriteCheckedCalls(ModuleOp moduleOp, SymbolTable &symbolTable) {
       return;
 
     OpBuilder builder(callOp);
+    auto loc = callOp.getLoc();
     auto constnessOfArgs = callOp.getConstnessOfArgs();
 
-    // Partition arguments into const and runtime based on constness.
+    // Partition arguments and their types into const and runtime based on
+    // the constness annotations from the checked call.
     SmallVector<Value> constArgs, runtimeArgs;
-    for (auto [arg, constness] :
-         llvm::zip(callOp.getArguments(), constnessOfArgs)) {
-      if (constness > 0)
+    SmallVector<Value> constTypeOfArgs, runtimeTypeOfArgs;
+    for (auto [arg, type, constness] : llvm::zip(
+             callOp.getArguments(), callOp.getTypeOfArgs(), constnessOfArgs)) {
+      if (constness > 0) {
         constArgs.push_back(arg);
-      else
+        constTypeOfArgs.push_back(type);
+      } else {
         runtimeArgs.push_back(arg);
+        runtimeTypeOfArgs.push_back(type);
+      }
     }
 
+    // Result types for the const call are not yet known; use inferrables.
+    SmallVector<Value> constCallTypeOfResults;
+    for (size_t i = 0; i < callOp.getResultTypes().size(); ++i)
+      constCallTypeOfResults.push_back(
+          InferrableOp::create(builder, loc).getResult());
+
     // Call the const-phase function with the const arguments.
-    auto constCall = DirectCallOp::create(
-        builder, callOp.getLoc(), callOp.getResultTypes(),
-        builder.getStringAttr(constFuncName), constArgs);
+    auto constCall = CallOp::create(
+        builder, loc, callOp.getResultTypes(),
+        builder.getStringAttr(constFuncName), constArgs, constTypeOfArgs,
+        constCallTypeOfResults);
 
     // The const-phase function returns values that the runtime phase needs.
-    // Thread them through as additional arguments to the runtime-phase call.
+    // Thread them through as additional arguments to the runtime-phase call,
+    // with inferrable type placeholders since the types are resolved later.
     SmallVector<Value> fullRuntimeArgs(runtimeArgs);
-    for (auto result : constCall.getResults())
+    SmallVector<Value> fullRuntimeTypeOfArgs(runtimeTypeOfArgs);
+    for (auto result : constCall.getResults()) {
       fullRuntimeArgs.push_back(result);
+      fullRuntimeTypeOfArgs.push_back(
+          InferrableOp::create(builder, loc).getResult());
+    }
 
-    // Call the runtime-phase function.
-    auto runtimeCall = DirectCallOp::create(
-        builder, callOp.getLoc(), callOp.getResultTypes(),
-        builder.getStringAttr(runtimeFuncName), fullRuntimeArgs);
+    // Call the runtime-phase function with the combined argument list.
+    auto runtimeCall = CallOp::create(
+        builder, loc, callOp.getResultTypes(),
+        builder.getStringAttr(runtimeFuncName), fullRuntimeArgs,
+        fullRuntimeTypeOfArgs, callOp.getTypeOfResults());
 
     callOp.replaceAllUsesWith(runtimeCall.getResults());
     callOp.erase();

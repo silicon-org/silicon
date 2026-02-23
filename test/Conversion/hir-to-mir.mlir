@@ -39,10 +39,14 @@ hir.func @Calls {
   // CHECK: mir.call @foo() : () -> ()
   hir.call @foo() : () -> ()
 
-  // CHECK: [[TMP:%.+]] = mir.constant #mir.int<42>
-  // CHECK: mir.call @foo([[TMP]]) : (!mir.int) -> !mir.uint<42>
-  %b1 = hir.constant_int 42
-  hir.call @foo(%b1) : (!hir.any) -> !mir.uint<42>
+  %int_type = hir.int_type
+  // CHECK: [[C42:%.+]] = mir.constant #mir.int<42>
+  %c42 = hir.constant_int 42
+  // CHECK: mir.constant #mir.type<!mir.uint<42>>
+  %uint42_type = hir.uint_type %c42
+
+  // CHECK: mir.call @foo([[C42]]) : (!mir.int) -> !mir.uint<42>
+  hir.call @foo(%c42) : (%int_type) -> (%uint42_type)
 
   hir.return
 }

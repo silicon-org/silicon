@@ -1,7 +1,9 @@
-- Rename `hir.unchecked_*` ops to `hir.unified_*`. And `hir.checked_call` should just be `hir.call`.
-- Remove `hir.direct_call` in favor of `hir.call`. Conversion to `mir.call` should enforce that the type SSA operands are all constants, and then bake those constant types into the MIR call.
+- Rename `hir.unchecked_*` ops to `hir.unified_*`. Track phase for each argument and result on `hir.unified_func` and `hir.unified_call` as an array of integers. The call verifier should check that the phases on the call are identical to the phases on the function. The verifiers also need to check that the number of argument and result phases exactly matches the number of arguments and results.
+- `hir.checked_call` should just be `hir.call`. No phase ("constness") annotation should be needed at this point, since we split `hir.unified_call` up into separate `hir.call`, one per phase.
 - Rename "constness" in the AST to "phase", and make it signed such that `const` can decrease the phase and `dyn` can increase the phase.
 - Remove `hir.const_type`, `hir.const_wrap`, and `hir.const_unwrap`.
 - Make the parser accept multiple const and dyn modifiers on function arguments.
 - Make the parser accept const and dyn modifiers in function results. This may need closer alignment to the intentions described in CLAUDE.md.
 - Replace `hir.binary` with dedicated ops like `hir.add`. Same for `mir.binary`.
+- `rewriteCheckedCalls` is prototype code; type operands for the const call use `hir.inferrable` placeholders (lowered to `!hir.any`) rather than the actual types. When the phase-split pipeline matures, these should be replaced with real type values.
+- Several call sites still use the deprecated `builder.create<Op>()` form instead of `Op::create(builder, ...)` (warnings emitted during compilation).

@@ -46,6 +46,24 @@ SuccessorOperands ConstCondBranchOp::getSuccessorOperands(unsigned index) {
 #include "silicon/HIR/Ops.cpp.inc"
 
 //===----------------------------------------------------------------------===//
+// CallOp
+//===----------------------------------------------------------------------===//
+
+/// Infer result types for `hir.call`: one `!hir.any` result per element of
+/// `typeOfResults`, so the parser can reconstruct the result count without
+/// needing an explicit `type($results)` directive in the assembly format.
+LogicalResult CallOp::inferReturnTypes(
+    MLIRContext *ctx, std::optional<Location>, ValueRange operands,
+    DictionaryAttr attrs, OpaqueProperties props, RegionRange,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  CallOp::Adaptor adaptor(operands, attrs, props);
+  auto anyType = AnyType::get(ctx);
+  for (size_t i = 0; i < adaptor.getTypeOfResults().size(); ++i)
+    inferredReturnTypes.push_back(anyType);
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // TypeOfOp
 //===----------------------------------------------------------------------===//
 

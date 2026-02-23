@@ -268,28 +268,22 @@ def NextPhaseOp : HIROp<"next_phase", [
   let assemblyFormat = "$dest attr-dict";
 }
 
-def DirectCallOp : HIROp<"direct_call"> {
+def CallOp : HIROp<"call", [
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+  RangedTypesMatchWith<"arguments match argument types", "arguments", "typeOfArgs", "$_self">,
+  RangedTypesMatchWith<"results match result types", "results", "typeOfResults", "$_self">,
+]> {
   let summary = "A direct call to a named function";
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
-    Variadic<AnyType>:$arguments
+    Variadic<AnyHIRType>:$arguments,
+    Variadic<AnyHIRType>:$typeOfArgs,
+    Variadic<AnyHIRType>:$typeOfResults
   );
-  let results = (outs Variadic<AnyType>:$results);
+  let results = (outs Variadic<AnyHIRType>:$results);
   let assemblyFormat = [{
-    $callee `(` $arguments `)` `:` functional-type($arguments, results)
-    attr-dict
-  }];
-}
-
-def CallOp : HIROp<"call"> {
-  let summary = "A direct call to a named function";
-  let arguments = (ins
-    FlatSymbolRefAttr:$callee,
-    Variadic<AnyType>:$arguments
-  );
-  let results = (outs Variadic<AnyType>:$results);
-  let assemblyFormat = [{
-    $callee `(` $arguments `)` `:` functional-type($arguments, results)
+    $callee `(` $arguments `)` `:` `(` $typeOfArgs `)` `->` `(` $typeOfResults `)`
     attr-dict
   }];
 }

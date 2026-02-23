@@ -158,6 +158,19 @@ static LogicalResult convert(hir::FuncTypeOp op,
 // Other Operations
 //===----------------------------------------------------------------------===//
 
+static LogicalResult convert(hir::InferrableOp op,
+                             hir::InferrableOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  // Lower an inferrable type placeholder to a type constant for !hir.any.
+  // Phase-split code inserts `hir.inferrable` for result types that are not
+  // yet resolved; these always carry !hir.any at the MLIR level, matching the
+  // original behavior of the removed DirectCallOp.
+  auto type = hir::AnyType::get(op.getContext());
+  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
 static LogicalResult convert(hir::BinaryOp op, hir::BinaryOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
   rewriter.replaceOpWithNewOp<mir::BinaryOp>(op, adaptor.getLhs(),
@@ -180,18 +193,29 @@ static LogicalResult convert(hir::ReturnOp op, hir::ReturnOp::Adaptor adaptor,
   return success();
 }
 
-static LogicalResult convert(hir::DirectCallOp op,
-                             hir::DirectCallOp::Adaptor adaptor,
-                             ConversionPatternRewriter &rewriter) {
-  rewriter.replaceOpWithNewOp<mir::CallOp>(
-      op, op.getResultTypes(), op.getCalleeAttr(), adaptor.getArguments());
-  return success();
-}
-
 static LogicalResult convert(hir::CallOp op, hir::CallOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  rewriter.replaceOpWithNewOp<mir::CallOp>(
-      op, op.getResultTypes(), op.getCalleeAttr(), adaptor.getArguments());
+  // Validate argument types from constant type operands (not used directly;
+  // the converted operand types are the ground truth).
+  for (auto value : adaptor.getTypeOfArgs()) {
+    mir::TypeAttr attr;
+    if (!matchPattern(value, m_Constant(&attr)))
+      return emitBug(op.getLoc()) << "non-constant argument type";
+  }
+
+  // Extract result types from constant type operands and bake them into
+  // the MIR call.
+  SmallVector<Type> resultTypes;
+  resultTypes.reserve(adaptor.getTypeOfResults().size());
+  for (auto value : adaptor.getTypeOfResults()) {
+    mir::TypeAttr attr;
+    if (!matchPattern(value, m_Constant(&attr)))
+      return emitBug(op.getLoc()) << "non-constant result type";
+    resultTypes.push_back(attr.getValue());
+  }
+
+  rewriter.replaceOpWithNewOp<mir::CallOp>(op, resultTypes, op.getCalleeAttr(),
+                                           adaptor.getArguments());
   return success();
 }
 
@@ -254,8 +278,8 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::UIntTypeOp>(convert);
   patterns.add<hir::AnyfuncTypeOp>(convert);
   patterns.add<hir::FuncTypeOp>(convert);
+  patterns.add<hir::InferrableOp>(convert);
   patterns.add<hir::BinaryOp>(convert);
-  patterns.add<hir::DirectCallOp>(convert);
   patterns.add<hir::SpecializeFuncOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
   patterns.add<hir::CallOp>(convert);

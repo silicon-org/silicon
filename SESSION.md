@@ -1,0 +1,1 @@
+- MLIR format caveat: `$variadic` in a custom assembly format fails for empty lists if the variadic is not surrounded by a delimiter like `(...)`, because the internal `parseCommaSeparatedList` with `Delimiter::None` tries to parse at least one element. The fix is to put the variadic inside a delimiter, like `` `(` $variadic `)` ``.
