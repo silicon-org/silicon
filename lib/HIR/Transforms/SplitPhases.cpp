@@ -29,27 +29,26 @@ namespace hir {
 } // namespace silicon
 
 namespace {
-/// A helper struct to analyze the phase split of a function and assign concrete
-/// phase numbers to individual operations.
+/// Compute the earliest available phase for each op and value in a unified
+/// function. This uses a forward PreOrder walk: each op's phase is determined
+/// by its parent's phase and its operands' phases (for pure ops), or just the
+/// parent's phase (for side-effecting ops). ExprOps with a `const` attribute
+/// shift relative to their parent.
+///
+/// Constants and other pure ops with no operands get INT16_MIN, meaning they
+/// float to whatever phase needs them. This is clipped to minPhase during
+/// splitting.
 struct PhaseAnalysis {
   PhaseAnalysis(UnifiedFuncOp funcOp) : funcOp(funcOp) {}
   void analyze();
-  void addToWorklist(Operation *op);
-  void drainWorklist();
+  int16_t getValuePhase(Value value) const;
+  LogicalResult checkCallArgPhases();
 
-  struct Item {
-    Operation *op;
-    bool checkParent;
-    Operation::user_iterator userIt;
-  };
   UnifiedFuncOp funcOp;
-  DenseSet<Operation *> seenOps;
-  SmallVector<Item, 0> worklist;
   DenseMap<Operation *, int16_t> opPhases;
 
-  /// Phases assigned to body block arguments based on constness of the
-  /// corresponding UnifiedArgOp in the signature.
-  DenseMap<Value, int16_t> argPhases;
+  /// Phases for all values: body block args and op results.
+  DenseMap<Value, int16_t> valuePhases;
 };
 } // namespace
 
@@ -57,92 +56,79 @@ void PhaseAnalysis::analyze() {
   LLVM_DEBUG(llvm::dbgs() << "Analyzing phases in " << funcOp.getSymNameAttr()
                           << "\n");
 
-  // Determine which body block arguments have a non-zero (shifted) phase based
-  // on the argPhases attribute. Negative phases are const (earlier), positive
-  // phases are dyn (later).
+  // Pre-populate valuePhases for all body block arguments.
   auto bodyArgs = funcOp.getBody().getArguments();
   for (auto [idx, phase] : llvm::enumerate(funcOp.getArgPhases())) {
     int16_t argPhase = static_cast<int16_t>(phase);
-    if (argPhase < 0) {
-      argPhases[bodyArgs[idx]] = argPhase;
-      LLVM_DEBUG(llvm::dbgs()
-                 << "- Arg " << idx << " has phase " << argPhase << "\n");
-    }
+    valuePhases[bodyArgs[idx]] = argPhase;
+    LLVM_DEBUG(if (argPhase != 0) llvm::dbgs()
+               << "- Arg " << idx << " has phase " << argPhase << "\n");
   }
 
+  // Seed the function itself at phase 0.
   opPhases.insert({funcOp, 0});
+
+  // Walk the body in PreOrder, computing earliest available phases.
   funcOp.getBody().walk<WalkOrder::PreOrder>([&](Operation *op) {
-    addToWorklist(op);
-    drainWorklist();
-  });
-}
+    auto *parentOp = op->getParentOp();
+    int16_t parentPhase = opPhases.at(parentOp);
 
-void PhaseAnalysis::addToWorklist(Operation *op) {
-  if (opPhases.contains(op))
-    return;
+    // Top-level ops (parent is the unified func) can float to any phase;
+    // nested ops are floored at their parent's phase.
+    bool isTopLevel = isa<UnifiedFuncOp>(parentOp);
+    int16_t floor = isTopLevel ? INT16_MIN : parentPhase;
 
-  if (!seenOps.insert(op).second) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "- Cycle detected; op already seen: ";
-      op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-      llvm::dbgs() << "\n";
-    });
-    return;
-  }
-
-  // If the op has side-effects, we do not adjust its phase based on its users.
-  // If the op has no side-effects, visit all users first.
-  auto userIt = op->user_end();
-  if (mlir::isMemoryEffectFree(op))
-    userIt = op->user_begin();
-  worklist.push_back({op, true, userIt});
-}
-
-void PhaseAnalysis::drainWorklist() {
-  while (!worklist.empty()) {
-    auto &item = worklist.back();
-
-    // Visit the parent op if we haven't done so yet.
-    if (item.checkParent) {
-      item.checkParent = false;
-      addToWorklist(item.op->getParentOp());
-      continue;
-    }
-
-    // Visit the next user if we have any left.
-    if (item.userIt != item.op->user_end()) {
-      addToWorklist(*item.userIt);
-      ++item.userIt;
-      continue;
-    }
-
-    // All dependencies have been processed, compute the phase.
-    // At the most basic level we inherit the phase of our parent.
-    int16_t phase = opPhases.at(item.op->getParentOp());
-
-    // If this is an `hir.expr` op, its phase can be shifted based on its
-    // `const` attribute.
+    // ExprOps with a `const` attribute shift relative to their parent.
     IntegerAttr constAttr;
-    if (isa<ExprOp>(item.op) &&
-        (constAttr = item.op->getAttrOfType<IntegerAttr>("const"))) {
-      phase += constAttr.getInt();
+    int16_t phase;
+    if (isa<ExprOp>(op) &&
+        (constAttr = op->getAttrOfType<IntegerAttr>("const"))) {
+      phase = parentPhase + constAttr.getInt();
+    } else if (!isa<ExprOp>(op) && mlir::isMemoryEffectFree(op)) {
+      // Pure ops: phase is max of floor and all operand phases.
+      phase = floor;
+      for (auto operand : op->getOperands())
+        phase = std::max(phase, getValuePhase(operand));
+    } else {
+      // Side-effecting ops (and ExprOps without const): inherit parent phase.
+      phase = parentPhase;
     }
-
-    // If this op has no side-effects (and is not an ExprOp with an explicit
-    // phase attribute), shift its phase to accommodate all users.
-    if (!constAttr &&
-        (isa<ExprOp>(item.op) || mlir::isMemoryEffectFree(item.op)))
-      for (auto *user : item.op->getUsers())
-        phase = std::max(phase, opPhases.at(user));
 
     LLVM_DEBUG({
       llvm::dbgs() << "- Computed phase " << phase << " for: ";
-      item.op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
+      op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
       llvm::dbgs() << "\n";
     });
-    opPhases.insert({item.op, phase});
-    worklist.pop_back();
-  }
+    opPhases.insert({op, phase});
+    for (auto result : op->getResults())
+      valuePhases[result] = phase;
+  });
+}
+
+/// Look up the earliest phase at which a value is available.
+int16_t PhaseAnalysis::getValuePhase(Value value) const {
+  auto it = valuePhases.find(value);
+  assert(it != valuePhases.end());
+  return it->second;
+}
+
+/// Check that unified_call arguments are available at their required phases.
+LogicalResult PhaseAnalysis::checkCallArgPhases() {
+  bool anyErrors = false;
+  funcOp.getBody().walk([&](UnifiedCallOp callOp) {
+    for (auto [arg, phase] :
+         llvm::zip(callOp.getArguments(), callOp.getArgPhases())) {
+      int16_t required = static_cast<int16_t>(phase);
+      int16_t available = getValuePhase(arg);
+      if (available > required) {
+        emitError(callOp.getLoc())
+            << "call argument requires phase " << required
+            << " but value is only available at phase " << available;
+        anyErrors = true;
+      }
+    }
+  });
+  return anyErrors ? failure() : success();
 }
 
 namespace {
@@ -166,14 +152,17 @@ struct PhaseSplitter {
 void PhaseSplitter::run() {
   LLVM_DEBUG(llvm::dbgs() << "Splitting " << funcOp.getSymNameAttr() << "\n");
 
-  // Determine the phase range, considering both operation phases and argument
-  // phases. Negative phases are const (run earlier), positive are dyn (later).
+  // Determine the phase range, skipping INT16_MIN (floating constants).
   int16_t minPhase = 0, maxPhase = 0;
   for (auto &[op, phase] : analysis.opPhases) {
+    if (phase == INT16_MIN)
+      continue;
     minPhase = std::min(minPhase, phase);
     maxPhase = std::max(maxPhase, phase);
   }
-  for (auto &[value, phase] : analysis.argPhases) {
+  for (auto &[value, phase] : analysis.valuePhases) {
+    if (phase == INT16_MIN)
+      continue;
     minPhase = std::min(minPhase, phase);
     maxPhase = std::max(maxPhase, phase);
   }
@@ -218,41 +207,40 @@ void PhaseSplitter::run() {
   splits[0 - minPhase].funcOp.getBody().takeBody(funcOp.getBody());
 
   // Move shifted-phase body block arguments to their respective phase
-  // functions. For each shifted arg, we create a block arg in that phase's
-  // function, add it to that phase's return values, create a receiving block
-  // arg in phase 0, and replace all uses of the original body block arg.
+  // functions. We create block args in each const arg's origin phase, replace
+  // all uses, and let cross-phase value threading handle multi-hop forwarding.
   {
     auto &phase0Block = splits[0 - minPhase].funcOp.getBody().front();
 
     // Collect const args and their phases first to avoid iterator invalidation.
     SmallVector<std::pair<unsigned, int16_t>> constArgs;
-    for (auto &[value, phase] : analysis.argPhases) {
-      auto bodyArg = cast<BlockArgument>(value);
-      constArgs.push_back({bodyArg.getArgNumber(), phase});
+    for (auto [idx, phase] : llvm::enumerate(funcOp.getArgPhases())) {
+      int16_t argPhase = static_cast<int16_t>(phase);
+      if (argPhase < 0)
+        constArgs.push_back({idx, argPhase});
     }
     llvm::sort(constArgs);
 
-    // Process each const arg.
+    // Step 1: Create a block arg in each const arg's origin phase function.
+    SmallVector<std::pair<unsigned, Value>> replacements;
     SmallVector<unsigned> argsToErase;
     for (auto [idx, argPhase] : constArgs) {
       auto bodyArg = phase0Block.getArgument(idx);
       LLVM_DEBUG(llvm::dbgs() << "- Moving body arg " << idx << " to phase "
                               << argPhase << "\n");
-
-      // Create a block arg in the shifted-phase function to receive this value.
       auto &constBlock = splits[argPhase - minPhase].funcOp.getBody().front();
-      auto constArg =
+      Value ownArg =
           constBlock.addArgument(bodyArg.getType(), bodyArg.getLoc());
-
-      // The shifted-phase function returns this value so it flows to phase 0.
-      splits[argPhase - minPhase].returnValues.push_back(constArg);
-
-      // Create a new block arg in phase 0 to receive the value from the const
-      // phase, and replace all uses of the old body block arg.
-      auto newPhase0Arg =
-          phase0Block.addArgument(bodyArg.getType(), bodyArg.getLoc());
-      bodyArg.replaceAllUsesWith(newPhase0Arg);
+      replacements.push_back({idx, ownArg});
       argsToErase.push_back(idx);
+    }
+
+    // Step 2: Replace all uses of old body block args with the origin-phase
+    // values. Cross-phase value threading will handle forwarding to later
+    // phases as needed.
+    for (auto &[idx, ownArg] : replacements) {
+      auto bodyArg = phase0Block.getArgument(idx);
+      bodyArg.replaceAllUsesWith(ownArg);
     }
 
     // Erase old body block args in reverse order.
@@ -273,6 +261,8 @@ void PhaseSplitter::run() {
     Operation *op = &*opIt;
     ++opIt;
     int16_t opPhase = analysis.opPhases.at(op);
+    if (opPhase == INT16_MIN)
+      opPhase = minPhase;
     if (opPhase != phase) {
       LLVM_DEBUG({
         llvm::dbgs() << "- Moving to phase " << opPhase << ": ";
@@ -312,7 +302,7 @@ void PhaseSplitter::run() {
 
     // Add a return operation to this split.
     builder.setInsertionPointToEnd(&split.funcOp.getBody().back());
-    builder.create<ReturnOp>(funcOp.getLoc(), split.returnValues);
+    ReturnOp::create(builder, funcOp.getLoc(), split.returnValues);
 
     // Replace all uses of values from earlier phases with additional block
     // arguments. This will be replaced with constants through function
@@ -369,85 +359,118 @@ struct SplitPhasesPass
 };
 } // namespace
 
-/// Rewrite UnifiedCallOps to call the split phase functions directly. For each
-/// unified call, the const arguments go to the const-phase function and the
-/// runtime arguments go to the runtime-phase function. The const-phase results
-/// are threaded through to the runtime-phase call.
+/// Rewrite UnifiedCallOps to call the split phase functions directly.
+///
+/// For each unified call, we discover the split functions for the callee,
+/// partition arguments by phase, and emit a chain of calls from the earliest
+/// phase to the latest. Each call receives its own phase's arguments plus all
+/// results from the previous phase's call.
 static void rewriteUnifiedCalls(ModuleOp moduleOp, SymbolTable &symbolTable) {
   moduleOp.walk([&](UnifiedCallOp callOp) {
     auto calleeName = callOp.getCallee();
+    auto argPhases = callOp.getArgPhases();
+    auto resultPhases = callOp.getResultPhases();
 
-    // Look up the split functions. If the const-phase function doesn't exist,
-    // this callee wasn't split.
-    auto constFuncName = (calleeName + ".const1").str();
-    auto runtimeFuncName = (calleeName + ".const0").str();
-    auto constFunc = symbolTable.lookup<FuncOp>(constFuncName);
-    auto runtimeFunc = symbolTable.lookup<FuncOp>(runtimeFuncName);
-    if (!constFunc || !runtimeFunc)
-      return;
+    // Compute the phase range from argument and result phases.
+    int16_t minPhase = 0, maxPhase = 0;
+    for (auto p : argPhases) {
+      minPhase = std::min(minPhase, static_cast<int16_t>(p));
+      maxPhase = std::max(maxPhase, static_cast<int16_t>(p));
+    }
+    for (auto p : resultPhases) {
+      minPhase = std::min(minPhase, static_cast<int16_t>(p));
+      maxPhase = std::max(maxPhase, static_cast<int16_t>(p));
+    }
+
+    // Discover all split functions by name. If any are missing, this callee
+    // wasn't split.
+    SmallVector<std::pair<int16_t, FuncOp>> splitFuncs;
+    for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
+      auto name = phase <= 0 ? (calleeName + ".const" + Twine(-phase)).str()
+                             : (calleeName + ".dyn" + Twine(phase)).str();
+      auto func = symbolTable.lookup<FuncOp>(name);
+      if (!func)
+        return;
+      splitFuncs.push_back({phase, func});
+    }
 
     OpBuilder builder(callOp);
     auto loc = callOp.getLoc();
-    auto argPhases = callOp.getArgPhases();
 
-    // Partition arguments and their types into const and runtime based on
-    // the phase annotations from the unified call.
-    SmallVector<Value> constArgs, runtimeArgs;
-    SmallVector<Value> constTypeOfArgs, runtimeTypeOfArgs;
+    // Partition arguments and their type operands by phase.
+    DenseMap<int16_t, SmallVector<Value>> phaseArgs, phaseTypeOfArgs;
     for (auto [arg, type, phase] :
          llvm::zip(callOp.getArguments(), callOp.getTypeOfArgs(), argPhases)) {
-      if (phase < 0) {
-        constArgs.push_back(arg);
-        constTypeOfArgs.push_back(type);
-      } else {
-        runtimeArgs.push_back(arg);
-        runtimeTypeOfArgs.push_back(type);
+      phaseArgs[static_cast<int16_t>(phase)].push_back(arg);
+      phaseTypeOfArgs[static_cast<int16_t>(phase)].push_back(type);
+    }
+
+    // Chain calls from earliest phase to latest. Each call gets its own
+    // phase's arguments plus all results from the previous phase's call.
+    SmallVector<Value> prevResults;
+    for (auto &[phase, splitFunc] : splitFuncs) {
+      SmallVector<Value> callArgs(phaseArgs[phase]);
+      SmallVector<Value> callTypeOfArgs(phaseTypeOfArgs[phase]);
+
+      // Thread results from the previous phase.
+      for (auto result : prevResults) {
+        callArgs.push_back(result);
+        callTypeOfArgs.push_back(
+            InferrableOp::create(builder, loc).getResult());
       }
+
+      // The final phase uses the original unified_call's result types.
+      // Intermediate phases determine their result count from the split
+      // function's return op.
+      bool isFinal = (phase == maxPhase);
+      SmallVector<Value> callTypeOfResults;
+      SmallVector<Type> resultTypes;
+      if (isFinal) {
+        callTypeOfResults.append(callOp.getTypeOfResults().begin(),
+                                 callOp.getTypeOfResults().end());
+        resultTypes.append(callOp.getResultTypes().begin(),
+                           callOp.getResultTypes().end());
+      } else {
+        auto returnOp =
+            cast<ReturnOp>(splitFunc.getBody().front().getTerminator());
+        for (unsigned i = 0; i < returnOp.getNumOperands(); ++i) {
+          callTypeOfResults.push_back(
+              InferrableOp::create(builder, loc).getResult());
+          resultTypes.push_back(returnOp.getOperand(i).getType());
+        }
+      }
+
+      auto call = CallOp::create(builder, loc, resultTypes,
+                                 builder.getStringAttr(splitFunc.getSymName()),
+                                 callArgs, callTypeOfArgs, callTypeOfResults);
+      prevResults.assign(call.getResults().begin(), call.getResults().end());
     }
 
-    // Result types for the const call are not yet known; use inferrables.
-    SmallVector<Value> constCallTypeOfResults;
-    for (size_t i = 0; i < callOp.getResultTypes().size(); ++i)
-      constCallTypeOfResults.push_back(
-          InferrableOp::create(builder, loc).getResult());
-
-    // Call the const-phase function with the const arguments.
-    auto constCall =
-        CallOp::create(builder, loc, callOp.getResultTypes(),
-                       builder.getStringAttr(constFuncName), constArgs,
-                       constTypeOfArgs, constCallTypeOfResults);
-
-    // The const-phase function returns values that the runtime phase needs.
-    // Thread them through as additional arguments to the runtime-phase call,
-    // with inferrable type placeholders since the types are resolved later.
-    SmallVector<Value> fullRuntimeArgs(runtimeArgs);
-    SmallVector<Value> fullRuntimeTypeOfArgs(runtimeTypeOfArgs);
-    for (auto result : constCall.getResults()) {
-      fullRuntimeArgs.push_back(result);
-      fullRuntimeTypeOfArgs.push_back(
-          InferrableOp::create(builder, loc).getResult());
-    }
-
-    // Call the runtime-phase function with the combined argument list.
-    auto runtimeCall =
-        CallOp::create(builder, loc, callOp.getResultTypes(),
-                       builder.getStringAttr(runtimeFuncName), fullRuntimeArgs,
-                       fullRuntimeTypeOfArgs, callOp.getTypeOfResults());
-
-    callOp.replaceAllUsesWith(runtimeCall.getResults());
+    callOp.replaceAllUsesWith(prevResults);
     callOp.erase();
   });
 }
 
 void SplitPhasesPass::runOnOperation() {
   auto &symbolTable = getAnalysis<SymbolTable>();
-  for (auto op :
-       llvm::make_early_inc_range(getOperation().getOps<UnifiedFuncOp>())) {
-    PhaseAnalysis analysis(op);
+
+  // Run analysis and check call arg phases.
+  SmallVector<std::pair<UnifiedFuncOp, PhaseAnalysis>> analyses;
+  bool anyErrors = false;
+  for (auto op : getOperation().getOps<UnifiedFuncOp>()) {
+    auto &[funcOp, analysis] = analyses.emplace_back(op, op);
     analysis.analyze();
+    if (failed(analysis.checkCallArgPhases()))
+      anyErrors = true;
+  }
+  if (anyErrors)
+    return signalPassFailure();
+
+  // Split each function using its pre-computed analysis.
+  for (auto &[funcOp, analysis] : analyses) {
     PhaseSplitter splitter(analysis, symbolTable);
     splitter.run();
-    op.erase();
+    funcOp.erase();
   }
 
   // Rewrite unified calls to use the split phase functions.

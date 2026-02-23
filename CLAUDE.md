@@ -11,6 +11,7 @@ This document is aspirational: it describes where the project is heading, not ne
 If you notice any inconsistencies or contradictions, ask the user for clarification and update this file to clear up the confusion.
 Write down any noteworthy or surprising things for you to remember later as concise bullet-point notes in the SESSION.md file.
 If you want to remember a task to be done later, add it to the TODO.md file.
+If you make a change that resolves a todo, remove it from the TODO.md file.
 
 As a first phase of the project, we would like to develop a minimum viable example of the phased execution, HIR/MIR split, and monomorphization of functions.
 
