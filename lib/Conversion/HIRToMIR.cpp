@@ -190,39 +190,8 @@ static LogicalResult convert(hir::DirectCallOp op,
 
 static LogicalResult convert(hir::CallOp op, hir::CallOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  // Determine the callee.
-  mir::FuncAttr calleeAttr;
-  if (!matchPattern(adaptor.getCallee(), m_Constant(&calleeAttr)))
-    return emitBug(op.getLoc()) << "non-constant callee";
-  auto calleeType = calleeAttr.getType();
-
-  // TODO: Migrate this to the `hir.constant_func` lowering, and use the type of
-  // the `mir::FuncAttr` directly.
-
-  // Check the argument types.
-  if (calleeType.getNumInputs() != adaptor.getArguments().size())
-    return emitBug(op.getLoc())
-           << "callee expects " << calleeType.getNumInputs()
-           << " arguments, but call provides " << adaptor.getArguments().size();
-
-  for (auto [arg, expectedType] : llvm::zip(
-           adaptor.getArguments(), llvm::enumerate(calleeType.getInputs()))) {
-    if (arg.getType() != expectedType.value())
-      return emitBug(op.getLoc())
-             << "callee expects argument #" << expectedType.index() << " type "
-             << expectedType.value() << ", but call provides " << arg.getType();
-  }
-
-  // Check the result types.
-  if (calleeType.getNumResults() != op.getNumResults())
-    return emitBug(op.getLoc())
-           << "callee provides " << calleeType.getNumResults()
-           << " results, but call expects " << op.getNumResults();
-
-  // Create the call op.
-  rewriter.replaceOpWithNewOp<mir::CallOp>(op, calleeType.getResults(),
-                                           calleeAttr.getFunc(),
-                                           adaptor.getArguments());
+  rewriter.replaceOpWithNewOp<mir::CallOp>(
+      op, op.getResultTypes(), op.getCalleeAttr(), adaptor.getArguments());
   return success();
 }
 

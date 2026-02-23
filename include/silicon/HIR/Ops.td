@@ -282,8 +282,9 @@ def DirectCallOp : HIROp<"direct_call"> {
 }
 
 def CallOp : HIROp<"call"> {
+  let summary = "A direct call to a named function";
   let arguments = (ins
-    AnyHIRType:$callee,
+    FlatSymbolRefAttr:$callee,
     Variadic<AnyType>:$arguments
   );
   let results = (outs Variadic<AnyType>:$results);

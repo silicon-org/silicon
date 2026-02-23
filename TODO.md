@@ -1,4 +1,3 @@
-- The `hir.call` op should have the callee as a symbol ref, not an SSA operand. This will break a few existing tests, which we can just remove or comment out.
 - Rename `hir.unchecked_*` ops to `hir.unified_*`. And `hir.checked_call` should just be `hir.call`.
 - Remove `hir.direct_call` in favor of `hir.call`. Conversion to `mir.call` should enforce that the type SSA operands are all constants, and then bake those constant types into the MIR call.
 - Rename "constness" in the AST to "phase", and make it signed such that `const` can decrease the phase and `dyn` can increase the phase.

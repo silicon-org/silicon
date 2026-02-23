@@ -37,18 +37,12 @@ hir.func @Constants {
 // CHECK-LABEL: @Calls
 hir.func @Calls {
   // CHECK: mir.call @foo() : () -> ()
-  %a0 = hir.func_type () -> ()
-  %a1 = hir.constant_func @foo : %a0
-  hir.call %a1() : () -> ()
+  hir.call @foo() : () -> ()
 
   // CHECK: [[TMP:%.+]] = mir.constant #mir.int<42>
   // CHECK: mir.call @foo([[TMP]]) : (!mir.int) -> !mir.uint<42>
-  %b0 = hir.int_type
   %b1 = hir.constant_int 42
-  %b2 = hir.uint_type %b1
-  %b3 = hir.func_type (%b0) -> (%b2)
-  %b4 = hir.constant_func @foo : %b3
-  hir.call %b4(%b1) : (!hir.any) -> (!hir.any)
+  hir.call @foo(%b1) : (!hir.any) -> !mir.uint<42>
 
   hir.return
 }
