@@ -268,6 +268,19 @@ def NextPhaseOp : HIROp<"next_phase", [
   let assemblyFormat = "$dest attr-dict";
 }
 
+def DirectCallOp : HIROp<"direct_call"> {
+  let summary = "A direct call to a named function";
+  let arguments = (ins
+    FlatSymbolRefAttr:$callee,
+    Variadic<AnyType>:$arguments
+  );
+  let results = (outs Variadic<AnyType>:$results);
+  let assemblyFormat = [{
+    $callee `(` $arguments `)` `:` functional-type($arguments, results)
+    attr-dict
+  }];
+}
+
 def CallOp : HIROp<"call"> {
   let arguments = (ins
     AnyHIRType:$callee,

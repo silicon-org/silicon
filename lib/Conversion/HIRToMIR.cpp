@@ -180,6 +180,14 @@ static LogicalResult convert(hir::ReturnOp op, hir::ReturnOp::Adaptor adaptor,
   return success();
 }
 
+static LogicalResult convert(hir::DirectCallOp op,
+                             hir::DirectCallOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<mir::CallOp>(
+      op, op.getResultTypes(), op.getCalleeAttr(), adaptor.getArguments());
+  return success();
+}
+
 static LogicalResult convert(hir::CallOp op, hir::CallOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
   // Determine the callee.
@@ -237,19 +245,18 @@ static LogicalResult convert(UnrealizedConversionCastOp op,
 }
 
 void HIRToMIRPass::runOnOperation() {
-  if (llvm::any_of(getOperation().getBody().getArgumentTypes(), [](auto type) {
-        return !isa<mir::MIRDialect>(type.getDialect());
-      }))
-    return;
   LLVM_DEBUG(llvm::dbgs() << "Lowering @" << getOperation().getSymName()
                           << "\n");
 
   // Setup the type conversion.
   TypeConverter converter;
 
-  // All MIR types and a handful of builtin types are fine.
+  // All MIR types, HIR types, and a handful of builtin types are fine.
+  // HIR types (like !hir.any) are kept during partial lowering; they'll be
+  // resolved in later passes.
   converter.addConversion([](Type type) -> std::optional<Type> {
-    if (isa<mir::MIRDialect>(type.getDialect()) || isa<FunctionType>(type))
+    if (isa<mir::MIRDialect>(type.getDialect()) ||
+        isa<hir::HIRDialect>(type.getDialect()) || isa<FunctionType>(type))
       return type;
     return std::nullopt;
   });
@@ -279,6 +286,7 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::AnyfuncTypeOp>(convert);
   patterns.add<hir::FuncTypeOp>(convert);
   patterns.add<hir::BinaryOp>(convert);
+  patterns.add<hir::DirectCallOp>(convert);
   patterns.add<hir::SpecializeFuncOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
   patterns.add<hir::CallOp>(convert);

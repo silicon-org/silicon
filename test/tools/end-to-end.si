@@ -1,0 +1,12 @@
+// RUN: silc %s | FileCheck %s
+
+// Test that const arguments are evaluated at compile time through phased
+// execution. The `add` function has a const argument `a` which gets split into
+// a separate const-phase function. The compiler evaluates `add(42, 7)` at
+// compile time, producing the constant result 49.
+
+// CHECK-LABEL: hir.func private @main.const0
+// CHECK-NEXT: %c49_int = mir.constant #mir.int<49>
+// CHECK-NEXT: mir.return %c49_int
+fn add(const a: int, b: int) -> int { a + b }
+fn main() -> int { add(42, 7) }

@@ -358,6 +358,57 @@ struct SplitPhasesPass
 };
 } // namespace
 
+/// Rewrite CheckedCallOps to call the split phase functions directly. For each
+/// checked call, the const arguments go to the const-phase function and the
+/// runtime arguments go to the runtime-phase function. The const-phase results
+/// are threaded through to the runtime-phase call.
+static void rewriteCheckedCalls(ModuleOp moduleOp, SymbolTable &symbolTable) {
+  moduleOp.walk([&](CheckedCallOp callOp) {
+    auto calleeName = callOp.getCallee();
+
+    // Look up the split functions. If the const-phase function doesn't exist,
+    // this callee wasn't split.
+    auto constFuncName = (calleeName + ".const1").str();
+    auto runtimeFuncName = (calleeName + ".const0").str();
+    auto constFunc = symbolTable.lookup<FuncOp>(constFuncName);
+    auto runtimeFunc = symbolTable.lookup<FuncOp>(runtimeFuncName);
+    if (!constFunc || !runtimeFunc)
+      return;
+
+    OpBuilder builder(callOp);
+    auto constnessOfArgs = callOp.getConstnessOfArgs();
+
+    // Partition arguments into const and runtime based on constness.
+    SmallVector<Value> constArgs, runtimeArgs;
+    for (auto [arg, constness] :
+         llvm::zip(callOp.getArguments(), constnessOfArgs)) {
+      if (constness > 0)
+        constArgs.push_back(arg);
+      else
+        runtimeArgs.push_back(arg);
+    }
+
+    // Call the const-phase function with the const arguments.
+    auto constCall = DirectCallOp::create(
+        builder, callOp.getLoc(), callOp.getResultTypes(),
+        builder.getStringAttr(constFuncName), constArgs);
+
+    // The const-phase function returns values that the runtime phase needs.
+    // Thread them through as additional arguments to the runtime-phase call.
+    SmallVector<Value> fullRuntimeArgs(runtimeArgs);
+    for (auto result : constCall.getResults())
+      fullRuntimeArgs.push_back(result);
+
+    // Call the runtime-phase function.
+    auto runtimeCall = DirectCallOp::create(
+        builder, callOp.getLoc(), callOp.getResultTypes(),
+        builder.getStringAttr(runtimeFuncName), fullRuntimeArgs);
+
+    callOp.replaceAllUsesWith(runtimeCall.getResults());
+    callOp.erase();
+  });
+}
+
 void SplitPhasesPass::runOnOperation() {
   auto &symbolTable = getAnalysis<SymbolTable>();
   for (auto op :
@@ -368,4 +419,7 @@ void SplitPhasesPass::runOnOperation() {
     splitter.run();
     op.erase();
   }
+
+  // Rewrite checked calls to use the split phase functions.
+  rewriteCheckedCalls(getOperation(), symbolTable);
 }

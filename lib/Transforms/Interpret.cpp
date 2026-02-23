@@ -99,6 +99,13 @@ LogicalResult Interpreter::run() {
     // Handle all other operations.
     if (auto constOp = dyn_cast<mir::ConstantOp>(op)) {
       frame.values[constOp] = constOp.getValue();
+    } else if (auto binaryOp = dyn_cast<mir::BinaryOp>(op)) {
+      // For now, interpret binary ops on integers as addition.
+      // TODO: Add binary op kind tracking and handle all ops properly.
+      auto lhs = cast<mir::IntAttr>(operands[0]);
+      auto rhs = cast<mir::IntAttr>(operands[1]);
+      auto result = mir::IntAttr::get(op->getContext(), lhs.getValue() + rhs.getValue());
+      frame.values[binaryOp] = result;
     } else if (auto specializeFuncOp = dyn_cast<mir::SpecializeFuncOp>(op)) {
       auto attr = specializeFuncOp.interpret(
           mir::SpecializeFuncOp::FoldAdaptor(operands, specializeFuncOp));
