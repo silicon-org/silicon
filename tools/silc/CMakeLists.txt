@@ -3,6 +3,8 @@ set(libs
   SiliconRegisterDialects
   SiliconRegisterPasses
   SiliconSyntax
+  MLIRBytecodeReader
+  MLIRParser
 )
 
 add_silicon_tool(silc silc.cpp DEPENDS ${libs})

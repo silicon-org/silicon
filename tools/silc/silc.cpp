@@ -16,7 +16,10 @@
 #include "silicon/Syntax/Names.h"
 #include "silicon/Syntax/Parser.h"
 #include "silicon/Transforms/Passes.h"
+#include "mlir/Bytecode/BytecodeReader.h"
 #include "mlir/IR/AsmState.h"
+#include "mlir/IR/OwningOpRef.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/ToolUtilities.h"
@@ -35,6 +38,7 @@ namespace cl = llvm::cl;
 //===----------------------------------------------------------------------===//
 
 enum class LoweringMode { Parse, Full };
+enum class Format { Silicon, MLIR };
 
 struct Opt {
   cl::opt<std::string> inputFilename{cl::Positional, cl::init("-"),
@@ -64,6 +68,14 @@ struct Opt {
       cl::values(clEnumValN(LoweringMode::Parse, "parse-only",
                             "Emit the IR immediately after parsing")),
       cl::init(LoweringMode::Full)};
+
+  cl::opt<Format> format{
+      "format",
+      cl::desc("Input file format (auto-detected from extension by default)"),
+      cl::values(
+          clEnumValN(Format::Silicon, "silicon",
+                     "Parse as Silicon source text"),
+          clEnumValN(Format::MLIR, "mlir", "Parse as MLIR or MLIRBC file"))};
 };
 static Opt opt;
 
@@ -119,43 +131,92 @@ static void populatePasses(PassManager &pm) {
 // Driver
 //===----------------------------------------------------------------------===//
 
-static LogicalResult process(MLIRContext *context, llvm::SourceMgr &sourceMgr,
-                             llvm::raw_ostream &os) {
-  // Create a lexer to tokenize the input.
+/// Detect whether the input should be parsed as Silicon source or MLIR,
+/// based on the `--format` flag if given, or on the file extension and
+/// bytecode magic otherwise.
+static Format detectFormat(llvm::StringRef filename,
+                           const llvm::MemoryBuffer &buf) {
+  if (opt.format.getNumOccurrences() > 0)
+    return opt.format;
+  if (filename.ends_with(".mlir") || filename.ends_with(".mlirbc") ||
+      mlir::isBytecode(buf.getMemBufferRef()))
+    return Format::MLIR;
+  return Format::Silicon;
+}
+
+/// Parse a Silicon source file through the lexer, parser, name resolver, and
+/// codegen pipeline.
+///
+/// Returns `failure()` on error. Returns `success({})` (a null module) when an
+/// early-exit option like `--test-lexer` or `--test-parser` already printed its
+/// output. Returns `success(module)` when a module is ready for further
+/// processing.
+static FailureOr<mlir::OwningOpRef<mlir::ModuleOp>>
+parseSilicon(MLIRContext *context, llvm::SourceMgr &sourceMgr,
+             llvm::raw_ostream &os) {
   Lexer lexer(context, sourceMgr);
 
-  // If we are only testing the lexer, print all tokens in the input and exit.
+  // If we are only testing the lexer, print all tokens and exit early.
   if (opt.testLexer) {
     while (auto token = lexer.next()) {
       if (token.isError())
         return failure();
       os << lexer.getLoc(token) << ": " << token << "\n";
     }
-    return success();
+    return mlir::OwningOpRef<mlir::ModuleOp>{};
   }
 
-  // Create a parser and parse the input into an AST.
+  // Parse the input into an AST and resolve names.
   AST ast;
   Parser parser(lexer, ast);
   auto *root = parser.parseRoot();
   if (!root)
     return failure();
   ast.roots.push_back(root);
-
-  // Resolve names in the AST.
   if (failed(resolveNames(ast)))
     return failure();
 
-  // If we are only testing the parser, print the AST and exit.
+  // If we are only testing the parser, print the AST and exit early.
   if (opt.testParser) {
     ast.print(os);
-    return success();
+    return mlir::OwningOpRef<mlir::ModuleOp>{};
   }
 
   // Convert the AST to MLIR.
   auto module = convertToIR(context, ast);
   if (!module)
     return failure();
+  return module;
+}
+
+/// Parse an MLIR text or bytecode file.
+///
+/// Returns `failure()` if parsing fails, `success(module)` otherwise.
+static FailureOr<mlir::OwningOpRef<mlir::ModuleOp>>
+parseMlir(MLIRContext *context, llvm::SourceMgr &sourceMgr) {
+  mlir::ParserConfig config(context);
+  auto module = mlir::parseSourceFile<mlir::ModuleOp>(sourceMgr, config);
+  if (!module)
+    return failure();
+  return module;
+}
+
+/// Detect the format, parse the input, run the pass pipeline, and emit MLIR.
+static LogicalResult process(MLIRContext *context, llvm::SourceMgr &sourceMgr,
+                             llvm::raw_ostream &os) {
+  // Detect the format and parse into a module.
+  auto *buf = sourceMgr.getMemoryBuffer(sourceMgr.getMainFileID());
+  FailureOr<mlir::OwningOpRef<mlir::ModuleOp>> moduleOrErr;
+  if (detectFormat(opt.inputFilename, *buf) == Format::MLIR)
+    moduleOrErr = parseMlir(context, sourceMgr);
+  else
+    moduleOrErr = parseSilicon(context, sourceMgr, os);
+
+  if (failed(moduleOrErr))
+    return failure();
+  auto &module = *moduleOrErr;
+  if (!module)
+    return success(); // early exit for --test-lexer / --test-parser
 
   // If the user requested anything besides simply parsing the input, run the
   // appropriate transformation passes according to the command line options.
@@ -210,8 +271,8 @@ static LogicalResult executeCompiler(MLIRContext *context) {
     return handler.verify();
   };
 
-  // Split the input file into chunks if the `--split-input-file` option is set.
-  // Otherwise, process the entire input file as a single buffer.
+  // Split the input file into chunks if the `--split-input-file` option is
+  // set. Otherwise, process the entire input file as a single buffer.
   auto result = opt.splitInputFile
                     ? mlir::splitAndProcessBuffer(
                           std::move(inputFile), processBuffer, outputFile->os())
