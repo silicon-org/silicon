@@ -1,3 +1,8 @@
+# Phase Splits
+
+This document describes how the Silicon language intends to implement metaprogramming, function specialization, and phased compile-time execution.
+It is aspirational and does not reflect the current state of the code base.
+
 Consider the following input:
 
 ```
@@ -39,6 +44,50 @@ hir.unified_func @bar [] -> [0] attributes {argNames = [], resultNames = [""]} {
   hir.unified_return %3 : %0
 }
 ```
+
+## General Concepts
+
+**Note on optimizations.**
+This document describes the mechanical, canonical pattern for phase splitting and evaluation.
+In practice, the compiler should compute constants and types as early as possible, and materialize constant values in wiring regions and functions wherever beneficial.
+These optimizations are omitted from this document for clarity.
+We focus on the underlying pattern here; optimizations and shortcuts are for the implementation phase.
+
+### The HIR → MIR → LLVM → Interpret → Specialize Pipeline
+
+Phase evaluation follows a loop:
+
+1.  **Lower HIR to MIR.**
+    Type-as-value ops (`hir.int_type`, type block args) become concrete MLIR types on MIR ops.
+    For example, `hir.binary %a, %b : %type` becomes `mir.binary %a, %b : !mir.int` once `%type` is known to be `int_type`.
+    This is only possible when all type operands have been resolved to known constants, i.e. they are defined by ConstantLike ops such as `hir.int_type` or `hir.constant_int 42`.
+2.  **Lower MIR to LLVM IR.**
+    Standard MLIR-to-LLVM lowering.
+3.  **JIT-execute.**
+    Run the LLVM module and collect results.
+4.  **Materialize constants.**
+    Replace the evaluated `hir.phase_call` in the wiring region with constant ops holding the results.
+5.  **Specialize functions.**
+    Copy constant call arguments into function bodies, creating specialized/monomorphized versions of the function.
+    This is the metaprogramming mechanism in Silicon.
+6.  **Repeat.**
+    Check if any more `hir.phase_call` ops now have all-constant operands and can be evaluated.
+    If there are, go back to the first step and repeat.
+
+### JIT Batching
+
+Multiple independent phase functions can be compiled into a single LLVM module and JIT-executed together, minimizing the number of JIT round-trips.
+When a phase function contains `hir.split_call` ops, they are first resolved to direct `hir.call` ops by consulting callee wiring regions — each `hir.split_call @callee[phase]` becomes an `hir.call` to the concrete split function for that phase.
+The resolved functions are then lowered to MIR together and compiled into a single LLVM module, allowing the JIT to transitively evaluate an entire subgraph of phase functions in one execution.
+
+### Specialization and Monomorphization
+
+Substituting known constants for a phase function's block args is _specialization_.
+When all type and constant block args of a phase function are known, the function is fully specialized and can be lowered to MIR.
+
+_Monomorphization_ creates a dedicated clone of a split function for a specific set of constant arguments.
+The specialization key is (original function symbol, constant arg values).
+Before cloning, the compiler checks if a clone with the same key already exists and reuses it — this is how deduplication works.
 
 ## `hir.split_func` with a Wiring Region
 
@@ -111,12 +160,14 @@ This makes specialization uniform: inlining constants for some block args = spec
 The wiring region's SSA structure tells us everything:
 
 For **foo's** wiring region:
+
 - `%a`, `%b` are block args of `hir.split_func` -> original function arguments
 - `%a.type`, `%x.type` are results of `hir.phase_call @foo.split0()` -> inter-phase values (specialization constants once evaluated)
 - `%x`, `%y` appear in `hir.split_return` -> original function results
 - Everything else (`%b.type`, `%y.type`) -> inter-phase values for later phases
 
 For **bar's** wiring region:
+
 - No block args (bar takes no arguments)
 - `%x`, `%foo.ctx`, `%bar.result.type` are results of `hir.phase_call @bar.split0()` -> inter-phase values
 - `%foo.ctx` is an opaque phase context -- bar's wiring region threads it but never inspects it
@@ -283,6 +334,7 @@ To resolve this, the pipeline reads foo's wiring region with `%a = 21`:
    Result: `(42, int_type, int_type)`, i.e. `%x = 42`, `%b.type = int_type`, `%y.type = int_type`.
 
 The split_call collects:
+
 - Visible result: `%x = 42` (appears in foo's `hir.split_return` and has phase -1).
 - Phase context: `{b.type = int_type, y.type = int_type}` (values from resolved phases that unresolved phases need).
 
@@ -349,15 +401,22 @@ Running this all the way through compilation in silc should produce a few iterat
 The interpret pass reads wiring regions instead of parsing naming conventions:
 
 1. Walk `hir.split_func` ops.
-2. For each, find the first `hir.phase_call` whose operands are all constants (= don't transitively depend on block args).
+2. For each, find the first `hir.phase_call` whose operands are all constants (= don't transitively depend on block args) and whose referenced split function can be lowered.
+   A split function can be lowered when all its `hir.split_call` ops are transitively expandable: reading each callee's wiring region with the provided arguments and already-evaluated constants must make all relevant callee phase_calls all-constant.
+   Pre-specialization (step 7b) simplifies this check by baking known constants into split functions ahead of time.
 3. Specialize that phase function (inline constants for block args).
-4. If the phase function contains `hir.split_call` ops, resolve them by reading the callee's wiring region, evaluating the necessary internal phases, and collecting the visible results and phase context.
-5. Lower the specialized+resolved function to MIR.
-6. Interpret it.
+4. If the phase function contains `hir.split_call` ops, resolve them to direct `hir.call` ops by consulting each callee's wiring region.
+   Each `hir.split_call @callee[phase]` becomes an `hir.call` to the concrete split function for that phase; the opaque context is replaced by the target function's explicit return values.
+   This is a pure IR rewrite — no evaluation happens yet.
+5. Lower the resolved function, along with any functions it calls via `hir.call`, to MIR.
+   All called functions are compiled into one LLVM module for batch execution.
+6. JIT-execute the LLVM module. The entry function's call graph resolves transitively at runtime.
 7. Replace the `hir.phase_call` in the wiring region with the resulting constant ops.
    For `hir.split_call` results, the opaque context becomes an `hir.phase_ctx` constant in the wiring region.
-8. Check if the next `hir.phase_call` now has all-constant operands; repeat.
-9. Stop when a `hir.phase_call` depends on block args (needs caller-provided values).
+   7b. Pre-specialize: for each `hir.phase_call` that now has some operands resolved to constants (but still depends on block args), inline those constants into the referenced split function and update the phase_call to remove the inlined operands.
+   This is the same mechanism as in the Library Compilation section.
+8. Check if any `hir.phase_call` now has all-constant operands or became newly evaluatable due to callee pre-specialization; repeat from step 2.
+9. Stop when no more `hir.phase_call` ops can be evaluated (remaining ones depend on block args).
 
 This naturally supports per-function monomorphization: walk the wiring region front-to-back, evaluate phases that have all-constant operands, and stop when hitting one that depends on block args.
 silc should check if there are any more compile-time-executable or specializable functions in the IR where we know the constant values of some parameters, usually because the previous iteration's interpretation has computed some constants.
@@ -387,12 +446,6 @@ This creates a tree of four leaf specializations:
 
 - bark → cark(b=0) → dark(d=42), dark(d=1337)
 - bark → cark(b=1) → dark(d=43), dark(d=1338)
-
-Three compilation phases:
-
-1. **Types**: compute types for all params (trivially `int_type`).
-2. **Const evaluation**: evaluate cark for b=0 and b=1, transitively evaluating dark for d=42, d=1337, d=43, d=1338. Each produces a monomorphized function.
-3. **Runtime**: the final program where bark(a) calls cark.0(a) and cark.1(a), which call dark.{0,1,2,3}(c), which call print({42,1337,43,1338}+e). This is not executed at compile time -- it is the shape of the final executable.
 
 ### Unified IR
 
@@ -447,27 +500,36 @@ hir.unified_func @bark [0] -> []
 
 After the SplitPhases pass, each function gets a `split_func` with a wiring region and internal split functions.
 The number of internal splits depends on the phase structure of the function and its callees.
-Split functions use `@name.split0`, `@name.split1`, etc. naming; the monomorphized functions produced later use `@name.0`, `@name.1`, etc.
 
 **dark** has caller-visible phases {-1, 0}.
 Its body (`print(d + e)`) is entirely phase 0 since both the addition and the print call need `e`.
-There is no phase -1 computation -- `d` is simply threaded through the wiring region as a pass-through block arg.
-dark gets two internal splits: type computation and the runtime body.
+There is no phase -1 computation — `d` is simply threaded through the wiring region as a pass-through block arg.
+Following the mechanical pattern where each argument's type is computed one phase before the argument's own phase, dark gets three internal splits: d's type at phase -2, e's type at phase -1, and the runtime body at phase 0.
 
 ```mlir
 hir.split_func @dark [-1, 0] -> [] {
 ^bb0(%d: !hir.any, %e: !hir.any):
-  %d.type, %e.type = hir.phase_call @dark.split0()
-  hir.phase_call @dark.split1(%e, %d, %d.type, %e.type)
+  %d.type = hir.phase_call @dark.split0()
+  %d.ctx, %d.type.ctx, %e.type = hir.phase_call @dark.split1(%d, %d.type)
+  hir.phase_call @dark.split2(%e, %d.ctx, %d.type.ctx, %e.type)
   hir.split_return
 }
 
+// Computes the type of d (phase -2).
 hir.func @dark.split0 {
-  %0 = hir.int_type
-  hir.return %0, %0
+  %d.type = hir.int_type
+  hir.return %d.type
 }
 
+// Consumes d (phase -1 arg), computes the type of e, passes d through as context.
 hir.func @dark.split1 {
+^bb0(%d: !hir.any, %d.type: !hir.any):
+  %e.type = hir.int_type
+  hir.return %d, %d.type, %e.type
+}
+
+// Runtime: computes d+e and calls print (phase 0).
+hir.func @dark.split2 {
 ^bb0(%e: !hir.any, %d: !hir.any, %d.type: !hir.any, %e.type: !hir.any):
   %0 = hir.binary %d, %e : %d.type
   hir.call @print(%0) : (%e.type) -> ()
@@ -475,39 +537,46 @@ hir.func @dark.split1 {
 }
 ```
 
-Note that `%d` flows from the wiring region's block args directly to split1.
-When a caller does `hir.split_call @dark[-1](d_val)`, the pipeline reads dark's wiring region with `%d = d_val`, evaluates what it can (split0 and any phases whose operands become constant), and bundles the remaining inter-phase values -- including d -- into an opaque context.
-The caller's later `hir.split_call @dark[0](e_val, ctx)` unpacks that context and specializes dark.split1 with the baked-in d.
+`%d` (the phase -1 argument) flows into split1, which is the phase -1 split.
+split1 consumes it, computes `%e.type`, and returns everything that split2 will need as opaque context.
+This ensures that each split cleanly consumes its phase's arguments and produces context for subsequent phases — no values bypass a split in the wiring region.
+
+When a caller does `hir.split_call @dark[-1](d_val)`, the pipeline reads dark's wiring region with `%d = d_val`, evaluates split0 and split1 (both now have all-constant operands), and bundles split1's return values into an opaque context.
+The caller's later `hir.split_call @dark[0](e_val, ctx)` unpacks that context and feeds it into dark.split2.
 
 **cark** has caller-visible phases {-1, 0}.
 Unlike dark, cark has real phase -1 computation: it evaluates b+42 and b+1337, then calls dark's phase -1 for each result.
-cark gets three internal splits: type computation, const evaluation, and the runtime body.
+cark gets three internal splits: one to compute b's type, one for const evaluation (which also computes c's type), and one for the runtime body.
 
 ```mlir
 hir.split_func @cark [-1, 0] -> [] {
 ^bb0(%b: !hir.any, %c: !hir.any):
-  %b.type, %c.type = hir.phase_call @cark.split0()
-  %dark.ctx1, %dark.ctx2 = hir.phase_call @cark.split1(%b, %b.type)
+  %b.type = hir.phase_call @cark.split0()
+  %c.type, %dark.ctx1, %dark.ctx2 = hir.phase_call @cark.split1(%b, %b.type)
   hir.phase_call @cark.split2(%c, %c.type, %dark.ctx1, %dark.ctx2)
   hir.split_return
 }
 
+// Computes the type of b.
 hir.func @cark.split0 {
   %0 = hir.int_type
-  hir.return %0, %0
+  hir.return %0
 }
 
+// Evaluates b+42 and b+1337, calls dark's const phase, computes c's type.
 hir.func @cark.split1 {
 ^bb0(%b: !hir.any, %b.type: !hir.any):
+  %c.type = hir.int_type
   %42 = hir.constant_int 42
   %d1 = hir.binary %b, %42 : %b.type
   %1337 = hir.constant_int 1337
   %d2 = hir.binary %b, %1337 : %b.type
   %dark.ctx1 = hir.split_call @dark[-1](%d1)
   %dark.ctx2 = hir.split_call @dark[-1](%d2)
-  hir.return %dark.ctx1, %dark.ctx2
+  hir.return %c.type, %dark.ctx1, %dark.ctx2
 }
 
+// Runtime: calls dark's runtime phase with c and each dark context.
 hir.func @cark.split2 {
 ^bb0(%c: !hir.any, %c.type: !hir.any, %dark.ctx1: !hir.any, %dark.ctx2: !hir.any):
   hir.split_call @dark[0](%c, %dark.ctx1)
@@ -516,37 +585,36 @@ hir.func @cark.split2 {
 }
 ```
 
-Note that `%c.type` flows from split0 directly to split2 in the wiring region, bypassing split1.
-cark.split1 only receives what it needs for its computation: `%b` and `%b.type`.
-The `hir.split_call @dark[-1]` ops inside cark.split1 are cross-function calls that produce opaque dark contexts; the `hir.split_call @dark[0]` ops in cark.split2 consume those contexts at runtime.
+Note that `%c.type` is computed in cark.split1, one phase before `%c` appears as an argument at phase 0.
+This ensures that `%c`'s type can depend on values from the previous phase (such as `%b`), even though in this example the type is trivially `int_type`.
+cark.split1 receives `%b` and `%b.type` for its const-phase computation; the `hir.split_call @dark[-1]` ops inside cark.split1 are cross-function calls that produce opaque dark contexts.
+The `hir.split_call @dark[0]` ops in cark.split2 are specialized with these contexts to turn into simple functions accepting only arg `%c` at runtime.
 
 **bark** has a single caller-visible phase {0} (its only arg `a` is phase 0).
-But internally, bark provides const args to cark, which induces an internal const-evaluation phase in addition to the type-computation phase.
-bark gets three internal splits: types, const eval, and runtime.
+Internally, bark provides const args to cark and needs to compute `a`'s type.
+Since `a` is phase 0, its type must be computed in phase -1 — the same phase in which the cark const-evaluation happens.
+bark gets two internal splits: one for computing `a`'s type and evaluating cark's const phase, and one for the runtime body.
 
 ```mlir
 hir.split_func @bark [0] -> [] {
 ^bb0(%a: !hir.any):
-  %a.type = hir.phase_call @bark.split0()
-  %cark.ctx1, %cark.ctx2 = hir.phase_call @bark.split1()
-  hir.phase_call @bark.split2(%a, %a.type, %cark.ctx1, %cark.ctx2)
+  %a.type, %cark.ctx1, %cark.ctx2 = hir.phase_call @bark.split0()
+  hir.phase_call @bark.split1(%a, %a.type, %cark.ctx1, %cark.ctx2)
   hir.split_return
 }
 
+// Computes a's type and evaluates cark's const phase for b=0 and b=1.
 hir.func @bark.split0 {
-  %0 = hir.int_type
-  hir.return %0
-}
-
-hir.func @bark.split1 {
+  %a.type = hir.int_type
   %0 = hir.constant_int 0
   %cark.ctx1 = hir.split_call @cark[-1](%0)
   %1 = hir.constant_int 1
   %cark.ctx2 = hir.split_call @cark[-1](%1)
-  hir.return %cark.ctx1, %cark.ctx2
+  hir.return %a.type, %cark.ctx1, %cark.ctx2
 }
 
-hir.func @bark.split2 {
+// Runtime: calls cark's runtime phase with a and each cark context.
+hir.func @bark.split1 {
 ^bb0(%a: !hir.any, %a.type: !hir.any, %cark.ctx1: !hir.any, %cark.ctx2: !hir.any):
   hir.split_call @cark[0](%a, %cark.ctx1)
   hir.split_call @cark[0](%a, %cark.ctx2)
@@ -554,80 +622,215 @@ hir.func @bark.split2 {
 }
 ```
 
-bark.split1 has no block args -- the const values 0 and 1 are literals inside the function, and the split_call ops reference cark by symbol.
-This means bark.split1 can be fully evaluated at compile time without any external inputs, driving the entire const-evaluation cascade.
+bark.split0 has no block args — the const values 0 and 1 are literals inside the function, `a`'s type is computed inline, and the split_call ops reference cark by symbol.
+This means bark.split0 can be fully evaluated at compile time without any external inputs, driving the entire const-evaluation cascade.
 
 ### Progressive Evaluation
 
-#### Step 1: Type Computation
+#### Step 1: Lower and JIT-execute dark.split0 and cark.split0
 
-Find all `hir.phase_call` ops with no operands across all split_funcs: all split0 functions qualify.
-Lower dark.split0, cark.split0, bark.split0 to MIR, interpret.
-All trivially return `int_type`.
+Scan for `hir.phase_call` ops whose operands are all constants.
+Two candidates qualify: `@dark.split0()` and `@cark.split0()` — both take no operands and contain no `hir.split_call` ops, making them trivially lowerable.
+(`@dark.split1(%d, %d.type)` depends on `%d` which is a block arg — it can only be evaluated when a caller provides `%d`.
+`@bark.split0()` takes no operands but contains `hir.split_call @cark[-1]` ops — these are not yet expandable since cark.split0 hasn't been evaluated. We handle bark.split0 in step 2.)
 
-Replace the phase_calls in wiring regions:
+**HIR → MIR lowering.**
+The type-as-value ops become concrete type constants:
+
+```mlir
+// dark.split0 lowered to MIR
+mir.func @dark.split0() -> (!mir.type) {
+  %0 = mir.type_constant !mir.int
+  mir.return %0
+}
+
+// cark.split0 lowered to MIR
+mir.func @cark.split0() -> (!mir.type) {
+  %0 = mir.type_constant !mir.int
+  mir.return %0
+}
+```
+
+**JIT execution.**
+Both functions go into one LLVM module.
+Lower MIR to LLVM IR, compile, JIT-execute.
+Each trivially returns `int_type`.
+
+**Materialize results.**
+Replace the evaluated `hir.phase_call` ops with constant ops in the wiring regions:
 
 ```mlir
 hir.split_func @dark [-1, 0] -> [] {
 ^bb0(%d: !hir.any, %e: !hir.any):
   %d.type = hir.int_type                    // split0 evaluated
-  %e.type = hir.int_type                    // split0 evaluated
-  hir.phase_call @dark.split1(%e, %d, %d.type, %e.type)
+  %d.ctx, %d.type.ctx, %e.type = hir.phase_call @dark.split1(%d, %d.type)
+  hir.phase_call @dark.split2(%e, %d.ctx, %d.type.ctx, %e.type)
   hir.split_return
 }
 
 hir.split_func @cark [-1, 0] -> [] {
 ^bb0(%b: !hir.any, %c: !hir.any):
   %b.type = hir.int_type                    // split0 evaluated
-  %c.type = hir.int_type                    // split0 evaluated
-  %dark.ctx1, %dark.ctx2 = hir.phase_call @cark.split1(%b, %b.type)
+  %c.type, %dark.ctx1, %dark.ctx2 = hir.phase_call @cark.split1(%b, %b.type)
   hir.phase_call @cark.split2(%c, %c.type, %dark.ctx1, %dark.ctx2)
   hir.split_return
 }
 
 hir.split_func @bark [0] -> [] {
 ^bb0(%a: !hir.any):
-  %a.type = hir.int_type                    // split0 evaluated
-  %cark.ctx1, %cark.ctx2 = hir.phase_call @bark.split1()
-  hir.phase_call @bark.split2(%a, %a.type, %cark.ctx1, %cark.ctx2)
+  %a.type, %cark.ctx1, %cark.ctx2 = hir.phase_call @bark.split0()
+  hir.phase_call @bark.split1(%a, %a.type, %cark.ctx1, %cark.ctx2)
   hir.split_return
 }
 ```
 
-#### Step 2: Const Evaluation
+dark.split0 and cark.split0 are resolved.
 
-Scan for newly evaluatable phase_calls.
-In bark's wiring region, `hir.phase_call @bark.split1()` has no operands -> evaluate.
+**Pre-specialize.**
+With `%d.type` and `%b.type` now known constants, pre-specialize split functions that have some constant operands.
+`dark.split1(%d, %d.type)` has `%d.type = int_type` known — inline it to produce `dark.split1'(%d)`.
+`cark.split1(%b, %b.type)` has `%b.type = int_type` known — inline it to produce `cark.split1'(%b)`.
 
-bark.split1 contains two `hir.split_call @cark[-1]` ops.
-To resolve these, the pipeline reads cark's wiring region and cascades through the callee's internal phases.
+Updated wiring regions:
 
-**Resolving `hir.split_call @cark[-1](0)`:**
+```mlir
+hir.split_func @dark [-1, 0] -> [] {
+^bb0(%d: !hir.any, %e: !hir.any):
+  %d.ctx, %d.type.ctx, %e.type = hir.phase_call @dark.split1'(%d)
+  hir.phase_call @dark.split2(%e, %d.ctx, %d.type.ctx, %e.type)
+  hir.split_return
+}
 
-1. Substitute `%b = 0` in cark's wiring region.
-2. `%b.type = int_type` and `%c.type = int_type` are already constants (from step 1).
-3. `hir.phase_call @cark.split1(0, int_type)` -- all constants, evaluate.
-4. cark.split1(0, int_type) computes:
-   - d1 = 0 + 42 = 42
-   - d2 = 0 + 1337 = 1337
-   - Resolve `hir.split_call @dark[-1](42)`: read dark's wiring with `%d = 42`.
-     Types already evaluated. dark.split1 needs `%e` (block arg) -> can't evaluate further.
-     Bundle into context: `{d=42, d.type=int_type, e.type=int_type}`.
-   - Resolve `hir.split_call @dark[-1](1337)`: context `{d=1337, d.type=int_type, e.type=int_type}`.
-   - Returns: `(dark_ctx{42,...}, dark_ctx{1337,...})`.
-5. cark.split2 needs `%c` (block arg) -> can't evaluate further.
-6. Bundle remaining values into cark context: `{c.type=int_type, dark_ctx{42,...}, dark_ctx{1337,...}}`.
+hir.split_func @cark [-1, 0] -> [] {
+^bb0(%b: !hir.any, %c: !hir.any):
+  %c.type, %dark.ctx1, %dark.ctx2 = hir.phase_call @cark.split1'(%b)
+  hir.phase_call @cark.split2(%c, %c.type, %dark.ctx1, %dark.ctx2)
+  hir.split_return
+}
+```
 
-**Resolving `hir.split_call @cark[-1](1)`:**
+dark.split1' and cark.split1' now each take only a single block-arg operand — they cannot be evaluated further without a caller providing the argument.
+bark is unchanged — bark.split0 is still pending.
 
-Same cascade with `%b = 1`:
-- d1 = 1 + 42 = 43, d2 = 1 + 1337 = 1338
-- dark contexts: `{d=43,...}`, `{d=1338,...}`
-- cark context: `{int_type, dark_ctx{43,...}, dark_ctx{1338,...}}`
+#### Step 2: Resolve phase -1 `hir.split_call` ops to direct `hir.call` ops
 
-bark.split1 returns both cark contexts.
+After Step 1, the pre-specialized functions `dark.split1'` and `cark.split1'` exist, and their earlier phases (dark.split0, cark.split0) have been evaluated.
+The next step is a mechanical IR rewrite: replace every `hir.split_call @callee[phase]` in the phase -1 functions with a direct `hir.call` to the concrete split function that handles that phase.
 
-Replace in bark's wiring region:
+To resolve a `hir.split_call`, consult the callee's wiring region.
+Phases that have already been evaluated (replaced by constants in the wiring region) are skipped; the first remaining `hir.phase_call` for the requested phase identifies the target split function.
+The opaque context result of the `hir.split_call` is replaced by the explicit return values of the target function.
+
+**Resolving `cark.split1'`.**
+cark.split1' contains two `hir.split_call @dark[-1]` ops.
+Dark's wiring shows that phase -1 maps to `dark.split1'` (dark.split0 was evaluated in Step 1).
+Replace each `hir.split_call` with a direct `hir.call`:
+
+```mlir
+hir.func @cark.split1' {
+^bb0(%b: !hir.any):
+  %b.type = hir.int_type                                       // inlined in step 1
+  %c.type = hir.int_type
+  %42 = hir.constant_int 42
+  %d1 = hir.binary %b, %42 : %b.type
+  %1337 = hir.constant_int 1337
+  %d2 = hir.binary %b, %1337 : %b.type
+  %d1.pass, %d1t, %e1t = hir.call @dark.split1'(%d1)           // was split_call @dark[-1]
+  %d2.pass, %d2t, %e2t = hir.call @dark.split1'(%d2)           // was split_call @dark[-1]
+  hir.return %c.type, %d1.pass, %d1t, %e1t, %d2.pass, %d2t, %e2t
+}
+```
+
+The opaque `%dark.ctx` has been replaced by the three explicit return values of `dark.split1'` — the values that dark's later phase (dark.split2) will need.
+The return list of cark.split1' grows from 3 to 7 values correspondingly.
+
+**Resolving `bark.split0`.**
+bark.split0 contains two `hir.split_call @cark[-1]` ops.
+Cark's wiring shows that phase -1 maps to `cark.split1'`.
+Replace:
+
+```mlir
+hir.func @bark.split0 {
+  %a.type = hir.int_type
+  %0 = hir.constant_int 0
+  // cark.split1' returns 7 values: c.type, d1.pass, d1.type, e1.type, d2.pass, d2.type, e2.type
+  %c0t, %c0.d1, %c0.d1t, %c0.e1t, %c0.d2, %c0.d2t, %c0.e2t
+      = hir.call @cark.split1'(%0)                              // was split_call @cark[-1]
+  %1 = hir.constant_int 1
+  %c1t, %c1.d1, %c1.d1t, %c1.e1t, %c1.d2, %c1.d2t, %c1.e2t
+      = hir.call @cark.split1'(%1)                              // was split_call @cark[-1]
+  hir.return %a.type, %c0t, %c0.d1, %c0.d1t, %c0.e1t, %c0.d2, %c0.d2t, %c0.e2t,
+                      %c1t, %c1.d1, %c1.d1t, %c1.e1t, %c1.d2, %c1.d2t, %c1.e2t
+}
+```
+
+After this step, none of the phase -1 functions contain `hir.split_call` ops — only regular `hir.call` ops to concrete split functions.
+This makes them directly lowerable to MIR without any wiring region inspection.
+
+#### Step 3: Lower phase -1 functions to MIR
+
+With all cross-function calls resolved to direct `hir.call` ops, the three phase -1 functions can be mechanically lowered to MIR.
+The type-as-value rewriting follows the same pattern as in Step 1: `hir.binary %b, %42 : %b.type` where `%b.type = hir.int_type` becomes `mir.binary add %b, %42 : !mir.int`.
+
+```mlir
+// dark.split1': leaf function, no calls.
+mir.func @dark.split1'(%d: !mir.int) -> (!mir.int, !mir.type, !mir.type) {
+  %d.type = mir.type_constant !mir.int
+  %e.type = mir.type_constant !mir.int
+  mir.return %d, %d.type, %e.type
+}
+
+// cark.split1': calls dark.split1', all types known.
+mir.func @cark.split1'(%b: !mir.int)
+    -> (!mir.type, !mir.int, !mir.type, !mir.type, !mir.int, !mir.type, !mir.type) {
+  %c.type = mir.type_constant !mir.int
+  %42 = mir.constant 42 : !mir.int
+  %d1 = mir.binary add %b, %42 : !mir.int
+  %1337 = mir.constant 1337 : !mir.int
+  %d2 = mir.binary add %b, %1337 : !mir.int
+  %d1.pass, %d1t, %e1t = mir.call @dark.split1'(%d1)
+      : (!mir.int) -> (!mir.int, !mir.type, !mir.type)
+  %d2.pass, %d2t, %e2t = mir.call @dark.split1'(%d2)
+      : (!mir.int) -> (!mir.int, !mir.type, !mir.type)
+  mir.return %c.type, %d1.pass, %d1t, %e1t, %d2.pass, %d2t, %e2t
+}
+
+// bark.split0: calls cark.split1', all types known.
+mir.func @bark.split0() -> (!mir.type, ...) {
+  %a.type = mir.type_constant !mir.int
+  %0 = mir.constant 0 : !mir.int
+  %c0t, %c0.d1, %c0.d1t, %c0.e1t, %c0.d2, %c0.d2t, %c0.e2t
+      = mir.call @cark.split1'(%0)
+      : (!mir.int) -> (!mir.type, !mir.int, !mir.type, !mir.type, !mir.int, !mir.type, !mir.type)
+  %1 = mir.constant 1 : !mir.int
+  %c1t, %c1.d1, %c1.d1t, %c1.e1t, %c1.d2, %c1.d2t, %c1.e2t
+      = mir.call @cark.split1'(%1)
+      : (!mir.int) -> (!mir.type, !mir.int, !mir.type, !mir.type, !mir.int, !mir.type, !mir.type)
+  mir.return %a.type, %c0t, %c0.d1, %c0.d1t, %c0.e1t, %c0.d2, %c0.d2t, %c0.e2t,
+                      %c1t, %c1.d1, %c1.d1t, %c1.e1t, %c1.d2, %c1.d2t, %c1.e2t
+}
+```
+
+All three functions go into a single LLVM module for batch JIT execution, with `bark.split0` as the entry point.
+The call graph resolves transitively at runtime: bark.split0 calls cark.split1', which calls dark.split1' — all within one JIT execution.
+Each function remains a separate compilation unit; the JIT linker resolves the inter-function calls.
+
+#### Step 4: JIT-execute and materialize results
+
+Execute the LLVM module with `bark.split0()` as the entry point.
+The call graph is traversed transitively in a single JIT execution:
+
+- `cark.split1'(0)`: b=0, computes d1 = 0+42 = 42, d2 = 0+1337 = 1337.
+  Calls `dark.split1'(42)` → (42, int_type, int_type) and `dark.split1'(1337)` → (1337, int_type, int_type).
+  Returns: (int_type, 42, int_type, int_type, 1337, int_type, int_type).
+- `cark.split1'(1)`: b=1, computes d1 = 1+42 = 43, d2 = 1+1337 = 1338.
+  Calls `dark.split1'(43)` → (43, int_type, int_type) and `dark.split1'(1338)` → (1338, int_type, int_type).
+  Returns: (int_type, 43, int_type, int_type, 1338, int_type, int_type).
+- `bark.split0()`: collects a.type = int_type plus both cark result tuples.
+
+The materialization infrastructure maps the flat return values back into nested `hir.phase_ctx` ops.
+The structure is derived from the call graph: bark calls cark calls dark, so the contexts nest correspondingly.
+Replace `hir.phase_call @bark.split0()` in bark's wiring region:
 
 ```mlir
 hir.split_func @bark [0] -> [] {
@@ -639,124 +842,181 @@ hir.split_func @bark [0] -> [] {
   %cark.ctx2 = hir.phase_ctx @cark [hir.int_type,
       hir.phase_ctx @dark [43, hir.int_type, hir.int_type],
       hir.phase_ctx @dark [1338, hir.int_type, hir.int_type]]
-  hir.phase_call @bark.split2(%a, %a.type, %cark.ctx1, %cark.ctx2)
+  hir.phase_call @bark.split1(%a, %a.type, %cark.ctx1, %cark.ctx2)
   hir.split_return
 }
 ```
 
 All const-phase work is done.
-The contexts nest: each cark context carries c.type plus two dark contexts; each dark context carries d plus the types.
-bark.split2 depends on `%a` (block arg) -> cannot evaluate at compile time.
-This is the boundary between compile time and runtime.
+The contexts nest: each cark context carries c.type plus two dark contexts; each dark context carries d plus d.type and e.type.
 
-#### Step 3: Monomorphization
+**Pre-specialize `bark.split1`.**
+`hir.phase_call @bark.split1(%a, int_type, ctx, ctx)` has three of four operands constant.
+Inline the known constants to produce `bark.split1'` that only takes `%a`:
 
-Pre-specialize bark.split2 by inlining the known constants (%a.type, %cark.ctx1, %cark.ctx2).
-Then resolve each `hir.split_call` by unpacking contexts and creating dedicated monomorphized functions.
+```mlir
+hir.func @bark.split1' {
+^bb0(%a: !hir.any):
+  %a.type = hir.int_type                    // inlined
+  %cark.ctx1 = hir.phase_ctx @cark [...]    // inlined
+  %cark.ctx2 = hir.phase_ctx @cark [...]    // inlined
+  hir.split_call @cark[0](%a, %cark.ctx1)
+  hir.split_call @cark[0](%a, %cark.ctx2)
+  hir.return
+}
+```
 
-**Specialize bark** with constants inlined.
-Resolve `hir.split_call @cark[0](%a, cark_ctx1)` by unpacking cark_ctx1 and specializing cark.split2:
+bark.split1' depends on `%a` (block arg from bark's caller) — this is the boundary between compile time and runtime.
 
-- c.type = int_type (from cark context)
-- dark_ctx1 = {42, int_type, int_type} (from cark context)
-- dark_ctx2 = {1337, int_type, int_type} (from cark context)
-- Substitute into cark.split2 -> produces `@cark.0`.
+#### Step 5: Resolve phase 0 `hir.split_call` ops and specialize runtime functions
 
-Similarly, `hir.split_call @cark[0](%a, cark_ctx2)` -> `@cark.1`.
+With all contexts materialized, resolve the remaining `hir.split_call` ops in the runtime functions.
+Unlike the phase -1 resolution in Step 2 where contexts had not yet been computed, the phase 0 split_calls carry materialized `hir.phase_ctx` ops that provide all the constant arguments.
+For each split_call, unpack the context, read the callee's wiring region to identify the target runtime function, then clone and specialize it by substituting the constants.
+The `hir.split_call` ops within the clone are also resolved to direct `hir.call` ops to the specialized functions.
 
-**Inside @cark.0**, resolve `hir.split_call @dark[0]` by unpacking dark contexts and specializing dark.split1:
+**Specializing bark.split1' → `@bark`.**
+bark.split1' contains `hir.split_call @cark[0](%a, %cark.ctx1)`.
+Unpack cark.ctx1: c.type = int_type, dark_ctx1 = {42, int, int}, dark_ctx2 = {1337, int, int}.
+Read cark's wiring region with `%c = %a` and the unpacked values.
+The remaining phase_call is `@cark.split2(%c, c.type, dark_ctx1, dark_ctx2)` — all type/ctx args are constants.
+Clone cark.split2 with c.type, dark_ctx1, dark_ctx2 baked in → `@cark.0`.
+Similarly, `@cark[0](%a, %cark.ctx2)` produces `@cark.1` (with dark contexts for d=43 and d=1338).
 
-- dark_ctx{42, int_type, int_type}: d=42 baked in -> `@dark.0`
-- dark_ctx{1337, int_type, int_type}: d=1337 baked in -> `@dark.1`
-
-**Inside @cark.1**:
-
-- dark_ctx{43,...}: d=43 -> `@dark.2`
-- dark_ctx{1338,...}: d=1338 -> `@dark.3`
-
-### Final Runtime IR
+`@bark` after specialization:
 
 ```mlir
 hir.func @bark {
 ^bb0(%a: !hir.any):
-  %0 = hir.int_type
-  hir.call @cark.0(%a) : (%0) -> ()
-  hir.call @cark.1(%a) : (%0) -> ()
+  %a.type = hir.int_type
+  hir.call @cark.0(%a)
+  hir.call @cark.1(%a)
   hir.return
 }
+```
 
+**Specializing cark.split2 → `@cark.0` and `@cark.1`.**
+cark.split2 contains `hir.split_call @dark[0](%c, %dark.ctx)` ops.
+For each, unpack the dark context, read dark's wiring to find dark.split2 as the target, and clone dark.split2 with the context values baked in.
+The `hir.split_call` ops in the clone are resolved to direct `hir.call` ops to the specialized dark functions.
+
+- @cark.0 (b=0): dark_ctx1 = {d=42, int, int} → `@dark.0`; dark_ctx2 = {d=1337, int, int} → `@dark.1`.
+- @cark.1 (b=1): dark_ctx1 = {d=43, int, int} → `@dark.2`; dark_ctx2 = {d=1338, int, int} → `@dark.3`.
+
+`@cark.0` after specialization:
+
+```mlir
 hir.func @cark.0 {
 ^bb0(%c: !hir.any):
-  %0 = hir.int_type
-  hir.call @dark.0(%c) : (%0) -> ()
-  hir.call @dark.1(%c) : (%0) -> ()
+  %c.type = hir.int_type                    // inlined from context
+  hir.call @dark.0(%c)
+  hir.call @dark.1(%c)
   hir.return
 }
+```
 
-hir.func @cark.1 {
-^bb0(%c: !hir.any):
-  %0 = hir.int_type
-  hir.call @dark.2(%c) : (%0) -> ()
-  hir.call @dark.3(%c) : (%0) -> ()
-  hir.return
-}
+`@cark.1` follows the same pattern, calling `@dark.2` and `@dark.3`.
 
+**Specializing dark.split2 → `@dark.0` through `@dark.3`.**
+Each specialization clones dark.split2 and inlines the constant arguments (d, d.type, e.type) from the context:
+
+```mlir
+// @dark.0: d=42, d.type=int, e.type=int
 hir.func @dark.0 {
 ^bb0(%e: !hir.any):
-  %0 = hir.constant_int 42
-  %1 = hir.int_type
-  %2 = hir.binary %0, %e : %1
-  hir.call @print(%2) : (%1) -> ()
+  %d = hir.constant_int 42                  // inlined from context
+  %d.type = hir.int_type                    // inlined from context
+  %e.type = hir.int_type                    // inlined from context
+  %0 = hir.binary %d, %e : %d.type
+  hir.call @print(%0) : (%e.type) -> ()
   hir.return
 }
+```
 
-hir.func @dark.1 {
-^bb0(%e: !hir.any):
-  %0 = hir.constant_int 1337
-  %1 = hir.int_type
-  %2 = hir.binary %0, %e : %1
-  hir.call @print(%2) : (%1) -> ()
-  hir.return
+`@dark.1` (d=1337), `@dark.2` (d=43), and `@dark.3` (d=1338) are identical in structure with their respective constant values.
+
+**Deduplication.**
+The specialization key is (original function symbol, constant arg values).
+Before cloning, the compiler checks if a specialization with the same key already exists and reuses it.
+In this example all four dark specializations have distinct d values, so no deduplication occurs.
+If two different call sites had both produced d=42, they would share `@dark.0`.
+
+#### Step 6: Lower runtime functions to MIR
+
+The specialized HIR functions from Step 5 are mechanically lowered to MIR.
+Type-as-value operands become concrete MLIR types, and `hir.call` ops become `mir.call` ops:
+
+```mlir
+mir.func @dark.0(%e: !mir.int) {
+  %d = mir.constant 42 : !mir.int
+  %0 = mir.binary add %d, %e : !mir.int
+  mir.call @print(%0) : (!mir.int) -> ()
+  mir.return
+}
+```
+
+The `!hir.any` on the block arg `%e` has become `!mir.int` because `%e.type = int_type` was known.
+The `hir.binary %d, %e : %d.type` became `mir.binary add %d, %e : !mir.int` because `%d.type = int_type`.
+This is how context substitution produces a well-typed `mir.func`: specialization replaces block args with constants, type values become known, and MIR lowering replaces `!hir.any` with concrete types.
+
+The same lowering applies to all runtime functions — `@dark.1` through `@dark.3`, `@cark.0`, `@cark.1`, and `@bark`.
+This produces the **Final Runtime IR** in the next section: a flat set of `mir.func` ops with concrete types and baked-in constants.
+No `split_func`, `split_call`, `phase_call`, or `phase_ctx` ops remain.
+
+### Final Runtime IR
+
+After monomorphization, all `split_func`, `split_call`, `phase_call`, and `phase_ctx` ops have been resolved.
+The final IR is a flat set of `mir.func` ops with concrete types and baked-in constants:
+
+```mlir
+mir.func @bark(%a: !mir.int) {
+  mir.call @cark.0(%a) : (!mir.int) -> ()
+  mir.call @cark.1(%a) : (!mir.int) -> ()
+  mir.return
 }
 
-hir.func @dark.2 {
-^bb0(%e: !hir.any):
-  %0 = hir.constant_int 43
-  %1 = hir.int_type
-  %2 = hir.binary %0, %e : %1
-  hir.call @print(%2) : (%1) -> ()
-  hir.return
+mir.func @cark.0(%c: !mir.int) {
+  mir.call @dark.0(%c) : (!mir.int) -> ()
+  mir.call @dark.1(%c) : (!mir.int) -> ()
+  mir.return
 }
 
-hir.func @dark.3 {
-^bb0(%e: !hir.any):
-  %0 = hir.constant_int 1338
-  %1 = hir.int_type
-  %2 = hir.binary %0, %e : %1
-  hir.call @print(%2) : (%1) -> ()
-  hir.return
+mir.func @cark.1(%c: !mir.int) {
+  mir.call @dark.2(%c) : (!mir.int) -> ()
+  mir.call @dark.3(%c) : (!mir.int) -> ()
+  mir.return
+}
+
+mir.func @dark.0(%e: !mir.int) {
+  %0 = mir.constant 42 : !mir.int
+  %1 = mir.binary add %0, %e : !mir.int
+  mir.call @print(%1) : (!mir.int) -> ()
+  mir.return
+}
+
+mir.func @dark.1(%e: !mir.int) {
+  %0 = mir.constant 1337 : !mir.int
+  %1 = mir.binary add %0, %e : !mir.int
+  mir.call @print(%1) : (!mir.int) -> ()
+  mir.return
+}
+
+mir.func @dark.2(%e: !mir.int) {
+  %0 = mir.constant 43 : !mir.int
+  %1 = mir.binary add %0, %e : !mir.int
+  mir.call @print(%1) : (!mir.int) -> ()
+  mir.return
+}
+
+mir.func @dark.3(%e: !mir.int) {
+  %0 = mir.constant 1338 : !mir.int
+  %1 = mir.binary add %0, %e : !mir.int
+  mir.call @print(%1) : (!mir.int) -> ()
+  mir.return
 }
 ```
 
 No `split_func`, `split_call`, or `phase_call` ops remain.
 All phased execution has been resolved into a flat set of monomorphized functions with baked-in constants.
 bark takes a runtime argument `a` and calls through the monomorphized tree.
-
-If two different call sites had produced the same const argument (e.g., two callers both yielding d=42), the monomorphization pass could deduplicate them into a single function, similar to how linkers merge identical template instantiations.
-
-### JIT Batching
-
-Each compile-time step maps to one JIT execution, keeping the number of JIT round-trips minimal.
-
-**JIT module 1 (types):** Contains dark.split0, cark.split0, bark.split0.
-All are independent functions returning type constants.
-One JIT call per function (or a single wrapper calling all three).
-
-**JIT module 2 (const eval):** Contains bark.split1 as the entry point, plus cark.split1 as a callee.
-During HIR->MIR lowering, the `hir.split_call @cark[-1]` ops inside bark.split1 are expanded into direct calls to cark.split1 (with types materialized as MIR types).
-The `hir.split_call @dark[-1]` ops inside cark.split1 become context struct packing, since dark has no phase -1 computation.
-The entire evaluation graph compiles to one LLVM module with bark.split1 as the entry point.
-Executing it transitively evaluates cark.split1 for both b=0 and b=1, producing all four dark contexts.
-
-**No JIT module 3:** Monomorphization is pure IR manipulation -- unpacking contexts, inlining constants into split functions, and renaming the results.
-The final runtime IR is then lowered through MIR to LLVM (or CIRCT) for the target platform, not for JIT.
+This IR is then lowered through LLVM (or CIRCT) for the target platform — no further JIT execution needed.
