@@ -2,6 +2,52 @@
 
 This document describes how the Silicon language intends to implement metaprogramming, function specialization, and phased compile-time execution.
 It is aspirational and does not reflect the current state of the code base.
+It also describes the mechanical, canonical pattern for phase splitting and evaluation.
+In practice, the compiler should compute constants and types as early as possible, and materialize constant values in wiring regions and functions wherever beneficial.
+These optimizations are omitted for clarity; we focus on the underlying mechanical pattern.
+
+## Phased Evaluation
+
+Phase evaluation follows a loop through the HIR-MIR-LLVM-Execute-Specialize pipeline:
+
+1.  **Lower HIR to MIR.**
+    Type-as-value ops (`hir.int_type`, type block args) become concrete MLIR types on MIR ops.
+    For example, `hir.binary %a, %b : %type` becomes `mir.binary %a, %b : !mir.int` once `%type` is known to be `int_type`.
+    This is only possible when all type operands have been resolved to known constants, i.e. they are defined by ConstantLike ops such as `hir.int_type` or `hir.constant_int 42`.
+
+2.  **Lower MIR to LLVM IR.**
+    Standard MLIR-to-LLVM lowering.
+
+3.  **JIT-execute.**
+    Run the LLVM module and collect results.
+
+4.  **Materialize constants.**
+    Replace the evaluated `hir.phase_call` in the wiring region with constant ops holding the results.
+
+5.  **Specialize functions.**
+    Copy constant call arguments into function bodies, creating specialized/monomorphized versions of the function.
+    This is the metaprogramming mechanism in Silicon.
+
+6.  **Repeat.**
+    Check if any more `hir.phase_call` ops now have all-constant operands and can be evaluated.
+    If there are, go back to the first step and repeat.
+
+## JIT Batching
+
+Multiple independent phase functions can be compiled into a single LLVM module and JIT-executed together, minimizing the number of JIT round-trips.
+When a phase function contains `hir.split_call` ops, they are first resolved to direct `hir.call` ops by consulting callee wiring regions — each `hir.split_call @callee[phase]` becomes an `hir.call` to the concrete split function for that phase.
+The resolved functions are then lowered to MIR together and compiled into a single LLVM module, allowing the JIT to transitively evaluate an entire subgraph of phase functions in one execution.
+
+## Specialization and Monomorphization
+
+Substituting known constants for a phase function's block args is _specialization_.
+When all type and constant block args of a phase function are known, the function is fully specialized and can be lowered to MIR.
+
+_Monomorphization_ creates a dedicated clone of a split function for a specific set of constant arguments.
+The specialization key is (original function symbol, constant arg values).
+Before cloning, the compiler checks if a clone with the same key already exists and reuses it — this is how deduplication works.
+
+## Example 1
 
 Consider the following input:
 
@@ -45,51 +91,7 @@ hir.unified_func @bar [] -> [0] attributes {argNames = [], resultNames = [""]} {
 }
 ```
 
-## General Concepts
-
-**Note on optimizations.**
-This document describes the mechanical, canonical pattern for phase splitting and evaluation.
-In practice, the compiler should compute constants and types as early as possible, and materialize constant values in wiring regions and functions wherever beneficial.
-These optimizations are omitted from this document for clarity.
-We focus on the underlying pattern here; optimizations and shortcuts are for the implementation phase.
-
-### The HIR → MIR → LLVM → Interpret → Specialize Pipeline
-
-Phase evaluation follows a loop:
-
-1.  **Lower HIR to MIR.**
-    Type-as-value ops (`hir.int_type`, type block args) become concrete MLIR types on MIR ops.
-    For example, `hir.binary %a, %b : %type` becomes `mir.binary %a, %b : !mir.int` once `%type` is known to be `int_type`.
-    This is only possible when all type operands have been resolved to known constants, i.e. they are defined by ConstantLike ops such as `hir.int_type` or `hir.constant_int 42`.
-2.  **Lower MIR to LLVM IR.**
-    Standard MLIR-to-LLVM lowering.
-3.  **JIT-execute.**
-    Run the LLVM module and collect results.
-4.  **Materialize constants.**
-    Replace the evaluated `hir.phase_call` in the wiring region with constant ops holding the results.
-5.  **Specialize functions.**
-    Copy constant call arguments into function bodies, creating specialized/monomorphized versions of the function.
-    This is the metaprogramming mechanism in Silicon.
-6.  **Repeat.**
-    Check if any more `hir.phase_call` ops now have all-constant operands and can be evaluated.
-    If there are, go back to the first step and repeat.
-
-### JIT Batching
-
-Multiple independent phase functions can be compiled into a single LLVM module and JIT-executed together, minimizing the number of JIT round-trips.
-When a phase function contains `hir.split_call` ops, they are first resolved to direct `hir.call` ops by consulting callee wiring regions — each `hir.split_call @callee[phase]` becomes an `hir.call` to the concrete split function for that phase.
-The resolved functions are then lowered to MIR together and compiled into a single LLVM module, allowing the JIT to transitively evaluate an entire subgraph of phase functions in one execution.
-
-### Specialization and Monomorphization
-
-Substituting known constants for a phase function's block args is _specialization_.
-When all type and constant block args of a phase function are known, the function is fully specialized and can be lowered to MIR.
-
-_Monomorphization_ creates a dedicated clone of a split function for a specific set of constant arguments.
-The specialization key is (original function symbol, constant arg values).
-Before cloning, the compiler checks if a clone with the same key already exists and reuses it — this is how deduplication works.
-
-## `hir.split_func` with a Wiring Region
+### `hir.split_func` with a Wiring Region
 
 Running the above through the SplitPhases pass should yield the IR below.
 The current codebase names split functions `@foo.const0`, `@foo.const1`, `@foo.dyn1`, etc.
@@ -238,7 +240,7 @@ hir.func @bar.split1 {
 Note how bar's wiring region is compact: just two `hir.phase_call`s to bar's own splits, with `%foo.ctx` flowing opaquely between them.
 If foo pre-specializes its internal phases, bar's IR is completely unaffected.
 
-## Library Compilation
+### Library Compilation
 
 When compiling foo as a library, we evaluate phases that have no block-arg dependencies.
 
@@ -289,12 +291,12 @@ hir.split_func @foo [-1, 0] -> [-1, 0] ... {
 Phases -1 and 0 still depend on block args `%a` and `%b` -> can't evaluate further without a caller.
 But the pre-specialization means that when a caller later provides `%a`, only one argument needs to be substituted instead of three.
 
-## Progressive Evaluation
+### Progressive Evaluation
 
 The following traces the full evaluation of both foo and bar, step by step.
 We assume foo has been library-compiled as shown above.
 
-### Initial state
+#### Initial state
 
 Foo after library compilation:
 
@@ -319,7 +321,7 @@ hir.split_func @bar [] -> [0] ... {
 }
 ```
 
-### Step 1: Evaluate bar.split0
+#### Step 1: Evaluate bar.split0
 
 `hir.phase_call @bar.split0()` has no operands -> can evaluate.
 Specialize bar.split0 (no block args), lower to MIR, interpret.
@@ -353,7 +355,7 @@ hir.split_func @bar [] -> [0] ... {
 }
 ```
 
-### Step 2: Evaluate bar.split1
+#### Step 2: Evaluate bar.split1
 
 `hir.phase_call @bar.split1(int_type, 42, ctx{...})` -- all operands are constants -> can evaluate.
 Specialize bar.split1 with the constants inlined, lower to MIR, interpret.
@@ -383,7 +385,7 @@ hir.split_func @bar [] -> [0] ... {
 
 Done -- bar is fully monomorphized.
 
-## `hir.unified_call` Decomposition
+### `hir.unified_call` Decomposition
 
 When a caller has `hir.unified_call @foo(...)`, the SplitPhases pass decomposes it into `hir.split_call` ops inside the caller's split functions:
 
@@ -395,7 +397,7 @@ When a caller has `hir.unified_call @foo(...)`, the SplitPhases pass decomposes 
 
 The caller never references the callee's internal split functions (`foo.split0`, `foo.split1`, etc.) -- only the callee's `split_func` symbol and phase indices.
 
-## Interpretation Pipeline
+### Interpretation Pipeline
 
 Running this all the way through compilation in silc should produce a few iterations through the HIR-MIR-interpret-specialize pipeline.
 The interpret pass reads wiring regions instead of parsing naming conventions:
@@ -422,7 +424,7 @@ This naturally supports per-function monomorphization: walk the wiring region fr
 silc should check if there are any more compile-time-executable or specializable functions in the IR where we know the constant values of some parameters, usually because the previous iteration's interpretation has computed some constants.
 If any such functions are left, it should run that specific HIR-MIR-interpret-specialize pass pipeline, and then rinse and repeat.
 
-## Multi-Function Example: Transitive Monomorphization
+## Example 2
 
 Consider a chain of functions where const arguments propagate transitively across multiple call levels:
 
@@ -955,18 +957,13 @@ mir.func @dark.0(%e: !mir.int) {
 }
 ```
 
-The `!hir.any` on the block arg `%e` has become `!mir.int` because `%e.type = int_type` was known.
-The `hir.binary %d, %e : %d.type` became `mir.binary add %d, %e : !mir.int` because `%d.type = int_type`.
-This is how context substitution produces a well-typed `mir.func`: specialization replaces block args with constants, type values become known, and MIR lowering replaces `!hir.any` with concrete types.
-
+Specialization replaces block args with constants, making type values known; MIR lowering then replaces `!hir.any` with concrete types (e.g., `%e.type = int_type` turns `%e: !hir.any` into `%e: !mir.int`).
 The same lowering applies to all runtime functions — `@dark.1` through `@dark.3`, `@cark.0`, `@cark.1`, and `@bark`.
-This produces the **Final Runtime IR** in the next section: a flat set of `mir.func` ops with concrete types and baked-in constants.
-No `split_func`, `split_call`, `phase_call`, or `phase_ctx` ops remain.
 
 ### Final Runtime IR
 
-After monomorphization, all `split_func`, `split_call`, `phase_call`, and `phase_ctx` ops have been resolved.
-The final IR is a flat set of `mir.func` ops with concrete types and baked-in constants:
+All phases have been resolved into a flat set of `mir.func` ops with concrete types and baked-in constants.
+No `split_func`, `split_call`, `phase_call`, or `phase_ctx` ops remain:
 
 ```mlir
 mir.func @bark(%a: !mir.int) {
@@ -981,42 +978,14 @@ mir.func @cark.0(%c: !mir.int) {
   mir.return
 }
 
-mir.func @cark.1(%c: !mir.int) {
-  mir.call @dark.2(%c) : (!mir.int) -> ()
-  mir.call @dark.3(%c) : (!mir.int) -> ()
-  mir.return
-}
-
 mir.func @dark.0(%e: !mir.int) {
   %0 = mir.constant 42 : !mir.int
   %1 = mir.binary add %0, %e : !mir.int
   mir.call @print(%1) : (!mir.int) -> ()
   mir.return
 }
-
-mir.func @dark.1(%e: !mir.int) {
-  %0 = mir.constant 1337 : !mir.int
-  %1 = mir.binary add %0, %e : !mir.int
-  mir.call @print(%1) : (!mir.int) -> ()
-  mir.return
-}
-
-mir.func @dark.2(%e: !mir.int) {
-  %0 = mir.constant 43 : !mir.int
-  %1 = mir.binary add %0, %e : !mir.int
-  mir.call @print(%1) : (!mir.int) -> ()
-  mir.return
-}
-
-mir.func @dark.3(%e: !mir.int) {
-  %0 = mir.constant 1338 : !mir.int
-  %1 = mir.binary add %0, %e : !mir.int
-  mir.call @print(%1) : (!mir.int) -> ()
-  mir.return
-}
 ```
 
-No `split_func`, `split_call`, or `phase_call` ops remain.
-All phased execution has been resolved into a flat set of monomorphized functions with baked-in constants.
-bark takes a runtime argument `a` and calls through the monomorphized tree.
-This IR is then lowered through LLVM (or CIRCT) for the target platform — no further JIT execution needed.
+`@cark.1` follows the same pattern as `@cark.0`, calling `@dark.2` and `@dark.3`.
+`@dark.1` through `@dark.3` are identical to `@dark.0` with their respective constant values (1337, 43, 1338).
+bark takes a runtime argument `a` and calls through the monomorphized tree; this IR is lowered to CIRCT to arrive at the final hardware design.
