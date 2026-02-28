@@ -6,6 +6,231 @@ It also describes the mechanical, canonical pattern for phase splitting and eval
 In practice, the compiler should compute constants and types as early as possible, and materialize constant values in wiring regions and functions wherever beneficial.
 These optimizations are omitted for clarity; we focus on the underlying mechanical pattern.
 
+## Unified IR
+
+After parsing and an initial set of optimizations, value inference, and call checking, the IR is in its unified form.
+It uses `hir.unified_func` and `hir.unified_call` ops to represent functions and calls, where arguments and regions of all execution phases are merged in a single structure, reflecting closely how the AST after parsing looked like.
+The call checking pass has copied the function signature into call sites and the function body as a constraint.
+Note that all HIR values have MLIR type `!hir.any`, but it is omitted from all assembly formats.
+
+For example, consider the following unified function:
+
+```mlir
+hir.unified_func @foo(%a: -3, %b: -1) -> (c: 0) {
+  // signature omitted for brevity
+  // (CheckCalls pass has copied most of the type computation into the body)
+} {
+  %int_type = hir.int_type                                                // any phase
+  %type_type = hir.type_type                                              // any phase
+  %a.type = hir.unified_call @doU() : () -> (%type_type: 0)               // phase -4
+  %a0 = hir.coerce_type %a : %a.type                                      // phase -3
+  %a1 = hir.unified_call @doV(%a0) : (%a.type: 0) -> (%a.type: 0)         // phase -3
+  %a2 = hir.const { hir.yield %a1 }                                       // phase -2
+  %b.type = hir.unified_call @doW(%a2) : (%a.type: 0) -> (%type_type: 0)  // phase -2
+  %b0 = hir.coerce_type %b : %b.type                                      // phase -1
+  %b1 = hir.unified_call @doX(%b0) : (%b.type: 0) -> (%b.type: 0)         // phase -1
+  %b2 = hir.const { hir.yield %b1 }                                       // phase 0
+  %c = hir.unified_call @doY(%b2) : (%b.type: 0) -> (%int_type: 0)        // phase 0
+  hir.return %c : %int_type
+}
+```
+
+Arguments indicate in which phase they are available.
+They are unknown in earlier phases and cannot be used for control flow or typing.
+Results indicate in which phase they are computed.
+The return op assigns these phases to its operands, and back-propagates phase requirements across the function body.
+Uses of a value as a type require that the type is available in the phase before the op that uses it as a type.
+This enforces that we evaluate all types to constant values in the phase before, such that they can then be absorbed into the MIR lowering for the next phase.
+Ops like `hir.const` and `hir.dyn` introduce an additional phase shift.
+Constant-like ops don't have any phase requirements, since they are trivially copied to whichever phase they are needed in.
+
+The above example is roughly equivalent to the following input:
+
+```silicon
+fn foo(const const const a: doU(), const b: doW(const { doV(a) })) -> (c: int) {
+  doY(const { doX(b) })
+}
+```
+
+### `hir.unified_func`
+
+A unified function consists of:
+
+- a symbol visibility
+- a symbol name, such as `@hello`
+- a list of arguments and their phases, such as `(%a: 0, %b: -3, %c: 2)`
+- a list of result names and their phases, such as `(x: 4, y: -2, z: 0)`
+- a signature region computing the types of arguments and results, terminated with `hir.signature`
+- a body region describing the actual computation of the function, terminated with `hir.return`
+
+The block arguments of the first block in the signature and body region correspond to the function arguments and are not printed.
+This corresponds to how `func.func` prints the names of its body region block arguments inline in the list of function arguments.
+The syntax of a unified function looks roughly like this:
+
+```mlir
+hir.unified_func @hello(%a: 0, %b: -3, %c: 2) -> (x: 4, y: -2, z: 0) {
+  // signature region
+  hir.signature (%a.type, %b.type, %c.type) -> (%x.type, %y.type, %z.type)
+} {
+  // body region
+  hir.return %x, %y, %z : %x.type, %y.type, %z.type
+}
+```
+
+### `hir.unified_call`
+
+A unified function call consist of:
+
+- a symbol name of the function to be called, such as `@hello`
+- a list of operands to pass as arguments, such as `(%i, %j, %k)`
+- a list of argument types and phases, such as `(%a.type: 0, %b.type: -3, %c.type: 2)`
+- a list of result types and phases, such as `(%x.type: 4, %y.type: -2, %z.type: 0)`
+
+The phases indicate in which phase a call operand must be available, and in which phase a call result becomes available.
+The type operands must be available one phase before the corresponding argument or result.
+
+## Split IR
+
+Consider the previous example split into separate phases:
+
+```mlir
+hir.split_func @foo(%a: -3, %b: -1) -> (c: 0) {
+  // signature same as unified func
+} [
+  -3: @foo.0,  // implied (a) -> (ctx01)
+  -1: @foo.1,  // implied (b, ctx01) -> (ctx12)
+  0: @foo.2    // implied (ctx12) -> (c)
+]
+hir.multiphase_func @foo.0(last a) -> (ctx01) [
+  @foo.0a,  // implied () -> (ctx0ab)
+  @foo.0b   // implied (a, ctx0ab) -> (ctx01)
+]
+hir.func @foo.0a() -> (a.type) {
+  %type_type = hir.type_type
+  %a.type = hir.unified_call @doU() : () -> (%type_type: 0)  // phase -4
+  hir.return %a.type : %type_type
+}
+hir.func @foo.0b(%a, %a.type) -> (ctx01) {
+  %opaque_type = hir.opaque_type
+  %a0 = hir.coerce_type %a : %a.type                               // phase -3
+  %a1 = hir.unified_call @doV(%a0) : (%a.type: 0) -> (%a.type: 0)  // phase -3
+  %ctx01 = hir.opaque_pack (%a1, %a.type)
+  hir.return %ctx01 : %opaque_type
+}
+hir.multiphase_func @foo.1(last b, first ctx01) -> (ctx12) [
+  @foo.1a,  // implied (ctx01) -> (ctx1ab)
+  @foo.1b   // implied (b, ctx1ab) -> (ctx12)
+]
+hir.func @foo.1a(%ctx01) -> (b.type) {
+  %type_type = hir.type_type
+  %a2, %a.type = hir.opaque_unpack %ctx01
+  %b.type = hir.unified_call @doW(%a2) : (%a.type: 0) -> (%type_type: 0)  // phase -2
+  hir.return %b.type : %type_type
+}
+hir.func @foo.1b(%b, %b.type) -> (ctx12) {
+  %opaque_type = hir.opaque_type
+  %b0 = hir.coerce_type %b : %b.type                               // phase -1
+  %b1 = hir.unified_call @doX(%b0) : (%b.type: 0) -> (%b.type: 0)  // phase -1
+  %ctx12 = hir.opaque_pack (%b1, %b.type)
+  hir.return %ctx12 : %opaque_type
+}
+hir.func @foo.2(%ctx12) -> (c) {
+  %int_type = hir.int_type
+  %b2, %b.type = hir.opaque_unpack %ctx12
+  %c = hir.unified_call @doY(%b2) : (%b.type: 0) -> (%int_type: 0)  // phase 0
+  hir.return %c : %int_type
+}
+```
+
+The original `@foo` unified function had 5 internal phases in total.
+However, only 3 of these are visible to the outside when looking at the function arguments and results.
+The split function only lists separate functions for the externally visible phases.
+All internal phases are absorbed into multiphase functions.
+
+### `hir.split_func`
+
+This operation indicates how a unified function has been split up into separate phases.
+Unified functions are lowered to split functions of the same name.
+A split function consist of:
+
+- a symbol visibility
+- a symbol name, such as `@hello`
+- a list of arguments and their phases, such as `(%a: 0, %b: -3, %c: 2)`
+- a list of result names and their phases, such as `(x: 4, y: -2, z: 0)`
+- a signature region computing the types of arguments and results, terminated with `hir.signature`
+- a list of phases and the name of the corresponding function
+
+The signature region is identical to the original unified function.
+This allows a piece of input IR to be compiled into a library by splitting it into distinct phases, but then still allow unified user code to link against the library and have the CheckCalls impose the function signature as constraints onto call sites in the user code.
+
+Private unified functions may not need a corresponding split function, since no later user code can do a unified call to the function.
+Dead symbol elimination should automatically collect private split functions.
+
+Each entry in the list of phases consits of:
+
+- a phase number, such as `42:`
+- a name of the function that contains the code for this phase
+
+Each function in the list must accept the arguments of the split function with the corresponding phase, and must produce the results with the corresponding phase.
+All except for the last function are expected to return one additional, opaque result containing internal values that flow to the next split function.
+All except for the first function are expected to accept one additional, opaque argument containing internal values that flow from the previous split function.
+The symbol user verifier of the op verifies that each function in the list of phases accepts the expected number of arguments and returns the expected number of results.
+
+The syntax of a split function looks roughly like this:
+
+```mlir
+hir.split_func @hello(%a: 0, %b: -3, %c: 2) -> (x: 4, y: -2, z: 0) {
+  // signature region
+  hir.signature (%a.type, %b.type, %c.type) -> (%x.type, %y.type, %z.type)
+} [
+  -3: @hello.0,  // implied (b) -> (ctx01)
+  -2: @hello.1,  // implied (ctx01) -> (y, ctx12)
+  0: @hello.2,   // implied (a, ctx12) -> (z, ctx23)
+  2: @hello.3,   // implied (c, ctx23) -> (ctx34)
+  4: @hello.4    // implied (ctx34) -> (x)
+]
+```
+
+### `hir.multiphase_func`
+
+A multiphase function explicitly encodes that a series of functions should be evaluated iteratively in separate phases.
+It consists of:
+
+- a symbol visibility
+- a symbol name, such as `@world`
+- a list of argument names and a keyword indicating whether each argument goes into the first or last phase, such as `(last a, first b, last c)`
+- a list of result names, such as `(d, e, f)`
+- a list of names of functions to call in subsequent phases
+
+All except for the last function are expected to return one additional, opaque result containing internal values that flow to the next split function.
+All except for the first function are expected to accept one additional, opaque argument containing internal values that flow from the previous split function.
+Once a phase has been evaluated, the function's opaque result is passed to the subsequent phase function as a constant, specializing it.
+The first function accepts the multiphase function arguments specified as "first".
+The last function accepts the multiphase function arguments specified as "last", and the opaque result from the previous phase.
+The last function returns exactly the multiphase function results.
+
+This op can be iteratively reduced to a regular function by removing and evaluating the first function in the list, and using the returned values to specialize the subsequent function.
+As functions are evaluated and specialized, the names in the list are likely to change since specializing a function with multiple users means creating a specialized copy of it instead of modifying the original declaration.
+When only a single function remains in the list, the op can be replaced with a direct call to that function.
+
+The syntax of a multiphase function looks roughly like this:
+
+```mlir
+hir.multiphase_func @world(last a, first b, last c) -> (d, e, f) [
+  @world.0,  // implied (b) -> (ctx01)
+  @world.1,  // implied (ctx01) -> (ctx12)
+  @world.2   // implied (a, c, ctx12) -> (d, e, f)
+]
+```
+
+### `hir.func`
+
+TODO
+
+### `hir.call`
+
+TODO
+
 ## Phased Evaluation
 
 Phase evaluation follows a loop through the HIR-MIR-LLVM-Execute-Specialize pipeline:
@@ -46,6 +271,15 @@ When all type and constant block args of a phase function are known, the functio
 _Monomorphization_ creates a dedicated clone of a split function for a specific set of constant arguments.
 The specialization key is (original function symbol, constant arg values).
 Before cloning, the compiler checks if a clone with the same key already exists and reuses it — this is how deduplication works.
+
+## Library Compilation
+
+When we compile an input into a library, we want to execute as many phases as possible.
+This means that any internal phases, i.e. phases that don't depend on a function argument, should be evaluated until no such phases remain.
+Once the library is compiled, we store it as an MLIR bytecode blob on disk.
+A user may then use this library in their code compiled in a later invocation of the compiler.
+At that point the new user code is still using `hir.unified_{func,call}` ops.
+The library must retain enough information about how the individual phase splits combine to form a unified function to allow the later compiler invocation to resolve the user's unified calls to the precompiled phase splits in the library.
 
 ## Example 1
 
