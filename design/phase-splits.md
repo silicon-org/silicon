@@ -2,14 +2,11 @@
 
 This document describes how the Silicon language intends to implement metaprogramming, function specialization, and phased compile-time execution.
 It is aspirational and does not reflect the current state of the code base.
-It also describes the mechanical, canonical pattern for phase splitting and evaluation.
-In practice, the compiler should compute constants and types as early as possible, and materialize constant values in wiring regions and functions wherever beneficial.
-These optimizations are omitted for clarity; we focus on the underlying mechanical pattern.
 
 ## Unified IR
 
 After parsing and an initial set of optimizations, value inference, and call checking, the IR is in its unified form.
-It uses `hir.unified_func` and `hir.unified_call` ops to represent functions and calls, where arguments and regions of all execution phases are merged in a single structure, reflecting closely how the AST after parsing looked like.
+It uses `hir.unified_func` and `hir.unified_call` ops to represent functions and calls, where arguments and regions of all execution phases are merged in a single structure, closely reflecting the AST after parsing.
 The call checking pass has copied the function signature into call sites and the function body as a constraint.
 Note that all HIR values have MLIR type `!hir.any`, but it is omitted from all assembly formats.
 
@@ -79,7 +76,7 @@ hir.unified_func @hello(%a: 0, %b: -3, %c: 2) -> (x: 4, y: -2, z: 0) {
 
 ### `hir.unified_call`
 
-A unified function call consist of:
+A unified function call consists of:
 
 - a symbol name of the function to be called, such as `@hello`
 - a list of operands to pass as arguments, such as `(%i, %j, %k)`
@@ -88,6 +85,7 @@ A unified function call consist of:
 
 The phases indicate in which phase a call operand must be available, and in which phase a call result becomes available.
 The type operands must be available one phase before the corresponding argument or result.
+The number, names, and phases of arguments and results of the call must match the corresponding function definition.
 
 ## Split IR
 
@@ -105,15 +103,18 @@ hir.multiphase_func @foo.0(last a) -> (ctx01) [
   @foo.0a,  // implied () -> (ctx0ab)
   @foo.0b   // implied (a, ctx0ab) -> (ctx01)
 ]
-hir.func @foo.0a() -> (a.type) {
+hir.func @foo.0a() -> (ctx0ab) {
   %type_type = hir.type_type
-  %a.type = hir.unified_call @doU() : () -> (%type_type: 0)  // phase -4
-  hir.return %a.type : %type_type
-}
-hir.func @foo.0b(%a, %a.type) -> (ctx01) {
   %opaque_type = hir.opaque_type
+  %a.type = hir.call @doU() : () -> (%type_type)  // phase -4
+  %ctx0ab = hir.opaque_pack (%a.type)
+  hir.return %ctx0ab : %opaque_type
+}
+hir.func @foo.0b(%a, %ctx0ab) -> (ctx01) {
+  %opaque_type = hir.opaque_type
+  %a.type = hir.opaque_unpack %ctx0ab
   %a0 = hir.coerce_type %a : %a.type                               // phase -3
-  %a1 = hir.unified_call @doV(%a0) : (%a.type: 0) -> (%a.type: 0)  // phase -3
+  %a1 = hir.call @doV(%a0) : (%a.type) -> (%a.type)  // phase -3
   %ctx01 = hir.opaque_pack (%a1, %a.type)
   hir.return %ctx01 : %opaque_type
 }
@@ -121,23 +122,26 @@ hir.multiphase_func @foo.1(last b, first ctx01) -> (ctx12) [
   @foo.1a,  // implied (ctx01) -> (ctx1ab)
   @foo.1b   // implied (b, ctx1ab) -> (ctx12)
 ]
-hir.func @foo.1a(%ctx01) -> (b.type) {
+hir.func @foo.1a(%ctx01) -> (ctx1ab) {
   %type_type = hir.type_type
-  %a2, %a.type = hir.opaque_unpack %ctx01
-  %b.type = hir.unified_call @doW(%a2) : (%a.type: 0) -> (%type_type: 0)  // phase -2
-  hir.return %b.type : %type_type
-}
-hir.func @foo.1b(%b, %b.type) -> (ctx12) {
   %opaque_type = hir.opaque_type
+  %a2, %a.type = hir.opaque_unpack %ctx01
+  %b.type = hir.call @doW(%a2) : (%a.type) -> (%type_type)  // phase -2
+  %ctx1ab = hir.opaque_pack (%b.type)
+  hir.return %ctx1ab : %opaque_type
+}
+hir.func @foo.1b(%b, %ctx1ab) -> (ctx12) {
+  %opaque_type = hir.opaque_type
+  %b.type = hir.opaque_unpack %ctx1ab
   %b0 = hir.coerce_type %b : %b.type                               // phase -1
-  %b1 = hir.unified_call @doX(%b0) : (%b.type: 0) -> (%b.type: 0)  // phase -1
+  %b1 = hir.call @doX(%b0) : (%b.type) -> (%b.type)  // phase -1
   %ctx12 = hir.opaque_pack (%b1, %b.type)
   hir.return %ctx12 : %opaque_type
 }
 hir.func @foo.2(%ctx12) -> (c) {
   %int_type = hir.int_type
   %b2, %b.type = hir.opaque_unpack %ctx12
-  %c = hir.unified_call @doY(%b2) : (%b.type: 0) -> (%int_type: 0)  // phase 0
+  %c = hir.call @doY(%b2) : (%b.type) -> (%int_type)  // phase 0
   hir.return %c : %int_type
 }
 ```
@@ -147,11 +151,14 @@ However, only 3 of these are visible to the outside when looking at the function
 The split function only lists separate functions for the externally visible phases.
 All internal phases are absorbed into multiphase functions.
 
+The HIR operations `hir.opaque_type`, `hir.opaque_pack`, and `hir.opaque_unpack` allow SSA values to be packed and unpacked from a single SSA value.
+This allows functions to bundle op internal state that needs to flow between execution phases.
+
 ### `hir.split_func`
 
 This operation indicates how a unified function has been split up into separate phases.
 Unified functions are lowered to split functions of the same name.
-A split function consist of:
+A split function consists of:
 
 - a symbol visibility
 - a symbol name, such as `@hello`
@@ -166,7 +173,7 @@ This allows a piece of input IR to be compiled into a library by splitting it in
 Private unified functions may not need a corresponding split function, since no later user code can do a unified call to the function.
 Dead symbol elimination should automatically collect private split functions.
 
-Each entry in the list of phases consits of:
+Each entry in the list of phases consists of:
 
 - a phase number, such as `42:`
 - a name of the function that contains the code for this phase
@@ -202,8 +209,8 @@ It consists of:
 - a list of result names, such as `(d, e, f)`
 - a list of names of functions to call in subsequent phases
 
-All except for the last function are expected to return one additional, opaque result containing internal values that flow to the next split function.
-All except for the first function are expected to accept one additional, opaque argument containing internal values that flow from the previous split function.
+All except for the last function are expected to return one additional, opaque result containing internal values that flow to the next function.
+All except for the first function are expected to accept one additional, opaque argument containing internal values that flow from the previous function.
 Once a phase has been evaluated, the function's opaque result is passed to the subsequent phase function as a constant, specializing it.
 The first function accepts the multiphase function arguments specified as "first".
 The last function accepts the multiphase function arguments specified as "last", and the opaque result from the previous phase.
@@ -230,6 +237,10 @@ TODO
 ### `hir.call`
 
 TODO
+
+## Calls
+
+TODO: Show how a function that calls `@foo` lowers lowers from unified to split
 
 ## Phased Evaluation
 
