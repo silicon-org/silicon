@@ -232,11 +232,49 @@ hir.multiphase_func @world(last a, first b, last c) -> (d, e, f) [
 
 ### `hir.func`
 
-TODO
+A regular function consists of:
+
+- a symbol visibility
+- a symbol name, such as `@hello`
+- a list of block arguments, such as `(%a, %b, $c)`
+- a list of result names, such as `(d, e, f)`
+- a body region describing the computation, terminated with `hir.return`
+
+All block arguments have MLIR type `!hir.any`, which is omitted in the assembly format.
+The SSA name of each block argument matches the name of the corresponding function argument.
+Types of block arguments are not passed into the function as distinct inputs, but can be obtained through a `hir.type_of` op.
+When a call site wants to specialize a function for concrete argument and result types, it inserts `hir.coerce_type` ops immediately after the block arguments and immediately before return ops, and inserts unification ops into the return ops' type operands.
+
+The syntax of a function looks roughly like this:
+
+```mlir
+hir.func @hello(%a, %b, %c) -> (d, e, f) {
+  %a.type = hir.type_of %a
+  %b.type = hir.type_of %b
+  %c.type = hir.type_of %c
+  // ...
+  hir.return %d, %e, %f : %d.type, %e.type, %f.type
+}
+```
 
 ### `hir.call`
 
-TODO
+A regular function call consists of:
+
+- a symbol name of the function to call, such as `@hello`
+- a list of arguments to pass to the function, such as `(%a, %b, %c)`
+- a list of argument types, such as `(%a.type, %b.type, %c.type)`
+- a list of result types, such as `(%d.type, %e.type, %f.type)`
+
+The number of arguments and results must match the callee's block arguments and return values.
+When all argument and result types are constants, the call can be replaced with a `mir.call` operation with concrete types baked into the op.
+Unlike `hir.unified_call`, which references a unified function across all phases and carries per-argument phase annotations, `hir.call` invokes a single concrete function with no phase distinctions.
+
+The syntax of a call looks roughly like this:
+
+```mlir
+%d, %e, %f = hir.call @hello(%a, %b, %c) : (%a.type, %b.type, %c.type) -> (%d.type, %e.type, %f.type)
+```
 
 ## Calls
 
