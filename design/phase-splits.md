@@ -84,6 +84,7 @@ A unified function call consists of:
 - a list of result types and phases, such as `(%x.type: 4, %y.type: -2, %z.type: 0)`
 
 The phases indicate in which phase a call operand must be available, and in which phase a call result becomes available.
+These phases are relative to the call op; the entire call op may be phase-shifted relative to other ops in the caller, e.g., if the result of a call is required in a specific phase, the call op's phase is shifted to accommodate all phase requirements.
 The type operands must be available one phase before the corresponding argument or result.
 The number, names, and phases of arguments and results of the call must match the corresponding function definition.
 
@@ -113,7 +114,7 @@ hir.func @foo.0a() -> (ctx0ab) {
 hir.func @foo.0b(%a, %ctx0ab) -> (ctx01) {
   %opaque_type = hir.opaque_type
   %a.type = hir.opaque_unpack %ctx0ab
-  %a0 = hir.coerce_type %a : %a.type                               // phase -3
+  %a0 = hir.coerce_type %a : %a.type                 // phase -3
   %a1 = hir.call @doV(%a0) : (%a.type) -> (%a.type)  // phase -3
   %ctx01 = hir.opaque_pack (%a1, %a.type)
   hir.return %ctx01 : %opaque_type
@@ -133,7 +134,7 @@ hir.func @foo.1a(%ctx01) -> (ctx1ab) {
 hir.func @foo.1b(%b, %ctx1ab) -> (ctx12) {
   %opaque_type = hir.opaque_type
   %b.type = hir.opaque_unpack %ctx1ab
-  %b0 = hir.coerce_type %b : %b.type                               // phase -1
+  %b0 = hir.coerce_type %b : %b.type                 // phase -1
   %b1 = hir.call @doX(%b0) : (%b.type) -> (%b.type)  // phase -1
   %ctx12 = hir.opaque_pack (%b1, %b.type)
   hir.return %ctx12 : %opaque_type
@@ -153,6 +154,9 @@ All internal phases are absorbed into multiphase functions.
 
 The HIR operations `hir.opaque_type`, `hir.opaque_pack`, and `hir.opaque_unpack` allow SSA values to be packed and unpacked from a single SSA value.
 This allows functions to bundle op internal state that needs to flow between execution phases.
+
+In this example, `@foo.0` is a multiphase function without any arguments for the first phase.
+This means that `@foo.0a` can be fully evaluated at compile time and `@foo.0b` can be specialized with the result, even if the input is compiled to a library.
 
 ### `hir.split_func`
 
@@ -220,6 +224,10 @@ This op can be iteratively reduced to a regular function by removing and evaluat
 As functions are evaluated and specialized, the names in the list are likely to change since specializing a function with multiple users means creating a specialized copy of it instead of modifying the original declaration.
 When only a single function remains in the list, the op can be replaced with a direct call to that function.
 
+The op intentionally only supports arguments for the first and last phases.
+If it has arguments for the first phase, specializing the function for those arguments yields a multiphase function that has no more arguments for the first phase.
+A multiphase function that only has arguments for the last phase can be fully evaluated and reduced to a regular function at compile time.
+
 The syntax of a multiphase function looks roughly like this:
 
 ```mlir
@@ -236,7 +244,7 @@ A regular function consists of:
 
 - a symbol visibility
 - a symbol name, such as `@hello`
-- a list of block arguments, such as `(%a, %b, $c)`
+- a list of block arguments, such as `(%a, %b, %c)`
 - a list of result names, such as `(d, e, f)`
 - a body region describing the computation, terminated with `hir.return`
 
@@ -266,6 +274,7 @@ A regular function call consists of:
 - a list of argument types, such as `(%a.type, %b.type, %c.type)`
 - a list of result types, such as `(%d.type, %e.type, %f.type)`
 
+The callee may be an `hir.func` or `hir.multiphase_func` operation.
 The number of arguments and results must match the callee's block arguments and return values.
 When all argument and result types are constants, the call can be replaced with a `mir.call` operation with concrete types baked into the op.
 Unlike `hir.unified_call`, which references a unified function across all phases and carries per-argument phase annotations, `hir.call` invokes a single concrete function with no phase distinctions.
@@ -278,7 +287,111 @@ The syntax of a call looks roughly like this:
 
 ## Calls
 
-TODO: Show how a function that calls `@foo` lowers lowers from unified to split
+Call operations must be split according to the phases indicated on the arguments and results of the callee.
+
+### Unified
+
+Consider the following unified IR which calls the `@foo` function described above:
+
+```mlir
+hir.unified_func @bar() {
+  hir.signature () -> ()
+} {
+  %int_type = hir.int_type                                                           // any phase
+  %type_type = hir.type_type                                                         // any phase
+  %a.type = hir.unified_call @doU() : () -> (%type_type: 0)                          // phase -4
+  %a = hir.unified_call @makeA() : () -> (%a.type: 0)                                // phase -3
+  %a2 = hir.unified_call @doV(%a) : (%a.type: 0) -> (%a.type: 0)                     // phase -2
+  %b.type = hir.unified_call @doW(%a2) : (%a.type: 0) -> (%type_type: 0)             // phase -2
+  %b = hir.unified_call @makeB() : () -> (%b.type: 0)                                // phase -1
+  %c = hir.unified_call @foo(%a, %b) : (%a.type: -3, %b.type: -1) -> (%int_type: 0)  // phases -3, -1, 0
+  hir.unified_call @consumeC(%c) : (%int_type: 0) -> ()                              // phase 0
+  hir.return
+}
+```
+
+A single unified call invokes `@foo`.
+The argument and result phases of the call dictate most of the other phases in the surrounding operations.
+The calls to `@doU`, `@doV`, and `@doW` compute types for `%a` and `%b`, and were likely inlined from foo's signature region into the call site by the CheckCalls pass earlier.
+We omit a few `hir.const` ops to bunch calls to these functions more closely together into phases.
+This is just for illustrative purposes to highlight that the phase structure around a call to `@foo` can differ significantly from the phase structure of `@foo` itself.
+The interesting additions are calls to `@makeA`, `@makeB`, and `@consumeC`.
+Since the type of `%b` is dependent on the type of `%a`, an earlier type inference pass has likely propagated the type of `%b` onto the result of the call to `@makeB`.
+
+The above example is roughly equivalent to the following input:
+
+```silicon
+fn bar() {
+  consumeC(foo(makeA(), makeB()))
+}
+```
+
+### Split
+
+Consider the previous example split into separate phases:
+
+```mlir
+hir.split_func @bar() {
+  hir.signature () -> ()
+} [
+  0: @bar.0  // since no phase constraints from arguments/results, default to phase 0
+]
+hir.multiphase_func @bar.0() [
+  @bar.0a,  // implied () -> (ctx0ab)
+  @bar.0b,  // implied (ctx0ab) -> (ctx0bc)
+  @bar.0c,  // implied (ctx0bc) -> (ctx0cd)
+  @bar.0d,  // implied (ctx0cd) -> (ctx0de)
+  @bar.0e   // implied (ctx0de) -> ()
+]
+hir.func @bar.0a() -> (ctx0ab) {
+  %type_type = hir.type_type
+  %opaque_type = hir.opaque_type
+  %a.type = hir.call @doU() : () -> (%type_type)  // phase -4
+  %ctx0ab = hir.opaque_pack (%a.type)
+  hir.return %ctx0ab : %opaque_type
+}
+hir.func @bar.0b(%ctx0ab) -> (ctx0bc) {
+  %opaque_type = hir.opaque_type
+  %a.type = hir.opaque_unpack %ctx0ab
+  %a = hir.call @makeA() : () -> (%a.type)                        // phase -3
+  %foo.ctx01 = hir.call @foo.0(%a) : (%a.type) -> (%opaque_type)  // phase -3
+  %ctx0bc = hir.opaque_pack (%a, %foo.ctx01)
+  hir.return %ctx0bc : %opaque_type
+}
+hir.func @bar.0c(%ctx0bc) -> (ctx0cd) {
+  %type_type = hir.type_type
+  %opaque_type = hir.opaque_type
+  %a, %foo.ctx01 = hir.opaque_unpack %ctx0bc
+  %a.type = hir.type_of %a
+  %a2 = hir.call @doV(%a) : (%a.type) -> (%a.type)          // phase -2
+  %b.type = hir.call @doW(%a2) : (%a.type) -> (%type_type)  // phase -2
+  %ctx0cd = hir.opaque_pack (%b.type, %foo.ctx01)
+  hir.return %ctx0cd : %opaque_type
+}
+hir.func @bar.0d(%ctx0cd) -> (ctx0de) {
+  %opaque_type = hir.opaque_type
+  %b.type, %foo.ctx01 = hir.opaque_unpack %ctx0cd
+  %b = hir.call @makeB() : () -> (%b.type)                                                  // phase -1
+  %foo.ctx12 = hir.call @foo.1(%b, %foo.ctx01) : (%b.type, %opaque_type) -> (%opaque_type)  // phase -1
+  %ctx0de = hir.opaque_pack (%foo.ctx12)
+  hir.return %ctx0de : %opaque_type
+}
+hir.func @bar.0e(%ctx0de) -> () {
+  %int_type = hir.int_type
+  %opaque_type = hir.opaque_type
+  %foo.ctx12 = hir.opaque_unpack %ctx0de
+  %c = hir.call @foo.2(%foo.ctx12) : (%opaque_type) -> (%int_type)  // phase 0
+  hir.call @consumeC(%c) : (%int_type) -> ()                        // phase 0
+  hir.return
+}
+```
+
+The original `@bar` unified function had 5 internal phases in total, but none of them were externally visible since the function has no arguments or results.
+Therefore, only a single default phase 0 is listed in the corresponding split function.
+All 5 internal phases are absorbed into a multiphase function, which allows all but the last phase to be executed at compile time.
+
+Note how the unified call to `@foo` has been split up into three separate calls to the splits listed in `hir.split_func @foo`.
+Even if foo has been precompiled as a library and partially evaluated and specialized, the split function still allows the unified bar function to know which phases the call to foo has to be split up into, and which functions correspond to each phase.
 
 ## Phased Evaluation
 
