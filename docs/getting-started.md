@@ -12,16 +12,16 @@ You will need:
 
 - **CMake** (3.13.4 or later)
 - **Ninja** build system
-- A **C++17** compiler (GCC or Clang)
+- **C++17** compiler (GCC or Clang)
 - **Python 3** (for running lit tests)
-- **Hugo** (optional, for building the documentation website)
 
 ## Clone
 
 Clone the repository with its submodules (CIRCT, MLIR, LLVM):
 
 ```sh
-git clone --recurse-submodules --shallow-submodules git@github.com:silicon-org/silicon.git
+git clone --recurse-submodules --shallow-submodules \
+  git@github.com:silicon-org/silicon.git
 cd silicon
 ```
 

@@ -2,32 +2,30 @@
 set(docdir ${CMAKE_BINARY_DIR}/docs)
 set(collect_py ${CMAKE_CURRENT_SOURCE_DIR}/collect.py)
 macro(collect_doc dst src)
-  find_file(found_src ${src} PATHS ${SILICON_BINARY_DIR} ${SILICON_SOURCE_DIR} NO_DEFAULT_PATH)
   add_custom_command(
     OUTPUT ${docdir}/${dst}
-    COMMAND ${Python3_EXECUTABLE} ${collect_py} ${found_src} ${docdir}/${dst}
-    DEPENDS ${collect_py} ${found_src} silicon-headers
+    COMMAND ${Python3_EXECUTABLE} ${collect_py} ${src} ${docdir}/${dst}
+    DEPENDS ${collect_py} ${src} silicon-headers
     COMMENT "Collecting docs ${dst}"
   )
   list(APPEND collected_docs ${docdir}/${dst})
-  unset(found_src CACHE)
 endmacro()
 
 # Dialects
-collect_doc(internals/dialects/HIR.md include/silicon/HIR/Dialect.md)
-collect_doc(internals/dialects/MIR.md include/silicon/MIR/Dialect.md)
+collect_doc(internals/dialects/HIR.md ${SILICON_BINARY_DIR}/include/silicon/HIR/Dialect.md)
+collect_doc(internals/dialects/MIR.md ${SILICON_BINARY_DIR}/include/silicon/MIR/Dialect.md)
 
 # Passes
-collect_doc(internals/passes/HIR.md include/silicon/HIR/Passes.md)
-collect_doc(internals/passes/MIR.md include/silicon/MIR/Passes.md)
-collect_doc(internals/passes/Conversions.md include/silicon/Conversion/Passes.md)
-collect_doc(internals/passes/Transforms.md include/silicon/Transforms/Passes.md)
+collect_doc(internals/passes/HIR.md ${SILICON_BINARY_DIR}/include/silicon/HIR/Passes.md)
+collect_doc(internals/passes/MIR.md ${SILICON_BINARY_DIR}/include/silicon/MIR/Passes.md)
+collect_doc(internals/passes/Conversions.md ${SILICON_BINARY_DIR}/include/silicon/Conversion/Passes.md)
+collect_doc(internals/passes/Transforms.md ${SILICON_BINARY_DIR}/include/silicon/Transforms/Passes.md)
 
 # Static documents
 file(GLOB_RECURSE static_docs RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS *.md)
 list(FILTER static_docs EXCLUDE REGEX "^themes/")
 foreach(doc ${static_docs})
-  collect_doc(${doc} docs/${doc})
+  collect_doc(${doc} ${CMAKE_CURRENT_SOURCE_DIR}/${doc})
 endforeach()
 
 # Collect these documents as part of the silicon-docs target.

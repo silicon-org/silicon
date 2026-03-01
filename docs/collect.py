@@ -23,13 +23,23 @@ text = args.src.read_text()
 # Strip [TOC] markers. Hugo Book renders the table of contents automatically.
 text = re.sub(r"^\[TOC\]\s*$", "", text, flags=re.MULTILINE)
 
-# Inject YAML front matter if missing.
-if not text.startswith("---"):
+# Ensure YAML front matter with a title. If front matter already exists, strip
+# it off; otherwise start with an empty front matter. Then ensure a title line
+# is present, guessing from the first `# Heading` or the filename stem. Finally
+# reassemble the document with the front matter.
+match = re.match(r"^---\n(.+?)^---\n", text, re.MULTILINE | re.DOTALL)
+if match:
+    front = match.group(1)
+    text = text[len(match.group(0)):]
+else:
+    front = ""
+if not re.search(r"^title\s*:", front, re.MULTILINE):
     title = args.dst.stem
-    match = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
-    if match:
-        title = match.group(1).strip()
-    text = f"---\ntitle: \"{title}\"\n---\n\n{text}"
+    heading = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
+    if heading:
+        title = heading.group(1).strip()
+    front += f"title: \"{title}\"\n"
+text = f"---\n{front}---\n{text}"
 
 args.dst.parent.mkdir(parents=True, exist_ok=True)
 args.dst.write_text(text)
