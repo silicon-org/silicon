@@ -24,6 +24,7 @@ collect_doc(internals/passes/Transforms.md include/silicon/Transforms/Passes.md)
 
 # Static documents
 file(GLOB_RECURSE static_docs RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS *.md)
+list(FILTER static_docs EXCLUDE REGEX "^themes/")
 foreach(doc ${static_docs})
   collect_doc(${doc} docs/${doc})
 endforeach()
@@ -31,3 +32,18 @@ endforeach()
 # Collect these documents as part of the silicon-docs target.
 add_custom_target(SiliconDocFiles DEPENDS ${collected_docs})
 add_dependencies(silicon-docs SiliconDocFiles)
+
+# Build the website with Hugo. We copy hugo.toml and symlink the theme into
+# the build docs directory, so Hugo runs entirely inside the build tree.
+find_program(HUGO hugo)
+if(HUGO)
+  add_custom_target(silicon-website
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/hugo.toml ${dstdir}/hugo.toml
+    COMMAND ${CMAKE_COMMAND} -E create_symlink ${CMAKE_CURRENT_SOURCE_DIR}/themes ${dstdir}/themes
+    COMMAND ${HUGO} --source ${dstdir} --destination ${CMAKE_BINARY_DIR}/website
+    COMMENT "Building website"
+  )
+  add_dependencies(silicon-website silicon-docs)
+else()
+  message(STATUS "Hugo not found; silicon-website target will not be available")
+endif()

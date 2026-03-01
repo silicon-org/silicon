@@ -29,6 +29,7 @@ Run the build:
 ninja -C build check-silicon      # build and run all tests
 ninja -C build silicon            # build everything
 ninja -C build silicon-docs       # build documentation
+ninja -C build silicon-website    # build website (requires hugo)
 ninja -C build silicon-tools      # build tools such as silc and silicon-opt
 ninja -C build silicon-libraries  # build everything else
 ```
