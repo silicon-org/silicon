@@ -8,6 +8,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   #===----------------------------------------------------------------------===#
   # Sanity Check
@@ -126,6 +131,13 @@ jobs:
           key: short-${{ matrix.compiler.cc }}-${{ matrix.build-type }}-${{ matrix.build-shared }}-${{ matrix.build-assert }}
           max-size: 500M
 
+      # Install Hugo for website build.
+      - name: Setup Hugo
+        uses: peaceiris/actions-hugo@v3
+        with:
+          hugo-version: latest
+          extended: true
+
       # Configure the build
       - name: Configure
         run: |
@@ -149,11 +161,18 @@ jobs:
 
       # Build everything
       - name: Build
-        run: ninja -C build silicon
+        run: ninja -C build silicon silicon-website
 
       # Run the tests
       - name: Tests
         run: ninja -C build check-silicon
+
+      # Upload the built website as an artifact. (Only for the clang build.)
+      - name: Upload Website
+        if: matrix.compiler.cc == 'clang'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/website
 
       # Choose the git commit to diff against for the purposes of linting.
       # Since this workflow is triggered on both pushes and pull requests, we
@@ -212,3 +231,19 @@ jobs:
         with:
           name: clang-tidy-patches
           path: clang-*.patch
+
+  #===----------------------------------------------------------------------===#
+  # Deploy Website
+  #===----------------------------------------------------------------------===#
+  deploy-website:
+    name: Deploy Website
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

@@ -3,3 +3,6 @@
     url = https://github.com/llvm/circt.git
     shallow = true
     branch = main
+[submodule "docs/themes/hugo-book"]
+	path = docs/themes/hugo-book
+	url = https://github.com/alex-shpak/hugo-book

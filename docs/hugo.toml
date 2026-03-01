@@ -1,0 +1,10 @@
+baseURL = "https://silicon-org.github.io/silicon/"
+title = "Silicon"
+theme = "hugo-book"
+contentDir = "."
+
+disableKinds = ["taxonomy"]
+ignoreFiles = ['cmake_install\.cmake$', 'CMakeFiles']
+
+[markup.goldmark.renderer]
+unsafe = true
