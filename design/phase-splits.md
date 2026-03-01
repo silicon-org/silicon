@@ -395,31 +395,64 @@ Even if foo has been precompiled as a library and partially evaluated and specia
 
 ## Phased Evaluation
 
-Phase evaluation follows a loop through the HIR-MIR-LLVM-Execute-Specialize pipeline:
+The phases ascribed to split and multiphase functions describe an execution schedule in which the compile-time evaluation of code should occur.
+A fixed pipeline of compiler passes takes the earliest phase, executes it, and uses its results to specialize functions for the next phase.
+The compiler executes this pipeline in a loop until no more multiphase functions remain.
+If we are compiling a design (as opposed to a library for later reuse), the compiler marks all but the main function as private.
+Each iteration through the pipeline performs roughly the following steps:
 
-1.  **Lower HIR to MIR.**
-    Type-as-value ops (`hir.int_type`, type block args) become concrete MLIR types on MIR ops.
-    For example, `hir.binary %a, %b : %type` becomes `mir.binary %a, %b : !mir.int` once `%type` is known to be `int_type`.
-    This is only possible when all type operands have been resolved to known constants, i.e. they are defined by ConstantLike ops such as `hir.int_type` or `hir.constant_int 42`.
+1.  **Canonicalize.**
+    Propagate and fold constant values.
+    This includes pushing unification ops through trivially equivalent operations and substituting inferrable ops.
+    Also run the symbol dead code elimination pass to clean up any functions that may have become unused.
 
-2.  **Lower MIR to LLVM IR.**
-    Standard MLIR-to-LLVM lowering.
+2.  **Unify.**
+    Ensure that all unification ops have been resolved and emit errors for values and types that cannot be unified.
+    This is the user-facing mechanism that produces error messages about incompatible types.
 
-3.  **JIT-execute.**
-    Run the LLVM module and collect results.
+3.  **Lower HIR to MIR.**
+    Lower functions to MIR if all ops in the body have type operands defined entirely by `ConstantLike` operations.
 
-4.  **Materialize constants.**
-    For each `hir.multiphase_func` whose first sub-function has been evaluated, materialize the returned opaque result as constants and use those to specialize the next sub-function.
-    Remove the evaluated sub-function from the multiphase function's list.
+4.  **Pick functions to evaluate.**
+    Collect the first sub-function from all executable multiphase functions.
+    A multiphase function is executable if it does not have any `first` arguments, and the first phase function and its entire transitive call graph has been lowered to MIR.
+    Note that this means that none of the called functions are multiphase functions, which are HIR dialect ops; multiphase functions can only be executed once they have been fully reduced to a single function and lowered to MIR.
 
-5.  **Specialize functions.**
-    Inline constant opaque context values into subsequent sub-functions, creating specialized versions.
-    When only a single function remains in the multiphase function's list, replace the `hir.multiphase_func` with a direct call to that function.
-    This iterative reduction is the metaprogramming mechanism in Silicon.
+5.  **Lower MIR to LLVM IR.**
+    Lower all functions picked for evaluation to the LLVM dialect, including transitively any functions they call.
+    The lowered LLVM functions reside in a separate MLIR top-level module, since the JIT execution engine requires the entire module to be in LLVM.
+    If all call sites of a function reside within the transitive call graphs of sub-functions picked for evaluation, the function can simply be moved to the other module and lowered.
+    If there are call sites that remain in HIR or MIR, the function has to be cloned for LLVM lowering.
+    This ensures that a function can both be used in a compile-time evaluated context, but also in a context where it ends up being lowered to CIRCT IR later.
 
-6.  **Repeat.**
-    Check if any more `hir.multiphase_func` ops now have their first sub-function fully evaluable (all arguments are constants or the function takes no arguments).
-    If there are, go back to the first step and repeat.
+6.  **Evaluate.**
+    Call the picked functions using MLIR's execution engine, which uses LLVM's JIT compiler under the hood.
+    Since we are incrementally adding new LLVM functions, make use of any object caching offered by the infrastructure.
+
+7.  **Materialize results.**
+    Map the results of the picked functions to MLIR attributes.
+    Then remove the picked functions from their parent multiphase function's phase list, and specialize the subsequent phase with the results.
+    If only one sub-function remains in a multiphase function's list, replace all uses of the multiphase function's symbol with that sub-function's symbol.
+    This step reduces individual multiphase functions; the next step propagates the resulting constants through call sites.
+
+8.  **Specialize functions.**
+    Transitively specialize any function calls by copying constant arguments into a distinct copy of the function.
+    Don't create a copy if specializing the last remaining call of a private function, but modify that function directly instead.
+    If a function has been specialized for the exact same constant argument before, reuse that function instead of creating a redundant copy.
+    This ensures that the results obtained during evaluation get propagated through the call graph and are used to specialize functions.
+
+9.  **Repeat.**
+    If there are any remaining multiphase functions and at least one function was picked and evaluated in this iteration of the pipeline, go back to step 1.
+
+After exiting the loop, the IR has been compile-time evaluated as far as possible.
+Discard the LLVM top-level module at this point.
+
+If we are compiling a library, we can simply store the IR in its current state into an MLIRBC file.
+
+If we are compiling a design, run an additional compiler pass to ensure that all multiphase functions have been fully evaluated.
+Any unused functions must have been deleted and all others fully compile-time evaluated down to a single phase at this point.
+The loop must also have lowered the entire input to MIR.
+If this is not the case, report a compiler bug to the user and abort.
 
 ## JIT Batching
 
