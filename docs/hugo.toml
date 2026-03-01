@@ -6,5 +6,8 @@ contentDir = "."
 disableKinds = ["taxonomy"]
 ignoreFiles = ['cmake_install\.cmake$', 'CMakeFiles']
 
+[params]
+BookSection = "/"
+
 [markup.goldmark.renderer]
 unsafe = true

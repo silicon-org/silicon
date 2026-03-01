@@ -1,5 +1,5 @@
 ---
-title: Silicon
+title: Introduction
 type: docs
 ---
 
