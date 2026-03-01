@@ -37,7 +37,7 @@ They are unknown in earlier phases and cannot be used for control flow or typing
 Results indicate in which phase they are computed.
 The return op assigns these phases to its operands, and back-propagates phase requirements across the function body.
 Uses of a value as a type require that the type is available in the phase before the op that uses it as a type.
-This enforces that we evaluate all types to constant values in the phase before, such that they can then be absorbed into the MIR lowering for the next phase.
+This enforces that we evaluate all types to constant values in the preceding phase, such that they can then be absorbed into the MIR lowering for the next phase.
 Ops like `hir.const` and `hir.dyn` introduce an additional phase shift.
 Constant-like ops don't have any phase requirements, since they are trivially copied to whichever phase they are needed in.
 
@@ -60,7 +60,7 @@ A unified function consists of:
 - a signature region computing the types of arguments and results, terminated with `hir.signature`
 - a body region describing the actual computation of the function, terminated with `hir.return`
 
-The block arguments of the first block in the signature and body region correspond to the function arguments and are not printed.
+The block arguments of the first block in the signature and body regions correspond to the function arguments and are not printed.
 This corresponds to how `func.func` prints the names of its body region block arguments inline in the list of function arguments.
 The syntax of a unified function looks roughly like this:
 
@@ -152,7 +152,7 @@ However, only 3 of these are visible to the outside when looking at the function
 The split function only lists separate functions for the externally visible phases.
 All internal phases are absorbed into multiphase functions.
 
-The HIR operations `hir.opaque_type`, `hir.opaque_pack`, and `hir.opaque_unpack` allow SSA values to be packed and unpacked from a single SSA value.
+The HIR operations `hir.opaque_type`, `hir.opaque_pack`, and `hir.opaque_unpack` allow multiple SSA values to be packed into and unpacked from a single SSA value.
 This allows functions to bundle op internal state that needs to flow between execution phases.
 
 In this example, `@foo.0` is a multiphase function without any arguments for the first phase.
@@ -172,7 +172,7 @@ A split function consists of:
 - a list of phases and the name of the corresponding function
 
 The signature region is identical to the original unified function.
-This allows a piece of input IR to be compiled into a library by splitting it into distinct phases, but then still allow unified user code to link against the library and have the CheckCalls impose the function signature as constraints onto call sites in the user code.
+This allows a piece of input IR to be compiled into a library by splitting it into distinct phases, but then still allows unified user code to link against the library and have the CheckCalls impose the function signature as constraints onto call sites in the user code.
 
 Private unified functions may not need a corresponding split function, since no later user code can do a unified call to the function.
 Dead symbol elimination should automatically collect private split functions.
@@ -226,7 +226,7 @@ When only a single function remains in the list, the op can be replaced with a d
 
 The op intentionally only supports arguments for the first and last phases.
 If it has arguments for the first phase, specializing the function for those arguments yields a multiphase function that has no more arguments for the first phase.
-A multiphase function that only has arguments for the last phase can be fully evaluated and reduced to a regular function at compile time.
+A multiphase function that only has arguments for the last phase can have its compile-time phases fully evaluated, reducing it to a regular function.
 
 The syntax of a multiphase function looks roughly like this:
 
@@ -251,7 +251,7 @@ A regular function consists of:
 All block arguments have MLIR type `!hir.any`, which is omitted in the assembly format.
 The SSA name of each block argument matches the name of the corresponding function argument.
 Types of block arguments are not passed into the function as distinct inputs, but can be obtained through a `hir.type_of` op.
-When a call site wants to specialize a function for concrete argument and result types, it inserts `hir.coerce_type` ops immediately after the block arguments and immediately before return ops, and inserts unification ops into the return ops' type operands.
+When a call site wants to specialize a function for concrete argument and result types, it inserts `hir.coerce_type` ops immediately after the block arguments and immediately before return ops, and inserts unification ops on the return ops' type operands.
 
 The syntax of a function looks roughly like this:
 
@@ -312,8 +312,9 @@ hir.unified_func @bar() {
 
 A single unified call invokes `@foo`.
 The argument and result phases of the call dictate most of the other phases in the surrounding operations.
-The calls to `@doU`, `@doV`, and `@doW` compute types for `%a` and `%b`, and were likely inlined from foo's signature region into the call site by the CheckCalls pass earlier.
-We omit a few `hir.const` ops to bunch calls to these functions more closely together into phases.
+The calls to `@doU` and `@doW` compute the types of `%a` and `%b`, and `@doV` computes a value that feeds into `@doW`.
+These were likely inlined from foo's signature region and type computation chain into the call site by the CheckCalls pass earlier.
+We omit a few `hir.const` ops to group calls to these functions more closely together into phases.
 This is just for illustrative purposes to highlight that the phase structure around a call to `@foo` can differ significantly from the phase structure of `@foo` itself.
 The interesting additions are calls to `@makeA`, `@makeB`, and `@consumeC`.
 Since the type of `%b` is dependent on the type of `%a`, an earlier type inference pass has likely propagated the type of `%b` onto the result of the call to `@makeB`.
@@ -415,7 +416,7 @@ Each iteration through the pipeline performs roughly the following steps:
 
 4.  **Pick functions to evaluate.**
     Collect the first sub-function from all executable multiphase functions.
-    A multiphase function is executable if it does not have any `first` arguments, and the first phase function and its entire transitive call graph has been lowered to MIR.
+    A multiphase function is executable if it does not have any `first` arguments, and the first phase function and its entire transitive call graph have been lowered to MIR.
     Note that this means that none of the called functions are multiphase functions, which are HIR dialect ops; multiphase functions can only be executed once they have been fully reduced to a single function and lowered to MIR.
 
 5.  **Lower MIR to LLVM IR.**
@@ -423,7 +424,7 @@ Each iteration through the pipeline performs roughly the following steps:
     The lowered LLVM functions reside in a separate MLIR top-level module, since the JIT execution engine requires the entire module to be in LLVM.
     If all call sites of a function reside within the transitive call graphs of sub-functions picked for evaluation, the function can simply be moved to the other module and lowered.
     If there are call sites that remain in HIR or MIR, the function has to be cloned for LLVM lowering.
-    This ensures that a function can both be used in a compile-time evaluated context, but also in a context where it ends up being lowered to CIRCT IR later.
+    This ensures that a function can be used both in a compile-time evaluated context and in a context where it ends up being lowered to CIRCT IR later.
 
 6.  **Evaluate.**
     Call the picked functions using MLIR's execution engine, which uses LLVM's JIT compiler under the hood.
@@ -438,7 +439,7 @@ Each iteration through the pipeline performs roughly the following steps:
 8.  **Specialize functions.**
     Transitively specialize any function calls by copying constant arguments into a distinct copy of the function.
     Don't create a copy if specializing the last remaining call of a private function, but modify that function directly instead.
-    If a function has been specialized for the exact same constant argument before, reuse that function instead of creating a redundant copy.
+    If a function has been specialized for the exact same constant arguments before, reuse that function instead of creating a redundant copy.
     This ensures that the results obtained during evaluation get propagated through the call graph and are used to specialize functions.
 
 9.  **Repeat.**
@@ -458,7 +459,7 @@ If this is not the case, report a compiler bug to the user and abort.
 
 This section describes step-by-step how the previous examples of `@foo` and `@bar` are processed by the phased evaluation pipeline.
 We assume compilation as a design, such that any unused functions can be eliminated.
-We also assume that any of the `@do*`, `@make*`, and the `@consumeC` function are already lowered to MIR and LLVM; we skip their implementation details for brevity.
+We also assume that the `@do*`, `@make*`, and `@consumeC` functions are already lowered to MIR and LLVM; we skip their implementation details for brevity.
 
 ### First Iteration
 
@@ -571,7 +572,7 @@ mir.func @bar.0b() -> (ctx0bc: !mir.opaque) {
   %a.type = mir.constant_type !mir.uint<42>
   %a = mir.call @makeA() : () -> (!mir.uint<42>)
   %foo.ctx01 = mir.call @foo.0b(%a) : (!mir.uint<42>) -> (!mir.opaque)
-  %ctx0bc = mir.opaque_pack (%a, %foo.ctx01) : (!mir.uint<42>, !mir.type)
+  %ctx0bc = mir.opaque_pack (%a, %foo.ctx01) : (!mir.uint<42>, !mir.opaque)
   mir.return %ctx0bc : !mir.opaque
 }
 ```
@@ -585,7 +586,7 @@ Then lower the picked function and any transitively called functions to LLVM:
 ```mlir
 llvm.func @foo.0b(%a: i42) -> (ctx01: !llvm.ptr) {
   %c42_i64 = llvm.mlir.constant 42 : i64
-  %a.type = llvm.call @make_int_type(%c42_64) : (i64) -> !llvm.ptr
+  %a.type = llvm.call @make_int_type(%c42_i64) : (i64) -> !llvm.ptr
   %a1 = llvm.call @doV(%a) : (i42) -> (i42)
   %ctx01 = llvm.call @opaque_pack.i42.type(%a1, %a.type) : (i42, !llvm.ptr) -> !llvm.ptr
   llvm.return %ctx01 : !llvm.ptr
@@ -593,10 +594,10 @@ llvm.func @foo.0b(%a: i42) -> (ctx01: !llvm.ptr) {
 
 llvm.func @bar.0b() -> (ctx0bc: !llvm.ptr) {
   %c42_i64 = llvm.mlir.constant 42 : i64
-  %a.type = llvm.call @make_int_type(%c42_64) : (i64) -> !llvm.ptr
+  %a.type = llvm.call @make_int_type(%c42_i64) : (i64) -> !llvm.ptr
   %a = llvm.call @makeA() : () -> (i42)
   %foo.ctx01 = llvm.call @foo.0b(%a) : (i42) -> (!llvm.ptr)
-  %ctx0bc = llvm.call @opaque_pack.i42.type(%a, %foo.ctx01) : (i42, !llvm.ptr) -> !llvm.ptr
+  %ctx0bc = llvm.call @opaque_pack.i42.opaque(%a, %foo.ctx01) : (i42, !llvm.ptr) -> !llvm.ptr
   llvm.return %ctx0bc : !llvm.ptr
 }
 ```
@@ -962,14 +963,19 @@ This creates a tree of four leaf specializations:
 
 After phase splitting, all three functions follow the same structural pattern as the worked example: a `hir.split_func` listing the caller-visible phases, with internal phases absorbed into `hir.multiphase_func` ops.
 `top` has a single caller-visible phase since its only argument `a` is phase 0.
+Since all types are trivially `int`, no type-computation sub-functions are generated.
+Each function splits into just two phases: a const phase (a regular `hir.func`) and a runtime phase.
+For example, `@middle` splits into `@middle.0` (takes `b`, computes const results) and `@middle.1` (takes `c`, uses specialized const values).
+Similarly, `@leaf` splits into `@leaf.0` and `@leaf.1`.
+`@top` has a single externally visible phase with a two-function `hir.multiphase_func @top.0` containing `@top.0a` (const) and `@top.0b` (runtime).
 
-During phased evaluation, the compile-time sub-function `@top.0a` calls `@middle.0b` twice (with `b=0` and `b=1`), and each `@middle.0b` call invokes `@leaf.0b` twice with different `d` values.
-The entire call tree executes in a single JIT batch, producing an opaque context that carries the computed constants for all four leaf instances.
+During phased evaluation, the compile-time sub-function `@top.0a` calls `@middle.0` twice (with `b=0` and `b=1`), and each `@middle.0` call invokes `@leaf.0` twice with different `d` values.
+Since `@middle.0` and `@leaf.0` are regular functions (not multiphase), the entire call tree executes in a single JIT batch, producing an opaque context that carries the computed constants for all four leaf instances.
 
 When specializing the runtime functions, the pipeline creates distinct copies for each unique set of constant arguments:
 
-- `@middle.1` is specialized twice: `@middle.b0` (for `b=0`) and `@middle.b1` (for `b=1`).
-- `@leaf.1` is specialized four times: `@leaf.d42`, `@leaf.d1337`, `@leaf.d43`, and `@leaf.d1338`.
+- `@middle.1` is specialized twice: `@middle.1.b0` (for `b=0`) and `@middle.1.b1` (for `b=1`).
+- `@leaf.1` is specialized four times: `@leaf.1.d42`, `@leaf.1.d1337`, `@leaf.1.d43`, and `@leaf.1.d1338`.
 
 For trivial types and constants, the specialized function name includes the constant value directly.
 For more complex structures, a short hash is used instead.
@@ -977,38 +983,38 @@ For more complex structures, a short hash is used instead.
 Each specialization has the const argument baked in as a constant:
 
 ```mlir
-mir.func @leaf.d42(%e: !mir.int) {
+mir.func @leaf.1.d42(%e: !mir.int) {
   %d = mir.constant 42 : !mir.int
   %0 = mir.binary add %d, %e : !mir.int
   mir.call @print(%0) : (!mir.int) -> ()
   mir.return
 }
-// @leaf.d1337, @leaf.d43, @leaf.d1338 are identical with their respective d values
+// @leaf.1.d1337, @leaf.1.d43, @leaf.1.d1338 are identical with their respective d values
 ```
 
 The final monomorphized IR is a flat set of `mir.func` ops with no remaining `split_func`, `multiphase_func`, or opaque operations:
 
 ```mlir
 mir.func @top(%a: !mir.int) {
-  mir.call @middle.b0(%a) : (!mir.int) -> ()
-  mir.call @middle.b1(%a) : (!mir.int) -> ()
+  mir.call @middle.1.b0(%a) : (!mir.int) -> ()
+  mir.call @middle.1.b1(%a) : (!mir.int) -> ()
   mir.return
 }
 
-mir.func @middle.b0(%c: !mir.int) {
-  mir.call @leaf.d42(%c) : (!mir.int) -> ()
-  mir.call @leaf.d1337(%c) : (!mir.int) -> ()
+mir.func @middle.1.b0(%c: !mir.int) {
+  mir.call @leaf.1.d42(%c) : (!mir.int) -> ()
+  mir.call @leaf.1.d1337(%c) : (!mir.int) -> ()
   mir.return
 }
 
-mir.func @leaf.d42(%e: !mir.int) {
+mir.func @leaf.1.d42(%e: !mir.int) {
   %d = mir.constant 42 : !mir.int
   %0 = mir.binary add %d, %e : !mir.int
   mir.call @print(%0) : (!mir.int) -> ()
   mir.return
 }
-// @leaf.d1337, @leaf.d43, @leaf.d1338 follow the same pattern
-// @middle.b1 calls @leaf.d43 and @leaf.d1338
+// @leaf.1.d1337, @leaf.1.d43, @leaf.1.d1338 follow the same pattern
+// @middle.1.b1 calls @leaf.1.d43 and @leaf.1.d1338
 ```
 
 The specialization step uses the key `(original function symbol, constant argument values)` to identify specializations.
