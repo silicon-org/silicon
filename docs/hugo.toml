@@ -1,4 +1,4 @@
-baseURL = "https://silicon-org.github.io/silicon/"
+baseURL = "https://docs.silicon-lang.org/"
 title = "Silicon"
 theme = "hugo-book"
 contentDir = "."
@@ -7,7 +7,19 @@ disableKinds = ["taxonomy"]
 ignoreFiles = ['cmake_install\.cmake$', 'CMakeFiles']
 
 [params]
-BookSection = "/"
+BookSection = "/"   # include entire docs directory in navigation
+BookTheme = "auto"  # switch between light and dark based on OS preferences
 
 [markup.goldmark.renderer]
-unsafe = true
+unsafe = true  # allow inline HTML and some other stuff
+
+[markup.tableOfContents]
+startLevel = 1  # include page title in table of contents
+
+[markup.highlight]
+style = "catppuccin-frappe"  # color theme for syntax highlighting
+
+# Add a link to the GitHub repository to the left sidebar.
+[[menu.after]]
+name = "GitHub"
+url = "https://github.com/silicon-org/silicon"

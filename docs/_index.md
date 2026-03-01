@@ -1,9 +1,10 @@
 ---
 title: Introduction
 type: docs
+bookFlatSection: true
 ---
 
-# Silicon
+# Introduction
 
 An experimental hardware description language and compiler, built on top of [CIRCT](https://circt.llvm.org/), [MLIR](https://mlir.llvm.org/), and [LLVM](https://llvm.org/).
 
