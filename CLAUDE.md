@@ -15,52 +15,22 @@ If you make a change that resolves a todo, remove it from the TODO.md file.
 
 As a first phase of the project, we would like to develop a minimum viable example of the phased execution, HIR/MIR split, and monomorphization of functions.
 
-## Build and Test
+## Build, Test, and Project Layout
 
-```sh
-ninja -C build check-silicon  # compile and run all tests
-ninja -C build silc           # build the silc compiler CLI
-ninja -C build silicon-opt    # build the silicon-opt utility
+See `docs/getting-started.md` for build commands, project layout, and where to start.
 
-build/bin/silc input.si  # compile a silicon source file
-build/bin/silicon-opt input.mlir --my-pass-name  # run a specific pass
-```
+- Never touch the `build/` directory.
+- Never perform a clean rebuild, for example, through `ninja clean`.
+- When working on transformation passes, use `silicon-opt` and MLIR input files; these also make good lit tests later.
+- When working on the lexer, parser, AST, or syntax in general, use `silc`.
+- Add `--debug-only=<pass>` to `silicon-opt` to print all `LLVM_DEBUG(...)` lines in a pass.
 
-Never touch the build/ directory.
-Never perform a clean rebuild, for example, through `ninja clean`.
-When working on transformation passes, use `silicon-opt` and MLIR input files; these also make good lit tests later.
-When working on the lexer, parser, AST, or syntax in general, use `silc`.
-Add `--debug-only=<pass>` to `silicon-opt` to print all `LLVM_DEBUG(...)` lines in a pass.
+## Conventions
 
-## Project Layout
-
-```
-circt/             CIRCT dependency
-  llvm/            LLVM dependency
-    mlir/          MLIR dependency
-cmake/
-  modules/         cmake utilities for silicon, modeled after CIRCT/MLIR/LLVM
-doodles/           random notes and snippets; not authoritative
-include/           public headers
-  silicon/
-    Codegen/       conversion from AST to HIR
-    Conversion/    conversion passes between dialects
-    HIR/           high-level dialect where types are SSA values
-    MIR/           mid-level dialect where types have been materialized
-    Support/       various utilities and support code
-    Syntax/        lexer, parser, and AST for the language
-    Transforms/    passes that operate on multiple dialects
-lib/               implementation files, same structure as include/silicon/
-test/              llvm-lit tests, same structure as include/silicon/
-tools/             command line utilities
-  silc/            main silicon compiler CLI
-  silicon-opt/     utility to run passes on IR files
-```
-
-- Code lives in the `silicon` C++ namespace
-- One sentence per line in Markdown files; don't break long lines
-- When you add new IR ops, add parsing tests to the corresponding basic.mlir file, and check that the verifier catches errors by adding to the corresponding errors.mlir.
-- Run clang format on changed files before git add and git commit
+- Code lives in the `silicon` C++ namespace.
+- One sentence per line in Markdown files; don't break long lines.
+- When you add new IR ops, add parsing tests to the corresponding `basic.mlir` file, and check that the verifier catches errors by adding to the corresponding `errors.mlir`.
+- Run clang-format on changed files before git add and git commit.
 
 ## Compilation Flow
 
