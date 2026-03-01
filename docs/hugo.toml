@@ -13,11 +13,14 @@ BookTheme = "auto"  # switch between light and dark based on OS preferences
 [markup.goldmark.renderer]
 unsafe = true  # allow inline HTML and some other stuff
 
-[markup.tableOfContents]
-startLevel = 1  # include page title in table of contents
-
 [markup.highlight]
 style = "catppuccin-frappe"  # color theme for syntax highlighting
+
+# Add the root `_index.md` file to the left sidebar.
+[[menu.before]]
+name = "Introduction"
+pageRef = "/"
+weight = 1
 
 # Add a link to the GitHub repository to the left sidebar.
 [[menu.after]]
