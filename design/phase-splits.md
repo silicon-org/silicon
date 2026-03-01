@@ -454,32 +454,485 @@ Any unused functions must have been deleted and all others fully compile-time ev
 The loop must also have lowered the entire input to MIR.
 If this is not the case, report a compiler bug to the user and abort.
 
-## JIT Batching
+## Worked Example
 
-Multiple independent sub-functions can be compiled into a single LLVM module and JIT-executed together, minimizing the number of JIT round-trips.
-When a sub-function contains `hir.call` ops to other functions, the compiler consults the callee's `hir.split_func` phase list to identify which function handles each caller-visible phase.
-The resolved functions are then lowered to MIR together and compiled into a single LLVM module, allowing the JIT to transitively evaluate an entire subgraph of phase functions in one execution.
+This section describes step-by-step how the previous examples of `@foo` and `@bar` are processed by the phased evaluation pipeline.
+We assume compilation as a design, such that any unused functions can be eliminated.
+We also assume that any of the `@do*`, `@make*`, and the `@consumeC` function are already lowered to MIR and LLVM; we skip their implementation details for brevity.
 
-## Specialization and Monomorphization
+### First Iteration
 
-Substituting known constants for a function's opaque context values (via `hir.opaque_unpack`) is _specialization_.
-When all opaque context values flowing into a sub-function are known constants, the function is fully specialized and can be lowered to MIR.
-An `hir.multiphase_func` is ready for reduction when its first sub-function has no arguments or all arguments are constants.
+The IR is already fully canonicalized and unified.
+Lower `@foo.0a` and `@bar.0a` to MIR since all type operands in the body are constants.
 
-_Monomorphization_ creates a dedicated clone of a function for a specific set of constant arguments.
-The specialization key is (original function symbol, constant arg values).
-Before cloning, the compiler checks if a clone with the same key already exists and reuses it — this is how deduplication works.
+```mlir
+mir.func @foo.0a() -> (ctx0ab: !mir.opaque) {
+  %a.type = mir.call @doU() : () -> (!mir.type)
+  %ctx0ab = mir.opaque_pack (%a.type) : (!mir.type)
+  mir.return %ctx0ab : !mir.opaque
+}
 
-## Library Compilation
+mir.func @bar.0a() -> (ctx0ab: !mir.opaque) {
+  %a.type = mir.call @doU() : () -> (!mir.type)
+  %ctx0ab = mir.opaque_pack (%a.type) : (!mir.type)
+  mir.return %ctx0ab : !mir.opaque
+}
+```
 
-When we compile an input into a library, we want to execute as many phases as possible.
-An `hir.multiphase_func` with no `first` arguments can have its first sub-function evaluated immediately, progressively shrinking the function list.
-For example, `@foo.0a` in the Split IR section above can be fully evaluated at compile time since it takes no arguments, and the result specializes `@foo.0b`.
-This process continues until no more sub-functions can be evaluated without caller-provided arguments.
-Once the library is compiled, we store it as an MLIR bytecode blob on disk.
-A user may then use this library in their code compiled in a later invocation of the compiler.
-At that point the new user code is still using `hir.unified_{func,call}` ops.
-The library must retain enough information about how the individual phase splits combine to form a unified function to allow the later compiler invocation to resolve the user's unified calls to the precompiled phase splits in the library.
+These are the first sub-functions of multiphase functions `@foo.0` and `@bar.0`.
+They have no arguments and the entire transitive call graph has been lowered to MIR.
+Pick these for execution.
+Then lower them to LLVM in a separate module.
+
+```mlir
+llvm.func @foo.0a() -> !llvm.ptr {
+  %a.type = llvm.call @doU() : () -> (!llvm.ptr)
+  %ctx0ab = llvm.call @opaque_pack.type(%a.type) : (!llvm.ptr) -> !llvm.ptr
+  llvm.return %ctx0ab : !llvm.ptr
+}
+
+llvm.func @bar.0a() -> !llvm.ptr {
+  %a.type = llvm.call @doU() : () -> (!llvm.ptr)
+  %ctx0ab = llvm.call @opaque_pack.type(%a.type) : (!llvm.ptr) -> !llvm.ptr
+  llvm.return %ctx0ab : !mir.ptr
+}
+```
+
+We omit the implementation of opaque value packing.
+This would be implemented as a heap allocation of a struct with fields corresponding to the packed operands.
+Similarly, we simply represent `!mir.type`s as heap-allocated `!llvm.ptr`, even though we may choose to implement these as a form of struct or union.
+
+Evaluate the two functions.
+We execute them through MLIR's execution engine.
+Then convert the resulting packed opaque values from the runtime representation to an MLIR attribute that we can materialize.
+This will likely have to be done by generating additional LLVM glue code that unpacks the opaque value again, and calls helper functions registered with the execution engine that construct MLIR attributes.
+We omit this as an implementation detail.
+The resulting MLIR attributes are expected to look like this, assuming that `@doU` returns a `uint<42>` type:
+
+```mlir
+#foo.0a = #mir.opaque<#mir.type<!mir.uint<42>>>
+#bar.0a = #mir.opaque<#mir.type<!mir.uint<42>>>
+```
+
+Remove the evaluated sub-functions from the surrounding multiphase function and specialize the next sub-functions with the materialized results:
+
+```mlir
+// removed hir.multiphase_func @foo.0
+// removed hir.func @foo.0a
+hir.func @foo.0b(%a) -> (ctx01) {
+  %opaque_type = hir.opaque_type
+  // ctx0ab has been inlined and converted to HIR constant
+  %a.type = hir.mir_type !mir.uint<42>
+  %a0 = hir.coerce_type %a : %a.type
+  %a1 = hir.call @doV(%a0) : (%a.type) -> (%a.type)
+  %ctx01 = hir.opaque_pack (%a1, %a.type)
+  hir.return %ctx01 : %opaque_type
+}
+
+// removed hir.func @bar.0a
+hir.multiphase_func @bar.0() [
+  @bar.0b,  // implied () -> (ctx0bc)
+  @bar.0c,  // implied (ctx0bc) -> (ctx0cd)
+  @bar.0d,  // implied (ctx0cd) -> (ctx0de)
+  @bar.0e   // implied (ctx0de) -> ()
+]
+hir.func @bar.0b() -> (ctx0bc) {
+  %opaque_type = hir.opaque_type
+  // ctx0ab has been inlined and converted to HIR constant
+  %a.type = hir.mir_type !mir.uint<42>
+  %a = hir.call @makeA() : () -> (%a.type)
+  // call to @foo.0 replaced with @foo.0b
+  %foo.ctx01 = hir.call @foo.0b(%a) : (%a.type) -> (%opaque_type)
+  %ctx0bc = hir.opaque_pack (%a, %foo.ctx01)
+  hir.return %ctx0bc : %opaque_type
+}
+```
+
+The multiphase function `@foo.0` gets reduced down to a single phase.
+We therefore replace all occurrences of it with direct calls to the specialized `@foo.0b`.
+
+The multiphase functions are the only users of the `@foo.0b` and `@bar.0b` functions, which allows us to directly modify these functions instead of creating a specialized copy.
+
+The packed opaque values obtained from execution are MIR attributes, which we materialize as constants in the HIR dialect.
+
+### Second Iteration
+
+Lower `@foo.0b` and `@bar.0b` to MIR since all type operands in the body are constants, and the type coercion on the block arguments provides for a concrete type to assign to those arguments.
+
+```mlir
+mir.func @foo.0b(%a: !mir.uint<42>) -> (ctx01: !mir.opaque) {
+  %a.type = mir.constant_type !mir.uint<42>
+  %a1 = mir.call @doV(%a) : (!mir.uint<42>) -> (!mir.uint<42>)
+  %ctx01 = mir.opaque_pack (%a1, %a.type) : (!mir.uint<42>, !mir.type)
+  mir.return %ctx01 : !mir.opaque
+}
+
+mir.func @bar.0b() -> (ctx0bc: !mir.opaque) {
+  %a.type = mir.constant_type !mir.uint<42>
+  %a = mir.call @makeA() : () -> (!mir.uint<42>)
+  %foo.ctx01 = mir.call @foo.0b(%a) : (!mir.uint<42>) -> (!mir.opaque)
+  %ctx0bc = mir.opaque_pack (%a, %foo.ctx01) : (!mir.uint<42>, !mir.type)
+  mir.return %ctx0bc : !mir.opaque
+}
+```
+
+The `@bar.0b` function is again the first sub-function of the multiphase function `@bar.0`.
+It has no arguments, and the transitive call graph has been lowered to MIR.
+Therefore, pick `@bar.0b` for execution.
+Note that `@foo.0b` is no longer part of a multiphase function, but it gets transitively called by `@bar.0b`.
+Then lower the picked function and any transitively called functions to LLVM:
+
+```mlir
+llvm.func @foo.0b(%a: i42) -> (ctx01: !llvm.ptr) {
+  %c42_i64 = llvm.mlir.constant 42 : i64
+  %a.type = llvm.call @make_int_type(%c42_64) : (i64) -> !llvm.ptr
+  %a1 = llvm.call @doV(%a) : (i42) -> (i42)
+  %ctx01 = llvm.call @opaque_pack.i42.type(%a1, %a.type) : (i42, !llvm.ptr) -> !llvm.ptr
+  llvm.return %ctx01 : !llvm.ptr
+}
+
+llvm.func @bar.0b() -> (ctx0bc: !llvm.ptr) {
+  %c42_i64 = llvm.mlir.constant 42 : i64
+  %a.type = llvm.call @make_int_type(%c42_64) : (i64) -> !llvm.ptr
+  %a = llvm.call @makeA() : () -> (i42)
+  %foo.ctx01 = llvm.call @foo.0b(%a) : (i42) -> (!llvm.ptr)
+  %ctx0bc = llvm.call @opaque_pack.i42.type(%a, %foo.ctx01) : (i42, !llvm.ptr) -> !llvm.ptr
+  llvm.return %ctx0bc : !llvm.ptr
+}
+```
+
+Execute the `@bar.0b` function using MLIR's execution engine.
+The resulting MLIR attributes are expected to look like this, assuming that `@makeA` returned 1337 and `@doV` returned 1338:
+
+```mlir
+#bar.0b = #mir.opaque<
+  #mir.uint<1337, 42>,
+  #mir.opaque<#mir.uint<1338, 42>, #mir.type<!mir.uint<42>>>
+>
+```
+
+Remove the evaluated function and specialize the next function with the materialized results:
+
+```mlir
+// removed hir.func @foo.0b
+// removed hir.func @bar.0b
+hir.multiphase_func @bar.0() [
+  @bar.0c,  // implied () -> (ctx0cd)
+  @bar.0d,  // implied (ctx0cd) -> (ctx0de)
+  @bar.0e   // implied (ctx0de) -> ()
+]
+hir.func @bar.0c() -> (ctx0cd) {
+  %type_type = hir.type_type
+  %opaque_type = hir.opaque_type
+  // ctx0bc has been inlined and converted to HIR constants
+  %a = hir.mir_constant #mir.uint<1337, 42>
+  %foo.ctx01 = hir.mir_constant #mir.opaque<#mir.uint<1338, 42>, #mir.type<!mir.uint<42>>>
+  %a.type = hir.type_of %a
+  %a2 = hir.call @doV(%a) : (%a.type) -> (%a.type)
+  %b.type = hir.call @doW(%a2) : (%a.type) -> (%type_type)
+  %ctx0cd = hir.opaque_pack (%b.type, %foo.ctx01)
+  hir.return %ctx0cd : %opaque_type
+}
+```
+
+The `@foo.0b` and `@bar.0b` functions have no more users and can be removed.
+
+### Third Iteration
+
+Canonicalization resolves simplifies a few ops after specialization:
+
+```mlir
+hir.func @bar.0c ... {
+  // ...
+  %a = hir.mir_constant #mir.uint<1337, 42>
+  %a.type = hir.mir_type !mir.uint<42>  // from hir.type_of %a
+  // ...
+}
+```
+
+Lower `@bar.0c` to MIR since all type operands in the body are constants:
+
+```mlir
+mir.func @bar.0c() -> (ctx0cd: !mir.opaque) {
+  %a = mir.constant 1337 : !mir.uint<42>
+  %a2 = mir.call @doV(%a) : (!mir.uint<42>) -> (!mir.uint<42>)
+  %b.type = mir.call @doW(%a2) : (!mir.uint<42>) -> (!mir.type)
+  %foo.ctx01 = mir.constant #mir.opaque<#mir.uint<1338, 42>, #mir.type<!mir.uint<42>>> : !mir.opaque
+  %ctx0cd = mir.opaque_pack (%b.type, %foo.ctx01) : (!mir.type, !mir.opaque)
+  mir.return %ctx0cd : !mir.opaque
+}
+```
+
+`@bar.0c` is the first sub-function of `@bar.0`.
+It takes no arguments and the entire transitive call graph has been lowered to MIR.
+Pick it for execution.
+Then lower to LLVM in a separate module:
+
+```mlir
+llvm.func @bar.0c() -> !llvm.ptr {
+  %c1337 = llvm.mlir.constant(1337 : i42) : i42
+  %a2 = llvm.call @doV(%c1337) : (i42) -> i42
+  %b.type = llvm.call @doW(%a2) : (i42) -> !llvm.ptr
+  %c1338 = llvm.mlir.constant(1338 : i42) : i42
+  %c42 = llvm.mlir.constant(42 : i64) : i64
+  %a.type = llvm.call @make_int_type(%c42) : (i64) -> !llvm.ptr
+  %foo.ctx01 = llvm.call @opaque_pack.i42.type(%c1338, %a.type) : (i42, !llvm.ptr) -> !llvm.ptr
+  %ctx0cd = llvm.call @opaque_pack.type.opaque(%b.type, %foo.ctx01) : (!llvm.ptr, !llvm.ptr) -> !llvm.ptr
+  llvm.return %ctx0cd : !llvm.ptr
+}
+```
+
+Execute `@bar.0c`.
+The resulting MLIR attributes are expected to look like this, assuming that `@doV` returns 1338 and `@doW` returns a `uint<9001>` type:
+
+```mlir
+#bar.0c = #mir.opaque<
+  #mir.type<!mir.uint<9001>>,
+  #mir.opaque<#mir.uint<1338, 42>, #mir.type<!mir.uint<42>>>
+>
+```
+
+Remove the evaluated sub-function from the surrounding multiphase function and specialize the next sub-function with the materialized results:
+
+```mlir
+// removed hir.func @bar.0c
+hir.multiphase_func @bar.0() [
+  @bar.0d,  // implied () -> (ctx0de)
+  @bar.0e   // implied (ctx0de) -> ()
+]
+hir.func @bar.0d() -> (ctx0de) {
+  %opaque_type = hir.opaque_type
+  // ctx0cd has been inlined and converted to HIR constants
+  %b.type = hir.mir_type !mir.uint<9001>
+  %foo.ctx01 = hir.mir_constant #mir.opaque<#mir.uint<1338, 42>, #mir.type<!mir.uint<42>>>
+  %b = hir.call @makeB() : () -> (%b.type)
+  %foo.ctx12 = hir.call @foo.1(%b, %foo.ctx01) : (%b.type, %opaque_type) -> (%opaque_type)
+  %ctx0de = hir.opaque_pack (%foo.ctx12)
+  hir.return %ctx0de : %opaque_type
+}
+```
+
+`@bar.0d` calls `@foo.1`, which is still a multiphase function.
+The `%foo.ctx01` argument is now a known constant, so the specialization step inlines it into `@foo.1a` as the `first` argument of `@foo.1`:
+
+```mlir
+hir.multiphase_func @foo.1(last b) -> (ctx12) [
+  @foo.1a,  // implied () -> (ctx1ab); ctx01 has been inlined
+  @foo.1b   // implied (b, ctx1ab) -> (ctx12)
+]
+hir.func @foo.1a() -> (ctx1ab) {
+  %type_type = hir.type_type
+  %opaque_type = hir.opaque_type
+  // ctx01 has been inlined and converted to HIR constants
+  %a2 = hir.mir_constant #mir.uint<1338, 42>
+  %a.type = hir.mir_type !mir.uint<42>
+  %b.type = hir.call @doW(%a2) : (%a.type) -> (%type_type)
+  %ctx1ab = hir.opaque_pack (%b.type)
+  hir.return %ctx1ab : %opaque_type
+}
+
+hir.func @bar.0d() -> (ctx0de) {
+  %opaque_type = hir.opaque_type
+  %b.type = hir.mir_type !mir.uint<9001>
+  %b = hir.call @makeB() : () -> (%b.type)
+  // foo.ctx01 has been inlined into foo.1
+  %foo.ctx12 = hir.call @foo.1(%b) : (%b.type) -> (%opaque_type)
+  %ctx0de = hir.opaque_pack (%foo.ctx12)
+  hir.return %ctx0de : %opaque_type
+}
+```
+
+`@foo.1a` now takes no arguments and can be evaluated in the next iteration.
+`@bar.0d` cannot yet be evaluated since its callee `@foo.1` remains a multiphase function.
+
+### Fourth Iteration
+
+Lower `@foo.1a` to MIR since all type operands in the body are constants:
+
+```mlir
+mir.func @foo.1a() -> (ctx1ab: !mir.opaque) {
+  %a2 = mir.constant 1338 : !mir.uint<42>
+  %b.type = mir.call @doW(%a2) : (!mir.uint<42>) -> (!mir.type)
+  %ctx1ab = mir.opaque_pack (%b.type) : (!mir.type)
+  mir.return %ctx1ab : !mir.opaque
+}
+```
+
+`@foo.1a` is the first sub-function of `@foo.1`.
+It takes no arguments and the entire transitive call graph has been lowered to MIR.
+Pick it for execution.
+Then lower to LLVM in a separate module:
+
+```mlir
+llvm.func @foo.1a() -> !llvm.ptr {
+  %c1338 = llvm.mlir.constant(1338 : i42) : i42
+  %b.type = llvm.call @doW(%c1338) : (i42) -> !llvm.ptr
+  %ctx1ab = llvm.call @opaque_pack.type(%b.type) : (!llvm.ptr) -> !llvm.ptr
+  llvm.return %ctx1ab : !llvm.ptr
+}
+```
+
+Execute `@foo.1a`.
+`@doW` receives the same input as in the third iteration (1338 as `uint<42>`) and returns `uint<9001>`.
+The resulting MLIR attribute is:
+
+```mlir
+#foo.1a = #mir.opaque<#mir.type<!mir.uint<9001>>>
+```
+
+Remove the evaluated sub-function from `@foo.1` and specialize `@foo.1b` with the materialized result:
+
+```mlir
+// removed hir.multiphase_func @foo.1
+// removed hir.func @foo.1a
+hir.func @foo.1b(%b) -> (ctx12) {
+  %opaque_type = hir.opaque_type
+  // ctx1ab has been inlined and converted to HIR constants
+  %b.type = hir.mir_type !mir.uint<9001>
+  %b0 = hir.coerce_type %b : %b.type
+  %b1 = hir.call @doX(%b0) : (%b.type) -> (%b.type)
+  %ctx12 = hir.opaque_pack (%b1, %b.type)
+  hir.return %ctx12 : %opaque_type
+}
+```
+
+The multiphase function `@foo.1` gets reduced down to a single phase.
+We therefore replace all occurrences of it with direct calls to `@foo.1b`.
+`@bar.0d`'s call to `@foo.1` is updated accordingly:
+
+```mlir
+hir.func @bar.0d() -> (ctx0de) {
+  %opaque_type = hir.opaque_type
+  %b.type = hir.mir_type !mir.uint<9001>
+  %b = hir.call @makeB() : () -> (%b.type)
+  // call to @foo.1 replaced with @foo.1b
+  %foo.ctx12 = hir.call @foo.1b(%b) : (%b.type) -> (%opaque_type)
+  %ctx0de = hir.opaque_pack (%foo.ctx12)
+  hir.return %ctx0de : %opaque_type
+}
+```
+
+`@bar.0d` now calls only regular functions and takes no arguments.
+It can be evaluated in the next iteration.
+
+### Fifth Iteration
+
+Lower `@bar.0d` and `@foo.1b` to MIR since all type operands in their bodies are constants:
+
+```mlir
+mir.func @foo.1b(%b: !mir.uint<9001>) -> (ctx12: !mir.opaque) {
+  %b1 = mir.call @doX(%b) : (!mir.uint<9001>) -> (!mir.uint<9001>)
+  %b.type = mir.constant_type !mir.uint<9001>
+  %ctx12 = mir.opaque_pack (%b1, %b.type) : (!mir.uint<9001>, !mir.type)
+  mir.return %ctx12 : !mir.opaque
+}
+
+mir.func @bar.0d() -> (ctx0de: !mir.opaque) {
+  %b = mir.call @makeB() : () -> (!mir.uint<9001>)
+  %foo.ctx12 = mir.call @foo.1b(%b) : (!mir.uint<9001>) -> (!mir.opaque)
+  %ctx0de = mir.opaque_pack (%foo.ctx12) : (!mir.opaque)
+  mir.return %ctx0de : !mir.opaque
+}
+```
+
+`@bar.0d` is the first sub-function of `@bar.0`.
+It takes no arguments and the entire transitive call graph has been lowered to MIR.
+Pick it for execution.
+Then lower to LLVM in a separate module:
+
+```mlir
+llvm.func @foo.1b(%b: i9001) -> !llvm.ptr {
+  %b1 = llvm.call @doX(%b) : (i9001) -> i9001
+  %c9001 = llvm.mlir.constant(9001 : i64) : i64
+  %b.type = llvm.call @make_int_type(%c9001) : (i64) -> !llvm.ptr
+  %ctx12 = llvm.call @opaque_pack.i9001.type(%b1, %b.type) : (i9001, !llvm.ptr) -> !llvm.ptr
+  llvm.return %ctx12 : !llvm.ptr
+}
+
+llvm.func @bar.0d() -> !llvm.ptr {
+  %b = llvm.call @makeB() : () -> i9001
+  %foo.ctx12 = llvm.call @foo.1b(%b) : (i9001) -> !llvm.ptr
+  %ctx0de = llvm.call @opaque_pack.opaque(%foo.ctx12) : (!llvm.ptr) -> !llvm.ptr
+  llvm.return %ctx0de : !llvm.ptr
+}
+```
+
+Execute `@bar.0d`.
+The resulting MLIR attributes are expected to look like this, assuming that `@makeB` returns 17 and `@doX` returns 18:
+
+```mlir
+#bar.0d = #mir.opaque<
+  #mir.opaque<#mir.uint<18, 9001>, #mir.type<!mir.uint<9001>>>
+>
+```
+
+Remove the evaluated sub-function from the surrounding multiphase function and specialize the next sub-function with the materialized results:
+
+```mlir
+// removed hir.multiphase_func @bar.0
+// removed hir.func @bar.0d
+hir.func @bar.0e() -> () {
+  %int_type = hir.int_type
+  %opaque_type = hir.opaque_type
+  // ctx0de has been inlined and converted to HIR constants
+  %foo.ctx12 = hir.mir_constant #mir.opaque<#mir.uint<18, 9001>, #mir.type<!mir.uint<9001>>>
+  %c = hir.call @foo.2(%foo.ctx12) : (%opaque_type) -> (%int_type)
+  hir.call @consumeC(%c) : (%int_type) -> ()
+  hir.return
+}
+```
+
+The multiphase function `@bar.0` gets reduced down to a single phase.
+We therefore replace all occurrences of it with direct calls to `@bar.0e`.
+
+The specialization step propagates the now-constant `%foo.ctx12` into `@foo.2`:
+
+```mlir
+hir.func @foo.2() -> (c) {
+  %int_type = hir.int_type
+  // ctx12 has been inlined and converted to HIR constants
+  %b2 = hir.mir_constant #mir.uint<18, 9001>
+  %b.type = hir.mir_type !mir.uint<9001>
+  %c = hir.call @doY(%b2) : (%b.type) -> (%int_type)
+  hir.return %c : %int_type
+}
+
+hir.func @bar.0e() -> () {
+  %int_type = hir.int_type
+  %opaque_type = hir.opaque_type
+  // foo.ctx12 has been inlined into foo.2
+  %c = hir.call @foo.2() : () -> (%int_type)
+  hir.call @consumeC(%c) : (%int_type) -> ()
+  hir.return
+}
+```
+
+No multiphase functions remain and the pipeline loop exits.
+
+### Aftermath
+
+The LLVM top-level module is discarded.
+The remaining phase 0 functions `@bar.0e` and `@foo.2` represent the final hardware behavior.
+Since `@bar.0e` is the only phase in the split function `@bar`, it is renamed to `@bar`.
+Lower the remaining functions to MIR.
+
+```mlir
+mir.func @foo.2() -> (c: !mir.int) {
+  %b2 = mir.constant 18 : !mir.uint<9001>
+  %c = mir.call @doY(%b2) : (!mir.uint<9001>) -> (!mir.int)
+  mir.return %c : !mir.int
+}
+
+mir.func @bar() {
+  %c = mir.call @foo.2() : () -> (!mir.int)
+  mir.call @consumeC(%c) : (!mir.int) -> ()
+  mir.return
+}
+```
+
+Done — `@bar` is fully monomorphized.
+All compile-time phases have been evaluated and their results baked into the final IR as constants.
+The remainder of the compiler pipeline lowers this MIR representation to CIRCT to arrive at an actual hardware module.
 
 ## Example 1
 
