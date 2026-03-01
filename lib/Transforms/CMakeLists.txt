@@ -3,7 +3,7 @@ add_silicon_library(SiliconTransforms
   SpecializeFuncs.cpp
 
   DEPENDS
-  SiliconTransformsIncGen
+  SiliconTransformsHeaders
 
   LINK_LIBS PUBLIC
   MLIRPass
