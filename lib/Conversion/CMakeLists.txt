@@ -2,7 +2,7 @@ add_silicon_library(SiliconConversion
   HIRToMIR.cpp
 
   DEPENDS
-  SiliconConversionIncGen
+  SiliconConversionHeaders
 
   LINK_LIBS PUBLIC
   MLIRTransformUtils

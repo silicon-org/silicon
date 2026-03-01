@@ -53,9 +53,10 @@ include(AddSilicon)
 # Installing the headers and docs needs to depend on generating any public
 # tablegen outputs.
 add_custom_target(silicon-headers)
-add_custom_target(silicon-doc)
+add_custom_target(silicon-docs)
 add_custom_target(silicon-tools)
 add_custom_target(silicon-libraries)
+add_custom_target(silicon DEPENDS silicon-headers silicon-docs silicon-tools silicon-libraries)
 
 # Add CIRCT, MLIR, and LLVM headers to the include path.
 include_directories(${CIRCT_INCLUDE_DIRS})
@@ -70,6 +71,7 @@ include_directories(${SILICON_INCLUDE_DIR})
 # Directory Setup
 #===------------------------------------------------------------------------===#
 
+add_subdirectory(docs)
 add_subdirectory(include/silicon)
 add_subdirectory(lib)
 add_subdirectory(tools)

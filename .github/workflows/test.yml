@@ -149,7 +149,7 @@ jobs:
 
       # Build everything
       - name: Build
-        run: ninja -C build silicon-headers silicon-libraries silicon-tools silicon-doc
+        run: ninja -C build silicon
 
       # Run the tests
       - name: Tests
