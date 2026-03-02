@@ -1,7 +1,7 @@
 // RUN: silicon-opt --interpret %s | FileCheck %s
 
 // CHECK-LABEL: hir.func @foo
-hir.func @foo {
+hir.func @foo() -> () {
   // CHECK-NEXT: [[TMP:%.+]] = mir.constant #mir.specialized_func<@foo, [], [], [#mir.specialized_func<@bar, [!mir.int], [], []> : !mir.specialized_func]>
   // CHECK-NEXT: mir.return [[TMP]]
   %0 = mir.call @bar() : () -> !mir.specialized_func
@@ -10,7 +10,7 @@ hir.func @foo {
 }
 
 // CHECK-LABEL: hir.func @bar
-hir.func @bar {
+hir.func @bar() -> () {
   // CHECK-NEXT: [[TMP:%.+]] = mir.constant #mir.specialized_func<@bar, [!mir.int], [], []>
   // CHECK-NEXT: mir.return [[TMP]]
   %0 = mir.constant #mir.specialized_func<@bar, [!mir.int], [], []> : !mir.specialized_func
@@ -26,7 +26,7 @@ hir.func @bar {
 // CHECK-LABEL: hir.func private @Chain.const2
 // CHECK-NEXT: [[C42:%.+]] = mir.constant #mir.int<42>
 // CHECK-NEXT: mir.return [[C42]]
-hir.func private @Chain.const2 {
+hir.func private @Chain.const2() -> () {
   %0 = mir.constant #mir.int<42> : !mir.int
   mir.return %0 : !mir.int
 }
@@ -34,8 +34,7 @@ hir.func private @Chain.const2 {
 // CHECK-LABEL: hir.func private @Chain.const1
 // CHECK-NEXT: [[C52:%.+]] = mir.constant #mir.int<52>
 // CHECK-NEXT: mir.return [[C52]]
-hir.func private @Chain.const1 {
-^bb0(%ctx: !mir.int):
+hir.func private @Chain.const1(%ctx: !mir.int) -> () {
   %0 = mir.constant #mir.int<10> : !mir.int
   %1 = mir.binary %ctx, %0 : !mir.int
   mir.return %1 : !mir.int
@@ -63,7 +62,7 @@ hir.multiphase_func @Chain.const() -> (ctx) [
 // CHECK-LABEL: hir.func private @OpaqueChain.const2
 // CHECK-NEXT: [[PACKED:%.+]] = mir.constant #mir.opaque
 // CHECK-NEXT: mir.return [[PACKED]]
-hir.func private @OpaqueChain.const2 {
+hir.func private @OpaqueChain.const2() -> () {
   %0 = mir.constant #mir.int<42> : !mir.int
   %1 = mir.opaque_pack(%0) : (!mir.int) -> !mir.opaque
   mir.return %1 : !mir.opaque
@@ -72,8 +71,7 @@ hir.func private @OpaqueChain.const2 {
 // CHECK-LABEL: hir.func private @OpaqueChain.const1
 // CHECK-NEXT: [[C52:%.+]] = mir.constant #mir.int<52>
 // CHECK-NEXT: mir.return [[C52]]
-hir.func private @OpaqueChain.const1 {
-^bb0(%packed: !mir.opaque):
+hir.func private @OpaqueChain.const1(%packed: !mir.opaque) -> () {
   %0 = mir.opaque_unpack %packed : !mir.opaque -> !mir.int
   %1 = mir.constant #mir.int<10> : !mir.int
   %2 = mir.binary %0, %1 : !mir.int

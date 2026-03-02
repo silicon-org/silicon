@@ -1,7 +1,7 @@
 // RUN: silicon-opt --check-calls %s | FileCheck %s
 
 // CHECK-LABEL: hir.unified_func @Empty
-hir.unified_func @Empty [] -> [] attributes {argNames = []} {
+hir.unified_func @Empty() -> () {
   // CHECK: hir.unified_signature () -> ()
   hir.unified_signature () -> ()
 } {
@@ -10,7 +10,7 @@ hir.unified_func @Empty [] -> [] attributes {argNames = []} {
 }
 
 // CHECK-LABEL: hir.unified_func @SimpleFoo
-hir.unified_func @SimpleFoo [] -> [] attributes {argNames = []} {
+hir.unified_func @SimpleFoo() -> () {
   hir.unified_signature () -> ()
 } {
   // CHECK: [[TMP:%.+]] = builtin.unrealized_conversion_cast
@@ -27,19 +27,17 @@ hir.unified_func @SimpleFoo [] -> [] attributes {argNames = []} {
 }
 
 // CHECK-LABEL: hir.unified_func @SimpleBar
-hir.unified_func @SimpleBar [0] -> [0] attributes {argNames = ["a"]} {
-^bb0(%arg0: !hir.any):
+hir.unified_func @SimpleBar(%a: 0) -> (result: 0) {
   %0 = hir.int_type {a}
   %1 = hir.int_type {b}
   hir.unified_signature (%0) -> (%1)
 } {
-^bb0(%arg0: !hir.any):
-  %t0 = hir.type_of %arg0
-  hir.unified_return (%arg0) : (%t0)
+  %t0 = hir.type_of %a
+  hir.unified_return (%a) : (%t0)
 }
 
 // CHECK-LABEL: hir.unified_func @NestedFoo
-hir.unified_func @NestedFoo [] -> [] attributes {argNames = []} {
+hir.unified_func @NestedFoo() -> () {
   // CHECK: [[TMP:%.+]] = builtin.unrealized_conversion_cast
   // CHECK: [[ARG_TY:%.+]] = hir.int_type {a}
   // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
@@ -56,13 +54,11 @@ hir.unified_func @NestedFoo [] -> [] attributes {argNames = []} {
 }
 
 // CHECK-LABEL: hir.unified_func @NestedBar
-hir.unified_func @NestedBar [0] -> [0] attributes {argNames = ["a"]} {
-^bb0(%arg0: !hir.any):
+hir.unified_func @NestedBar(%a: 0) -> (result: 0) {
   %0 = hir.int_type {a}
   %1 = hir.int_type {b}
   hir.unified_signature (%0) -> (%1)
 } {
-^bb0(%arg0: !hir.any):
-  %t0 = hir.type_of %arg0
-  hir.unified_return (%arg0) : (%t0)
+  %t0 = hir.type_of %a
+  hir.unified_return (%a) : (%t0)
 }

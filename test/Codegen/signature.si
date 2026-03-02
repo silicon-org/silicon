@@ -1,25 +1,23 @@
 // RUN: silc --parse-only %s | FileCheck %s
 
 // CHECK-LABEL: hir.unified_func @empty
-// CHECK-SAME: [] -> [0]
+// CHECK-SAME: () -> (result: 0)
 // CHECK-NEXT: [[UNIT_TYPE:%.+]] = hir.unit_type
 // CHECK-NEXT: hir.unified_signature () -> ([[UNIT_TYPE]])
 fn empty() {}
 
 // CHECK-LABEL: hir.unified_func @simple
-// CHECK-SAME: [0] -> [0]
-// CHECK-NEXT: ^bb0([[A:%.+]]: !hir.any):
+// CHECK-SAME: (%a: 0) -> (result: 0)
 // CHECK-NEXT: [[A_TYPE:%.+]] = hir.int_type
 // CHECK-NEXT: [[RET_TYPE:%.+]] = hir.int_type
 // CHECK-NEXT: hir.unified_signature ([[A_TYPE]]) -> ([[RET_TYPE]])
 fn simple(a: int) -> int { 0 }
 
 // CHECK-LABEL: hir.unified_func @dependent_types
-// CHECK-SAME: [0, -1, 0] -> [0]
-// CHECK-NEXT: ^bb0([[A:%.+]]: !hir.any, [[B:%.+]]: !hir.any, [[C:%.+]]: !hir.any):
+// CHECK-SAME: (%a: 0, %b: -1, %c: 0) -> (result: 0)
 // CHECK-NEXT: [[A_TYPE:%.+]] = hir.int_type
 // CHECK-NEXT: [[B_TYPE:%.+]] = hir.int_type
-// CHECK-NEXT: [[C_TYPE:%.+]] = hir.uint_type [[B]]
+// CHECK-NEXT: [[C_TYPE:%.+]] = hir.uint_type %b
 // CHECK-NEXT: [[UNIT_TYPE:%.+]] = hir.unit_type
 // CHECK-NEXT: hir.unified_signature ([[A_TYPE]], [[B_TYPE]], [[C_TYPE]]) -> ([[UNIT_TYPE]])
 fn dependent_types(a: int, const b: int, c: uint<b>) {}

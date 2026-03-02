@@ -2,12 +2,10 @@
 
 // Phase mismatch: passing phase-0 func args as phase -2 and -1 callee args.
 
-hir.unified_func @ThreePhase [-2, -1, 0] -> [0] attributes {argNames = ["a", "b", "c"]} {
-^bb0(%a: !hir.any, %b: !hir.any, %c: !hir.any):
+hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.unified_signature (%0, %0, %0) -> (%0)
 } {
-^bb0(%a: !hir.any, %b: !hir.any, %c: !hir.any):
   %ta = hir.type_of %a
   %tb = hir.type_of %b
   %t0 = hir.unify %ta, %tb
@@ -20,12 +18,10 @@ hir.unified_func @ThreePhase [-2, -1, 0] -> [0] attributes {argNames = ["a", "b"
   hir.unified_return (%1) : (%t1b)
 }
 
-hir.unified_func @BadCaller [0, 0, 0] -> [0] attributes {argNames = ["x", "y", "z"]} {
-^bb0(%x: !hir.any, %y: !hir.any, %z: !hir.any):
+hir.unified_func @BadCaller(%x: 0, %y: 0, %z: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.unified_signature (%0, %0, %0) -> (%0)
 } {
-^bb0(%x: !hir.any, %y: !hir.any, %z: !hir.any):
   %t0 = hir.inferrable
   %t1 = hir.inferrable
   %t2 = hir.inferrable

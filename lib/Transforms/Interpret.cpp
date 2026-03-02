@@ -191,6 +191,8 @@ void InterpretPass::runOnOperation() {
       interpreter.callStack.back().currentOp = &func.getBody().front().front();
       if (failed(interpreter.run()))
         return signalPassFailure();
+      // The body was rewritten; clear argNames to match the new block arg count.
+      func.setArgNamesAttr(ArrayAttr::get(&getContext(), {}));
       changed = true;
     }
 
@@ -237,6 +239,13 @@ void InterpretPass::runOnOperation() {
           arg.replaceAllUsesWith(constOp);
         }
         nextBlock.eraseArguments(numOwn, numChained);
+        // Update argNames to match the new block arg count.
+        SmallVector<Attribute> newArgNames(nextFunc.getArgNames().begin(),
+                                           nextFunc.getArgNames().end());
+        if (newArgNames.size() > numOwn)
+          newArgNames.resize(numOwn);
+        nextFunc.setArgNamesAttr(
+            ArrayAttr::get(&getContext(), newArgNames));
         changed = true;
       }
     }

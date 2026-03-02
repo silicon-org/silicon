@@ -1,4 +1,3 @@
-- Add argument and result names to `hir.func`. These indicate how many arguments and results there are. Under the hood they all have MLIR type `!hir.any`. Use custom parser and printers if necessary to print these as outlined in CLAUDE.md.
-- Add argument and result names to `hir.unified_func`, which must match the corresponding number of phases. These should print as outlined in CLAUDE.md.
+- Enforce `hir.func` block args to be `!hir.any`. Some tests (e.g., `specialize-funcs.mlir`, `interpret.mlir`) currently use `!mir.*` types for `hir.func` block arguments. The verifier should reject this. If a value needs to transition from an HIR to an MIR type, a dedicated cast op should be used instead.
 - Replace `hir.binary` with dedicated ops like `hir.add`. Same for `mir.binary`.
 - Dependent types in signatures (type depends on argument value).

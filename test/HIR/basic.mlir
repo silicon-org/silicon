@@ -46,24 +46,22 @@ hir.call @foo(%int_type) : (%int_type) -> (%int_type)
 hir.call @foo(%int_type, %c42_int) : (%int_type, %int_type) -> (%int_type, %int_type)
 
 // Test HIR function operations with symbol visibility
-hir.func @public_visibility1 {}
-hir.func public @public_visibility2 {}
-hir.func private @private_visibility {}
-hir.func nested @nested_visibility {}
+hir.func @public_visibility1() -> () {}
+hir.func public @public_visibility2() -> () {}
+hir.func private @private_visibility() -> () {}
+hir.func nested @nested_visibility() -> () {}
 
 // Test return with operands
-hir.func @ReturnWithOperands {
+hir.func @ReturnWithOperands() -> (result) {
   %t = hir.int_type
   %0 = hir.constant_int 42
   hir.return(%0) : (%t)
 }
 
-hir.unified_func @UnifiedSimple [0, -1] -> [0] attributes {argNames = ["a", "b"]} {
-^bb0(%a: !hir.any, %b: !hir.any):
+hir.unified_func @UnifiedSimple(%a: 0, %b: -1) -> (result: 0) {
   %0 = hir.int_type
   hir.unified_signature (%0, %0) -> (%0)
 } {
-^bb0(%a: !hir.any, %b: !hir.any):
   %0 = hir.type_of %a
   hir.unified_return(%a) : (%0)
 }

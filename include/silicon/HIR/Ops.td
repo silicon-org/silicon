@@ -9,6 +9,7 @@
 #ifndef SILICON_HIR_OPS_TD
 #define SILICON_HIR_OPS_TD
 
+include "mlir/IR/OpAsmInterface.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
@@ -215,15 +216,19 @@ def ConstCondBranchOp : HIROp<"const_cond_br", [
 def FuncOp : HIROp<"func", [
   IsolatedFromAbove,
   Symbol,
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
 ]> {
   let arguments = (ins
     SymbolNameAttr:$sym_name,
-    OptionalAttr<StrAttr>:$sym_visibility
+    OptionalAttr<StrAttr>:$sym_visibility,
+    ArrayAttr:$argNames,
+    ArrayAttr:$resultNames
   );
   let regions = (region AnyRegion:$body);
-  let assemblyFormat = [{
-    custom<SymbolVisibility>($sym_visibility) ``
-    $sym_name attr-dict-with-keyword $body
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    ReturnOp getReturnOp();
   }];
 }
 
@@ -299,6 +304,7 @@ def SpecializeFuncOp : HIROp<"specialize_func", [
 def UnifiedFuncOp : HIROp<"unified_func", [
   IsolatedFromAbove,
   Symbol,
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
 ]> {
   let summary = "A function combining all phases before splitting";
   let arguments = (ins
@@ -306,16 +312,14 @@ def UnifiedFuncOp : HIROp<"unified_func", [
     OptionalAttr<StrAttr>:$sym_visibility,
     DenseI32ArrayAttr:$argPhases,
     DenseI32ArrayAttr:$resultPhases,
-    ArrayAttr:$argNames
+    ArrayAttr:$argNames,
+    ArrayAttr:$resultNames
   );
   let regions = (region
     MinSizedRegion<1>:$signature,
     MinSizedRegion<1>:$body
   );
-  let assemblyFormat = [{
-    custom<SymbolVisibility>($sym_visibility) ``
-    $sym_name $argPhases `->` $resultPhases attr-dict-with-keyword $signature $body
-  }];
+  let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
   let hasRegionVerifier = 1;
   let extraClassDeclaration = [{

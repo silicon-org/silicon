@@ -118,5 +118,12 @@ hir::FuncOp SpecializeFuncsPass::specialize(hir::FuncOp originalFunc,
   }
   block.eraseArguments(firstConstIdx, argIdx - firstConstIdx);
 
+  // Update argNames to match the new argument count after erasing consts.
+  SmallVector<Attribute> newArgNames(func.getArgNames().begin(),
+                                     func.getArgNames().end());
+  newArgNames.erase(newArgNames.begin() + firstConstIdx,
+                    newArgNames.begin() + argIdx);
+  func.setArgNamesAttr(builder.getArrayAttr(newArgNames));
+
   return func;
 }

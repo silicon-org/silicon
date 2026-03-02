@@ -1,7 +1,7 @@
 // RUN: silicon-opt --lower-hir-to-mir %s | FileCheck %s
 
 // CHECK-LABEL: @Types
-hir.func @Types {
+hir.func @Types() -> () {
   // CHECK: mir.constant #mir.type<!mir.int>
   %int_type = hir.int_type
 
@@ -22,7 +22,7 @@ hir.func @Types {
 }
 
 // CHECK-LABEL: @Constants
-hir.func @Constants {
+hir.func @Constants() -> () {
   // CHECK: mir.constant #mir.int<42>
   hir.constant_int 42
   // CHECK: mir.constant #mir.unit
@@ -35,7 +35,7 @@ hir.func @Constants {
 }
 
 // CHECK-LABEL: @Calls
-hir.func @Calls {
+hir.func @Calls() -> () {
   // CHECK: mir.call @foo() : () -> ()
   hir.call @foo() : () -> ()
 
@@ -52,7 +52,7 @@ hir.func @Calls {
 }
 
 // CHECK-LABEL: @FunctionSpecialization
-hir.func @FunctionSpecialization {
+hir.func @FunctionSpecialization() -> (result) {
   // CHECK: [[TYPE:%.+]] = mir.constant #mir.type<!mir.int>
   %0 = hir.int_type
   // CHECK: [[VALUE:%.+]] = mir.constant #mir.int<42>
@@ -68,7 +68,7 @@ hir.func @FunctionSpecialization {
 }
 
 // CHECK-LABEL: @Casts
-hir.func @Casts {
+hir.func @Casts() -> (a, b) {
   // CHECK-NEXT: [[TMP1:%.+]] = mir.constant
   %a0 = mir.constant #mir.int<42>
   %a1 = builtin.unrealized_conversion_cast %a0 : !mir.int to !hir.any

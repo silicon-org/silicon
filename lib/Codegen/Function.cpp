@@ -74,12 +74,17 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
                                     resultTypes);
   }
 
-  // Record argument names as an attribute on the func op.
+  // Record argument and result names on the func op.
   SmallVector<Attribute> argNameAttrs;
   for (auto *arg : item.args)
     argNameAttrs.push_back(StringAttr::get(module.getContext(), arg->name));
   funcOp.setArgNamesAttr(
       mlir::ArrayAttr::get(module.getContext(), argNameAttrs));
+
+  SmallVector<Attribute> resultNameAttrs;
+  resultNameAttrs.push_back(StringAttr::get(module.getContext(), "result"));
+  funcOp.setResultNamesAttr(
+      mlir::ArrayAttr::get(module.getContext(), resultNameAttrs));
 
   // Handle the function body.
   {

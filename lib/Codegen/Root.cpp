@@ -32,7 +32,7 @@ struct DeclareItems : public ast::Visitor<DeclareItems> {
         cx.builder, item.loc, cx.builder.getStringAttr(item.name), StringAttr{},
         mlir::DenseI32ArrayAttr::get(ctx, argPhases),
         mlir::DenseI32ArrayAttr::get(ctx, resultPhases),
-        mlir::ArrayAttr::get(ctx, {}));
+        mlir::ArrayAttr::get(ctx, {}), mlir::ArrayAttr::get(ctx, {}));
     cx.funcs.insert({&item, func});
     cx.symbolTable.insert(func);
   }

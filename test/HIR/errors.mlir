@@ -5,8 +5,7 @@ hir.unified_call @foo() : () -> () () -> () [] -> []
 
 // -----
 
-hir.unified_func @foo [0] -> [] attributes {argNames = ["a"]} {
-^bb0(%a: !hir.any):
+hir.unified_func @foo(%a: 0) -> () {
   %0 = hir.int_type
   hir.unified_signature (%0) -> ()
 } {
@@ -17,7 +16,7 @@ hir.unified_call @foo() : () -> () () -> () [] -> []
 
 // -----
 
-hir.unified_func @foo [] -> [0] attributes {argNames = []} {
+hir.unified_func @foo() -> (result: 0) {
   %0 = hir.int_type
   hir.unified_signature () -> (%0)
 } {
@@ -28,7 +27,7 @@ hir.unified_call @foo() : () -> () () -> () [] -> []
 
 // -----
 
-hir.unified_func @foo [] -> [] attributes {argNames = []} {
+hir.unified_func @foo() -> () {
   // expected-error @below {{can only appear in the last block}}
   hir.unified_signature () -> ()
 ^bb1:
@@ -39,7 +38,7 @@ hir.unified_func @foo [] -> [] attributes {argNames = []} {
 
 // -----
 
-hir.unified_func @foo [] -> [] attributes {argNames = []} {
+hir.unified_func @foo() -> () {
   hir.unified_signature () -> ()
 } {
   // expected-error @below {{can only appear in the last block}}
@@ -51,7 +50,7 @@ hir.unified_func @foo [] -> [] attributes {argNames = []} {
 // -----
 
 // expected-error @below {{requires `hir.unified_return` terminator in the body}}
-hir.unified_func @foo [] -> [] attributes {argNames = []} {
+hir.unified_func @foo() -> () {
   hir.unified_signature () -> ()
 } {
   hir.unified_signature () -> ()
@@ -60,7 +59,7 @@ hir.unified_func @foo [] -> [] attributes {argNames = []} {
 // -----
 
 // expected-error @below {{requires `hir.unified_signature` terminator in the signature}}
-hir.unified_func @foo [] -> [] attributes {argNames = []} {
+hir.unified_func @foo() -> () {
   hir.unified_return
 } {
   hir.unified_return
@@ -69,8 +68,7 @@ hir.unified_func @foo [] -> [] attributes {argNames = []} {
 // -----
 
 // expected-error @below {{argPhases has 2 entries but function has 1 arguments}}
-hir.unified_func @foo [0, -1] -> [0] attributes {argNames = ["a"]} {
-^bb0(%a: !hir.any):
+hir.unified_func @foo(%a: 0, %b: -1) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
@@ -81,8 +79,7 @@ hir.unified_func @foo [0, -1] -> [0] attributes {argNames = ["a"]} {
 // -----
 
 // expected-error @below {{resultPhases has 2 entries but function has 1 results}}
-hir.unified_func @foo [0] -> [0, -1] attributes {argNames = ["a"]} {
-^bb0(%a: !hir.any):
+hir.unified_func @foo(%a: 0) -> (x: 0, y: -1) {
   %0 = hir.int_type
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
@@ -92,8 +89,7 @@ hir.unified_func @foo [0] -> [0, -1] attributes {argNames = ["a"]} {
 
 // -----
 
-hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
-^bb0(%a: !hir.any):
+hir.unified_func @foo(%a: 0) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
@@ -107,8 +103,7 @@ hir.unified_call @foo(%arg) : (%int_type) -> (%int_type) (!hir.any) -> !hir.any 
 
 // -----
 
-hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
-^bb0(%a: !hir.any):
+hir.unified_func @foo(%a: 0) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
@@ -122,8 +117,7 @@ hir.unified_call @foo(%arg) : (%int_type) -> (%int_type) (!hir.any) -> !hir.any 
 
 // -----
 
-hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
-^bb0(%a: !hir.any):
+hir.unified_func @foo(%a: 0) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
@@ -137,8 +131,7 @@ hir.unified_call @foo(%arg) : (%int_type) -> (%int_type) (!hir.any) -> !hir.any 
 
 // -----
 
-hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
-^bb0(%a: !hir.any):
+hir.unified_func @foo(%a: 0) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
@@ -152,8 +145,7 @@ hir.unified_call @foo(%arg) : (%int_type) -> (%int_type) (!hir.any) -> !hir.any 
 
 // -----
 
-hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
-^bb0(%a: !hir.any):
+hir.unified_func @foo(%a: 0) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
@@ -167,8 +159,7 @@ hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
 
 // -----
 
-hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
-^bb0(%a: !hir.any):
+hir.unified_func @foo(%a: 0) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)

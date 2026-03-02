@@ -27,7 +27,7 @@ func.func @TypeOfConstantInt() -> !hir.any {
   return %1 : !hir.any
 }
 
-hir.unified_func @dummy [] -> [0, 0] attributes {argNames = []} {
+hir.unified_func @dummy() -> (x: 0, y: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
   hir.unified_signature () -> (%0, %1)

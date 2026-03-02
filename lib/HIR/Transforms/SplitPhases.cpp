@@ -197,8 +197,9 @@ void PhaseSplitter::run() {
                                                    ".const" + Twine(-phase))
                            : builder.getStringAttr(funcOp.getSymName() +
                                                    ".dyn" + Twine(phase));
-    auto phaseFuncOp =
-        FuncOp::create(builder, funcOp.getLoc(), name, privateAttr);
+    auto emptyArray = builder.getArrayAttr({});
+    auto phaseFuncOp = FuncOp::create(builder, funcOp.getLoc(), name,
+                                      privateAttr, emptyArray, emptyArray);
     if (phase != 0)
       phaseFuncOp.getBody().emplaceBlock();
     symbolTable.insert(phaseFuncOp);
@@ -606,6 +607,46 @@ void PhaseSplitter::run() {
   }
 
   //===--------------------------------------------------------------------===//
+  // Set Argument and Result Names on Phase Functions
+  //
+  // Now that each phase function has its final block args and return values,
+  // assign meaningful names. Own args get their original names from the
+  // unified func; the opaque context arg (if any) gets named "ctx". Phase 0's
+  // own results get the unified func's result names; context returns get "ctx".
+  //===--------------------------------------------------------------------===//
+
+  for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
+    auto &split = splits[phase - minPhase];
+    auto &block = split.funcOp.getBody().front();
+
+    // Build argNames: original names for own args, "ctx" for the opaque arg.
+    SmallVector<Attribute> phaseArgNames;
+    for (auto [name, argPhase] :
+         llvm::zip(funcOp.getArgNames(), funcOp.getArgPhases())) {
+      if (static_cast<int16_t>(argPhase) == phase)
+        phaseArgNames.push_back(name);
+    }
+    if (block.getNumArguments() > phaseArgNames.size())
+      phaseArgNames.push_back(builder.getStringAttr("ctx"));
+    split.funcOp.setArgNamesAttr(builder.getArrayAttr(phaseArgNames));
+
+    // Build resultNames: unified func's result names for phase 0's own
+    // results, "ctx" for context returns.
+    SmallVector<Attribute> phaseResultNames;
+    if (auto retOp = split.funcOp.getReturnOp()) {
+      unsigned ownReturns = numOwnReturns[phase - minPhase];
+      if (phase == 0) {
+        auto rn = funcOp.getResultNames();
+        for (unsigned i = 0; i < ownReturns && i < rn.size(); ++i)
+          phaseResultNames.push_back(rn[i]);
+      }
+      if (retOp.getValues().size() > ownReturns)
+        phaseResultNames.push_back(builder.getStringAttr("ctx"));
+    }
+    split.funcOp.setResultNamesAttr(builder.getArrayAttr(phaseResultNames));
+  }
+
+  //===--------------------------------------------------------------------===//
   // Emit Structural Ops
   //
   // Build a split_func recording the full phase-to-function mapping, and a
@@ -616,6 +657,7 @@ void PhaseSplitter::run() {
   auto sfLoc = funcOp.getLoc();
   auto sfName = funcOp.getSymNameAttr();
   auto sfArgNames = funcOp.getArgNames();
+  auto sfResultNames = funcOp.getResultNames();
   SmallVector<int32_t> sfArgPhases(funcOp.getArgPhases());
   SmallVector<int32_t> sfResultPhases(funcOp.getResultPhases());
 
@@ -634,21 +676,12 @@ void PhaseSplitter::run() {
         ctx, splits[phase - minPhase].funcOp.getSymName()));
   }
 
-  // Generate synthetic result names.
-  SmallVector<Attribute> resultNameAttrs;
-  if (sfResultPhases.size() == 1) {
-    resultNameAttrs.push_back(sfBuilder.getStringAttr("result"));
-  } else {
-    for (unsigned i = 0; i < sfResultPhases.size(); ++i)
-      resultNameAttrs.push_back(sfBuilder.getStringAttr("result" + Twine(i)));
-  }
-
   // Create the split_func.
   auto splitFuncOp =
       SplitFuncOp::create(sfBuilder, sfLoc, sfName,
                           /*sym_visibility=*/StringAttr{}, sfArgNames,
                           sfBuilder.getDenseI32ArrayAttr(sfArgPhases),
-                          sfBuilder.getArrayAttr(resultNameAttrs),
+                          sfResultNames,
                           sfBuilder.getDenseI32ArrayAttr(sfResultPhases),
                           sfBuilder.getDenseI32ArrayAttr(phaseNumbers),
                           sfBuilder.getArrayAttr(phaseFuncAttrs));

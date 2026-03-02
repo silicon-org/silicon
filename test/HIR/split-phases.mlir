@@ -5,7 +5,7 @@ func.func private @dummyB()
 
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: hir.func private @SinglePhase.const0
+// CHECK-LABEL: hir.func private @SinglePhase.const0() -> ()
 // CHECK-NEXT: func.call @dummyA
 // CHECK-NEXT: hir.return
 
@@ -13,7 +13,7 @@ func.func private @dummyB()
 // CHECK-LABEL: hir.split_func @SinglePhase() -> ()
 // CHECK:         hir.signature () -> ()
 // CHECK:       0: @SinglePhase.const0
-hir.unified_func @SinglePhase [] -> [] attributes {argNames = []} {
+hir.unified_func @SinglePhase() -> () {
   hir.unified_signature () -> ()
 } {
   func.call @dummyA() : () -> ()
@@ -24,14 +24,14 @@ hir.unified_func @SinglePhase [] -> [] attributes {argNames = []} {
 
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: hir.func private @TwoUnrelatedPhases.const1
+// CHECK-LABEL: hir.func private @TwoUnrelatedPhases.const1() -> ()
 // CHECK-NEXT: hir.expr
 // CHECK-NEXT:   func.call @dummyA
 // CHECK-NEXT:   hir.yield
 // CHECK-NEXT: }
 // CHECK-NEXT: hir.return
 
-// CHECK-LABEL: hir.func private @TwoUnrelatedPhases.const0
+// CHECK-LABEL: hir.func private @TwoUnrelatedPhases.const0() -> ()
 // CHECK-NEXT: func.call @dummyB
 // CHECK-NEXT: hir.return
 
@@ -40,7 +40,7 @@ hir.unified_func @SinglePhase [] -> [] attributes {argNames = []} {
 // CHECK:         hir.signature () -> ()
 // CHECK:       -1: @TwoUnrelatedPhases.const1
 // CHECK:       0: @TwoUnrelatedPhases.const0
-hir.unified_func @TwoUnrelatedPhases [] -> [] attributes {argNames = []} {
+hir.unified_func @TwoUnrelatedPhases() -> () {
   hir.unified_signature () -> ()
 } {
   func.call @dummyB() : () -> ()
@@ -55,14 +55,14 @@ hir.unified_func @TwoUnrelatedPhases [] -> [] attributes {argNames = []} {
 
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: hir.func private @ValueUseAcrossPhases.const1
+// CHECK-LABEL: hir.func private @ValueUseAcrossPhases.const1() -> ()
 // CHECK: [[C42:%.+]] = hir.constant_int 42
 // CHECK: [[TMP:%.+]] = hir.expr
 // CHECK:   hir.constant_int 1337
 // CHECK: hir.binary [[C42]], [[TMP]] :
 // CHECK: hir.return
 
-// CHECK-LABEL: hir.func private @ValueUseAcrossPhases.const0
+// CHECK-LABEL: hir.func private @ValueUseAcrossPhases.const0() -> ()
 // CHECK: hir.return
 
 // CHECK-NOT: hir.unified_func
@@ -70,7 +70,7 @@ hir.unified_func @TwoUnrelatedPhases [] -> [] attributes {argNames = []} {
 // CHECK:         hir.signature () -> ()
 // CHECK:       -1: @ValueUseAcrossPhases.const1
 // CHECK:       0: @ValueUseAcrossPhases.const0
-hir.unified_func @ValueUseAcrossPhases [] -> [] attributes {argNames = []} {
+hir.unified_func @ValueUseAcrossPhases() -> () {
   hir.unified_signature () -> ()
 } {
   %0 = hir.constant_int 42
@@ -89,16 +89,14 @@ hir.unified_func @ValueUseAcrossPhases [] -> [] attributes {argNames = []} {
 // Constness-aware split: a const argument flows from the const phase to the
 // runtime phase.
 
-// CHECK-LABEL: hir.func private @ConstArg.const1
-// CHECK-NEXT: ^bb0([[A:%.+]]: !hir.any):
-// CHECK:      [[TA:%.+]] = hir.type_of [[A]]
-// CHECK:      [[PACK:%.+]] = hir.opaque_pack([[TA]], [[A]])
+// CHECK-LABEL: hir.func private @ConstArg.const1(%a) -> (ctx)
+// CHECK:      [[TA:%.+]] = hir.type_of %a
+// CHECK:      [[PACK:%.+]] = hir.opaque_pack([[TA]], %a)
 // CHECK:      hir.return([[PACK]]) : ({{.*}})
 
-// CHECK-LABEL: hir.func private @ConstArg.const0
-// CHECK-NEXT: ^bb0([[B:%.+]]: !hir.any, [[OPAQUE:%.+]]: !hir.any):
-// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack [[OPAQUE]]
-// CHECK:      [[R:%.+]] = hir.binary {{.*}}, [[B]] :
+// CHECK-LABEL: hir.func private @ConstArg.const0(%b, %ctx) -> (result)
+// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:      [[R:%.+]] = hir.binary {{.*}}, %b :
 // CHECK:      hir.return([[R]]) : ({{.*}})
 
 // CHECK-NOT: hir.unified_func
@@ -106,14 +104,12 @@ hir.unified_func @ValueUseAcrossPhases [] -> [] attributes {argNames = []} {
 // CHECK:         hir.signature
 // CHECK:       -1: @ConstArg.const1
 // CHECK:       0: @ConstArg.const0
-hir.unified_func @ConstArg [-1, 0] -> [0] attributes {argNames = ["a", "b"]} {
-^bb0(%a: !hir.any, %b: !hir.any):
+hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
   %2 = hir.int_type
   hir.unified_signature (%0, %1) -> (%2)
 } {
-^bb0(%a: !hir.any, %b: !hir.any):
   %ta = hir.type_of %a
   %tb = hir.type_of %b
   %t = hir.unify %ta, %tb
@@ -126,23 +122,20 @@ hir.unified_func @ConstArg [-1, 0] -> [0] attributes {argNames = ["a", "b"]} {
 // Three-phase split: const const arg at phase -2, const arg at phase -1,
 // runtime arg at phase 0. Values thread through adjacent phases.
 
-// CHECK-LABEL: hir.func private @ThreePhase.const2
-// CHECK-NEXT: ^bb0([[A:%.+]]: !hir.any):
-// CHECK:      [[TA:%.+]] = hir.type_of [[A]]
-// CHECK:      [[PACK:%.+]] = hir.opaque_pack([[TA]], [[A]])
+// CHECK-LABEL: hir.func private @ThreePhase.const2(%a) -> (ctx)
+// CHECK:      [[TA:%.+]] = hir.type_of %a
+// CHECK:      [[PACK:%.+]] = hir.opaque_pack([[TA]], %a)
 // CHECK:      hir.return([[PACK]]) : ({{.*}})
 
-// CHECK-LABEL: hir.func private @ThreePhase.const1
-// CHECK-NEXT: ^bb0([[B:%.+]]: !hir.any, [[OPAQUE:%.+]]: !hir.any):
-// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack [[OPAQUE]]
-// CHECK:      [[TMP:%.+]] = hir.binary {{.*}}, [[B]] :
+// CHECK-LABEL: hir.func private @ThreePhase.const1(%b, %ctx) -> (ctx)
+// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:      [[TMP:%.+]] = hir.binary {{.*}}, %b :
 // CHECK:      [[PACK:%.+]] = hir.opaque_pack({{.*}}, [[TMP]])
 // CHECK:      hir.return([[PACK]]) : ({{.*}})
 
-// CHECK-LABEL: hir.func private @ThreePhase.const0
-// CHECK-NEXT: ^bb0([[C:%.+]]: !hir.any, [[OPAQUE:%.+]]: !hir.any):
-// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack [[OPAQUE]]
-// CHECK:      [[RES:%.+]] = hir.binary {{.*}}, [[C]] :
+// CHECK-LABEL: hir.func private @ThreePhase.const0(%c, %ctx) -> (result)
+// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:      [[RES:%.+]] = hir.binary {{.*}}, %c :
 // CHECK:      hir.return([[RES]]) : ({{.*}})
 
 // CHECK-NOT: hir.unified_func
@@ -154,12 +147,10 @@ hir.unified_func @ConstArg [-1, 0] -> [0] attributes {argNames = ["a", "b"]} {
 // CHECK-LABEL: hir.multiphase_func @ThreePhase.const(first a, last b) -> (ctx)
 // CHECK:       @ThreePhase.const2
 // CHECK:       @ThreePhase.const1
-hir.unified_func @ThreePhase [-2, -1, 0] -> [0] attributes {argNames = ["a", "b", "c"]} {
-^bb0(%a: !hir.any, %b: !hir.any, %c: !hir.any):
+hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.unified_signature (%0, %0, %0) -> (%0)
 } {
-^bb0(%a: !hir.any, %b: !hir.any, %c: !hir.any):
   %ta = hir.type_of %a
   %tb = hir.type_of %b
   %t0 = hir.unify %ta, %tb
@@ -202,12 +193,10 @@ hir.unified_func @ThreePhase [-2, -1, 0] -> [0] attributes {argNames = ["a", "b"
 // CHECK-LABEL: hir.multiphase_func @ThreePhaseCaller.const() -> (ctx)
 // CHECK:       @ThreePhaseCaller.const2
 // CHECK:       @ThreePhaseCaller.const1
-hir.unified_func @ThreePhaseCaller [0] -> [0] attributes {argNames = ["z"]} {
-^bb0(%z: !hir.any):
+hir.unified_func @ThreePhaseCaller(%z: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.unified_signature (%0) -> (%0)
 } {
-^bb0(%z: !hir.any):
   %a = hir.constant_int 10
   %b = hir.constant_int 20
   %t0 = hir.inferrable
