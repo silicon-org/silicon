@@ -85,4 +85,26 @@ def CallOp : MIROp<"call"> {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// Opaque Bundles
+//===----------------------------------------------------------------------===//
+
+def MIROpaquePackOp : MIROp<"opaque_pack", [Pure]> {
+  let summary = "Pack multiple values into a single opaque bundle";
+  let arguments = (ins Variadic<AnyType>:$operands);
+  let results = (outs OpaqueType:$result);
+  let assemblyFormat = [{
+    `(` $operands `)` `:` `(` type($operands) `)` attr-dict
+  }];
+}
+
+def MIROpaqueUnpackOp : MIROp<"opaque_unpack", [Pure]> {
+  let summary = "Unpack an opaque bundle into individual values";
+  let arguments = (ins OpaqueType:$input);
+  let results = (outs Variadic<AnyType>:$results);
+  let assemblyFormat = [{
+    $input `:` type($results) attr-dict
+  }];
+}
+
 #endif // SILICON_MIR_OPS_TD

@@ -52,4 +52,9 @@ def SpecializedFuncType : MIRTypeDef<"SpecializedFunc"> {
   let summary = "specialized function";
 }
 
+def OpaqueType : MIRTypeDef<"Opaque"> {
+  let mnemonic = "opaque";
+  let summary = "opaque value bundle passed between phases";
+}
+
 #endif // SILICON_MIR_TYPES_TD

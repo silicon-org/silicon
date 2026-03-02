@@ -68,3 +68,41 @@ hir.expr : !hir.any, !hir.any {
   %1 = hir.anyfunc_type
   hir.yield %0, %1 : !hir.any, !hir.any
 }
+
+// split_func with args, results, signature, and phase map
+hir.split_func @SplitExample(a: -3, b: -1) -> (c: 0) {
+^bb0(%a_arg: !hir.any, %b_arg: !hir.any):
+  %st0 = hir.int_type
+  hir.signature (%st0, %st0) -> (%st0)
+} [
+  -3: @SplitExample.0,
+  -1: @SplitExample.1,
+  0: @SplitExample.2
+]
+
+// split_func with no args/results
+hir.split_func @SplitNoArgs() -> () {
+  hir.signature () -> ()
+} [
+  0: @SplitNoArgs.0
+]
+
+// multiphase_func with first/last args
+hir.multiphase_func @Multi(last a, first b) -> (out) [
+  @Multi.0,
+  @Multi.1
+]
+
+// multiphase_func with no args
+hir.multiphase_func @MultiNoArgs() -> (out) [
+  @MultiNoArgs.0,
+  @MultiNoArgs.1,
+  @MultiNoArgs.2
+]
+
+// opaque ops
+hir.opaque_type
+%opaque_a = hir.int_type
+%opaque_b = hir.constant_int 42
+%packed = hir.opaque_pack (%opaque_a, %opaque_b)
+%unp_x, %unp_y = hir.opaque_unpack %packed : !hir.any, !hir.any

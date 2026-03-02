@@ -39,3 +39,10 @@ func.func @Return2(%arg0: !mir.type, %arg1: !mir.int) {
 mir.call @foo() : () -> ()
 mir.call @foo(%int_type) : (!mir.type) -> (!mir.type)
 mir.call @foo(%int_type, %c42_int) : (!mir.type, !mir.int) -> (!mir.type, !mir.int)
+
+// Opaque type
+unrealized_conversion_cast to !mir.opaque
+
+// Opaque pack/unpack
+%opaque_ctx = mir.opaque_pack (%c42_int, %int_type) : (!mir.int, !mir.type)
+%opaque_a, %opaque_b = mir.opaque_unpack %opaque_ctx : !mir.int, !mir.type
