@@ -25,4 +25,13 @@ def SpecializeFuncsPass : Pass<"specialize-funcs", "mlir::ModuleOp"> {
   ];
 }
 
+def PhaseEvalLoopPass : Pass<"phase-eval-loop", "mlir::ModuleOp"> {
+  let summary = "Iteratively lower, interpret, and specialize until all "
+    "compile-time phases are evaluated";
+  let dependentDialects = [
+    "hir::HIRDialect",
+    "mir::MIRDialect",
+  ];
+}
+
 #endif // SILICON_TRANSFORMS_PASSES_TD
