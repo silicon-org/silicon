@@ -113,17 +113,9 @@ static void populatePasses(PassManager &pm) {
   pm.addPass(hir::createSplitPhasesPass());
   addCleanup(pm);
 
-  // Lower the earliest (const) phase from HIR to MIR.
-  pm.addNestedPass<hir::FuncOp>(createHIRToMIRPass());
-  addCleanup(pm);
-
-  // Execute the const phase to produce concrete constants. This also chains
-  // multi-phase callers by threading return values into the next phase.
-  pm.addPass(createInterpretPass());
-  addCleanup(pm);
-
-  // Specialize generic functions based on const arguments.
-  pm.addPass(createSpecializeFuncsPass());
+  // Iteratively lower, interpret, and specialize until all compile-time phases
+  // are evaluated.
+  pm.addPass(createPhaseEvalLoopPass());
   addCleanup(pm);
 }
 
