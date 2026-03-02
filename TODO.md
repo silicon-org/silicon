@@ -1,5 +1,4 @@
 - Add argument and result names to `hir.func`. These indicate how many arguments and results there are. Under the hood they all have MLIR type `!hir.any`. Use custom parser and printers if necessary to print these as outlined in CLAUDE.md.
 - Add argument and result names to `hir.unified_func`, which must match the corresponding number of phases. These should print as outlined in CLAUDE.md.
 - Replace `hir.binary` with dedicated ops like `hir.add`. Same for `mir.binary`.
-- One remaining `builder.create<UnifyOp>()` in `lib/HIR/Transforms/InferTypes.cpp` should use `UnifyOp::create(builder, ...)`.
 - Dependent types in signatures (type depends on argument value).

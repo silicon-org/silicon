@@ -122,8 +122,8 @@ void InferTypesPass::runOnOperation() {
     OpBuilder builder(keepOp);
     for (auto [keepArg, eraseArg] :
          llvm::zip(keepOp->getOpOperands(), eraseOp->getOperands())) {
-      auto unified = builder.create<UnifyOp>(
-          unifyOp.getLoc(), eraseArg.getType(), keepArg.get(), eraseArg);
+      auto unified = UnifyOp::create(
+          builder, unifyOp.getLoc(), eraseArg.getType(), keepArg.get(), eraseArg);
       keepArg.set(unified);
       worklist.push_back(unified);
     }
