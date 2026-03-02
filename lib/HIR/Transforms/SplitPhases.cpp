@@ -448,6 +448,18 @@ void PhaseSplitter::run() {
     }
   }
 
+  // Record the number of "own" block args and return values for each phase
+  // function before cross-phase threading adds context values. These counts
+  // are used afterward to bundle context values into opaque packs.
+  SmallVector<unsigned> numOwnArgs(maxPhase - minPhase + 1);
+  SmallVector<unsigned> numOwnReturns(maxPhase - minPhase + 1);
+  for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
+    numOwnArgs[phase - minPhase] =
+        splits[phase - minPhase].funcOp.getBody().front().getNumArguments();
+    numOwnReturns[phase - minPhase] =
+        splits[phase - minPhase].returnValues.size();
+  }
+
   // Add return operations to all phase functions and plumb values from earlier
   // phases to later phases. We iterate in reverse execution order (most-runtime
   // first, most-const last) so that thread-through adds values to later splits
@@ -527,6 +539,61 @@ void PhaseSplitter::run() {
       }
     });
     mapping.clear();
+  }
+
+  //===--------------------------------------------------------------------===//
+  // Bundle Context Values into Opaque Packs
+  //
+  // For each phase boundary, bundle the context values (added during
+  // cross-phase threading) into a single `hir.opaque_pack` at the source
+  // phase's return, and unpack them with `hir.opaque_unpack` at the target
+  // phase's entry. This ensures each phase boundary passes a single opaque
+  // bundle instead of individual values.
+  //===--------------------------------------------------------------------===//
+
+  auto anyType = AnyType::get(builder.getContext());
+  for (int16_t phase = minPhase + 1; phase <= maxPhase; ++phase) {
+    auto &split = splits[phase - minPhase];
+    auto &block = split.funcOp.getBody().front();
+    unsigned ownArgs = numOwnArgs[phase - minPhase];
+    unsigned totalArgs = block.getNumArguments();
+    unsigned contextArgs = totalArgs - ownArgs;
+    if (contextArgs == 0)
+      continue;
+
+    // In this phase: replace trailing context block args with a single opaque
+    // arg followed by an opaque_unpack.
+    auto opaqueArg = block.addArgument(anyType, funcOp.getLoc());
+    OpBuilder unpackBuilder(&block, block.begin());
+    auto unpackOp = OpaqueUnpackOp::create(
+        unpackBuilder, funcOp.getLoc(), SmallVector<Type>(contextArgs, anyType),
+        opaqueArg);
+    for (unsigned i = 0; i < contextArgs; ++i)
+      block.getArgument(ownArgs + i).replaceAllUsesWith(unpackOp.getResult(i));
+    block.eraseArguments(ownArgs, contextArgs);
+
+    // In the previous phase: replace trailing context return values with a
+    // single opaque_pack.
+    auto &prevSplit = splits[phase - 1 - minPhase];
+    auto prevReturnOp =
+        cast<ReturnOp>(prevSplit.funcOp.getBody().back().getTerminator());
+    unsigned prevOwnReturns = numOwnReturns[phase - 1 - minPhase];
+    unsigned prevTotalReturns = prevReturnOp.getNumOperands();
+    unsigned contextReturns = prevTotalReturns - prevOwnReturns;
+    if (contextReturns == 0)
+      continue;
+
+    OpBuilder packBuilder(prevReturnOp);
+    SmallVector<Value> contextValues(
+        prevReturnOp.getOperands().drop_front(prevOwnReturns));
+    auto packOp =
+        OpaquePackOp::create(packBuilder, funcOp.getLoc(), contextValues);
+
+    SmallVector<Value> newReturnValues(
+        prevReturnOp.getOperands().take_front(prevOwnReturns));
+    newReturnValues.push_back(packOp);
+    ReturnOp::create(packBuilder, funcOp.getLoc(), newReturnValues);
+    prevReturnOp.erase();
   }
 
   //===--------------------------------------------------------------------===//

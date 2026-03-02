@@ -40,9 +40,10 @@ mir.call @foo() : () -> ()
 mir.call @foo(%int_type) : (!mir.type) -> (!mir.type)
 mir.call @foo(%int_type, %c42_int) : (!mir.type, !mir.int) -> (!mir.type, !mir.int)
 
-// Opaque type
+// Opaque type and attribute
 unrealized_conversion_cast to !mir.opaque
+unrealized_conversion_cast to index {attr = #mir.opaque<[#mir.int<42>, #mir.type<!mir.int>]>}
 
 // Opaque pack/unpack
-%opaque_ctx = mir.opaque_pack (%c42_int, %int_type) : (!mir.int, !mir.type)
-%opaque_a, %opaque_b = mir.opaque_unpack %opaque_ctx : !mir.int, !mir.type
+%opaque_ctx = mir.opaque_pack (%c42_int, %int_type) : (!mir.int, !mir.type) -> !mir.opaque
+%opaque_a, %opaque_b = mir.opaque_unpack %opaque_ctx : !mir.opaque -> !mir.int, !mir.type

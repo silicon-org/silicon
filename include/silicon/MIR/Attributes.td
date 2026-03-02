@@ -79,4 +79,17 @@ def SpecializedFuncAttr : MIRAttrDef<"SpecializedFunc", [
   }];
 }
 
+def OpaqueAttr : MIRAttrDef<"Opaque", [
+  DeclareAttrInterfaceMethods<TypedAttrInterface>
+]> {
+  let mnemonic = "opaque";
+  let summary = "opaque bundle of values passed between phases";
+  let parameters = (ins
+    OptionalArrayRefParameter<"mlir::Attribute">:$elements
+  );
+  let assemblyFormat = [{
+    `<` `[` (`]`) : ($elements^ `]`)? `>`
+  }];
+}
+
 #endif // SILICON_MIR_ATTRIBUTES_TD

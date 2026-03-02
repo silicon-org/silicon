@@ -219,6 +219,23 @@ static LogicalResult convert(hir::CallOp op, hir::CallOp::Adaptor adaptor,
   return success();
 }
 
+static LogicalResult convert(hir::OpaquePackOp op,
+                             hir::OpaquePackOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  auto opaqueType = mir::OpaqueType::get(op.getContext());
+  rewriter.replaceOpWithNewOp<mir::MIROpaquePackOp>(op, opaqueType,
+                                                    adaptor.getOperands());
+  return success();
+}
+
+static LogicalResult convert(hir::OpaqueUnpackOp op,
+                             hir::OpaqueUnpackOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<mir::MIROpaqueUnpackOp>(op, op.getResultTypes(),
+                                                      adaptor.getInput());
+  return success();
+}
+
 static LogicalResult convert(UnrealizedConversionCastOp op,
                              UnrealizedConversionCastOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
@@ -283,6 +300,8 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::SpecializeFuncOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
   patterns.add<hir::CallOp>(convert);
+  patterns.add<hir::OpaquePackOp>(convert);
+  patterns.add<hir::OpaqueUnpackOp>(convert);
   patterns.add<UnrealizedConversionCastOp>(convert);
 
   // Setup the legal ops.

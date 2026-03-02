@@ -86,10 +86,12 @@ hir.unified_func @ValueUseAcrossPhases [] -> [] attributes {argNames = []} {
 
 // CHECK-LABEL: hir.func private @ConstArg.const1
 // CHECK-NEXT: ^bb0([[A:%.+]]: !hir.any):
-// CHECK-NEXT: hir.return [[A]]
+// CHECK-NEXT: [[PACK:%.+]] = hir.opaque_pack([[A]])
+// CHECK-NEXT: hir.return [[PACK]]
 
 // CHECK-LABEL: hir.func private @ConstArg.const0
-// CHECK-NEXT: ^bb0([[B:%.+]]: !hir.any, [[A:%.+]]: !hir.any):
+// CHECK-NEXT: ^bb0([[B:%.+]]: !hir.any, [[OPAQUE:%.+]]: !hir.any):
+// CHECK-NEXT: [[A:%.+]] = hir.opaque_unpack [[OPAQUE]]
 // CHECK-NEXT: [[R:%.+]] = hir.binary [[A]], [[B]]
 // CHECK-NEXT: hir.return [[R]]
 
@@ -116,15 +118,19 @@ hir.unified_func @ConstArg [-1, 0] -> [0] attributes {argNames = ["a", "b"]} {
 
 // CHECK-LABEL: hir.func private @ThreePhase.const2
 // CHECK-NEXT: ^bb0([[A:%.+]]: !hir.any):
-// CHECK-NEXT: hir.return [[A]]
+// CHECK-NEXT: [[PACK:%.+]] = hir.opaque_pack([[A]])
+// CHECK-NEXT: hir.return [[PACK]]
 
 // CHECK-LABEL: hir.func private @ThreePhase.const1
-// CHECK-NEXT: ^bb0([[B:%.+]]: !hir.any, [[A:%.+]]: !hir.any):
+// CHECK-NEXT: ^bb0([[B:%.+]]: !hir.any, [[OPAQUE:%.+]]: !hir.any):
+// CHECK-NEXT: [[A:%.+]] = hir.opaque_unpack [[OPAQUE]]
 // CHECK-NEXT: [[TMP:%.+]] = hir.binary [[A]], [[B]]
-// CHECK-NEXT: hir.return [[TMP]]
+// CHECK-NEXT: [[PACK:%.+]] = hir.opaque_pack([[TMP]])
+// CHECK-NEXT: hir.return [[PACK]]
 
 // CHECK-LABEL: hir.func private @ThreePhase.const0
-// CHECK-NEXT: ^bb0([[C:%.+]]: !hir.any, [[AB:%.+]]: !hir.any):
+// CHECK-NEXT: ^bb0([[C:%.+]]: !hir.any, [[OPAQUE:%.+]]: !hir.any):
+// CHECK-NEXT: [[AB:%.+]] = hir.opaque_unpack [[OPAQUE]]
 // CHECK-NEXT: [[RES:%.+]] = hir.binary [[AB]], [[C]]
 // CHECK-NEXT: hir.return [[RES]]
 
@@ -155,13 +161,17 @@ hir.unified_func @ThreePhase [-2, -1, 0] -> [0] attributes {argNames = ["a", "b"
 
 // CHECK-LABEL: hir.func private @ThreePhaseCaller.const2
 // CHECK: hir.call @ThreePhase.const2(
+// CHECK: hir.opaque_pack(
 // CHECK: hir.return
 
 // CHECK-LABEL: hir.func private @ThreePhaseCaller.const1
+// CHECK: hir.opaque_unpack
 // CHECK: hir.call @ThreePhase.const1(
+// CHECK: hir.opaque_pack(
 // CHECK: hir.return
 
 // CHECK-LABEL: hir.func private @ThreePhaseCaller.const0
+// CHECK: hir.opaque_unpack
 // CHECK: hir.call @ThreePhase.const0(
 // CHECK: hir.return
 

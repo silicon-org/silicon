@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/HIR/Ops.h"
+#include "silicon/MIR/Attributes.h"
 #include "silicon/MIR/Ops.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Transforms/Passes.h"
@@ -114,6 +115,13 @@ LogicalResult Interpreter::run() {
       if (!attr)
         return op->emitError() << "interpretation failed";
       frame.values[specializeFuncOp] = attr;
+    } else if (auto packOp = dyn_cast<mir::MIROpaquePackOp>(op)) {
+      frame.values[packOp] = mir::OpaqueAttr::get(op->getContext(), operands);
+    } else if (auto unpackOp = dyn_cast<mir::MIROpaqueUnpackOp>(op)) {
+      auto opaqueAttr = cast<mir::OpaqueAttr>(operands[0]);
+      for (auto [result, elem] :
+           llvm::zip(unpackOp.getResults(), opaqueAttr.getElements()))
+        frame.values[result] = elem;
     } else {
       return op->emitError() << "operation not supported by interpreter";
     }
