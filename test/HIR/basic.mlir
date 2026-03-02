@@ -22,6 +22,7 @@ func.func @Foo(%arg0: !hir.any, %arg1: !hir.any, %arg2: !hir.any, %arg3: i1) {
   hir.constant_unit
   hir.inferrable
   hir.unify %arg0, %arg1
+  hir.binary %arg0, %arg1 : %arg2
   hir.let "x" : %arg0
   hir.store %arg0, %arg1 : %arg2
   hir.const_br ^bb1(%arg0 : !hir.any)
@@ -50,12 +51,21 @@ hir.func public @public_visibility2 {}
 hir.func private @private_visibility {}
 hir.func nested @nested_visibility {}
 
+// Test return with operands
+hir.func @ReturnWithOperands {
+  %t = hir.int_type
+  %0 = hir.constant_int 42
+  hir.return(%0) : (%t)
+}
+
 hir.unified_func @UnifiedSimple [0, -1] -> [0] attributes {argNames = ["a", "b"]} {
 ^bb0(%a: !hir.any, %b: !hir.any):
   %0 = hir.int_type
   hir.unified_signature (%0, %0) -> (%0)
 } {
-  hir.unified_return
+^bb0(%a: !hir.any, %b: !hir.any):
+  %0 = hir.type_of %a
+  hir.unified_return(%a) : (%0)
 }
 hir.unified_call @UnifiedSimple(%c42_int, %c42_int) : (%int_type, %int_type) -> (%int_type) (!hir.any, !hir.any) -> !hir.any [0, -1] -> [0]
 hir.unified_call @UnifiedSimple(%c42_int, %c42_int) : (%int_type, %int_type) -> (%int_type) (!hir.any, !hir.any) -> !hir.any [0, -1] -> [0]

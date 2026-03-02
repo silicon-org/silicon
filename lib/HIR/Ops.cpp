@@ -417,6 +417,11 @@ OpFoldResult TypeOfOp::fold(FoldAdaptor adaptor) {
 }
 
 LogicalResult TypeOfOp::canonicalize(TypeOfOp op, PatternRewriter &rewriter) {
+  // type_of(x) -> x's type operand, if extractable.
+  if (auto type = getTypeOf(op.getInput())) {
+    rewriter.replaceOp(op, type);
+    return success();
+  }
   // type_of(constant_int) -> int_type
   if (op.getInput().getDefiningOp<ConstantIntOp>()) {
     rewriter.replaceOpWithNewOp<IntTypeOp>(op);
@@ -556,4 +561,31 @@ UnifiedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
                          << " results";
 
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Type Extraction Helpers
+//===----------------------------------------------------------------------===//
+
+Value hir::getTypeOf(Value value) {
+  auto result = dyn_cast<OpResult>(value);
+  if (!result)
+    return {};
+
+  return TypeSwitch<Operation *, Value>(result.getOwner())
+      .Case<BinaryOp>([](BinaryOp op) { return op.getResultType(); })
+      .Case<CoerceTypeOp>([](CoerceTypeOp op) { return op.getTypeOperand(); })
+      .Case<CallOp>([&](CallOp op) {
+        return op.getTypeOfResults()[result.getResultNumber()];
+      })
+      .Case<UnifiedCallOp>([&](UnifiedCallOp op) {
+        return op.getTypeOfResults()[result.getResultNumber()];
+      })
+      .Default([](Operation *) { return Value(); });
+}
+
+Value hir::getOrCreateTypeOf(OpBuilder &builder, Location loc, Value value) {
+  if (auto type = getTypeOf(value))
+    return type;
+  return TypeOfOp::create(builder, loc, value).getResult();
 }

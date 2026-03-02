@@ -5,7 +5,7 @@ hir.unified_func @Empty [] -> [] attributes {argNames = []} {
   // CHECK: hir.unified_signature () -> ()
   hir.unified_signature () -> ()
 } {
-  // CHECK: hir.unified_return
+  // CHECK: hir.unified_return{{$}}
   hir.unified_return
 }
 
@@ -34,7 +34,8 @@ hir.unified_func @SimpleBar [0] -> [0] attributes {argNames = ["a"]} {
   hir.unified_signature (%0) -> (%1)
 } {
 ^bb0(%arg0: !hir.any):
-  hir.unified_return %arg0
+  %t0 = hir.type_of %arg0
+  hir.unified_return (%arg0) : (%t0)
 }
 
 // CHECK-LABEL: hir.unified_func @NestedFoo
@@ -62,5 +63,6 @@ hir.unified_func @NestedBar [0] -> [0] attributes {argNames = ["a"]} {
   hir.unified_signature (%0) -> (%1)
 } {
 ^bb0(%arg0: !hir.any):
-  hir.unified_return %arg0
+  %t0 = hir.type_of %arg0
+  hir.unified_return (%arg0) : (%t0)
 }

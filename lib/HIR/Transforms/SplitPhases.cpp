@@ -210,8 +210,8 @@ void PhaseSplitter::run() {
   // Handle the return operation. Return values are added to phase 0's return
   // values. The return op itself is erased since each phase will get its own.
   auto returnOp = funcOp.getReturnOp();
-  for (auto operand : returnOp.getOperands())
-    splits[0 - minPhase].returnValues.push_back(operand);
+  for (auto value : returnOp.getValues())
+    splits[0 - minPhase].returnValues.push_back(value);
   returnOp.erase();
 
   // Move all operations to phase 0 initially.
@@ -366,12 +366,12 @@ void PhaseSplitter::run() {
         } else {
           auto retOp =
               cast<ReturnOp>(splitFunc.getBody().front().getTerminator());
-          for (unsigned i = 0; i < retOp.getNumOperands(); ++i) {
+          for (unsigned i = 0; i < retOp.getValues().size(); ++i) {
             auto inferrable = InferrableOp::create(callBuilder, loc);
             analysis.opPhases[inferrable] = phase;
             analysis.valuePhases[inferrable.getResult()] = phase;
             callTypeOfResults.push_back(inferrable.getResult());
-            resultTypes.push_back(retOp.getOperand(i).getType());
+            resultTypes.push_back(retOp.getValues()[i].getType());
           }
         }
 
@@ -470,9 +470,13 @@ void PhaseSplitter::run() {
     auto &split = splits[phase - minPhase];
     closedFuncs.insert(split.funcOp);
 
-    // Add a return operation to this split.
+    // Add a return operation to this split. Extract or create type operands
+    // for each return value.
     builder.setInsertionPointToEnd(&split.funcOp.getBody().back());
-    ReturnOp::create(builder, funcOp.getLoc(), split.returnValues);
+    SmallVector<Value> returnTypes;
+    for (auto val : split.returnValues)
+      returnTypes.push_back(getOrCreateTypeOf(builder, funcOp.getLoc(), val));
+    ReturnOp::create(builder, funcOp.getLoc(), split.returnValues, returnTypes);
 
     // Replace all uses of values from earlier phases with additional block
     // arguments. This will be replaced with constants through function
@@ -578,21 +582,26 @@ void PhaseSplitter::run() {
     auto prevReturnOp =
         cast<ReturnOp>(prevSplit.funcOp.getBody().back().getTerminator());
     unsigned prevOwnReturns = numOwnReturns[phase - 1 - minPhase];
-    unsigned prevTotalReturns = prevReturnOp.getNumOperands();
+    unsigned prevTotalReturns = prevReturnOp.getValues().size();
     unsigned contextReturns = prevTotalReturns - prevOwnReturns;
     if (contextReturns == 0)
       continue;
 
     OpBuilder packBuilder(prevReturnOp);
     SmallVector<Value> contextValues(
-        prevReturnOp.getOperands().drop_front(prevOwnReturns));
+        prevReturnOp.getValues().drop_front(prevOwnReturns));
     auto packOp =
         OpaquePackOp::create(packBuilder, funcOp.getLoc(), contextValues);
 
     SmallVector<Value> newReturnValues(
-        prevReturnOp.getOperands().take_front(prevOwnReturns));
+        prevReturnOp.getValues().take_front(prevOwnReturns));
     newReturnValues.push_back(packOp);
-    ReturnOp::create(packBuilder, funcOp.getLoc(), newReturnValues);
+    SmallVector<Value> newReturnTypes(
+        prevReturnOp.getTypeOfValues().take_front(prevOwnReturns));
+    newReturnTypes.push_back(
+        getOrCreateTypeOf(packBuilder, funcOp.getLoc(), packOp));
+    ReturnOp::create(packBuilder, funcOp.getLoc(), newReturnValues,
+                     newReturnTypes);
     prevReturnOp.erase();
   }
 
@@ -680,7 +689,7 @@ void PhaseSplitter::run() {
     // 0.
     auto lastConstRetOp = cast<ReturnOp>(
         splits[-1 - minPhase].funcOp.getBody().back().getTerminator());
-    unsigned numCtx = lastConstRetOp.getNumOperands();
+    unsigned numCtx = lastConstRetOp.getValues().size();
     SmallVector<Attribute> mpResultNames;
     if (numCtx == 1) {
       mpResultNames.push_back(sfBuilder.getStringAttr("ctx"));

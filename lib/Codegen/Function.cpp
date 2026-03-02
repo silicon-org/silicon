@@ -42,8 +42,7 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
     // Bind each block argument so dependent-type expressions like `uint<b>`
     // can refer to the corresponding argument value.
     auto guard2 = BindingsScope(bindings);
-    for (auto [arg, blockArg] :
-         llvm::zip(item.args, sigEntry.getArguments())) {
+    for (auto [arg, blockArg] : llvm::zip(item.args, sigEntry.getArguments())) {
       bindings.insert(arg, blockArg);
       argTypes.push_back(blockArg.getType());
       argLocs.push_back(blockArg.getLoc());
@@ -79,7 +78,8 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
   SmallVector<Attribute> argNameAttrs;
   for (auto *arg : item.args)
     argNameAttrs.push_back(StringAttr::get(module.getContext(), arg->name));
-  funcOp.setArgNamesAttr(mlir::ArrayAttr::get(module.getContext(), argNameAttrs));
+  funcOp.setArgNamesAttr(
+      mlir::ArrayAttr::get(module.getContext(), argNameAttrs));
 
   // Handle the function body.
   {
@@ -100,7 +100,9 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
       return failure();
 
     // Return the result of the function body.
-    hir::UnifiedReturnOp::create(builder, item.loc, value);
+    auto valueType = hir::getOrCreateTypeOf(builder, item.loc, value);
+    hir::UnifiedReturnOp::create(builder, item.loc, ValueRange{value},
+                                 ValueRange{valueType});
   }
 
   return success();

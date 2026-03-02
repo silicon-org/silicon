@@ -3,4 +3,3 @@
 - Replace `hir.binary` with dedicated ops like `hir.add`. Same for `mir.binary`.
 - One remaining `builder.create<UnifyOp>()` in `lib/HIR/Transforms/InferTypes.cpp` should use `UnifyOp::create(builder, ...)`.
 - Dependent types in signatures (type depends on argument value).
-- Add type operand to `hir.binary`, `hir.unified_return`, and `hir.return`. For the binary op, codegen should emit `unify(type_of(lhs), typeof(rhs))` as type for the binary op -- ideally using `createOrFold`, such that trivial type situations can immediately be resolved. The returns should just use `type_of` on the operands.

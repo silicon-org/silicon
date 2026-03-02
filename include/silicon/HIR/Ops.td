@@ -148,13 +148,10 @@ def InferrableOp : HIROp<"inferrable", []> {
   let assemblyFormat = "attr-dict";
 }
 
-def BinaryOp : HIROp<"binary", [
-  Pure,
-  SameOperandsAndResultType,
-]> {
-  let arguments = (ins AnyHIRType:$lhs, AnyHIRType:$rhs);
+def BinaryOp : HIROp<"binary", [Pure]> {
+  let arguments = (ins AnyHIRType:$lhs, AnyHIRType:$rhs, AnyHIRType:$resultType);
   let results = (outs AnyHIRType:$result);
-  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+  let assemblyFormat = "$lhs `,` $rhs `:` $resultType attr-dict";
 }
 
 def LetOp : HIROp<"let", []> {
@@ -166,6 +163,7 @@ def LetOp : HIROp<"let", []> {
 def UnifyOp : HIROp<"unify", [
   SameOperandsAndResultType,
   Commutative,
+  Pure,
 ]> {
   let arguments = (ins AnyHIRType:$lhs, AnyHIRType:$rhs);
   let results = (outs AnyHIRType:$result);
@@ -230,14 +228,20 @@ def FuncOp : HIROp<"func", [
 }
 
 def ReturnOp : HIROp<"return", [
+  AttrSizedOperandSegments,
+  PredOpTrait<"values and typeOfValues must have the same size",
+    CPred<"$values.size() == $typeOfValues.size()">>,
   Pure,
   ReturnLike,
   Terminator,
   HasParent<"FuncOp">,
 ]> {
-  let arguments = (ins Variadic<AnyHIRType>:$operands);
+  let arguments = (ins
+    Variadic<AnyHIRType>:$values,
+    Variadic<AnyHIRType>:$typeOfValues
+  );
   let assemblyFormat = [{
-    ($operands^)? attr-dict
+    (`(` $values^ `)` `:` `(` $typeOfValues `)`)? attr-dict
   }];
 }
 
@@ -337,15 +341,21 @@ def UnifiedSignatureOp : HIROp<"unified_signature", [
 }
 
 def UnifiedReturnOp : HIROp<"unified_return", [
+  AttrSizedOperandSegments,
+  PredOpTrait<"values and typeOfValues must have the same size",
+    CPred<"$values.size() == $typeOfValues.size()">>,
   HasParent<"UnifiedFuncOp">,
   Pure,
   ReturnLike,
   Terminator,
 ]> {
   let summary = "Terminator for the body region of a unified function";
-  let arguments = (ins Variadic<AnyHIRType>:$operands);
+  let arguments = (ins
+    Variadic<AnyHIRType>:$values,
+    Variadic<AnyHIRType>:$typeOfValues
+  );
   let assemblyFormat = [{
-    ($operands^)? attr-dict
+    (`(` $values^ `)` `:` `(` $typeOfValues `)`)? attr-dict
   }];
 }
 

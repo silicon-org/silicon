@@ -23,3 +23,20 @@
 // Pull in the generated dialect definition.
 #define GET_OP_CLASSES
 #include "silicon/HIR/Ops.h.inc"
+
+namespace silicon {
+namespace hir {
+
+/// Try to extract the type of a value as an SSA value by inspecting its
+/// defining op. Returns nullptr if the type cannot be determined without
+/// creating a new op.
+mlir::Value getTypeOf(mlir::Value value);
+
+/// Get the type of a value as an SSA value.
+/// First tries to extract it from the defining op's type operand; falls back
+/// to creating a `hir.type_of` op.
+mlir::Value getOrCreateTypeOf(mlir::OpBuilder &builder, mlir::Location loc,
+                              mlir::Value value);
+
+} // namespace hir
+} // namespace silicon

@@ -171,6 +171,33 @@ static LogicalResult convert(hir::InferrableOp op,
   return success();
 }
 
+static LogicalResult convert(hir::TypeOfOp op, hir::TypeOfOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  // TypeOfOp results are consumed as type metadata by BinaryOp and ReturnOp,
+  // which discard them during lowering. Replace with a dummy type constant.
+  auto type = hir::AnyType::get(op.getContext());
+  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
+static LogicalResult convert(hir::UnifyOp op, hir::UnifyOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  // UnifyOp results are consumed as type metadata by BinaryOp, which discards
+  // them during lowering. Replace with a dummy type constant.
+  auto type = hir::AnyType::get(op.getContext());
+  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
+static LogicalResult convert(hir::CoerceTypeOp op,
+                             hir::CoerceTypeOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOp(op, adaptor.getInput());
+  return success();
+}
+
 static LogicalResult convert(hir::BinaryOp op, hir::BinaryOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
   rewriter.replaceOpWithNewOp<mir::BinaryOp>(op, adaptor.getLhs(),
@@ -189,7 +216,7 @@ static LogicalResult convert(hir::SpecializeFuncOp op,
 
 static LogicalResult convert(hir::ReturnOp op, hir::ReturnOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  rewriter.replaceOpWithNewOp<mir::ReturnOp>(op, adaptor.getOperands());
+  rewriter.replaceOpWithNewOp<mir::ReturnOp>(op, adaptor.getValues());
   return success();
 }
 
@@ -296,6 +323,9 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::AnyfuncTypeOp>(convert);
   patterns.add<hir::FuncTypeOp>(convert);
   patterns.add<hir::InferrableOp>(convert);
+  patterns.add<hir::TypeOfOp>(convert);
+  patterns.add<hir::UnifyOp>(convert);
+  patterns.add<hir::CoerceTypeOp>(convert);
   patterns.add<hir::BinaryOp>(convert);
   patterns.add<hir::SpecializeFuncOp>(convert);
   patterns.add<hir::ReturnOp>(convert);

@@ -96,7 +96,11 @@ static Value convert(ast::BinaryExpr &expr, Context &cx) {
   auto rhs = cx.convertExpr(*expr.rhs);
   if (!rhs)
     return {};
-  return hir::BinaryOp::create(cx.builder, expr.loc, lhs, rhs);
+  auto lhsType = hir::getOrCreateTypeOf(cx.builder, expr.loc, lhs);
+  auto rhsType = hir::getOrCreateTypeOf(cx.builder, expr.loc, rhs);
+  Value resultType = cx.builder.createOrFold<hir::UnifyOp>(
+      expr.loc, hir::AnyType::get(cx.module.getContext()), lhsType, rhsType);
+  return hir::BinaryOp::create(cx.builder, expr.loc, lhs, rhs, resultType);
 }
 
 /// Handle block expressions.

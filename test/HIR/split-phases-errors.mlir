@@ -8,9 +8,16 @@ hir.unified_func @ThreePhase [-2, -1, 0] -> [0] attributes {argNames = ["a", "b"
   hir.unified_signature (%0, %0, %0) -> (%0)
 } {
 ^bb0(%a: !hir.any, %b: !hir.any, %c: !hir.any):
-  %0 = hir.binary %a, %b
-  %1 = hir.binary %0, %c
-  hir.unified_return %1
+  %ta = hir.type_of %a
+  %tb = hir.type_of %b
+  %t0 = hir.unify %ta, %tb
+  %0 = hir.binary %a, %b : %t0
+  %t0b = hir.type_of %0
+  %tc = hir.type_of %c
+  %t1 = hir.unify %t0b, %tc
+  %1 = hir.binary %0, %c : %t1
+  %t1b = hir.type_of %1
+  hir.unified_return (%1) : (%t1b)
 }
 
 hir.unified_func @BadCaller [0, 0, 0] -> [0] attributes {argNames = ["x", "y", "z"]} {
@@ -26,5 +33,6 @@ hir.unified_func @BadCaller [0, 0, 0] -> [0] attributes {argNames = ["x", "y", "
   // expected-error @below {{call argument requires phase -2 but value is only available at phase 0}}
   // expected-error @below {{call argument requires phase -1 but value is only available at phase 0}}
   %r = hir.unified_call @ThreePhase(%x, %y, %z) : (%t0, %t1, %t2) -> (%t3) (!hir.any, !hir.any, !hir.any) -> !hir.any [-2, -1, 0] -> [0]
-  hir.unified_return %r
+  %tr = hir.type_of %r
+  hir.unified_return (%r) : (%tr)
 }

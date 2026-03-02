@@ -2,20 +2,20 @@
 
 // CHECK-LABEL: @Types
 hir.func @Types {
-  // CHECK-NEXT: mir.constant #mir.type<!mir.int>
+  // CHECK: mir.constant #mir.type<!mir.int>
   %int_type = hir.int_type
 
-  // CHECK-NEXT: mir.constant #mir.int<42>
-  // CHECK-NEXT: mir.constant #mir.type<!mir.uint<42>>
+  // CHECK: mir.constant #mir.int<42>
+  // CHECK: mir.constant #mir.type<!mir.uint<42>>
   %c42_int = hir.constant_int 42
   %uint42_type = hir.uint_type %c42_int
 
-  // CHECK-NEXT: mir.constant #mir.type<!mir.anyfunc>
+  // CHECK: mir.constant #mir.type<!mir.anyfunc>
   %anyfunc_type = hir.anyfunc_type
 
-  // CHECK-NEXT: mir.constant #mir.type<() -> ()>
+  // CHECK: mir.constant #mir.type<() -> ()>
   hir.func_type () -> ()
-  // CHECK-NEXT: mir.constant #mir.type<(!mir.int) -> !mir.uint<42>>
+  // CHECK: mir.constant #mir.type<(!mir.int) -> !mir.uint<42>>
   hir.func_type (%int_type) -> (%uint42_type)
 
   hir.return
@@ -23,12 +23,12 @@ hir.func @Types {
 
 // CHECK-LABEL: @Constants
 hir.func @Constants {
-  // CHECK-NEXT: mir.constant #mir.int<42>
+  // CHECK: mir.constant #mir.int<42>
   hir.constant_int 42
-  // CHECK-NEXT: mir.constant #mir.unit
+  // CHECK: mir.constant #mir.unit
   hir.constant_unit
-  // CHECK-NEXT: mir.constant #mir.type
-  // CHECK-NEXT: mir.constant #mir.func<@foo> : () -> ()
+  // CHECK: mir.constant #mir.type
+  // CHECK: mir.constant #mir.func<@foo> : () -> ()
   %0 = hir.func_type () -> ()
   hir.constant_func @foo : %0
   hir.return
@@ -53,18 +53,18 @@ hir.func @Calls {
 
 // CHECK-LABEL: @FunctionSpecialization
 hir.func @FunctionSpecialization {
-  // CHECK-NEXT: [[TYPE:%.+]] = mir.constant #mir.type<!mir.int>
+  // CHECK: [[TYPE:%.+]] = mir.constant #mir.type<!mir.int>
   %0 = hir.int_type
-  // CHECK-NEXT: [[VALUE:%.+]] = mir.constant #mir.int<42>
+  // CHECK: [[VALUE:%.+]] = mir.constant #mir.int<42>
   %1 = hir.constant_int 42
-  // CHECK-NEXT: mir.constant #mir.type<() -> ()>
+  // CHECK: mir.constant #mir.type<() -> ()>
   %2 = hir.func_type () -> ()
-  // CHECK-NEXT: [[FUNC:%.+]] = mir.constant #mir.func<@bar>
+  // CHECK: [[FUNC:%.+]] = mir.constant #mir.func<@bar>
   %3 = hir.constant_func @bar : %2
   // CHECK: [[SPEC:%.+]] = mir.specialize_func @foo([[TYPE]]) -> (), [[VALUE]], [[FUNC]]
   %4 = hir.specialize_func @foo(%0) -> (), %1, %3
   // CHECK: mir.return [[SPEC]]
-  hir.return %4
+  hir.return (%4) : (%0)
 }
 
 // CHECK-LABEL: @Casts
@@ -77,6 +77,8 @@ hir.func @Casts {
   %b0 = mir.constant #mir.func<@foo> : () -> ()
   %b1 = builtin.unrealized_conversion_cast %b0 : () -> () to !hir.any
 
-  // CHECK-NEXT: mir.return [[TMP1]], [[TMP2]]
-  hir.return %a1, %b1
+  %ta = hir.int_type
+  %tb = hir.anyfunc_type
+  // CHECK: mir.return [[TMP1]], [[TMP2]]
+  hir.return (%a1, %b1) : (%ta, %tb)
 }

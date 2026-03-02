@@ -7,3 +7,7 @@
 - Pure zero-operand ops (constants, type constructors) are cloned into each phase during value threading instead of being threaded as block args. This is needed because the HIR-to-MIR lowering requires type operands to be constant ops, not block arguments.
 - The interpret pass now chains multi-phase callers: after executing a `.constN` function, it looks for `.const{N-1}` and replaces its block args with the materialized constant return values, making it eligible for execution.
 - When decomposing unified calls, `returnValues` in the splitter's auxiliary data structure holds `Value` references that are NOT IR uses. `replaceAllUsesWith` won't update them, so they must be manually updated before erasing the old call op.
+- `hir.unify` was missing the `Pure` trait, causing it to be assigned its parent's phase (e.g., 0) instead of being computed from its operands. This dragged binary ops to phase 0 when they should have been in earlier phases. Fixed by adding `Pure`.
+- MLIR ODS: `AttrSizedOperandSegments` and `SameVariadicOperandSize` are mutually exclusive. Use `AttrSizedOperandSegments` with a custom verifier instead.
+- MLIR ODS: naming a variadic operand `$operands` conflicts with the base `Operation::getOperands()` accessor. Use a different name like `$values`.
+- When adding type operands to return ops, the `type_of` values get threaded across phase boundaries along with the data values, increasing the size of opaque packs. These extra type_of ops become dead code in the destination phase but are harmless.
