@@ -528,6 +528,110 @@ void PhaseSplitter::run() {
     });
     mapping.clear();
   }
+
+  //===--------------------------------------------------------------------===//
+  // Emit Structural Ops
+  //
+  // Build a split_func recording the full phase-to-function mapping, and a
+  // multiphase_func wrapping compile-time sub-functions when there are 2+
+  // compile-time phases. The unified func is erased afterward.
+  //===--------------------------------------------------------------------===//
+
+  auto sfLoc = funcOp.getLoc();
+  auto sfName = funcOp.getSymNameAttr();
+  auto sfArgNames = funcOp.getArgNames();
+  SmallVector<int32_t> sfArgPhases(funcOp.getArgPhases());
+  SmallVector<int32_t> sfResultPhases(funcOp.getResultPhases());
+
+  // Create builder for structural ops, inserting after the last per-phase func.
+  auto *lastPhaseFunc = splits[maxPhase - minPhase].funcOp.getOperation();
+  OpBuilder sfBuilder(lastPhaseFunc->getBlock(),
+                      std::next(lastPhaseFunc->getIterator()));
+  auto *ctx = sfBuilder.getContext();
+
+  // Build phase-to-function mapping arrays.
+  SmallVector<int32_t> phaseNumbers;
+  SmallVector<Attribute> phaseFuncAttrs;
+  for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
+    phaseNumbers.push_back(phase);
+    phaseFuncAttrs.push_back(FlatSymbolRefAttr::get(
+        ctx, splits[phase - minPhase].funcOp.getSymName()));
+  }
+
+  // Generate synthetic result names.
+  SmallVector<Attribute> resultNameAttrs;
+  if (sfResultPhases.size() == 1) {
+    resultNameAttrs.push_back(sfBuilder.getStringAttr("result"));
+  } else {
+    for (unsigned i = 0; i < sfResultPhases.size(); ++i)
+      resultNameAttrs.push_back(sfBuilder.getStringAttr("result" + Twine(i)));
+  }
+
+  // Create the split_func.
+  auto splitFuncOp =
+      SplitFuncOp::create(sfBuilder, sfLoc, sfName,
+                          /*sym_visibility=*/StringAttr{}, sfArgNames,
+                          sfBuilder.getDenseI32ArrayAttr(sfArgPhases),
+                          sfBuilder.getArrayAttr(resultNameAttrs),
+                          sfBuilder.getDenseI32ArrayAttr(sfResultPhases),
+                          sfBuilder.getDenseI32ArrayAttr(phaseNumbers),
+                          sfBuilder.getArrayAttr(phaseFuncAttrs));
+
+  // Move the unified func's signature region into the split_func and replace
+  // the unified_signature terminator with a signature terminator.
+  splitFuncOp.getSignature().takeBody(funcOp.getSignature());
+  {
+    auto &sigBlock = splitFuncOp.getSignature().back();
+    auto unifiedSigOp = cast<UnifiedSignatureOp>(sigBlock.getTerminator());
+    OpBuilder sigBuilder(unifiedSigOp);
+    SignatureOp::create(sigBuilder, unifiedSigOp.getLoc(),
+                        unifiedSigOp.getTypeOfArgs(),
+                        unifiedSigOp.getTypeOfResults());
+    unifiedSigOp.erase();
+  }
+
+  // Emit a multiphase_func wrapping the compile-time sub-functions if there
+  // are 2+ compile-time phases (phases < 0).
+  if (minPhase <= -2) {
+    SmallVector<Attribute> constFuncAttrs;
+    for (int16_t phase = minPhase; phase < 0; ++phase)
+      constFuncAttrs.push_back(FlatSymbolRefAttr::get(
+          ctx, splits[phase - minPhase].funcOp.getSymName()));
+
+    // Only include compile-time args (phase < 0). An arg is "first" if it
+    // enters at the earliest compile-time phase, "last" otherwise.
+    SmallVector<Attribute> mpArgNames;
+    SmallVector<bool> mpArgIsFirst;
+    for (auto [name, phase] : llvm::zip(sfArgNames, sfArgPhases)) {
+      if (phase < 0) {
+        mpArgNames.push_back(name);
+        mpArgIsFirst.push_back(phase == minPhase);
+      }
+    }
+
+    // One result per value threaded from the last compile-time phase to phase
+    // 0.
+    auto lastConstRetOp = cast<ReturnOp>(
+        splits[-1 - minPhase].funcOp.getBody().back().getTerminator());
+    unsigned numCtx = lastConstRetOp.getNumOperands();
+    SmallVector<Attribute> mpResultNames;
+    if (numCtx == 1) {
+      mpResultNames.push_back(sfBuilder.getStringAttr("ctx"));
+    } else {
+      for (unsigned i = 0; i < numCtx; ++i)
+        mpResultNames.push_back(sfBuilder.getStringAttr("ctx" + Twine(i)));
+    }
+
+    MultiphaseFuncOp::create(
+        sfBuilder, sfLoc, sfBuilder.getStringAttr(sfName.getValue() + ".const"),
+        /*sym_visibility=*/StringAttr{}, sfBuilder.getArrayAttr(mpArgNames),
+        sfBuilder.getDenseBoolArrayAttr(mpArgIsFirst),
+        sfBuilder.getArrayAttr(mpResultNames),
+        sfBuilder.getArrayAttr(constFuncAttrs));
+  }
+
+  // Erase the unified func now that all data has been extracted.
+  symbolTable.erase(funcOp);
 }
 
 namespace {
@@ -604,6 +708,6 @@ void SplitPhasesPass::runOnOperation() {
     auto &[funcOp, analysis] = analyses[idx];
     PhaseSplitter splitter(analysis, symbolTable);
     splitter.run();
-    funcOp.erase();
+    // Unified func is erased inside run().
   }
 }
