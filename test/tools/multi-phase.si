@@ -1,0 +1,19 @@
+// RUN: silc %s | FileCheck %s
+
+// Test multi-phase evaluation. The `compute` function has a const-const
+// argument (phase -2) and a const argument (phase -1), requiring multiple
+// rounds of evaluation:
+//   1. Evaluate const2 phase: pass through the const-const argument
+//   2. Chain into const1: add the const-const and const arguments
+//   3. Chain into const0: add the result to the runtime argument
+//
+// The caller `main` calls `compute(10, 20, 5)`, so:
+//   const2: returns 10
+//   const1: 10 + 20 = 30
+//   const0: 30 + 5 = 35
+
+// CHECK-LABEL: hir.func private @main.const0
+// CHECK-NEXT: %c35_int = mir.constant #mir.int<35>
+// CHECK-NEXT: mir.return %c35_int
+fn compute(const const a: int, const b: int, c: int) -> int { a + b + c }
+fn main() -> int { compute(10, 20, 5) }
