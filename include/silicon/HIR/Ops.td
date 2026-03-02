@@ -372,4 +372,100 @@ def UnifiedCallOp : HIROp<"unified_call", [
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// Split Functions and Phase Management
+//===----------------------------------------------------------------------===//
+
+def SignatureOp : HIROp<"signature", [
+  AttrSizedOperandSegments,
+  HasParent<"SplitFuncOp">,
+  Pure,
+  Terminator,
+]> {
+  let summary = "Terminator for the signature region of a split function";
+  let arguments = (ins
+    Variadic<AnyHIRType>:$typeOfArgs,
+    Variadic<AnyHIRType>:$typeOfResults
+  );
+  let assemblyFormat = [{
+    ` ` `(` $typeOfArgs `)` `->` `(` $typeOfResults `)` attr-dict
+  }];
+}
+
+def SplitFuncOp : HIROp<"split_func", [
+  IsolatedFromAbove,
+  Symbol,
+]> {
+  let summary = "Records how a unified function was split into per-phase functions";
+  let description = [{
+    A `hir.split_func` records the result of splitting a `hir.unified_func`
+    into separate per-phase functions. It preserves the original function's
+    signature (for library callers) and maps phase numbers to the generated
+    per-phase `hir.func` ops.
+  }];
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<StrAttr>:$sym_visibility,
+    ArrayAttr:$argNames,
+    DenseI32ArrayAttr:$argPhases,
+    ArrayAttr:$resultNames,
+    DenseI32ArrayAttr:$resultPhases,
+    DenseI32ArrayAttr:$phaseNumbers,
+    ArrayAttr:$phaseFuncs
+  );
+  let regions = (region MinSizedRegion<1>:$signature);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+  let hasRegionVerifier = 1;
+  let extraClassDeclaration = [{
+    SignatureOp getSignatureOp();
+  }];
+}
+
+def MultiphaseFuncOp : HIROp<"multiphase_func", [
+  Symbol,
+]> {
+  let summary = "A chain of sub-functions evaluated iteratively, one phase at a time";
+  let description = [{
+    A `hir.multiphase_func` represents a single phase of a split function that
+    itself spans multiple internal sub-phases. The sub-functions are evaluated
+    in order. Arguments are marked `first` or `last` to indicate whether they
+    are available from the first or last sub-phase.
+  }];
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<StrAttr>:$sym_visibility,
+    ArrayAttr:$argNames,
+    DenseBoolArrayAttr:$argIsFirst,
+    ArrayAttr:$resultNames,
+    ArrayAttr:$phaseFuncs
+  );
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Opaque Bundles
+//===----------------------------------------------------------------------===//
+
+def OpaqueTypeOp : HIROp<"opaque_type", [Pure]> {
+  let summary = "Type constructor for opaque bundles";
+  let results = (outs AnyHIRType:$result);
+  let assemblyFormat = "attr-dict";
+}
+
+def OpaquePackOp : HIROp<"opaque_pack", [Pure]> {
+  let summary = "Pack multiple values into a single opaque bundle";
+  let arguments = (ins Variadic<AnyHIRType>:$operands);
+  let results = (outs AnyHIRType:$result);
+  let assemblyFormat = [{ `(` $operands `)` attr-dict }];
+}
+
+def OpaqueUnpackOp : HIROp<"opaque_unpack", [Pure]> {
+  let summary = "Unpack an opaque bundle into individual values";
+  let arguments = (ins AnyHIRType:$input);
+  let results = (outs Variadic<AnyHIRType>:$results);
+  let assemblyFormat = [{ $input attr-dict `:` type($results) }];
+}
+
 #endif // SILICON_HIR_OPS_TD

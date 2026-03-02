@@ -179,3 +179,40 @@ hir.unified_func @foo [0] -> [0] attributes {argNames = ["a"]} {
 %int_type = hir.int_type
 // expected-error @below {{typeOfResults has 0 entries but call has 1 results}}
 %2 = hir.unified_call @foo(%arg) : (%int_type) -> () (!hir.any) -> !hir.any [0] -> [0]
+
+// -----
+
+// expected-error @below {{requires `hir.signature` terminator in the signature}}
+hir.split_func @bad_term() -> () {
+^bb0:
+  hir.const_br ^bb1
+^bb1:
+  hir.const_br ^bb1
+} [
+  0: @bad_term.0
+]
+
+// -----
+
+// expected-error @below {{signature has 1 argument types but function has 0 arguments}}
+hir.split_func @bad_sig_args() -> () {
+  %0 = hir.int_type
+  hir.signature (%0) -> ()
+} [
+  0: @bad_sig_args.0
+]
+
+// -----
+
+// expected-error @below {{signature has 1 result types but function has 0 results}}
+hir.split_func @bad_sig_results() -> () {
+  %0 = hir.int_type
+  hir.signature () -> (%0)
+} [
+  0: @bad_sig_results.0
+]
+
+// -----
+
+// expected-error @below {{phaseFuncs must have at least one entry}}
+hir.multiphase_func @empty_phases() -> (out) []
