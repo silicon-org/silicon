@@ -1,2 +1,1 @@
 - Replace `hir.binary` with dedicated ops like `hir.add`. Same for `mir.binary`.
-- `hir.split_func` should print argument names as SSA values and not have a `^bb0(...)` line, same as `hir.func` and `hir.multiphase_func`.

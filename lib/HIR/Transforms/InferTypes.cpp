@@ -102,10 +102,8 @@ void InferTypesPass::runOnOperation() {
     // Pick which one of the ops to keep.
     auto *keepOp = lhsOp;
     auto *eraseOp = rhsOp;
-    if (domInfo.properlyDominates(eraseOp, keepOp)) {
-      keepOp = inferrableRhs;
-      eraseOp = inferrableLhs;
-    }
+    if (domInfo.properlyDominates(eraseOp, keepOp))
+      std::swap(keepOp, eraseOp);
 
     // Ensure that all operands of the erased op dominate the op we keep, such
     // that we can introduce unification ops for the operands in front of the op
@@ -122,8 +120,11 @@ void InferTypesPass::runOnOperation() {
     OpBuilder builder(keepOp);
     for (auto [keepArg, eraseArg] :
          llvm::zip(keepOp->getOpOperands(), eraseOp->getOperands())) {
-      auto unified = UnifyOp::create(
-          builder, unifyOp.getLoc(), eraseArg.getType(), keepArg.get(), eraseArg);
+      if (keepArg.get() == eraseArg)
+        continue;
+      auto unified =
+          UnifyOp::create(builder, unifyOp.getLoc(), eraseArg.getType(),
+                          keepArg.get(), eraseArg);
       keepArg.set(unified);
       worklist.push_back(unified);
     }

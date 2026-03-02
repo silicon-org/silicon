@@ -233,19 +233,23 @@ ParseResult SplitFuncOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
   props.sym_name = nameAttr;
 
-  // Parse argument list: (name: phase, ...).
+  // Parse argument list: (%name: phase, ...).
+  auto anyType = AnyType::get(ctx);
+  SmallVector<OpAsmParser::Argument> args;
   SmallVector<Attribute> argNames;
   SmallVector<int32_t> argPhases;
   if (parser.parseLParen())
     return failure();
   if (failed(parser.parseOptionalRParen())) {
     do {
-      std::string name;
-      int32_t phase;
-      if (parser.parseKeywordOrString(&name) || parser.parseColon() ||
-          parser.parseInteger(phase))
+      auto &arg = args.emplace_back();
+      arg.type = anyType;
+      if (parser.parseArgument(arg) || parser.parseColon())
         return failure();
-      argNames.push_back(builder.getStringAttr(name));
+      int32_t phase;
+      if (parser.parseInteger(phase))
+        return failure();
+      argNames.push_back(builder.getStringAttr(arg.ssaName.name.drop_front()));
       argPhases.push_back(phase);
     } while (succeeded(parser.parseOptionalComma()));
     if (parser.parseRParen())
@@ -275,9 +279,9 @@ ParseResult SplitFuncOp::parse(OpAsmParser &parser, OperationState &result) {
   props.resultNames = builder.getArrayAttr(resultNames);
   props.resultPhases = builder.getDenseI32ArrayAttr(resultPhases);
 
-  // Parse signature region.
+  // Parse signature region with the inline arguments as entry block args.
   auto *region = result.addRegion();
-  if (parser.parseRegion(*region))
+  if (parser.parseRegion(*region, args))
     return failure();
 
   // Parse phase map: [phase: @sym, ...].
@@ -309,14 +313,17 @@ void SplitFuncOp::print(OpAsmPrinter &p) {
   printSymbolVisibility(p, *this, getSymVisibilityAttr());
   p.printSymbolName(getSymName());
 
-  // Print argument list.
+  // Print argument list with phases.
   p << '(';
-  auto argNames = getArgNames();
   auto argPhases = getArgPhases();
-  for (size_t i = 0, e = argNames.size(); i < e; ++i) {
-    if (i)
-      p << ", ";
-    p << cast<StringAttr>(argNames[i]).getValue() << ": " << argPhases[i];
+  if (!getSignature().empty()) {
+    auto args = getSignature().front().getArguments();
+    for (size_t i = 0, e = args.size(); i < e; ++i) {
+      if (i)
+        p << ", ";
+      p.printRegionArgument(args[i], {}, /*omitType=*/true);
+      p << ": " << argPhases[i];
+    }
   }
   p << ')';
 
@@ -331,8 +338,8 @@ void SplitFuncOp::print(OpAsmPrinter &p) {
   }
   p << ") ";
 
-  // Print signature region.
-  p.printRegion(getSignature());
+  // Print signature region without entry block arguments.
+  p.printRegion(getSignature(), /*printEntryBlockArgs=*/false);
 
   // Print phase map, one entry per line.
   p << " [";
@@ -392,6 +399,15 @@ LogicalResult SplitFuncOp::verifyRegions() {
 
 SignatureOp SplitFuncOp::getSignatureOp() {
   return cast<SignatureOp>(getSignature().back().getTerminator());
+}
+
+void SplitFuncOp::getAsmBlockArgumentNames(Region &region,
+                                           OpAsmSetValueNameFn setNameFn) {
+  if (&region != &getSignature() || region.empty())
+    return;
+  auto argNames = getArgNames();
+  for (auto [name, arg] : llvm::zip(argNames, region.front().getArguments()))
+    setNameFn(arg, cast<StringAttr>(name).getValue());
 }
 
 //===----------------------------------------------------------------------===//

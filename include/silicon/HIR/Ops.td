@@ -415,6 +415,7 @@ def SignatureOp : HIROp<"signature", [
 def SplitFuncOp : HIROp<"split_func", [
   IsolatedFromAbove,
   Symbol,
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
 ]> {
   let summary = "Records how a unified function was split into per-phase functions";
   let description = [{

@@ -17,7 +17,7 @@ func.func private @dummyB()
 // CHECK:      hir.return(%x) : ([[UNPACK]])
 
 // CHECK-NOT: hir.unified_func
-// CHECK-LABEL: hir.split_func @Identity(T: -1, x: 0) -> (result: 0)
+// CHECK-LABEL: hir.split_func @Identity(%T: -1, %x: 0) -> (result: 0)
 // CHECK:         hir.signature
 // CHECK:       -1: @Identity.const1
 // CHECK:       0: @Identity.const0
@@ -125,7 +125,7 @@ hir.unified_func @ValueUseAcrossPhases() -> () {
 // CHECK:      hir.return([[R]]) : ({{.*}})
 
 // CHECK-NOT: hir.unified_func
-// CHECK-LABEL: hir.split_func @ConstArg(a: -1, b: 0) -> (result: 0)
+// CHECK-LABEL: hir.split_func @ConstArg(%a: -1, %b: 0) -> (result: 0)
 // CHECK:         hir.signature
 // CHECK:       -1: @ConstArg.const1
 // CHECK:       0: @ConstArg.const0
@@ -164,7 +164,7 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      hir.return([[RES]]) : ({{.*}})
 
 // CHECK-NOT: hir.unified_func
-// CHECK-LABEL: hir.split_func @ThreePhase(a: -2, b: -1, c: 0) -> (result: 0)
+// CHECK-LABEL: hir.split_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0)
 // CHECK:         hir.signature
 // CHECK:       -2: @ThreePhase.const2
 // CHECK:       -1: @ThreePhase.const1
@@ -210,7 +210,7 @@ hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
 // CHECK: hir.return
 
 // CHECK-NOT: hir.unified_func
-// CHECK-LABEL: hir.split_func @ThreePhaseCaller(z: 0) -> (result: 0)
+// CHECK-LABEL: hir.split_func @ThreePhaseCaller(%z: 0) -> (result: 0)
 // CHECK:         hir.signature
 // CHECK:       -2: @ThreePhaseCaller.const2
 // CHECK:       -1: @ThreePhaseCaller.const1

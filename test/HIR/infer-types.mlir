@@ -117,6 +117,26 @@ func.func @InferIfDominates(%arg0: i1) {
   return
 }
 
+// CHECK-LABEL: func @UnifyConcreteOpsSwapped
+func.func @UnifyConcreteOpsSwapped() {
+  // The RHS (ref %1) dominates the LHS (ref %0), so the pass must swap
+  // keep/erase in the concrete-concrete case.
+  // CHECK-NEXT: [[INT:%.+]] = hir.int_type
+  // CHECK-NEXT: [[REF:%.+]] = hir.ref_type [[INT]]
+  // CHECK-NEXT: call @use_type([[REF]])
+  // CHECK-NEXT: call @use_type([[REF]])
+  // CHECK-NEXT: call @use_type([[REF]])
+  %0 = hir.int_type
+  %1 = hir.inferrable
+  %2 = hir.ref_type %1
+  %3 = hir.ref_type %0
+  %4 = hir.unify %3, %2
+  call @use_type(%2) : (!hir.any) -> ()
+  call @use_type(%3) : (!hir.any) -> ()
+  call @use_type(%4) : (!hir.any) -> ()
+  return
+}
+
 // CHECK-LABEL: func @InferConstantInt
 func.func @InferConstantInt() {
   // CHECK: [[TMP:%.+]] = hir.constant_int 42

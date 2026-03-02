@@ -79,8 +79,7 @@ hir.expr : !hir.any, !hir.any {
 }
 
 // split_func with args, results, signature, and phase map
-hir.split_func @SplitExample(a: -3, b: -1) -> (c: 0) {
-^bb0(%a_arg: !hir.any, %b_arg: !hir.any):
+hir.split_func @SplitExample(%a: -3, %b: -1) -> (c: 0) {
   %st0 = hir.int_type
   hir.signature (%st0, %st0) -> (%st0)
 } [
