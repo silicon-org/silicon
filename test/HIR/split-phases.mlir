@@ -10,6 +10,9 @@ func.func private @dummyB()
 // CHECK-NEXT: hir.return
 
 // CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @SinglePhase() -> ()
+// CHECK:         hir.signature () -> ()
+// CHECK:       0: @SinglePhase.const0
 hir.unified_func @SinglePhase [] -> [] attributes {argNames = []} {
   hir.unified_signature () -> ()
 } {
@@ -31,6 +34,10 @@ hir.unified_func @SinglePhase [] -> [] attributes {argNames = []} {
 // CHECK-NEXT: hir.return
 
 // CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @TwoUnrelatedPhases() -> ()
+// CHECK:         hir.signature () -> ()
+// CHECK:       -1: @TwoUnrelatedPhases.const1
+// CHECK:       0: @TwoUnrelatedPhases.const0
 hir.unified_func @TwoUnrelatedPhases [] -> [] attributes {argNames = []} {
   hir.unified_signature () -> ()
 } {
@@ -57,6 +64,10 @@ hir.unified_func @TwoUnrelatedPhases [] -> [] attributes {argNames = []} {
 // CHECK-NEXT: hir.return
 
 // CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @ValueUseAcrossPhases() -> ()
+// CHECK:         hir.signature () -> ()
+// CHECK:       -1: @ValueUseAcrossPhases.const1
+// CHECK:       0: @ValueUseAcrossPhases.const0
 hir.unified_func @ValueUseAcrossPhases [] -> [] attributes {argNames = []} {
   hir.unified_signature () -> ()
 } {
@@ -83,6 +94,10 @@ hir.unified_func @ValueUseAcrossPhases [] -> [] attributes {argNames = []} {
 // CHECK-NEXT: hir.return [[R]]
 
 // CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @ConstArg(a: -1, b: 0) -> (result: 0)
+// CHECK:         hir.signature
+// CHECK:       -1: @ConstArg.const1
+// CHECK:       0: @ConstArg.const0
 hir.unified_func @ConstArg [-1, 0] -> [0] attributes {argNames = ["a", "b"]} {
 ^bb0(%a: !hir.any, %b: !hir.any):
   %0 = hir.int_type
@@ -114,6 +129,14 @@ hir.unified_func @ConstArg [-1, 0] -> [0] attributes {argNames = ["a", "b"]} {
 // CHECK-NEXT: hir.return [[RES]]
 
 // CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @ThreePhase(a: -2, b: -1, c: 0) -> (result: 0)
+// CHECK:         hir.signature
+// CHECK:       -2: @ThreePhase.const2
+// CHECK:       -1: @ThreePhase.const1
+// CHECK:       0: @ThreePhase.const0
+// CHECK-LABEL: hir.multiphase_func @ThreePhase.const(first a, last b) -> (ctx)
+// CHECK:       @ThreePhase.const2
+// CHECK:       @ThreePhase.const1
 hir.unified_func @ThreePhase [-2, -1, 0] -> [0] attributes {argNames = ["a", "b", "c"]} {
 ^bb0(%a: !hir.any, %b: !hir.any, %c: !hir.any):
   %0 = hir.int_type
@@ -143,6 +166,14 @@ hir.unified_func @ThreePhase [-2, -1, 0] -> [0] attributes {argNames = ["a", "b"
 // CHECK: hir.return
 
 // CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @ThreePhaseCaller(z: 0) -> (result: 0)
+// CHECK:         hir.signature
+// CHECK:       -2: @ThreePhaseCaller.const2
+// CHECK:       -1: @ThreePhaseCaller.const1
+// CHECK:       0: @ThreePhaseCaller.const0
+// CHECK-LABEL: hir.multiphase_func @ThreePhaseCaller.const() -> (ctx)
+// CHECK:       @ThreePhaseCaller.const2
+// CHECK:       @ThreePhaseCaller.const1
 hir.unified_func @ThreePhaseCaller [0] -> [0] attributes {argNames = ["z"]} {
 ^bb0(%z: !hir.any):
   %0 = hir.int_type
