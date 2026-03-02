@@ -122,6 +122,9 @@ LogicalResult Interpreter::run() {
       for (auto [result, elem] :
            llvm::zip(unpackOp.getResults(), opaqueAttr.getElements()))
         frame.values[result] = elem;
+    } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
+      for (auto [result, attr] : llvm::zip(castOp.getResults(), operands))
+        frame.values[result] = attr;
     } else {
       return op->emitError() << "operation not supported by interpreter";
     }
@@ -191,7 +194,8 @@ void InterpretPass::runOnOperation() {
       interpreter.callStack.back().currentOp = &func.getBody().front().front();
       if (failed(interpreter.run()))
         return signalPassFailure();
-      // The body was rewritten; clear argNames to match the new block arg count.
+      // The body was rewritten; clear argNames to match the new block arg
+      // count.
       func.setArgNamesAttr(ArrayAttr::get(&getContext(), {}));
       changed = true;
     }
@@ -244,8 +248,7 @@ void InterpretPass::runOnOperation() {
                                            nextFunc.getArgNames().end());
         if (newArgNames.size() > numOwn)
           newArgNames.resize(numOwn);
-        nextFunc.setArgNamesAttr(
-            ArrayAttr::get(&getContext(), newArgNames));
+        nextFunc.setArgNamesAttr(ArrayAttr::get(&getContext(), newArgNames));
         changed = true;
       }
     }

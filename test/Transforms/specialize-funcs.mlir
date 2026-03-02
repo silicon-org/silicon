@@ -8,12 +8,11 @@ mir.constant #mir.specialized_func<@Simple, [!mir.int], [], [#mir.int<42>]>
 mir.constant #mir.specialized_func<@Simple, [!mir.int], [], [#mir.int<42>]>
 
 // CHECK-LABEL: hir.func @Simple
-// CHECK: hir.func [[SIMPLE_SPEC]](%arg0: !mir.int) -> ()
+// CHECK: hir.func [[SIMPLE_SPEC]](%arg0) -> ()
 hir.func @Simple(%arg0, %arg1) -> () {
-  // CHECK: [[ARG0:%.+]] = builtin.unrealized_conversion_cast %arg0 : !mir.int to !hir.any
-  // CHECK-NEXT: [[TMP:%.+]] = mir.constant #mir.int<42>
+  // CHECK: [[TMP:%.+]] = mir.constant #mir.int<42>
   // CHECK-NEXT: [[ARG1:%.+]] = builtin.unrealized_conversion_cast [[TMP]] : !mir.int to !hir.any
-  // CHECK-NEXT: func.call @use_value([[ARG0]]) : (!hir.any) -> ()
+  // CHECK-NEXT: func.call @use_value(%arg0) : (!hir.any) -> ()
   func.call @use_value(%arg0) : (!hir.any) -> ()
   // CHECK-NEXT: func.call @use_value([[ARG1]]) : (!hir.any) -> ()
   func.call @use_value(%arg1) : (!hir.any) -> ()

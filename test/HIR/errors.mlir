@@ -207,3 +207,11 @@ hir.split_func @bad_sig_results() -> () {
 
 // expected-error @below {{phaseFuncs must have at least one entry}}
 hir.multiphase_func @empty_phases() -> (out) []
+
+// -----
+
+// expected-error @below {{block argument must have type !hir.any, got '!mir.int'}}
+"hir.func"() ({
+^bb0(%arg0: !mir.int):
+  "mir.return"() : () -> ()
+}) {sym_name = "bad_block_arg_type", argNames = ["arg0"], resultNames = []} : () -> ()

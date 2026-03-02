@@ -90,17 +90,10 @@ hir::FuncOp SpecializeFuncsPass::specialize(hir::FuncOp originalFunc,
   builder.setInsertionPointAfter(originalFunc);
   auto func = cast<hir::FuncOp>(builder.clone(*originalFunc));
 
-  // Apply argument type specialization.
+  // Block args stay !hir.any; skip past the arg-typed arguments.
   auto &block = func.getBody().front();
   builder.setInsertionPointToStart(&block);
-  unsigned argIdx = 0;
-  for (auto type : spec.getArgs()) {
-    auto arg = block.getArgument(argIdx++);
-    auto castOp = UnrealizedConversionCastOp::create(
-        builder, arg.getLoc(), arg.getType(), ValueRange{arg});
-    arg.setType(type);
-    arg.replaceAllUsesExcept(castOp.getResult(0), castOp);
-  }
+  unsigned argIdx = spec.getArgs().size();
 
   // Materialize constant arguments.
   auto firstConstIdx = argIdx;

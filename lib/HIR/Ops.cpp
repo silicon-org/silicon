@@ -55,8 +55,8 @@ SuccessorOperands ConstCondBranchOp::getSuccessorOperands(unsigned index) {
 //   hir.func [visibility] @name(%arg, ...) -> (result, ...) { <body> }
 //
 // Argument names use `%` because they become SSA block arguments in the body
-// region. Each arg may optionally include a `: type` suffix; omitted types
-// default to `!hir.any`. Result names are bare identifiers.
+// region. All block args have type `!hir.any`. Result names are bare
+// identifiers.
 
 ParseResult FuncOp::parse(OpAsmParser &parser, OperationState &result) {
   auto &props = result.getOrAddProperties<FuncOp::Properties>();
@@ -88,15 +88,7 @@ ParseResult FuncOp::parse(OpAsmParser &parser, OperationState &result) {
       arg.type = anyType;
       if (parser.parseArgument(arg))
         return failure();
-      // Optional type annotation; defaults to !hir.any.
-      if (succeeded(parser.parseOptionalColon())) {
-        Type type;
-        if (parser.parseType(type))
-          return failure();
-        arg.type = type;
-      }
-      argNames.push_back(
-          builder.getStringAttr(arg.ssaName.name.drop_front()));
+      argNames.push_back(builder.getStringAttr(arg.ssaName.name.drop_front()));
     } while (succeeded(parser.parseOptionalComma()));
     if (parser.parseRParen())
       return failure();
@@ -136,16 +128,14 @@ void FuncOp::print(OpAsmPrinter &p) {
   printSymbolVisibility(p, *this, getSymVisibilityAttr());
   p.printSymbolName(getSymName());
 
-  // Print argument list. Omit the `: type` suffix when the type is !hir.any.
+  // Print argument list. All block args are !hir.any, so omit the type.
   p << '(';
   if (!getBody().empty()) {
-    auto anyType = AnyType::get(getContext());
     auto args = getBody().front().getArguments();
     for (size_t i = 0, e = args.size(); i < e; ++i) {
       if (i)
         p << ", ";
-      bool omitType = (args[i].getType() == anyType);
-      p.printRegionArgument(args[i], {}, omitType);
+      p.printRegionArgument(args[i], {}, /*omitType=*/true);
     }
   }
   p << ')';
@@ -162,9 +152,8 @@ void FuncOp::print(OpAsmPrinter &p) {
 
   // Print optional attributes, excluding properties we've already printed.
   p.printOptionalAttrDictWithKeyword(
-      (*this)->getAttrs(),
-      {getSymNameAttrName(), getSymVisibilityAttrName(),
-       getArgNamesAttrName(), getResultNamesAttrName()});
+      (*this)->getAttrs(), {getSymNameAttrName(), getSymVisibilityAttrName(),
+                            getArgNamesAttrName(), getResultNamesAttrName()});
 
   // Print body region without entry block arguments.
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
@@ -173,6 +162,13 @@ void FuncOp::print(OpAsmPrinter &p) {
 LogicalResult FuncOp::verify() {
   if (getBody().empty())
     return success();
+
+  // All block arguments must have type !hir.any.
+  auto anyType = AnyType::get(getContext());
+  for (auto arg : getBody().front().getArguments())
+    if (arg.getType() != anyType)
+      return emitOpError() << "block argument must have type !hir.any, got "
+                           << arg.getType();
 
   if (getArgNames().size() != getBody().front().getNumArguments())
     return emitOpError() << "argNames has " << getArgNames().size()
@@ -201,8 +197,7 @@ void FuncOp::getAsmBlockArgumentNames(Region &region,
   if (&region != &getBody() || region.empty())
     return;
   auto argNames = getArgNames();
-  for (auto [name, arg] :
-       llvm::zip(argNames, region.front().getArguments()))
+  for (auto [name, arg] : llvm::zip(argNames, region.front().getArguments()))
     setNameFn(arg, cast<StringAttr>(name).getValue());
 }
 
@@ -613,7 +608,8 @@ OpFoldResult UnifyOp::fold(FoldAdaptor adaptor) {
 // # Custom Parser for UnifiedFuncOp
 //
 // The assembly format is:
-//   hir.unified_func [visibility] @name(%arg: phase, ...) -> (result: phase, ...)
+//   hir.unified_func [visibility] @name(%arg: phase, ...) -> (result: phase,
+//   ...)
 //     { <signature> } { <body> }
 //
 // Argument names use `%` because they become SSA block arguments in both the
@@ -653,8 +649,7 @@ ParseResult UnifiedFuncOp::parse(OpAsmParser &parser, OperationState &result) {
       int32_t phase;
       if (parser.parseInteger(phase))
         return failure();
-      argNames.push_back(
-          builder.getStringAttr(arg.ssaName.name.drop_front()));
+      argNames.push_back(builder.getStringAttr(arg.ssaName.name.drop_front()));
       argPhases.push_back(phase);
     } while (succeeded(parser.parseOptionalComma()));
     if (parser.parseRParen())
@@ -732,9 +727,9 @@ void UnifiedFuncOp::print(OpAsmPrinter &p) {
   // Print optional attributes, excluding properties we've already printed.
   p.printOptionalAttrDictWithKeyword(
       (*this)->getAttrs(),
-      {getSymNameAttrName(), getSymVisibilityAttrName(),
-       getArgNamesAttrName(), getArgPhasesAttrName(),
-       getResultNamesAttrName(), getResultPhasesAttrName()});
+      {getSymNameAttrName(), getSymVisibilityAttrName(), getArgNamesAttrName(),
+       getArgPhasesAttrName(), getResultNamesAttrName(),
+       getResultPhasesAttrName()});
 
   // Print signature and body regions without entry block arguments.
   p.printRegion(getSignature(), /*printEntryBlockArgs=*/false);
@@ -787,8 +782,7 @@ void UnifiedFuncOp::getAsmBlockArgumentNames(Region &region,
   if ((&region != &getSignature() && &region != &getBody()) || region.empty())
     return;
   auto argNames = getArgNames();
-  for (auto [name, arg] :
-       llvm::zip(argNames, region.front().getArguments()))
+  for (auto [name, arg] : llvm::zip(argNames, region.front().getArguments()))
     setNameFn(arg, cast<StringAttr>(name).getValue());
 }
 

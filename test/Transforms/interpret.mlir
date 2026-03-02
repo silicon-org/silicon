@@ -34,9 +34,10 @@ hir.func private @Chain.const2() -> () {
 // CHECK-LABEL: hir.func private @Chain.const1
 // CHECK-NEXT: [[C52:%.+]] = mir.constant #mir.int<52>
 // CHECK-NEXT: mir.return [[C52]]
-hir.func private @Chain.const1(%ctx: !mir.int) -> () {
+hir.func private @Chain.const1(%ctx) -> () {
+  %ctx_mir = builtin.unrealized_conversion_cast %ctx : !hir.any to !mir.int
   %0 = mir.constant #mir.int<10> : !mir.int
-  %1 = mir.binary %ctx, %0 : !mir.int
+  %1 = mir.binary %ctx_mir, %0 : !mir.int
   mir.return %1 : !mir.int
 }
 
@@ -71,8 +72,9 @@ hir.func private @OpaqueChain.const2() -> () {
 // CHECK-LABEL: hir.func private @OpaqueChain.const1
 // CHECK-NEXT: [[C52:%.+]] = mir.constant #mir.int<52>
 // CHECK-NEXT: mir.return [[C52]]
-hir.func private @OpaqueChain.const1(%packed: !mir.opaque) -> () {
-  %0 = mir.opaque_unpack %packed : !mir.opaque -> !mir.int
+hir.func private @OpaqueChain.const1(%packed) -> () {
+  %packed_mir = builtin.unrealized_conversion_cast %packed : !hir.any to !mir.opaque
+  %0 = mir.opaque_unpack %packed_mir : !mir.opaque -> !mir.int
   %1 = mir.constant #mir.int<10> : !mir.int
   %2 = mir.binary %0, %1 : !mir.int
   mir.return %2 : !mir.int
