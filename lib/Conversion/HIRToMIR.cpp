@@ -91,6 +91,24 @@ static LogicalResult convert(hir::IntTypeOp op, hir::IntTypeOp::Adaptor adaptor,
   return success();
 }
 
+static LogicalResult convert(hir::UnitTypeOp op,
+                             hir::UnitTypeOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  auto type = mir::UnitType::get(op.getContext());
+  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
+static LogicalResult convert(hir::TypeTypeOp op,
+                             hir::TypeTypeOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  auto type = mir::TypeType::get(op.getContext());
+  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
 static LogicalResult convert(hir::UIntTypeOp op,
                              hir::UIntTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
@@ -319,6 +337,8 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::ConstantUnitOp>(convert);
   patterns.add<hir::ConstantFuncOp>(convert);
   patterns.add<hir::IntTypeOp>(convert);
+  patterns.add<hir::UnitTypeOp>(convert);
+  patterns.add<hir::TypeTypeOp>(convert);
   patterns.add<hir::UIntTypeOp>(convert);
   patterns.add<hir::AnyfuncTypeOp>(convert);
   patterns.add<hir::FuncTypeOp>(convert);

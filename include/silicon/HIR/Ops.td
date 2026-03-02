@@ -58,6 +58,12 @@ def IntTypeOp : HIROp<"int_type", [Pure]> {
   let assemblyFormat = "attr-dict";
 }
 
+def TypeTypeOp : HIROp<"type_type", [Pure]> {
+  let summary = "Construct the metatype 'Type'";
+  let results = (outs AnyHIRType:$result);
+  let assemblyFormat = "attr-dict";
+}
+
 def UIntTypeOp : HIROp<"uint_type", [Pure]> {
   let arguments = (ins AnyHIRType:$width);
   let results = (outs AnyHIRType:$result);

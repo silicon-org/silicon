@@ -3,6 +3,7 @@
 func.func @TypeConstructors(%value: !hir.any, %type: !hir.any) {
   hir.unit_type
   hir.int_type
+  hir.type_type
   hir.uint_type %value
   hir.anyfunc_type
   hir.ref_type %type

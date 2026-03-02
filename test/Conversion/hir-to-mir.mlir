@@ -5,6 +5,12 @@ hir.func @Types() -> () {
   // CHECK: mir.constant #mir.type<!mir.int>
   %int_type = hir.int_type
 
+  // CHECK: mir.constant #mir.type<!mir.unit>
+  %unit_type = hir.unit_type
+
+  // CHECK: mir.constant #mir.type<!mir.type>
+  %type_type = hir.type_type
+
   // CHECK: mir.constant #mir.int<42>
   // CHECK: mir.constant #mir.type<!mir.uint<42>>
   %c42_int = hir.constant_int 42

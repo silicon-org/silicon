@@ -40,6 +40,10 @@ static bool getAttrAbbrev(llvm::raw_ostream &os, Attribute attr) {
         os << 'c' << attr.getValue();
         return true;
       })
+      .Case<mir::UnitAttr>([&](auto attr) {
+        os << "unit";
+        return true;
+      })
       .Case<mir::TypeAttr>(
           [&](auto attr) { return getTypeAbbrev(os, attr.getValue()); })
       .Default([](auto) { return false; });

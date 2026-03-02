@@ -1,3 +1,2 @@
-- Enforce `hir.func` block args to be `!hir.any`. Some tests (e.g., `specialize-funcs.mlir`, `interpret.mlir`) currently use `!mir.*` types for `hir.func` block arguments. The verifier should reject this. If a value needs to transition from an HIR to an MIR type, a dedicated cast op should be used instead.
 - Replace `hir.binary` with dedicated ops like `hir.add`. Same for `mir.binary`.
-- Dependent types in signatures (type depends on argument value).
+- `hir.split_func` should print argument names as SSA values and not have a `^bb0(...)` line, same as `hir.func` and `hir.multiphase_func`.

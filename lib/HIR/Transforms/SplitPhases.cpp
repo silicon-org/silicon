@@ -136,6 +136,7 @@ struct PhaseSplit {
   FuncOp funcOp;
   int16_t phase;
   SmallVector<Value> returnValues;
+  SmallVector<Value> returnTypeOperands;
 };
 
 struct PhaseSplitter {
@@ -208,11 +209,14 @@ void PhaseSplitter::run() {
     splits[phase - minPhase].phase = phase;
   }
 
-  // Handle the return operation. Return values are added to phase 0's return
-  // values. The return op itself is erased since each phase will get its own.
+  // Handle the return operation. Return values and their type operands are
+  // added to phase 0's split. The return op itself is erased since each phase
+  // will get its own.
   auto returnOp = funcOp.getReturnOp();
   for (auto value : returnOp.getValues())
     splits[0 - minPhase].returnValues.push_back(value);
+  for (auto type : returnOp.getTypeOfValues())
+    splits[0 - minPhase].returnTypeOperands.push_back(type);
   returnOp.erase();
 
   // Move all operations to phase 0 initially.
@@ -249,10 +253,15 @@ void PhaseSplitter::run() {
 
     // Step 2: Replace all uses of old body block args with the origin-phase
     // values. Cross-phase value threading will handle forwarding to later
-    // phases as needed.
+    // phases as needed. Also update returnTypeOperands, which hold Value
+    // handles that replaceAllUsesWith won't touch.
     for (auto &[idx, ownArg] : replacements) {
       auto bodyArg = phase0Block.getArgument(idx);
       bodyArg.replaceAllUsesWith(ownArg);
+      for (auto &split : splits)
+        for (auto &typeOp : split.returnTypeOperands)
+          if (typeOp == bodyArg)
+            typeOp = ownArg;
     }
 
     // Erase old body block args in reverse order.
@@ -471,12 +480,18 @@ void PhaseSplitter::run() {
     auto &split = splits[phase - minPhase];
     closedFuncs.insert(split.funcOp);
 
-    // Add a return operation to this split. Extract or create type operands
-    // for each return value.
+    // Add a return operation to this split. Use preserved type operands for
+    // "own" return values (from the original unified return), and fall back to
+    // getOrCreateTypeOf for context values added later by cross-phase
+    // threading.
     builder.setInsertionPointToEnd(&split.funcOp.getBody().back());
     SmallVector<Value> returnTypes;
-    for (auto val : split.returnValues)
-      returnTypes.push_back(getOrCreateTypeOf(builder, funcOp.getLoc(), val));
+    for (auto [idx, val] : llvm::enumerate(split.returnValues)) {
+      if (idx < split.returnTypeOperands.size())
+        returnTypes.push_back(split.returnTypeOperands[idx]);
+      else
+        returnTypes.push_back(getOrCreateTypeOf(builder, funcOp.getLoc(), val));
+    }
     ReturnOp::create(builder, funcOp.getLoc(), split.returnValues, returnTypes);
 
     // Replace all uses of values from earlier phases with additional block
@@ -677,14 +692,13 @@ void PhaseSplitter::run() {
   }
 
   // Create the split_func.
-  auto splitFuncOp =
-      SplitFuncOp::create(sfBuilder, sfLoc, sfName,
-                          /*sym_visibility=*/StringAttr{}, sfArgNames,
-                          sfBuilder.getDenseI32ArrayAttr(sfArgPhases),
-                          sfResultNames,
-                          sfBuilder.getDenseI32ArrayAttr(sfResultPhases),
-                          sfBuilder.getDenseI32ArrayAttr(phaseNumbers),
-                          sfBuilder.getArrayAttr(phaseFuncAttrs));
+  auto splitFuncOp = SplitFuncOp::create(
+      sfBuilder, sfLoc, sfName,
+      /*sym_visibility=*/StringAttr{}, sfArgNames,
+      sfBuilder.getDenseI32ArrayAttr(sfArgPhases), sfResultNames,
+      sfBuilder.getDenseI32ArrayAttr(sfResultPhases),
+      sfBuilder.getDenseI32ArrayAttr(phaseNumbers),
+      sfBuilder.getArrayAttr(phaseFuncAttrs));
 
   // Move the unified func's signature region into the split_func and replace
   // the unified_signature terminator with a signature terminator.

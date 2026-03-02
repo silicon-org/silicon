@@ -4,6 +4,31 @@ func.func private @dummyA()
 func.func private @dummyB()
 
 //===----------------------------------------------------------------------===//
+// Dependent types: result type operand is a block argument (%T), not type_of.
+// After splitting, the phase-0 function should use the threaded %T value as
+// the return type operand, not fall back to hir.type_of.
+
+// CHECK-LABEL: hir.func private @Identity.const1(%T) -> (ctx)
+// CHECK:      [[PACK:%.+]] = hir.opaque_pack(%T)
+// CHECK:      hir.return([[PACK]]) : ({{.*}})
+
+// CHECK-LABEL: hir.func private @Identity.const0(%x, %ctx) -> (result)
+// CHECK:      [[UNPACK:%.+]] = hir.opaque_unpack %ctx
+// CHECK:      hir.return(%x) : ([[UNPACK]])
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @Identity(T: -1, x: 0) -> (result: 0)
+// CHECK:         hir.signature
+// CHECK:       -1: @Identity.const1
+// CHECK:       0: @Identity.const0
+hir.unified_func @Identity(%T: -1, %x: 0) -> (result: 0) {
+  %type_type = hir.type_type
+  hir.unified_signature (%type_type, %T) -> (%T)
+} {
+  hir.unified_return (%x) : (%T)
+}
+
+//===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: hir.func private @SinglePhase.const0() -> ()
 // CHECK-NEXT: func.call @dummyA

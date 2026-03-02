@@ -738,40 +738,49 @@ void UnifiedFuncOp::print(OpAsmPrinter &p) {
 }
 
 LogicalResult UnifiedFuncOp::verify() {
-  // Guard against a malformed signature region: verifyRegions() will report
-  // the missing terminator, so we just skip phase-count validation here.
-  auto sigOp =
-      dyn_cast<UnifiedSignatureOp>(getSignature().back().getTerminator());
-  if (!sigOp)
-    return success();
-
-  auto numArgs = sigOp.getTypeOfArgs().size();
-  auto numResults = sigOp.getTypeOfResults().size();
-
-  if (getArgPhases().size() != numArgs)
-    return emitOpError() << "argPhases has " << getArgPhases().size()
-                         << " entries but function has " << numArgs
-                         << " arguments";
+  // The function's argNames/argPhases and resultNames/resultPhases are
+  // authoritative. Everything else is checked against them.
+  auto numArgs = getArgPhases().size();
+  auto numResults = getResultPhases().size();
 
   if (getArgNames().size() != numArgs)
     return emitOpError() << "argNames has " << getArgNames().size()
                          << " entries but function has " << numArgs
                          << " arguments";
 
+  if (getResultNames().size() != numResults)
+    return emitOpError() << "resultNames has " << getResultNames().size()
+                         << " entries but function has " << numResults
+                         << " results";
+
+  // Check block arguments in both regions.
   if (getSignature().front().getNumArguments() != numArgs)
     return emitOpError() << "signature region has "
                          << getSignature().front().getNumArguments()
                          << " block arguments but function has " << numArgs
                          << " arguments";
 
-  if (getResultPhases().size() != numResults)
-    return emitOpError() << "resultPhases has " << getResultPhases().size()
-                         << " entries but function has " << numResults
-                         << " results";
+  if (getBody().front().getNumArguments() != numArgs)
+    return emitOpError() << "body region has "
+                         << getBody().front().getNumArguments()
+                         << " block arguments but function has " << numArgs
+                         << " arguments";
 
-  if (getResultNames().size() != numResults)
-    return emitOpError() << "resultNames has " << getResultNames().size()
-                         << " entries but function has " << numResults
+  // Check the signature terminator's operand counts against the function's
+  // declared arg/result counts.
+  auto sigOp =
+      dyn_cast<UnifiedSignatureOp>(getSignature().back().getTerminator());
+  if (!sigOp)
+    return success();
+
+  if (sigOp.getTypeOfArgs().size() != numArgs)
+    return emitOpError() << "signature has " << sigOp.getTypeOfArgs().size()
+                         << " argument types but function has " << numArgs
+                         << " arguments";
+
+  if (sigOp.getTypeOfResults().size() != numResults)
+    return emitOpError() << "signature has " << sigOp.getTypeOfResults().size()
+                         << " result types but function has " << numResults
                          << " results";
 
   return success();

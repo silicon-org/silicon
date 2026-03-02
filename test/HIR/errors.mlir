@@ -67,7 +67,7 @@ hir.unified_func @foo() -> () {
 
 // -----
 
-// expected-error @below {{argPhases has 2 entries but function has 1 arguments}}
+// expected-error @below {{signature has 1 argument types but function has 2 arguments}}
 hir.unified_func @foo(%a: 0, %b: -1) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
@@ -78,7 +78,7 @@ hir.unified_func @foo(%a: 0, %b: -1) -> (result: 0) {
 
 // -----
 
-// expected-error @below {{resultPhases has 2 entries but function has 1 results}}
+// expected-error @below {{signature has 1 result types but function has 2 results}}
 hir.unified_func @foo(%a: 0) -> (x: 0, y: -1) {
   %0 = hir.int_type
   %1 = hir.int_type

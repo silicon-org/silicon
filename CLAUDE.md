@@ -24,6 +24,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - When working on transformation passes, use `silicon-opt` and MLIR input files; these also make good lit tests later.
 - When working on the lexer, parser, AST, or syntax in general, use `silc`.
 - Add `--debug-only=<pass>` to `silicon-opt` to print all `LLVM_DEBUG(...)` lines in a pass.
+- When you fix a bug, add a lit test that triggers the bug first, to ensure we also commit a regression test alongside the fix.
 
 ## Conventions
 
