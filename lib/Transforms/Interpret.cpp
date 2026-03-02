@@ -10,6 +10,7 @@
 #include "silicon/MIR/Ops.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Transforms/Passes.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 
 using namespace mlir;
@@ -128,89 +129,53 @@ struct InterpretPass : public silicon::impl::InterpretPassBase<InterpretPass> {
 };
 } // namespace
 
-/// Parse a phase function name like "Foo.const2" into its base name ("Foo")
-/// and phase number (2). Returns std::nullopt if the name doesn't match the
-/// naming convention.
-static std::optional<std::pair<StringRef, unsigned>>
-parsePhaseFunc(StringRef name) {
-  auto dotPos = name.rfind('.');
-  if (dotPos == StringRef::npos)
-    return std::nullopt;
-  auto suffix = name.substr(dotPos + 1);
-  if (!suffix.starts_with("const"))
-    return std::nullopt;
-  unsigned phaseNum;
-  if (suffix.substr(5).getAsInteger(10, phaseNum))
-    return std::nullopt;
-  return std::make_pair(name.substr(0, dotPos), phaseNum);
+/// Check whether a function body has been fully evaluated, i.e., consists only
+/// of `mir.constant` and `mir.return` operations.
+static bool isFullyEvaluated(hir::FuncOp func) {
+  return llvm::all_of(func.getBody().front(), [](Operation &op) {
+    return isa<mir::ConstantOp, mir::ReturnOp>(op);
+  });
 }
+
+/// Collect the constant return values from a fully-evaluated function body.
+/// Returns an empty vector if any return operand is not a constant.
+static SmallVector<Attribute> collectReturnConstants(hir::FuncOp func) {
+  auto returnOp = cast<mir::ReturnOp>(func.getBody().front().getTerminator());
+  SmallVector<Attribute> result;
+  for (auto operand : returnOp.getOperands()) {
+    auto constOp = operand.getDefiningOp<mir::ConstantOp>();
+    if (!constOp)
+      return {};
+    result.push_back(constOp.getValue());
+  }
+  return result;
+}
+
+//===----------------------------------------------------------------------===//
+// InterpretPass
+//
+// Iteratively interprets zero-argument MIR-body functions, then uses
+// `hir.split_func` phase maps to chain evaluated results into the next
+// sub-function. For `hir.multiphase_func` ops, collapses them as their
+// sub-functions get evaluated. Repeats until no more progress is made.
+//===----------------------------------------------------------------------===//
 
 void InterpretPass::runOnOperation() {
   auto &symbolTable = getAnalysis<SymbolTable>();
 
-  // Iteratively interpret zero-arg functions and chain phase results into the
-  // next phase. This handles callers that were split into multiple phases by
-  // the unified_call decomposition in split-phases.
   bool changed = true;
   while (changed) {
     changed = false;
+
+    // Interpret zero-argument functions whose bodies contain MIR ops.
     for (auto func : getOperation().getOps<hir::FuncOp>()) {
       if (func.getBody().getNumArguments() > 0)
         continue;
-      // Only execute functions whose body contains MIR ops (already lowered).
       if (!func.getBody().front().getTerminator() ||
           !isa<mir::ReturnOp>(func.getBody().front().getTerminator()))
         continue;
-      // Skip already-evaluated functions (only constants and a return).
-      bool alreadyEvaluated = true;
-      for (auto &op : func.getBody().front()) {
-        if (!isa<mir::ConstantOp, mir::ReturnOp>(op)) {
-          alreadyEvaluated = false;
-          break;
-        }
-      }
-      if (alreadyEvaluated) {
-        // Chain constants into the next phase function if applicable.
-        auto parsed = parsePhaseFunc(func.getSymName());
-        if (!parsed || parsed->second == 0)
-          continue;
-        auto nextName =
-            (parsed->first + ".const" + Twine(parsed->second - 1)).str();
-        auto nextFunc = symbolTable.lookup<hir::FuncOp>(nextName);
-        if (!nextFunc)
-          continue;
-
-        // Collect materialized constant return values.
-        auto returnOp =
-            cast<mir::ReturnOp>(func.getBody().front().getTerminator());
-        if (returnOp.getNumOperands() != nextFunc.getBody().getNumArguments())
-          continue;
-
-        SmallVector<Attribute> returnConsts;
-        for (auto operand : returnOp.getOperands()) {
-          auto constOp = operand.getDefiningOp<mir::ConstantOp>();
-          if (!constOp)
-            break;
-          returnConsts.push_back(constOp.getValue());
-        }
-        if (returnConsts.size() != returnOp.getNumOperands())
-          continue;
-
-        // Replace the next phase's block args with materialized constants.
-        LLVM_DEBUG(llvm::dbgs() << "Chaining @" << func.getSymName() << " -> @"
-                                << nextName << "\n");
-        auto &nextBlock = nextFunc.getBody().front();
-        OpBuilder builder(&nextBlock, nextBlock.begin());
-        for (auto [arg, attr] :
-             llvm::zip(nextBlock.getArguments(), returnConsts)) {
-          auto constOp = mir::ConstantOp::create(builder, arg.getLoc(),
-                                                 cast<TypedAttr>(attr));
-          arg.replaceAllUsesWith(constOp);
-        }
-        nextBlock.eraseArguments(0, nextBlock.getNumArguments());
-        changed = true;
+      if (isFullyEvaluated(func))
         continue;
-      }
 
       LLVM_DEBUG(llvm::dbgs() << "Interpreting @" << func.getSymName() << "\n");
       Interpreter interpreter(symbolTable);
@@ -218,6 +183,105 @@ void InterpretPass::runOnOperation() {
       interpreter.callStack.back().currentOp = &func.getBody().front().front();
       if (failed(interpreter.run()))
         return signalPassFailure();
+      changed = true;
+    }
+
+    // Use split_func phase maps to chain evaluated results into the next
+    // sub-function. The phaseNumbers and phaseFuncs are parallel arrays stored
+    // in ascending phase order. When a phase's function is fully evaluated,
+    // materialize its return constants as the trailing block arguments of the
+    // next phase's function.
+    for (auto splitFunc : getOperation().getOps<hir::SplitFuncOp>()) {
+      auto phaseFuncs = splitFunc.getPhaseFuncs();
+      for (unsigned i = 0; i + 1 < phaseFuncs.size(); ++i) {
+        auto curSym = cast<FlatSymbolRefAttr>(phaseFuncs[i]);
+        auto curFunc = symbolTable.lookup<hir::FuncOp>(curSym.getValue());
+        if (!curFunc || curFunc.getBody().getNumArguments() > 0)
+          continue;
+        if (!isFullyEvaluated(curFunc))
+          continue;
+
+        auto returnConsts = collectReturnConstants(curFunc);
+        if (returnConsts.empty() &&
+            curFunc.getBody().front().getTerminator()->getNumOperands() > 0)
+          continue;
+
+        auto nextSym = cast<FlatSymbolRefAttr>(phaseFuncs[i + 1]);
+        auto nextFunc = symbolTable.lookup<hir::FuncOp>(nextSym.getValue());
+        if (!nextFunc)
+          continue;
+
+        // The chained values occupy the trailing block arguments. The leading
+        // arguments are the "own" arguments of the next sub-function.
+        unsigned numChained = returnConsts.size();
+        if (numChained > nextFunc.getBody().getNumArguments())
+          continue;
+        unsigned numOwn = nextFunc.getBody().getNumArguments() - numChained;
+
+        LLVM_DEBUG(llvm::dbgs()
+                   << "Chaining " << curSym << " -> " << nextSym << "\n");
+        auto &nextBlock = nextFunc.getBody().front();
+        OpBuilder builder(&nextBlock, nextBlock.begin());
+        for (unsigned j = 0; j < numChained; ++j) {
+          auto arg = nextBlock.getArgument(numOwn + j);
+          auto constOp = mir::ConstantOp::create(
+              builder, arg.getLoc(), cast<TypedAttr>(returnConsts[j]));
+          arg.replaceAllUsesWith(constOp);
+        }
+        nextBlock.eraseArguments(numOwn, numChained);
+        changed = true;
+      }
+    }
+
+    // Collapse multiphase_func ops whose sub-functions have all been evaluated.
+    // When the first sub-function is fully evaluated, remove it from the list.
+    // When only one sub-function remains, erase the multiphase_func entirely.
+    for (auto mpFunc : llvm::make_early_inc_range(
+             getOperation().getOps<hir::MultiphaseFuncOp>())) {
+      auto phaseFuncs = mpFunc.getPhaseFuncs();
+
+      // Count how many leading sub-functions have been fully evaluated.
+      unsigned numDone = 0;
+      for (auto sym : phaseFuncs) {
+        auto func = symbolTable.lookup<hir::FuncOp>(
+            cast<FlatSymbolRefAttr>(sym).getValue());
+        if (!func || !isFullyEvaluated(func))
+          break;
+        ++numDone;
+      }
+      if (numDone == 0)
+        continue;
+
+      // If all or all-but-one sub-functions are done, erase the op entirely.
+      if (phaseFuncs.size() - numDone <= 1) {
+        mpFunc.erase();
+      } else {
+        SmallVector<Attribute> newPhaseFuncs(phaseFuncs.begin() + numDone,
+                                             phaseFuncs.end());
+        auto *ctx = mpFunc.getContext();
+        mpFunc.setPhaseFuncsAttr(ArrayAttr::get(ctx, newPhaseFuncs));
+
+        // Remove args that were classified as "first" since they belonged to
+        // the now-evaluated sub-functions.
+        auto argIsFirst = mpFunc.getArgIsFirst();
+        SmallVector<StringRef> newArgNames;
+        SmallVector<bool> newArgIsFirst;
+        auto argNames = mpFunc.getArgNames();
+        for (unsigned k = 0; k < argNames.size(); ++k) {
+          if (!argIsFirst[k]) {
+            newArgNames.push_back(cast<StringAttr>(argNames[k]).getValue());
+            newArgIsFirst.push_back(false);
+          }
+        }
+        // The first remaining "last" arg becomes "first" in the new ordering.
+        if (!newArgIsFirst.empty())
+          newArgIsFirst[0] = true;
+        SmallVector<Attribute> nameAttrs;
+        for (auto n : newArgNames)
+          nameAttrs.push_back(StringAttr::get(ctx, n));
+        mpFunc.setArgNamesAttr(ArrayAttr::get(ctx, nameAttrs));
+        mpFunc.setArgIsFirstAttr(DenseBoolArrayAttr::get(ctx, newArgIsFirst));
+      }
       changed = true;
     }
   }
