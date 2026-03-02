@@ -1,8 +1,6 @@
-- Support results with different phases in the SplitPhases pass.
 - Add argument and result names to `hir.func`. These indicate how many arguments and results there are. Under the hood they all have MLIR type `!hir.any`. Use custom parser and printers if necessary to print these as outlined in CLAUDE.md.
 - Add argument and result names to `hir.unified_func`, which must match the corresponding number of phases. These should print as outlined in CLAUDE.md.
 - Replace `hir.binary` with dedicated ops like `hir.add`. Same for `mir.binary`.
-- Several call sites still use the deprecated `builder.create<Op>()` form instead of `Op::create(builder, ...)` (warnings emitted during compilation).
+- One remaining `builder.create<UnifyOp>()` in `lib/HIR/Transforms/InferTypes.cpp` should use `UnifyOp::create(builder, ...)`.
 - Dependent types in signatures (type depends on argument value).
-- Call chains: function A calls B which calls C, each with const args.
 - Add type operand to `hir.binary`, `hir.unified_return`, and `hir.return`. For the binary op, codegen should emit `unify(type_of(lhs), typeof(rhs))` as type for the binary op -- ideally using `createOrFold`, such that trivial type situations can immediately be resolved. The returns should just use `type_of` on the operands.

@@ -17,7 +17,7 @@ As a first phase of the project, we would like to develop a minimum viable examp
 
 ## Build, Test, and Project Layout
 
-See `docs/getting-started.md` for build commands, project layout, and where to start.
+See @docs/getting-started.md for build commands, project layout, and where to start.
 
 - Never touch the `build/` directory.
 - Never perform a clean rebuild, for example, through `ninja clean`.
