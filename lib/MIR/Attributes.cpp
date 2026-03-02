@@ -51,3 +51,9 @@ Type UnitAttr::getType() const { return UnitType::get(getContext()); }
 Type SpecializedFuncAttr::getType() const {
   return SpecializedFuncType::get(getContext());
 }
+
+//===----------------------------------------------------------------------===//
+// OpaqueAttr
+//===----------------------------------------------------------------------===//
+
+Type OpaqueAttr::getType() const { return OpaqueType::get(getContext()); }

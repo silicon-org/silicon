@@ -92,18 +92,18 @@ def CallOp : MIROp<"call"> {
 def MIROpaquePackOp : MIROp<"opaque_pack", [Pure]> {
   let summary = "Pack multiple values into a single opaque bundle";
   let arguments = (ins Variadic<AnyType>:$operands);
-  let results = (outs OpaqueType:$result);
+  let results = (outs AnyType:$result);
   let assemblyFormat = [{
-    `(` $operands `)` `:` `(` type($operands) `)` attr-dict
+    `(` $operands `)` `:` `(` type($operands) `)` `->` type($result) attr-dict
   }];
 }
 
 def MIROpaqueUnpackOp : MIROp<"opaque_unpack", [Pure]> {
   let summary = "Unpack an opaque bundle into individual values";
-  let arguments = (ins OpaqueType:$input);
+  let arguments = (ins AnyType:$input);
   let results = (outs Variadic<AnyType>:$results);
   let assemblyFormat = [{
-    $input `:` type($results) attr-dict
+    $input `:` type($input) `->` type($results) attr-dict
   }];
 }
 

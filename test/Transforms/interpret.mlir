@@ -55,3 +55,34 @@ hir.multiphase_func @Chain.const() -> (ctx) [
   @Chain.const2,
   @Chain.const1
 ]
+
+//===----------------------------------------------------------------------===//
+// Opaque-bundled chaining: same as above, but using mir.opaque_pack/unpack to
+// pass the context value as an opaque bundle between phases.
+
+// CHECK-LABEL: hir.func private @OpaqueChain.const2
+// CHECK-NEXT: [[PACKED:%.+]] = mir.constant #mir.opaque
+// CHECK-NEXT: mir.return [[PACKED]]
+hir.func private @OpaqueChain.const2 {
+  %0 = mir.constant #mir.int<42> : !mir.int
+  %1 = mir.opaque_pack(%0) : (!mir.int) -> !mir.opaque
+  mir.return %1 : !mir.opaque
+}
+
+// CHECK-LABEL: hir.func private @OpaqueChain.const1
+// CHECK-NEXT: [[C52:%.+]] = mir.constant #mir.int<52>
+// CHECK-NEXT: mir.return [[C52]]
+hir.func private @OpaqueChain.const1 {
+^bb0(%packed: !mir.opaque):
+  %0 = mir.opaque_unpack %packed : !mir.opaque -> !mir.int
+  %1 = mir.constant #mir.int<10> : !mir.int
+  %2 = mir.binary %0, %1 : !mir.int
+  mir.return %2 : !mir.int
+}
+
+hir.split_func @OpaqueChain() -> () {
+  hir.signature () -> ()
+} [
+  -2: @OpaqueChain.const2,
+  -1: @OpaqueChain.const1
+]
