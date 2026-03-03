@@ -905,7 +905,9 @@ Value hir::getTypeOf(Value value) {
     return {};
 
   return TypeSwitch<Operation *, Value>(result.getOwner())
-      .Case<BinaryOp>([](BinaryOp op) { return op.getResultType(); })
+      .Case<AddOp, SubOp, MulOp, DivOp, ModOp, AndOp, OrOp, XorOp, ShlOp, ShrOp,
+            EqOp, NeqOp, LtOp, GtOp, GeqOp, LeqOp>(
+          [](auto op) { return op.getResultType(); })
       .Case<CoerceTypeOp>([](CoerceTypeOp op) { return op.getTypeOperand(); })
       .Case<CallOp>([&](CallOp op) {
         return op.getTypeOfResults()[result.getResultNumber()];

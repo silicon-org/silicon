@@ -216,12 +216,46 @@ static LogicalResult convert(hir::CoerceTypeOp op,
   return success();
 }
 
-static LogicalResult convert(hir::BinaryOp op, hir::BinaryOp::Adaptor adaptor,
-                             ConversionPatternRewriter &rewriter) {
-  rewriter.replaceOpWithNewOp<mir::BinaryOp>(op, adaptor.getLhs(),
-                                             adaptor.getRhs());
-  return success();
-}
+// Arithmetic/bitwise HIR binary ops lower to the corresponding MIR ops by
+// discarding the type operand and forwarding the converted lhs/rhs operands.
+// Comparison ops additionally pass the result type explicitly since operand
+// and result types may differ in MIR (e.g. uint<1> for comparisons).
+
+#define CONVERT_BINARY_OP(HirOp, MirOp)                                        \
+  static LogicalResult convert(hir::HirOp op, hir::HirOp::Adaptor adaptor,     \
+                               ConversionPatternRewriter &rewriter) {          \
+    rewriter.replaceOpWithNewOp<mir::MirOp>(op, adaptor.getLhs(),              \
+                                            adaptor.getRhs());                 \
+    return success();                                                          \
+  }
+
+#define CONVERT_CMP_OP(HirOp, MirOp)                                           \
+  static LogicalResult convert(hir::HirOp op, hir::HirOp::Adaptor adaptor,     \
+                               ConversionPatternRewriter &rewriter) {          \
+    rewriter.replaceOpWithNewOp<mir::MirOp>(                                   \
+        op, adaptor.getLhs().getType(), adaptor.getLhs(), adaptor.getRhs());   \
+    return success();                                                          \
+  }
+
+CONVERT_BINARY_OP(AddOp, AddOp)
+CONVERT_BINARY_OP(SubOp, SubOp)
+CONVERT_BINARY_OP(MulOp, MulOp)
+CONVERT_BINARY_OP(DivOp, DivOp)
+CONVERT_BINARY_OP(ModOp, ModOp)
+CONVERT_BINARY_OP(AndOp, AndOp)
+CONVERT_BINARY_OP(OrOp, OrOp)
+CONVERT_BINARY_OP(XorOp, XorOp)
+CONVERT_BINARY_OP(ShlOp, ShlOp)
+CONVERT_BINARY_OP(ShrOp, ShrOp)
+CONVERT_CMP_OP(EqOp, EqOp)
+CONVERT_CMP_OP(NeqOp, NeqOp)
+CONVERT_CMP_OP(LtOp, LtOp)
+CONVERT_CMP_OP(GtOp, GtOp)
+CONVERT_CMP_OP(GeqOp, GeqOp)
+CONVERT_CMP_OP(LeqOp, LeqOp)
+
+#undef CONVERT_BINARY_OP
+#undef CONVERT_CMP_OP
 
 static LogicalResult convert(hir::SpecializeFuncOp op,
                              hir::SpecializeFuncOp::Adaptor adaptor,
@@ -357,7 +391,22 @@ void HIRToMIRPass::runOnOperation() {
     patterns.add<hir::TypeOfOp>(convert);
     patterns.add<hir::UnifyOp>(convert);
     patterns.add<hir::CoerceTypeOp>(convert);
-    patterns.add<hir::BinaryOp>(convert);
+    patterns.add<hir::AddOp>(convert);
+    patterns.add<hir::SubOp>(convert);
+    patterns.add<hir::MulOp>(convert);
+    patterns.add<hir::DivOp>(convert);
+    patterns.add<hir::ModOp>(convert);
+    patterns.add<hir::AndOp>(convert);
+    patterns.add<hir::OrOp>(convert);
+    patterns.add<hir::XorOp>(convert);
+    patterns.add<hir::ShlOp>(convert);
+    patterns.add<hir::ShrOp>(convert);
+    patterns.add<hir::EqOp>(convert);
+    patterns.add<hir::NeqOp>(convert);
+    patterns.add<hir::LtOp>(convert);
+    patterns.add<hir::GtOp>(convert);
+    patterns.add<hir::GeqOp>(convert);
+    patterns.add<hir::LeqOp>(convert);
     patterns.add<hir::SpecializeFuncOp>(convert);
     patterns.add<hir::ReturnOp>(convert);
     patterns.add<hir::CallOp>(convert);

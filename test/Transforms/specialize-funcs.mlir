@@ -9,8 +9,8 @@ mir.constant #mir.specialized_func<@Simple, [!mir.int], [], [#mir.int<42>]>
 // CHECK: mir.func [[SIMPLE_SPEC]](%arg0: !mir.int) -> (result: !mir.int)
 mir.func @Simple(%arg0: !mir.int, %arg1: !mir.int) -> (result: !mir.int) {
   // CHECK: [[TMP:%.+]] = mir.constant #mir.int<42>
-  // CHECK-NEXT: [[RESULT:%.+]] = mir.binary %arg0, [[TMP]]
-  %0 = mir.binary %arg0, %arg1 : !mir.int
+  // CHECK-NEXT: [[RESULT:%.+]] = mir.add %arg0, [[TMP]]
+  %0 = mir.add %arg0, %arg1 : !mir.int
   // CHECK-NEXT: mir.return [[RESULT]]
   mir.return %0 : !mir.int
 }

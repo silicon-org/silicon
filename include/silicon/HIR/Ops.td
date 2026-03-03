@@ -155,11 +155,34 @@ def InferrableOp : HIROp<"inferrable", []> {
   let assemblyFormat = "attr-dict";
 }
 
-def BinaryOp : HIROp<"binary", [Pure]> {
+class HIRBinaryOp<string mnemonic>
+    : HIROp<mnemonic, [Pure]> {
   let arguments = (ins AnyHIRType:$lhs, AnyHIRType:$rhs, AnyHIRType:$resultType);
   let results = (outs AnyHIRType:$result);
   let assemblyFormat = "$lhs `,` $rhs `:` $resultType attr-dict";
 }
+
+// Arithmetic
+def AddOp : HIRBinaryOp<"add">;
+def SubOp : HIRBinaryOp<"sub">;
+def MulOp : HIRBinaryOp<"mul">;
+def DivOp : HIRBinaryOp<"div">;
+def ModOp : HIRBinaryOp<"mod">;
+
+// Bitwise
+def AndOp : HIRBinaryOp<"and">;
+def OrOp  : HIRBinaryOp<"or">;
+def XorOp : HIRBinaryOp<"xor">;
+def ShlOp : HIRBinaryOp<"shl">;
+def ShrOp : HIRBinaryOp<"shr">;
+
+// Comparison
+def EqOp  : HIRBinaryOp<"eq">;
+def NeqOp : HIRBinaryOp<"neq">;
+def LtOp  : HIRBinaryOp<"lt">;
+def GtOp  : HIRBinaryOp<"gt">;
+def GeqOp : HIRBinaryOp<"geq">;
+def LeqOp : HIRBinaryOp<"leq">;
 
 def LetOp : HIROp<"let", []> {
   let arguments = (ins StrAttr:$name, AnyHIRType:$type);

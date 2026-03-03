@@ -88,7 +88,7 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
       .getResult(0);
 }
 
-/// Handle binary expressions.
+/// Handle binary expressions by dispatching to the appropriate HIR op.
 static Value convert(ast::BinaryExpr &expr, Context &cx) {
   auto lhs = cx.convertExpr(*expr.lhs);
   if (!lhs)
@@ -100,7 +100,43 @@ static Value convert(ast::BinaryExpr &expr, Context &cx) {
   auto rhsType = hir::getOrCreateTypeOf(cx.builder, expr.loc, rhs);
   Value resultType = cx.builder.createOrFold<hir::UnifyOp>(
       expr.loc, hir::AnyType::get(cx.module.getContext()), lhsType, rhsType);
-  return hir::BinaryOp::create(cx.builder, expr.loc, lhs, rhs, resultType);
+
+  auto loc = expr.loc;
+  switch (expr.op) {
+  case ast::BinaryOp::Add:
+    return hir::AddOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Sub:
+    return hir::SubOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Mul:
+    return hir::MulOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Div:
+    return hir::DivOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Mod:
+    return hir::ModOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::And:
+    return hir::AndOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Or:
+    return hir::OrOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Xor:
+    return hir::XorOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Shl:
+    return hir::ShlOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Shr:
+    return hir::ShrOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Eq:
+    return hir::EqOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Neq:
+    return hir::NeqOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Lt:
+    return hir::LtOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Gt:
+    return hir::GtOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Geq:
+    return hir::GeqOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Leq:
+    return hir::LeqOp::create(cx.builder, loc, lhs, rhs, resultType);
+  }
+  llvm_unreachable("unhandled binary op kind");
 }
 
 /// Handle block expressions.

@@ -9,11 +9,11 @@ hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
   %ta = hir.type_of %a
   %tb = hir.type_of %b
   %t0 = hir.unify %ta, %tb
-  %0 = hir.binary %a, %b : %t0
+  %0 = hir.add %a, %b : %t0
   %t0b = hir.type_of %0
   %tc = hir.type_of %c
   %t1 = hir.unify %t0b, %tc
-  %1 = hir.binary %0, %c : %t1
+  %1 = hir.add %0, %c : %t1
   %t1b = hir.type_of %1
   hir.unified_return (%1) : (%t1b)
 }

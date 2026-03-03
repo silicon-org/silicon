@@ -36,7 +36,7 @@ mir.func private @Chain.const2() -> (result: !mir.int) {
 // CHECK-NEXT: mir.return [[C52]]
 mir.func private @Chain.const1(%ctx: !mir.int) -> (result: !mir.int) {
   %0 = mir.constant #mir.int<10> : !mir.int
-  %1 = mir.binary %ctx, %0 : !mir.int
+  %1 = mir.add %ctx, %0 : !mir.int
   mir.return %1 : !mir.int
 }
 
@@ -74,7 +74,7 @@ mir.func private @OpaqueChain.const2() -> (result: !mir.opaque) {
 mir.func private @OpaqueChain.const1(%packed: !mir.opaque) -> (result: !mir.int) {
   %0 = mir.opaque_unpack %packed : !mir.opaque -> !mir.int
   %1 = mir.constant #mir.int<10> : !mir.int
-  %2 = mir.binary %0, %1 : !mir.int
+  %2 = mir.add %0, %1 : !mir.int
   mir.return %2 : !mir.int
 }
 

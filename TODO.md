@@ -1,1 +1,0 @@
-- Replace `hir.binary` with dedicated ops like `hir.add`. Same for `mir.binary`.

@@ -58,14 +58,41 @@ def SpecializeFuncOp : MIROp<"specialize_func", [
   }];
 }
 
-def BinaryOp : MIROp<"binary", [
-  Pure,
-  SameOperandsAndResultType,
-]> {
+class MIRBinaryOp<string mnemonic>
+    : MIROp<mnemonic, [Pure, SameOperandsAndResultType]> {
   let arguments = (ins AnyType:$lhs, AnyType:$rhs);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
 }
+
+class MIRCmpOp<string mnemonic>
+    : MIROp<mnemonic, [Pure, SameTypeOperands]> {
+  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
+}
+
+// Arithmetic
+def AddOp : MIRBinaryOp<"add">;
+def SubOp : MIRBinaryOp<"sub">;
+def MulOp : MIRBinaryOp<"mul">;
+def DivOp : MIRBinaryOp<"div">;
+def ModOp : MIRBinaryOp<"mod">;
+
+// Bitwise
+def AndOp : MIRBinaryOp<"and">;
+def OrOp  : MIRBinaryOp<"or">;
+def XorOp : MIRBinaryOp<"xor">;
+def ShlOp : MIRBinaryOp<"shl">;
+def ShrOp : MIRBinaryOp<"shr">;
+
+// Comparison
+def EqOp  : MIRCmpOp<"eq">;
+def NeqOp : MIRCmpOp<"neq">;
+def LtOp  : MIRCmpOp<"lt">;
+def GtOp  : MIRCmpOp<"gt">;
+def GeqOp : MIRCmpOp<"geq">;
+def LeqOp : MIRCmpOp<"leq">;
 
 def FuncOp : MIROp<"func", [
   IsolatedFromAbove,

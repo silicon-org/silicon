@@ -102,14 +102,49 @@ LogicalResult Interpreter::run() {
     // Handle all other operations.
     if (auto constOp = dyn_cast<mir::ConstantOp>(op)) {
       frame.values[constOp] = constOp.getValue();
-    } else if (auto binaryOp = dyn_cast<mir::BinaryOp>(op)) {
-      // For now, interpret binary ops on integers as addition.
-      // TODO: Add binary op kind tracking and handle all ops properly.
-      auto lhs = cast<mir::IntAttr>(operands[0]);
-      auto rhs = cast<mir::IntAttr>(operands[1]);
-      auto result =
-          mir::IntAttr::get(op->getContext(), lhs.getValue() + rhs.getValue());
-      frame.values[binaryOp] = result;
+    } else if (isa<mir::AddOp, mir::SubOp, mir::MulOp, mir::DivOp, mir::ModOp,
+                   mir::AndOp, mir::OrOp, mir::XorOp, mir::ShlOp, mir::ShrOp,
+                   mir::EqOp, mir::NeqOp, mir::LtOp, mir::GtOp, mir::GeqOp,
+                   mir::LeqOp>(op)) {
+      auto lhs = cast<mir::IntAttr>(operands[0]).getValue();
+      auto rhs = cast<mir::IntAttr>(operands[1]).getValue();
+      DynamicAPInt value;
+      if (isa<mir::AddOp>(op))
+        value = lhs + rhs;
+      else if (isa<mir::SubOp>(op))
+        value = lhs - rhs;
+      else if (isa<mir::MulOp>(op))
+        value = lhs * rhs;
+      else if (isa<mir::DivOp>(op))
+        value = lhs / rhs;
+      else if (isa<mir::ModOp>(op))
+        value = lhs % rhs;
+      // Bitwise and shift ops use int64_t since DynamicAPInt does not
+      // support these operations directly.
+      else if (isa<mir::AndOp>(op))
+        value = DynamicAPInt(int64_t(lhs) & int64_t(rhs));
+      else if (isa<mir::OrOp>(op))
+        value = DynamicAPInt(int64_t(lhs) | int64_t(rhs));
+      else if (isa<mir::XorOp>(op))
+        value = DynamicAPInt(int64_t(lhs) ^ int64_t(rhs));
+      else if (isa<mir::ShlOp>(op))
+        value = DynamicAPInt(int64_t(lhs) << int64_t(rhs));
+      else if (isa<mir::ShrOp>(op))
+        value = DynamicAPInt(int64_t(lhs) >> int64_t(rhs));
+      else if (isa<mir::EqOp>(op))
+        value = DynamicAPInt(lhs == rhs ? 1 : 0);
+      else if (isa<mir::NeqOp>(op))
+        value = DynamicAPInt(lhs != rhs ? 1 : 0);
+      else if (isa<mir::LtOp>(op))
+        value = DynamicAPInt(lhs < rhs ? 1 : 0);
+      else if (isa<mir::GtOp>(op))
+        value = DynamicAPInt(lhs > rhs ? 1 : 0);
+      else if (isa<mir::GeqOp>(op))
+        value = DynamicAPInt(lhs >= rhs ? 1 : 0);
+      else if (isa<mir::LeqOp>(op))
+        value = DynamicAPInt(lhs <= rhs ? 1 : 0);
+      frame.values[op->getResult(0)] =
+          mir::IntAttr::get(op->getContext(), value);
     } else if (auto specializeFuncOp = dyn_cast<mir::SpecializeFuncOp>(op)) {
       auto attr = specializeFuncOp.interpret(
           mir::SpecializeFuncOp::FoldAdaptor(operands, specializeFuncOp));

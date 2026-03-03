@@ -985,7 +985,7 @@ Each specialization has the const argument baked in as a constant:
 ```mlir
 mir.func @leaf.1.d42(%e: !mir.int) {
   %d = mir.constant 42 : !mir.int
-  %0 = mir.binary add %d, %e : !mir.int
+  %0 = mir.add %d, %e : !mir.int
   mir.call @print(%0) : (!mir.int) -> ()
   mir.return
 }
@@ -1009,7 +1009,7 @@ mir.func @middle.1.b0(%c: !mir.int) {
 
 mir.func @leaf.1.d42(%e: !mir.int) {
   %d = mir.constant 42 : !mir.int
-  %0 = mir.binary add %d, %e : !mir.int
+  %0 = mir.add %d, %e : !mir.int
   mir.call @print(%0) : (!mir.int) -> ()
   mir.return
 }

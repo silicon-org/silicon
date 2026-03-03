@@ -23,7 +23,7 @@ func.func @Foo(%arg0: !hir.any, %arg1: !hir.any, %arg2: !hir.any, %arg3: i1) {
   hir.constant_unit
   hir.inferrable
   hir.unify %arg0, %arg1
-  hir.binary %arg0, %arg1 : %arg2
+  hir.add %arg0, %arg1 : %arg2
   hir.let "x" : %arg0
   hir.store %arg0, %arg1 : %arg2
   hir.const_br ^bb1(%arg0 : !hir.any)

@@ -47,7 +47,7 @@ To be expanded into a proper design document later.
 - Block argument types are resolved from `unrealized_conversion_cast` ops (HIR→MIR direction); result types come from `mir.return` operands.
 - `hir.inferrable`, `hir.type_of`, `hir.unify` are all lowered to dummy `mir.constant #mir.type<!hir.any>` — by this point they should have been resolved, so only dead metadata remains.
 - `hir.coerce_type` is erased; the input value passes through directly.
-- Type operands on `hir.binary`, `hir.call`, etc. are consumed to determine the materialized MIR types and then discarded.
+- Type operands on `hir.add` (and other binary ops), `hir.call`, etc. are consumed to determine the materialized MIR types and then discarded.
 - The lowering requires type operands to be `ConstantLike` ops so they can be folded into MIR attributes.
 
 ### Phased Evaluation Pipeline (design doc, `phase-splits.md` step 1–2)
@@ -122,7 +122,7 @@ To be expanded into a proper design document later.
 ### No trait / interface constraints
 
 - No way to express that a type must implement a particular interface (e.g., `Add`, `Eq`).
-- Currently `hir.binary` takes a generic binary kind attribute but has no mechanism to check that the operand types support that operation.
+- Each dedicated binary op (`hir.add`, `hir.eq`, etc.) does not yet check that the operand types support that operation.
 
 ## Design Questions
 
@@ -166,10 +166,10 @@ To be expanded into a proper design document later.
 - The result is used as the "resolved" type, but the semantics of which operand "wins" is left to the InferTypes pass.
 - Should the unify op be purely a side-effect constraint (no result), or is having a result important for the IR structure?
 
-### Replacing `hir.binary` with dedicated ops
+### Per-op type rules for dedicated binary ops
 
-- TODO.md mentions replacing `hir.binary` with dedicated `hir.add`, `hir.sub`, etc.
-- This affects inference because each dedicated op could have different type rules (e.g., `hir.add` could widen, `hir.concat` doesn't unify its operand types).
+- `hir.binary` has been replaced with dedicated ops (`hir.add`, `hir.sub`, `hir.eq`, etc.).
+- Each dedicated op could have different type rules (e.g., `hir.add` could widen, `hir.concat` doesn't unify its operand types).
 - The current "unify both operand types" strategy in codegen would need per-op type rules.
 
 ### Value-dependent unification

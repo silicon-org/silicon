@@ -3,7 +3,7 @@ hir.func @foo {
   %1 = hir.const_wrap %0 : !hir.type
   %2 = hir.arg "x" : %1 : !hir.const<!hir.type> -> !hir.const<!hir.value>
   %3 = hir.constant_int 1 -> !hir.value
-  %4 = hir.binary %2, %3 : !hir.const<!hir.value>
+  %4 = hir.add %2, %3 : !hir.const<!hir.value>
   %5 = hir.uint_type %4 : (!hir.const<!hir.value>) -> !hir.type
   %6 = hir.arg "y" : %5 : !hir.type -> !hir.value
   hir.args %2, %6
@@ -82,7 +82,7 @@ func @bar {
 hir.func @bar {
 ^bb0(%arg0: !mir.int):
   %0 = mir.constant_int 1379 : !mir.int
-  %1 = mir.binary %0, %arg0 : !mir.int
+  %1 = mir.add %0, %arg0 : !mir.int
   mir.dump_int %1 : !mir.int
   hir.return
 }

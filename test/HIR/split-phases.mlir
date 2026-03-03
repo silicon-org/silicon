@@ -84,7 +84,7 @@ hir.unified_func @TwoUnrelatedPhases() -> () {
 // CHECK: [[C42:%.+]] = hir.constant_int 42
 // CHECK: [[TMP:%.+]] = hir.expr
 // CHECK:   hir.constant_int 1337
-// CHECK: hir.binary [[C42]], [[TMP]] :
+// CHECK: hir.add [[C42]], [[TMP]] :
 // CHECK: hir.return
 
 // CHECK-LABEL: hir.func private @ValueUseAcrossPhases.const0() -> ()
@@ -106,7 +106,7 @@ hir.unified_func @ValueUseAcrossPhases() -> () {
   %t0 = hir.type_of %0
   %t1 = hir.type_of %1
   %t = hir.unify %t0, %t1
-  %2 = hir.binary %0, %1 : %t
+  %2 = hir.add %0, %1 : %t
   hir.unified_return
 }
 
@@ -121,7 +121,7 @@ hir.unified_func @ValueUseAcrossPhases() -> () {
 
 // CHECK-LABEL: hir.func private @ConstArg.const0(%b, %ctx) -> (result)
 // CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
-// CHECK:      [[R:%.+]] = hir.binary {{.*}}, %b :
+// CHECK:      [[R:%.+]] = hir.add {{.*}}, %b :
 // CHECK:      hir.return([[R]]) : ({{.*}})
 
 // CHECK-NOT: hir.unified_func
@@ -138,7 +138,7 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
   %ta = hir.type_of %a
   %tb = hir.type_of %b
   %t = hir.unify %ta, %tb
-  %0 = hir.binary %a, %b : %t
+  %0 = hir.add %a, %b : %t
   %t0 = hir.type_of %0
   hir.unified_return (%0) : (%t0)
 }
@@ -154,13 +154,13 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
 
 // CHECK-LABEL: hir.func private @ThreePhase.const1(%b, %ctx) -> (ctx)
 // CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
-// CHECK:      [[TMP:%.+]] = hir.binary {{.*}}, %b :
+// CHECK:      [[TMP:%.+]] = hir.add {{.*}}, %b :
 // CHECK:      [[PACK:%.+]] = hir.opaque_pack({{.*}}, [[TMP]])
 // CHECK:      hir.return([[PACK]]) : ({{.*}})
 
 // CHECK-LABEL: hir.func private @ThreePhase.const0(%c, %ctx) -> (result)
 // CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
-// CHECK:      [[RES:%.+]] = hir.binary {{.*}}, %c :
+// CHECK:      [[RES:%.+]] = hir.add {{.*}}, %c :
 // CHECK:      hir.return([[RES]]) : ({{.*}})
 
 // CHECK-NOT: hir.unified_func
@@ -179,11 +179,11 @@ hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
   %ta = hir.type_of %a
   %tb = hir.type_of %b
   %t0 = hir.unify %ta, %tb
-  %0 = hir.binary %a, %b : %t0
+  %0 = hir.add %a, %b : %t0
   %t0b = hir.type_of %0
   %tc = hir.type_of %c
   %t1 = hir.unify %t0b, %tc
-  %1 = hir.binary %0, %c : %t1
+  %1 = hir.add %0, %c : %t1
   %t1b = hir.type_of %1
   hir.unified_return (%1) : (%t1b)
 }
