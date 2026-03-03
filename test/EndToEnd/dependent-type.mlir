@@ -5,7 +5,7 @@
 // resolves the result type to !mir.int through the full pipeline:
 //   check-calls → infer-types → split-phases → phase-eval-loop
 
-// CHECK-LABEL: hir.func private @main.const0() -> (r0, r1)
+// CHECK-LABEL: mir.func private @main.const0() -> (r0: !mir.int, r1: !mir.unit)
 // CHECK-NEXT:    %c42_int = mir.constant #mir.int<42> : !mir.int
 // CHECK-NEXT:    %unit = mir.constant #mir.unit : !mir.unit
 // CHECK-NEXT:    mir.return %c42_int, %unit : !mir.int, !mir.unit

@@ -11,7 +11,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def HIRToMIRPass : Pass<"lower-hir-to-mir", "hir::FuncOp"> {
+def HIRToMIRPass : Pass<"lower-hir-to-mir", "mlir::ModuleOp"> {
   let dependentDialects = ["mir::MIRDialect"];
 }
 

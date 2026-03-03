@@ -8,6 +8,7 @@
 
 #include "silicon/Conversion/Passes.h"
 #include "silicon/HIR/Ops.h"
+#include "silicon/MIR/Ops.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
@@ -50,28 +51,17 @@ void PhaseEvalLoopPass::runOnOperation() {
       return WalkResult::interrupt();
     });
 
-    // Also check if any hir::FuncOp has HIR ops that need lowering (for the
-    // first iteration and after SpecializeFuncs creates new funcs).
-    bool hasHIROps = false;
-    for (auto func : getOperation().getOps<hir::FuncOp>()) {
-      for (auto &op : func.getBody().front()) {
-        if (isa<hir::HIRDialect>(op.getDialect())) {
-          hasHIROps = true;
-          break;
-        }
-      }
-      if (hasHIROps)
-        break;
-    }
+    // Also check if any hir::FuncOp ops remain (need HIR-to-MIR lowering).
+    bool hasHIRFuncs = !getOperation().getOps<hir::FuncOp>().empty();
 
-    if (!hasMultiphase && !hasHIROps)
+    if (!hasMultiphase && !hasHIRFuncs)
       break;
 
     LLVM_DEBUG(llvm::dbgs() << "Phase eval loop iteration " << i << "\n");
 
     // Build and run the sub-pipeline.
     OpPassManager subPipeline("builtin.module");
-    subPipeline.addNestedPass<hir::FuncOp>(createHIRToMIRPass());
+    subPipeline.addPass(createHIRToMIRPass());
     auto &anyPM = subPipeline.nestAny();
     anyPM.addPass(mlir::createCanonicalizerPass());
     anyPM.addPass(mlir::createCSEPass());

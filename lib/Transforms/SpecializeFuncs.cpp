@@ -28,14 +28,14 @@ namespace {
 struct SpecializeFuncsPass
     : public silicon::impl::SpecializeFuncsPassBase<SpecializeFuncsPass> {
   void runOnOperation() override;
-  hir::FuncOp specialize(hir::FuncOp originalFunc,
+  mir::FuncOp specialize(mir::FuncOp originalFunc,
                          mir::SpecializedFuncAttr spec);
 };
 } // namespace
 
 void SpecializeFuncsPass::runOnOperation() {
   auto &symbolTable = getAnalysis<SymbolTable>();
-  DenseMap<mir::SpecializedFuncAttr, hir::FuncOp> funcs;
+  DenseMap<mir::SpecializedFuncAttr, mir::FuncOp> funcs;
   SmallVector<Operation *> worklist;
   worklist.push_back(getOperation());
   while (!worklist.empty()) {
@@ -48,7 +48,7 @@ void SpecializeFuncsPass::runOnOperation() {
       if (!func) {
         LLVM_DEBUG(llvm::dbgs() << "Specializing " << attr << "\n");
         func = specialize(
-            symbolTable.lookup<hir::FuncOp>(attr.getFunc().getAttr()), attr);
+            symbolTable.lookup<mir::FuncOp>(attr.getFunc().getAttr()), attr);
         if (!func)
           return WalkResult::interrupt();
         symbolTable.insert(func);
@@ -71,7 +71,15 @@ void SpecializeFuncsPass::runOnOperation() {
   }
 }
 
-hir::FuncOp SpecializeFuncsPass::specialize(hir::FuncOp originalFunc,
+//===----------------------------------------------------------------------===//
+// Specialize a mir::FuncOp
+//
+// Clones the original function, materializes constant arguments at the start
+// of the body, erases the corresponding block arguments, and updates the
+// function_type to reflect the remaining arguments.
+//===----------------------------------------------------------------------===//
+
+mir::FuncOp SpecializeFuncsPass::specialize(mir::FuncOp originalFunc,
                                             mir::SpecializedFuncAttr spec) {
   // Make sure we have the correct number of arguments.
   auto argsExpected = spec.getArgs().size() + spec.getConsts().size();
@@ -88,26 +96,21 @@ hir::FuncOp SpecializeFuncsPass::specialize(hir::FuncOp originalFunc,
   // Create a clone of the function.
   OpBuilder builder(originalFunc);
   builder.setInsertionPointAfter(originalFunc);
-  auto func = cast<hir::FuncOp>(builder.clone(*originalFunc));
+  auto func = cast<mir::FuncOp>(builder.clone(*originalFunc));
 
-  // Block args stay !hir.any; skip past the arg-typed arguments.
+  // Skip past the arg-typed arguments to the const arguments.
   auto &block = func.getBody().front();
   builder.setInsertionPointToStart(&block);
   unsigned argIdx = spec.getArgs().size();
 
-  // Materialize constant arguments.
+  // Materialize constant arguments. Since block args now have MIR types, the
+  // constant's type should match the block arg's type directly.
   auto firstConstIdx = argIdx;
   for (auto attr : spec.getConsts()) {
     auto arg = block.getArgument(argIdx++);
     auto constOp =
         mir::ConstantOp::create(builder, arg.getLoc(), cast<TypedAttr>(attr));
-    if (constOp.getType() == arg.getType()) {
-      arg.replaceAllUsesWith(constOp);
-      continue;
-    }
-    auto castOp = UnrealizedConversionCastOp::create(
-        builder, arg.getLoc(), arg.getType(), ValueRange{constOp});
-    arg.replaceAllUsesExcept(castOp.getResult(0), castOp);
+    arg.replaceAllUsesWith(constOp);
   }
   block.eraseArguments(firstConstIdx, argIdx - firstConstIdx);
 
@@ -117,6 +120,13 @@ hir::FuncOp SpecializeFuncsPass::specialize(hir::FuncOp originalFunc,
   newArgNames.erase(newArgNames.begin() + firstConstIdx,
                     newArgNames.begin() + argIdx);
   func.setArgNamesAttr(builder.getArrayAttr(newArgNames));
+
+  // Update function_type to reflect the remaining arg types and result types.
+  SmallVector<Type> newArgTypes;
+  for (auto arg : block.getArguments())
+    newArgTypes.push_back(arg.getType());
+  func.setFunctionTypeAttr(mlir::TypeAttr::get(FunctionType::get(
+      &getContext(), newArgTypes, func.getFunctionType().getResults())));
 
   return func;
 }

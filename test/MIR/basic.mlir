@@ -40,6 +40,33 @@ mir.call @foo() : () -> ()
 mir.call @foo(%int_type) : (!mir.type) -> (!mir.type)
 mir.call @foo(%int_type, %c42_int) : (!mir.type, !mir.int) -> (!mir.type, !mir.int)
 
+// Functions
+// CHECK-LABEL: mir.func @NoArgs
+mir.func @NoArgs() -> () {
+  mir.return
+}
+
+// CHECK-LABEL: mir.func @OneArg
+mir.func @OneArg(%x: !mir.int) -> (result: !mir.int) {
+  mir.return %x : !mir.int
+}
+
+// CHECK-LABEL: mir.func @TwoArgs
+mir.func @TwoArgs(%x: !mir.int, %y: !mir.uint<8>) -> (sum: !mir.int) {
+  mir.return %x : !mir.int
+}
+
+// CHECK-LABEL: mir.func @MultiResult
+mir.func @MultiResult(%x: !mir.int) -> (a: !mir.int, b: !mir.type) {
+  %t = mir.constant #mir.type<!mir.int>
+  mir.return %x, %t : !mir.int, !mir.type
+}
+
+// CHECK-LABEL: mir.func private @Private
+mir.func private @Private() -> () {
+  mir.return
+}
+
 // Opaque type and attribute
 unrealized_conversion_cast to !mir.opaque
 unrealized_conversion_cast to index {attr = #mir.opaque<[#mir.int<42>, #mir.type<!mir.int>]>}

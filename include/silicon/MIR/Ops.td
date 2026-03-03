@@ -12,6 +12,7 @@
 include "mlir/IR/BuiltinAttributeInterfaces.td"
 include "mlir/IR/OpAsmInterface.td"
 include "mlir/IR/OpBase.td"
+include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
@@ -64,6 +65,27 @@ def BinaryOp : MIROp<"binary", [
   let arguments = (ins AnyType:$lhs, AnyType:$rhs);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+}
+
+def FuncOp : MIROp<"func", [
+  IsolatedFromAbove,
+  Symbol,
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
+]> {
+  let summary = "A function with materialized MIR types";
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<StrAttr>:$sym_visibility,
+    TypeAttrOf<FunctionType>:$function_type,
+    ArrayAttr:$argNames,
+    ArrayAttr:$resultNames
+  );
+  let regions = (region AnyRegion:$body);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    ReturnOp getReturnOp();
+  }];
 }
 
 def ReturnOp : MIROp<"return", [Pure, ReturnLike, Terminator]> {

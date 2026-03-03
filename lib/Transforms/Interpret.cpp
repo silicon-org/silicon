@@ -9,6 +9,7 @@
 #include "silicon/HIR/Ops.h"
 #include "silicon/MIR/Attributes.h"
 #include "silicon/MIR/Ops.h"
+#include "silicon/MIR/Types.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Transforms/Passes.h"
 #include "llvm/ADT/STLExtras.h"
@@ -57,7 +58,7 @@ LogicalResult Interpreter::run() {
 
     // Special handling for call operations.
     if (auto callOp = dyn_cast<mir::CallOp>(op)) {
-      auto calleeOp = symbolTable.lookup<hir::FuncOp>(callOp.getCallee());
+      auto calleeOp = symbolTable.lookup<mir::FuncOp>(callOp.getCallee());
       auto &newFrame = callStack.emplace_back();
       newFrame.currentOp = &calleeOp.getBody().front().front();
       for (auto [arg, attr] :
@@ -142,7 +143,7 @@ struct InterpretPass : public silicon::impl::InterpretPassBase<InterpretPass> {
 
 /// Check whether a function body has been fully evaluated, i.e., consists only
 /// of `mir.constant` and `mir.return` operations.
-static bool isFullyEvaluated(hir::FuncOp func) {
+static bool isFullyEvaluated(mir::FuncOp func) {
   return llvm::all_of(func.getBody().front(), [](Operation &op) {
     return isa<mir::ConstantOp, mir::ReturnOp>(op);
   });
@@ -150,7 +151,7 @@ static bool isFullyEvaluated(hir::FuncOp func) {
 
 /// Collect the constant return values from a fully-evaluated function body.
 /// Returns an empty vector if any return operand is not a constant.
-static SmallVector<Attribute> collectReturnConstants(hir::FuncOp func) {
+static SmallVector<Attribute> collectReturnConstants(mir::FuncOp func) {
   auto returnOp = cast<mir::ReturnOp>(func.getBody().front().getTerminator());
   SmallVector<Attribute> result;
   for (auto operand : returnOp.getOperands()) {
@@ -179,7 +180,7 @@ void InterpretPass::runOnOperation() {
     changed = false;
 
     // Interpret zero-argument functions whose bodies contain MIR ops.
-    for (auto func : getOperation().getOps<hir::FuncOp>()) {
+    for (auto func : getOperation().getOps<mir::FuncOp>()) {
       if (func.getBody().getNumArguments() > 0)
         continue;
       if (!func.getBody().front().getTerminator() ||
@@ -194,9 +195,14 @@ void InterpretPass::runOnOperation() {
       interpreter.callStack.back().currentOp = &func.getBody().front().front();
       if (failed(interpreter.run()))
         return signalPassFailure();
-      // The body was rewritten; clear argNames to match the new block arg
-      // count.
+      // The body was rewritten; update argNames and function_type to match.
       func.setArgNamesAttr(ArrayAttr::get(&getContext(), {}));
+      SmallVector<Type> resultTypes;
+      if (auto returnOp = func.getReturnOp())
+        for (auto operand : returnOp.getOperands())
+          resultTypes.push_back(operand.getType());
+      func.setFunctionTypeAttr(mlir::TypeAttr::get(
+          FunctionType::get(&getContext(), {}, resultTypes)));
       changed = true;
     }
 
@@ -209,7 +215,7 @@ void InterpretPass::runOnOperation() {
       auto phaseFuncs = splitFunc.getPhaseFuncs();
       for (unsigned i = 0; i + 1 < phaseFuncs.size(); ++i) {
         auto curSym = cast<FlatSymbolRefAttr>(phaseFuncs[i]);
-        auto curFunc = symbolTable.lookup<hir::FuncOp>(curSym.getValue());
+        auto curFunc = symbolTable.lookup<mir::FuncOp>(curSym.getValue());
         if (!curFunc || curFunc.getBody().getNumArguments() > 0)
           continue;
         if (!isFullyEvaluated(curFunc))
@@ -221,7 +227,7 @@ void InterpretPass::runOnOperation() {
           continue;
 
         auto nextSym = cast<FlatSymbolRefAttr>(phaseFuncs[i + 1]);
-        auto nextFunc = symbolTable.lookup<hir::FuncOp>(nextSym.getValue());
+        auto nextFunc = symbolTable.lookup<mir::FuncOp>(nextSym.getValue());
         if (!nextFunc)
           continue;
 
@@ -243,12 +249,21 @@ void InterpretPass::runOnOperation() {
           arg.replaceAllUsesWith(constOp);
         }
         nextBlock.eraseArguments(numOwn, numChained);
-        // Update argNames to match the new block arg count.
+        // Update argNames and function_type to match the new block arg count.
         SmallVector<Attribute> newArgNames(nextFunc.getArgNames().begin(),
                                            nextFunc.getArgNames().end());
         if (newArgNames.size() > numOwn)
           newArgNames.resize(numOwn);
         nextFunc.setArgNamesAttr(ArrayAttr::get(&getContext(), newArgNames));
+        SmallVector<Type> newArgTypes;
+        for (unsigned j = 0; j < numOwn; ++j)
+          newArgTypes.push_back(nextBlock.getArgument(j).getType());
+        SmallVector<Type> resultTypes;
+        if (auto returnOp = nextFunc.getReturnOp())
+          for (auto operand : returnOp.getOperands())
+            resultTypes.push_back(operand.getType());
+        nextFunc.setFunctionTypeAttr(mlir::TypeAttr::get(
+            FunctionType::get(&getContext(), newArgTypes, resultTypes)));
         changed = true;
       }
     }
@@ -263,7 +278,7 @@ void InterpretPass::runOnOperation() {
       // Count how many leading sub-functions have been fully evaluated.
       unsigned numDone = 0;
       for (auto sym : phaseFuncs) {
-        auto func = symbolTable.lookup<hir::FuncOp>(
+        auto func = symbolTable.lookup<mir::FuncOp>(
             cast<FlatSymbolRefAttr>(sym).getValue());
         if (!func || !isFullyEvaluated(func))
           break;

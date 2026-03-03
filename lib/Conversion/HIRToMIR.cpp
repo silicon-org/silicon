@@ -299,27 +299,26 @@ static LogicalResult convert(UnrealizedConversionCastOp op,
   return failure();
 }
 
+//===----------------------------------------------------------------------===//
+// HIRToMIR Pass
+//
+// For each hir.func in the module, convert its body ops from HIR to MIR via
+// dialect conversion, then convert the hir.func shell itself to mir.func by
+// resolving block argument types from unrealized_conversion_casts and gathering
+// result types from the mir.return operands.
+//===----------------------------------------------------------------------===//
+
 void HIRToMIRPass::runOnOperation() {
-  LLVM_DEBUG(llvm::dbgs() << "Lowering @" << getOperation().getSymName()
-                          << "\n");
+  auto moduleOp = getOperation();
 
-  // Setup the type conversion.
+  // Set up the type conversion.
   TypeConverter converter;
-
-  // All MIR types, HIR types, and a handful of builtin types are fine.
-  // HIR types (like !hir.any) are kept during partial lowering; they'll be
-  // resolved in later passes.
   converter.addConversion([](Type type) -> std::optional<Type> {
     if (isa<mir::MIRDialect>(type.getDialect()) ||
         isa<hir::HIRDialect>(type.getDialect()) || isa<FunctionType>(type))
       return type;
     return std::nullopt;
   });
-
-  // Allow any casts from MIR types. This is very relaxed, but allows us to get
-  // something up and running quickly. In the future, we'll want to take the MIR
-  // type and map it to the corresponding HIR type, and only allow casts that
-  // make sense.
   converter.addConversion([](Value value) -> std::optional<Type> {
     if (auto castOp = value.getDefiningOp<UnrealizedConversionCastOp>()) {
       if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
@@ -331,42 +330,95 @@ void HIRToMIRPass::runOnOperation() {
     return std::nullopt;
   });
 
-  // Gather the conversion patterns.
-  ConversionPatternSet patterns(&getContext(), converter);
-  patterns.add<hir::ConstantIntOp>(convert);
-  patterns.add<hir::ConstantUnitOp>(convert);
-  patterns.add<hir::ConstantFuncOp>(convert);
-  patterns.add<hir::IntTypeOp>(convert);
-  patterns.add<hir::UnitTypeOp>(convert);
-  patterns.add<hir::TypeTypeOp>(convert);
-  patterns.add<hir::UIntTypeOp>(convert);
-  patterns.add<hir::AnyfuncTypeOp>(convert);
-  patterns.add<hir::FuncTypeOp>(convert);
-  patterns.add<hir::InferrableOp>(convert);
-  patterns.add<hir::TypeOfOp>(convert);
-  patterns.add<hir::UnifyOp>(convert);
-  patterns.add<hir::CoerceTypeOp>(convert);
-  patterns.add<hir::BinaryOp>(convert);
-  patterns.add<hir::SpecializeFuncOp>(convert);
-  patterns.add<hir::ReturnOp>(convert);
-  patterns.add<hir::CallOp>(convert);
-  patterns.add<hir::OpaquePackOp>(convert);
-  patterns.add<hir::OpaqueUnpackOp>(convert);
-  patterns.add<UnrealizedConversionCastOp>(convert);
-
-  // Setup the legal ops.
+  // Set up the conversion target and config, shared across all functions.
   ConversionTarget target(getContext());
   target.addLegalDialect<mir::MIRDialect>();
   target.addIllegalDialect<hir::HIRDialect>();
   target.addLegalOp<hir::FuncOp>();
 
-  // Disable pattern rollback to use the faster one-shot dialect conversion.
   ConversionConfig config;
   config.allowPatternRollback = false;
 
-  if (failed(applyFullConversion(getOperation(), target, std::move(patterns),
-                                 config))) {
-    emitBug(getOperation().getLoc()) << "HIR-to-MIR lowering failed";
-    return signalPassFailure();
+  for (auto func : llvm::make_early_inc_range(moduleOp.getOps<hir::FuncOp>())) {
+    LLVM_DEBUG(llvm::dbgs() << "Lowering @" << func.getSymName() << "\n");
+
+    // Step 1: Convert body ops from HIR to MIR.
+    ConversionPatternSet patterns(&getContext(), converter);
+    patterns.add<hir::ConstantIntOp>(convert);
+    patterns.add<hir::ConstantUnitOp>(convert);
+    patterns.add<hir::ConstantFuncOp>(convert);
+    patterns.add<hir::IntTypeOp>(convert);
+    patterns.add<hir::UnitTypeOp>(convert);
+    patterns.add<hir::TypeTypeOp>(convert);
+    patterns.add<hir::UIntTypeOp>(convert);
+    patterns.add<hir::AnyfuncTypeOp>(convert);
+    patterns.add<hir::FuncTypeOp>(convert);
+    patterns.add<hir::InferrableOp>(convert);
+    patterns.add<hir::TypeOfOp>(convert);
+    patterns.add<hir::UnifyOp>(convert);
+    patterns.add<hir::CoerceTypeOp>(convert);
+    patterns.add<hir::BinaryOp>(convert);
+    patterns.add<hir::SpecializeFuncOp>(convert);
+    patterns.add<hir::ReturnOp>(convert);
+    patterns.add<hir::CallOp>(convert);
+    patterns.add<hir::OpaquePackOp>(convert);
+    patterns.add<hir::OpaqueUnpackOp>(convert);
+    patterns.add<UnrealizedConversionCastOp>(convert);
+
+    if (failed(
+            applyFullConversion(func, target, std::move(patterns), config))) {
+      emitBug(func.getLoc()) << "HIR-to-MIR lowering failed";
+      return signalPassFailure();
+    }
+
+    // Step 2: Convert the hir.func shell to mir.func.
+    // Resolve block argument types by folding unrealized_conversion_casts that
+    // bridge from !hir.any to MIR types.
+    if (func.getBody().empty())
+      continue;
+    auto &entryBlock = func.getBody().front();
+    for (auto arg : entryBlock.getArguments()) {
+      for (auto *user : llvm::make_early_inc_range(arg.getUsers())) {
+        auto castOp = dyn_cast<UnrealizedConversionCastOp>(user);
+        if (!castOp || castOp.getNumOperands() != 1 ||
+            castOp.getNumResults() != 1)
+          continue;
+        auto inputType = castOp.getOperand(0).getType();
+        auto resultType = castOp.getResult(0).getType();
+        if (!isa<hir::HIRDialect>(inputType.getDialect()))
+          continue;
+        if (!isa<mir::MIRDialect>(resultType.getDialect()) &&
+            !isa<FunctionType>(resultType))
+          continue;
+        // Replace the cast with the block arg and retype the arg.
+        castOp.getResult(0).replaceAllUsesWith(arg);
+        castOp.erase();
+        arg.setType(resultType);
+      }
+    }
+
+    // Gather arg types from the (now-retyped) block arguments.
+    SmallVector<Type> argTypes;
+    for (auto arg : entryBlock.getArguments())
+      argTypes.push_back(arg.getType());
+
+    // Gather result types from the mir.return operands.
+    SmallVector<Type> resultTypes;
+    if (auto returnOp =
+            dyn_cast<mir::ReturnOp>(func.getBody().back().getTerminator()))
+      for (auto operand : returnOp.getOperands())
+        resultTypes.push_back(operand.getType());
+
+    // Create mir::FuncOp with the materialized function type.
+    auto funcType = FunctionType::get(&getContext(), argTypes, resultTypes);
+    OpBuilder builder(func);
+    auto mirFunc = mir::FuncOp::create(
+        builder, func.getLoc(), func.getSymNameAttr(),
+        func.getSymVisibilityAttr(), mlir::TypeAttr::get(funcType),
+        func.getArgNamesAttr(), func.getResultNamesAttr());
+
+    // Move the body from hir.func to mir.func and erase the old op.
+    mirFunc.getBody().takeBody(func.getBody());
+    func.erase();
   }
 }

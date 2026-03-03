@@ -1,7 +1,7 @@
 // RUN: silicon-opt --interpret %s | FileCheck %s
 
-// CHECK-LABEL: hir.func @foo
-hir.func @foo() -> () {
+// CHECK-LABEL: mir.func @foo
+mir.func @foo() -> (result: !mir.specialized_func) {
   // CHECK-NEXT: [[TMP:%.+]] = mir.constant #mir.specialized_func<@foo, [], [], [#mir.specialized_func<@bar, [!mir.int], [], []> : !mir.specialized_func]>
   // CHECK-NEXT: mir.return [[TMP]]
   %0 = mir.call @bar() : () -> !mir.specialized_func
@@ -9,8 +9,8 @@ hir.func @foo() -> () {
   mir.return %1 : !mir.specialized_func
 }
 
-// CHECK-LABEL: hir.func @bar
-hir.func @bar() -> () {
+// CHECK-LABEL: mir.func @bar
+mir.func @bar() -> (result: !mir.specialized_func) {
   // CHECK-NEXT: [[TMP:%.+]] = mir.constant #mir.specialized_func<@bar, [!mir.int], [], []>
   // CHECK-NEXT: mir.return [[TMP]]
   %0 = mir.constant #mir.specialized_func<@bar, [!mir.int], [], []> : !mir.specialized_func
@@ -23,21 +23,20 @@ hir.func @bar() -> () {
 // via the split_func phase map, then evaluates @Chain.const1. The
 // multiphase_func is collapsed once its sub-functions are evaluated.
 
-// CHECK-LABEL: hir.func private @Chain.const2
+// CHECK-LABEL: mir.func private @Chain.const2
 // CHECK-NEXT: [[C42:%.+]] = mir.constant #mir.int<42>
 // CHECK-NEXT: mir.return [[C42]]
-hir.func private @Chain.const2() -> () {
+mir.func private @Chain.const2() -> (result: !mir.int) {
   %0 = mir.constant #mir.int<42> : !mir.int
   mir.return %0 : !mir.int
 }
 
-// CHECK-LABEL: hir.func private @Chain.const1
+// CHECK-LABEL: mir.func private @Chain.const1
 // CHECK-NEXT: [[C52:%.+]] = mir.constant #mir.int<52>
 // CHECK-NEXT: mir.return [[C52]]
-hir.func private @Chain.const1(%ctx) -> () {
-  %ctx_mir = builtin.unrealized_conversion_cast %ctx : !hir.any to !mir.int
+mir.func private @Chain.const1(%ctx: !mir.int) -> (result: !mir.int) {
   %0 = mir.constant #mir.int<10> : !mir.int
-  %1 = mir.binary %ctx_mir, %0 : !mir.int
+  %1 = mir.binary %ctx, %0 : !mir.int
   mir.return %1 : !mir.int
 }
 
@@ -60,21 +59,20 @@ hir.multiphase_func @Chain.const() -> (ctx) [
 // Opaque-bundled chaining: same as above, but using mir.opaque_pack/unpack to
 // pass the context value as an opaque bundle between phases.
 
-// CHECK-LABEL: hir.func private @OpaqueChain.const2
+// CHECK-LABEL: mir.func private @OpaqueChain.const2
 // CHECK-NEXT: [[PACKED:%.+]] = mir.constant #mir.opaque
 // CHECK-NEXT: mir.return [[PACKED]]
-hir.func private @OpaqueChain.const2() -> () {
+mir.func private @OpaqueChain.const2() -> (result: !mir.opaque) {
   %0 = mir.constant #mir.int<42> : !mir.int
   %1 = mir.opaque_pack(%0) : (!mir.int) -> !mir.opaque
   mir.return %1 : !mir.opaque
 }
 
-// CHECK-LABEL: hir.func private @OpaqueChain.const1
+// CHECK-LABEL: mir.func private @OpaqueChain.const1
 // CHECK-NEXT: [[C52:%.+]] = mir.constant #mir.int<52>
 // CHECK-NEXT: mir.return [[C52]]
-hir.func private @OpaqueChain.const1(%packed) -> () {
-  %packed_mir = builtin.unrealized_conversion_cast %packed : !hir.any to !mir.opaque
-  %0 = mir.opaque_unpack %packed_mir : !mir.opaque -> !mir.int
+mir.func private @OpaqueChain.const1(%packed: !mir.opaque) -> (result: !mir.int) {
+  %0 = mir.opaque_unpack %packed : !mir.opaque -> !mir.int
   %1 = mir.constant #mir.int<10> : !mir.int
   %2 = mir.binary %0, %1 : !mir.int
   mir.return %2 : !mir.int

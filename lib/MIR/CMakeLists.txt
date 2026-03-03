@@ -9,4 +9,5 @@ add_silicon_dialect_library(SiliconMIR
   MLIRControlFlowInterfaces
   MLIRInferTypeOpInterface
   MLIRSideEffectInterfaces
+  SiliconSupport
 )
