@@ -8,7 +8,7 @@ To be expanded into a proper design document later.
 ### Types as SSA Values
 
 - All HIR values have MLIR type `!hir.any`; the "actual" type of a value is represented as a separate SSA value, threaded alongside data through the IR.
-- Type constructor ops (`hir.int_type`, `hir.uint_type`, `hir.ref_type`, `hir.func_type`, etc.) produce type values.
+- Type constructor ops (`hir.int_type`, `hir.uint_type`, `hir.ref_type`, `hir.func_type`, `hir.type_type`, etc.) produce type values.
 - `hir.type_of %v` extracts the type of a value as an SSA value.
 - `hir.coerce_type %v, %t` annotates a value with a declared type (used at function entry for arguments, and at call sites for results).
 
@@ -43,6 +43,8 @@ To be expanded into a proper design document later.
 
 ### HIR-to-MIR Lowering (`lib/Conversion/HIRToMIR.cpp`)
 
+- The pass operates at module level, converting each `hir.func` to `mir.func` with materialized `FunctionType` and typed block arguments.
+- Block argument types are resolved from `unrealized_conversion_cast` ops (HIR→MIR direction); result types come from `mir.return` operands.
 - `hir.inferrable`, `hir.type_of`, `hir.unify` are all lowered to dummy `mir.constant #mir.type<!hir.any>` — by this point they should have been resolved, so only dead metadata remains.
 - `hir.coerce_type` is erased; the input value passes through directly.
 - Type operands on `hir.binary`, `hir.call`, etc. are consumed to determine the materialized MIR types and then discarded.
@@ -54,11 +56,6 @@ To be expanded into a proper design document later.
 - Step 2 (Unify): verify all unify ops are resolved; emit errors for incompatible types. This is the main user-facing type error mechanism.
 
 ## Bugs and Implementation Issues
-
-### InferTypes: swap uses null pointers in concrete-concrete case
-
-- Lines 106–107 of `InferTypes.cpp`: when both operands are concrete (not inferrable), the swap assigns `keepOp = inferrableRhs` and `eraseOp = inferrableLhs`, but both are null at that point.
-  This is a latent bug that would crash if the eraseOp dominates the keepOp in the concrete-concrete case.
 
 ### Inference failures are silent
 
@@ -98,13 +95,6 @@ To be expanded into a proper design document later.
 - There is no mechanism to infer _non-type_ values, such as integer widths in `uint<N>` where `N` could be inferred from context.
 - Example: `let x: uint<_> = some_uint8_expr` — inferring that `_` is 8.
 - The design doc mentions "value inference" in passing (phase-splits.md line 8) but doesn't specify it.
-
-### Dependent types in signatures
-
-- TODO.md lists "dependent types in signatures (type depends on argument value)" as an open item.
-- The infrastructure exists (`hir.uint_type %width` takes an SSA operand), and codegen already converts `uint<b>` to use the argument's SSA value.
-- But there is no mechanism to propagate value constraints across function boundaries: if a callee declares `fn foo(a: int) -> uint<a>`, the caller needs to know that the result width equals the argument value.
-- CheckCalls inlines the signature, which handles this in principle, but the unification algorithm only handles type equality, not value-level constraints like "this integer equals that integer".
 
 ### No occurs check or cycle detection in unification
 
