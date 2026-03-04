@@ -209,9 +209,23 @@ static LogicalResult convert(hir::UnifyOp op, hir::UnifyOp::Adaptor adaptor,
   return success();
 }
 
+// CoerceTypeOp annotates a value with a type. If the type operand resolves to
+// a mir.constant carrying a TypeAttr, extract the concrete MIR type and emit an
+// unrealized_conversion_cast. The Step 2 fixup below folds these casts into
+// block argument retypes. We use matchPattern/m_Constant to look through any
+// materialization casts the conversion framework may have inserted.
 static LogicalResult convert(hir::CoerceTypeOp op,
                              hir::CoerceTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
+  mir::TypeAttr typeAttr;
+  if (matchPattern(adaptor.getTypeOperand(), m_Constant(&typeAttr))) {
+    auto mirType = typeAttr.getValue();
+    if (!isa<hir::AnyType>(mirType)) {
+      rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
+          op, mirType, adaptor.getInput());
+      return success();
+    }
+  }
   rewriter.replaceOp(op, adaptor.getInput());
   return success();
 }
@@ -370,6 +384,22 @@ void HIRToMIRPass::runOnOperation() {
   target.addIllegalDialect<hir::HIRDialect>();
   target.addLegalOp<hir::FuncOp>();
 
+  // Allow HIR→MIR casts to persist through conversion. CoerceTypeOp creates
+  // these to annotate block args with concrete MIR types; Step 2 folds them
+  // into block arg retypes.
+  target.addDynamicallyLegalOp<UnrealizedConversionCastOp>(
+      [](UnrealizedConversionCastOp op) {
+        if (op.getNumOperands() == 1 && op.getNumResults() == 1) {
+          auto inputType = op.getOperand(0).getType();
+          auto resultType = op.getResult(0).getType();
+          if (isa<hir::HIRDialect>(inputType.getDialect()) &&
+              (isa<mir::MIRDialect>(resultType.getDialect()) ||
+               isa<FunctionType>(resultType)))
+            return true;
+        }
+        return false;
+      });
+
   ConversionConfig config;
   config.allowPatternRollback = false;
 
@@ -443,6 +473,20 @@ void HIRToMIRPass::runOnOperation() {
         castOp.getResult(0).replaceAllUsesWith(arg);
         castOp.erase();
         arg.setType(resultType);
+      }
+    }
+
+    // Check that all block arg types have been resolved. Skip private
+    // functions, since const fragments from split_func legitimately have
+    // !hir.any args whose types are resolved during specialization.
+    if (!func.isPrivate()) {
+      for (auto arg : entryBlock.getArguments()) {
+        if (isa<hir::AnyType>(arg.getType())) {
+          emitError(arg.getLoc())
+              << "block argument type could not be determined "
+              << "during HIR-to-MIR lowering; add hir.coerce_type";
+          return signalPassFailure();
+        }
       }
     }
 

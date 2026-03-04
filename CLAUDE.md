@@ -16,6 +16,8 @@ If you make a change that resolves a todo, remove it from the TODO.md file.
 As a first phase of the project, we would like to develop a minimum viable example of the phased execution, HIR/MIR split, and monomorphization of functions.
 That prototype should implement docs/design/phase-splits.md as closely as possible, and we eventually want to be able to commit the examples in that design doc as test cases.
 Let's ignore docs/design/inference.md for now when figuring out things to do; that document is still a work in progress.
+Let's not target LLVM lowering and JIT execution for now and stick with the interpreter; but we don't want to make design decisions that prevent us from eventually dropping the interpreter in favor of LLVM JIT.
+Let's not think about lowering to CIRCT for the time being; we want to stop at MIR and flesh out the frontend and phased evaluation pipeline first.
 
 ## Build, Test, and Project Layout
 

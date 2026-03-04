@@ -84,3 +84,167 @@ hir.split_func @OpaqueChain() -> () {
   -2: @OpaqueChain.const2,
   -1: @OpaqueChain.const1
 ]
+
+//===----------------------------------------------------------------------===//
+// Binary operations: verify that the interpreter correctly evaluates all 16
+// binary ops on constant integer operands.
+
+// CHECK-LABEL: mir.func @test_add
+// CHECK-NEXT: %c5_int = mir.constant #mir.int<5>
+// CHECK-NEXT: mir.return
+mir.func @test_add() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<3> : !mir.int
+  %1 = mir.constant #mir.int<2> : !mir.int
+  %2 = mir.add %0, %1 : !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_sub
+// CHECK-NEXT: %c4_int = mir.constant #mir.int<4>
+// CHECK-NEXT: mir.return
+mir.func @test_sub() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<7> : !mir.int
+  %1 = mir.constant #mir.int<3> : !mir.int
+  %2 = mir.sub %0, %1 : !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_mul
+// CHECK-NEXT: %c20_int = mir.constant #mir.int<20>
+// CHECK-NEXT: mir.return
+mir.func @test_mul() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<4> : !mir.int
+  %1 = mir.constant #mir.int<5> : !mir.int
+  %2 = mir.mul %0, %1 : !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_div
+// CHECK-NEXT: %c3_int = mir.constant #mir.int<3>
+// CHECK-NEXT: mir.return
+mir.func @test_div() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<10> : !mir.int
+  %1 = mir.constant #mir.int<3> : !mir.int
+  %2 = mir.div %0, %1 : !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_mod
+// CHECK-NEXT: %c1_int = mir.constant #mir.int<1>
+// CHECK-NEXT: mir.return
+mir.func @test_mod() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<10> : !mir.int
+  %1 = mir.constant #mir.int<3> : !mir.int
+  %2 = mir.mod %0, %1 : !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_and
+// CHECK-NEXT: %c2_int = mir.constant #mir.int<2>
+// CHECK-NEXT: mir.return
+mir.func @test_and() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<6> : !mir.int
+  %1 = mir.constant #mir.int<3> : !mir.int
+  %2 = mir.and %0, %1 : !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_or
+// CHECK-NEXT: %c7_int = mir.constant #mir.int<7>
+// CHECK-NEXT: mir.return
+mir.func @test_or() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<5> : !mir.int
+  %1 = mir.constant #mir.int<3> : !mir.int
+  %2 = mir.or %0, %1 : !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_xor
+// CHECK-NEXT: %c5_int = mir.constant #mir.int<5>
+// CHECK-NEXT: mir.return
+mir.func @test_xor() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<6> : !mir.int
+  %1 = mir.constant #mir.int<3> : !mir.int
+  %2 = mir.xor %0, %1 : !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_shl
+// CHECK-NEXT: %c8_int = mir.constant #mir.int<8>
+// CHECK-NEXT: mir.return
+mir.func @test_shl() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<1> : !mir.int
+  %1 = mir.constant #mir.int<3> : !mir.int
+  %2 = mir.shl %0, %1 : !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_shr
+// CHECK-NEXT: %c4_int = mir.constant #mir.int<4>
+// CHECK-NEXT: mir.return
+mir.func @test_shr() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<16> : !mir.int
+  %1 = mir.constant #mir.int<2> : !mir.int
+  %2 = mir.shr %0, %1 : !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_eq
+// CHECK-NEXT: %c1_int = mir.constant #mir.int<1>
+// CHECK-NEXT: mir.return
+mir.func @test_eq() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<3> : !mir.int
+  %1 = mir.constant #mir.int<3> : !mir.int
+  %2 = mir.eq %0, %1 : !mir.int -> !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_neq
+// CHECK-NEXT: %c1_int = mir.constant #mir.int<1>
+// CHECK-NEXT: mir.return
+mir.func @test_neq() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<3> : !mir.int
+  %1 = mir.constant #mir.int<4> : !mir.int
+  %2 = mir.neq %0, %1 : !mir.int -> !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_lt
+// CHECK-NEXT: %c1_int = mir.constant #mir.int<1>
+// CHECK-NEXT: mir.return
+mir.func @test_lt() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<2> : !mir.int
+  %1 = mir.constant #mir.int<5> : !mir.int
+  %2 = mir.lt %0, %1 : !mir.int -> !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_gt
+// CHECK-NEXT: %c1_int = mir.constant #mir.int<1>
+// CHECK-NEXT: mir.return
+mir.func @test_gt() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<5> : !mir.int
+  %1 = mir.constant #mir.int<3> : !mir.int
+  %2 = mir.gt %0, %1 : !mir.int -> !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_geq
+// CHECK-NEXT: %c1_int = mir.constant #mir.int<1>
+// CHECK-NEXT: mir.return
+mir.func @test_geq() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<3> : !mir.int
+  %1 = mir.constant #mir.int<3> : !mir.int
+  %2 = mir.geq %0, %1 : !mir.int -> !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK-LABEL: mir.func @test_leq
+// CHECK-NEXT: %c1_int = mir.constant #mir.int<1>
+// CHECK-NEXT: mir.return
+mir.func @test_leq() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<2> : !mir.int
+  %1 = mir.constant #mir.int<5> : !mir.int
+  %2 = mir.leq %0, %1 : !mir.int -> !mir.int
+  mir.return %2 : !mir.int
+}

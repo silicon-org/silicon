@@ -73,6 +73,66 @@ hir.func @FunctionSpecialization() -> (result) {
   hir.return (%4) : (%0)
 }
 
+//===----------------------------------------------------------------------===//
+// Binary operations
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: mir.func @BinaryArithmetic(%a: !mir.int, %b: !mir.int)
+hir.func @BinaryArithmetic(%a, %b) -> (r0, r1, r2, r3, r4) {
+  %int = hir.int_type
+  %a_typed = hir.coerce_type %a, %int
+  %b_typed = hir.coerce_type %b, %int
+  %r0 = hir.add %a_typed, %b_typed : %int
+  %r1 = hir.sub %a_typed, %b_typed : %int
+  %r2 = hir.mul %a_typed, %b_typed : %int
+  %r3 = hir.div %a_typed, %b_typed : %int
+  %r4 = hir.mod %a_typed, %b_typed : %int
+  // CHECK: mir.add %a, %b : !mir.int
+  // CHECK: mir.sub %a, %b : !mir.int
+  // CHECK: mir.mul %a, %b : !mir.int
+  // CHECK: mir.div %a, %b : !mir.int
+  // CHECK: mir.mod %a, %b : !mir.int
+  hir.return (%r0, %r1, %r2, %r3, %r4) : (%int, %int, %int, %int, %int)
+}
+
+// CHECK-LABEL: mir.func @BinaryBitwise(%a: !mir.int, %b: !mir.int)
+hir.func @BinaryBitwise(%a, %b) -> (r0, r1, r2, r3, r4) {
+  %int = hir.int_type
+  %a_typed = hir.coerce_type %a, %int
+  %b_typed = hir.coerce_type %b, %int
+  %r0 = hir.and %a_typed, %b_typed : %int
+  %r1 = hir.or %a_typed, %b_typed : %int
+  %r2 = hir.xor %a_typed, %b_typed : %int
+  %r3 = hir.shl %a_typed, %b_typed : %int
+  %r4 = hir.shr %a_typed, %b_typed : %int
+  // CHECK: mir.and %a, %b : !mir.int
+  // CHECK: mir.or %a, %b : !mir.int
+  // CHECK: mir.xor %a, %b : !mir.int
+  // CHECK: mir.shl %a, %b : !mir.int
+  // CHECK: mir.shr %a, %b : !mir.int
+  hir.return (%r0, %r1, %r2, %r3, %r4) : (%int, %int, %int, %int, %int)
+}
+
+// CHECK-LABEL: mir.func @BinaryComparison(%a: !mir.int, %b: !mir.int)
+hir.func @BinaryComparison(%a, %b) -> (r0, r1, r2, r3, r4, r5) {
+  %int = hir.int_type
+  %a_typed = hir.coerce_type %a, %int
+  %b_typed = hir.coerce_type %b, %int
+  %r0 = hir.eq %a_typed, %b_typed : %int
+  %r1 = hir.neq %a_typed, %b_typed : %int
+  %r2 = hir.lt %a_typed, %b_typed : %int
+  %r3 = hir.gt %a_typed, %b_typed : %int
+  %r4 = hir.geq %a_typed, %b_typed : %int
+  %r5 = hir.leq %a_typed, %b_typed : %int
+  // CHECK: mir.eq %a, %b : !mir.int -> !mir.int
+  // CHECK: mir.neq %a, %b : !mir.int -> !mir.int
+  // CHECK: mir.lt %a, %b : !mir.int -> !mir.int
+  // CHECK: mir.gt %a, %b : !mir.int -> !mir.int
+  // CHECK: mir.geq %a, %b : !mir.int -> !mir.int
+  // CHECK: mir.leq %a, %b : !mir.int -> !mir.int
+  hir.return (%r0, %r1, %r2, %r3, %r4, %r5) : (%int, %int, %int, %int, %int, %int)
+}
+
 // CHECK-LABEL: mir.func @Casts
 hir.func @Casts() -> (a, b) {
   // CHECK-NEXT: [[TMP1:%.+]] = mir.constant
