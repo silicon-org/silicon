@@ -1,0 +1,16 @@
+// RUN: silc %s | FileCheck %s
+// XFAIL: *
+
+// Test that the same function called multiple times with different const args
+// produces distinct specializations. Currently crashes because the interpreter
+// hits a cast<IntAttr> assertion when specializing a function called from a
+// caller that has runtime arguments (the caller's const phase encounters
+// non-integer attributes during binary op evaluation).
+//
+// TODO: Fix the interpreter to handle this case, then remove the XFAIL.
+
+// CHECK-DAG: mir.constant #mir.int<10>
+// CHECK-DAG: mir.constant #mir.int<20>
+
+fn add_const(const a: int, b: int) -> int { a + b }
+fn caller(x: int) -> int { add_const(10, x) + add_const(20, x) }

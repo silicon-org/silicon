@@ -9,6 +9,7 @@
 #include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Passes.h"
 #include "silicon/Support/MLIR.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -222,6 +223,11 @@ void PhaseSplitter::run() {
   // Move all operations to phase 0 initially.
   splits[0 - minPhase].funcOp.getBody().takeBody(funcOp.getBody());
 
+  // Track where each unified func arg ended up after const arg movement.
+  // Const args map to their new block arg in the origin phase function;
+  // phase-0 args map to the remaining block args in the phase-0 function.
+  SmallVector<Value> unifiedArgValues(funcOp.getArgPhases().size());
+
   // Move shifted-phase body block arguments to their respective phase
   // functions. We create block args in each const arg's origin phase, replace
   // all uses, and let cross-phase value threading handle multi-hop forwarding.
@@ -247,6 +253,7 @@ void PhaseSplitter::run() {
       auto &constBlock = splits[argPhase - minPhase].funcOp.getBody().front();
       Value ownArg =
           constBlock.addArgument(bodyArg.getType(), bodyArg.getLoc());
+      unifiedArgValues[idx] = ownArg;
       replacements.push_back({idx, ownArg});
       argsToErase.push_back(idx);
     }
@@ -267,6 +274,14 @@ void PhaseSplitter::run() {
     // Erase old body block args in reverse order.
     for (auto idx : llvm::reverse(argsToErase))
       phase0Block.eraseArgument(idx);
+
+    // Fill in phase-0 args (those that remained in the phase-0 block).
+    unsigned phase0ArgIdx = 0;
+    for (unsigned i = 0; i < unifiedArgValues.size(); ++i) {
+      if (unifiedArgValues[i]) // already filled (const arg)
+        continue;
+      unifiedArgValues[i] = phase0Block.getArgument(phase0ArgIdx++);
+    }
   }
 
   // Decompose UnifiedCallOps into per-phase CallOps. Each per-phase call is
@@ -468,6 +483,84 @@ void PhaseSplitter::run() {
         splits[phase - minPhase].funcOp.getBody().front().getNumArguments();
     numOwnReturns[phase - minPhase] =
         splits[phase - minPhase].returnValues.size();
+  }
+
+  //===--------------------------------------------------------------------===//
+  // Insert coerce_type Ops on Own Block Args
+  //
+  // For each phase function, insert an `hir.coerce_type` on every own block
+  // arg, annotating it with its type from the unified func's signature. This
+  // gives downstream passes (HIR-to-MIR) the type information needed to
+  // materialize concrete MLIR types. Cross-phase type operands are resolved
+  // later by the value threading loop below.
+  //===--------------------------------------------------------------------===//
+
+  {
+    auto sigOp = funcOp.getSignatureOp();
+    auto typeOfArgs = sigOp.getTypeOfArgs();
+    auto &sigBlock = funcOp.getSignature().front();
+
+    // Build per-phase list of unified arg indices for own args.
+    SmallVector<SmallVector<unsigned>> phaseOwnArgIndices(maxPhase - minPhase +
+                                                          1);
+    for (unsigned i = 0; i < funcOp.getArgPhases().size(); ++i) {
+      int16_t phase = static_cast<int16_t>(funcOp.getArgPhases()[i]);
+      phaseOwnArgIndices[phase - minPhase].push_back(i);
+    }
+
+    for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
+      auto &split = splits[phase - minPhase];
+      auto &block = split.funcOp.getBody().front();
+      auto &ownIndices = phaseOwnArgIndices[phase - minPhase];
+      if (ownIndices.empty())
+        continue;
+
+      // Build a per-phase mapping from signature values to body/split values.
+      // Signature block args map to unifiedArgValues; cloned op results are
+      // added as we go. A fresh mapping per phase ensures cloned ops are local.
+      IRMapping sigToBody;
+      for (auto [sigArg, bodyVal] :
+           llvm::zip(sigBlock.getArguments(), unifiedArgValues))
+        sigToBody.map(sigArg, bodyVal);
+
+      OpBuilder insertBuilder(&block, block.begin());
+      for (auto [localIdx, unifiedIdx] : llvm::enumerate(ownIndices)) {
+        Value ownArg = block.getArgument(localIdx);
+        Value sigTypeVal = typeOfArgs[unifiedIdx];
+
+        // Resolve the signature type value to a body/split value.
+        Value resolvedType;
+        if (auto mapped = sigToBody.lookupOrNull(sigTypeVal)) {
+          resolvedType = mapped;
+        } else {
+          auto *defOp = sigTypeVal.getDefiningOp();
+          auto *cloned = insertBuilder.clone(*defOp, sigToBody);
+          resolvedType =
+              cloned->getResult(cast<OpResult>(sigTypeVal).getResultNumber());
+        }
+
+        auto coerceOp = CoerceTypeOp::create(insertBuilder, ownArg.getLoc(),
+                                             ownArg, resolvedType);
+
+        // Replace uses of the own arg within this function with the coerced
+        // value. Exclude the coerce_type itself and scope to this function
+        // (cross-phase refs to this block arg exist from const arg movement).
+        ownArg.replaceUsesWithIf(coerceOp.getResult(), [&](OpOperand &use) {
+          if (use.getOwner() == coerceOp)
+            return false;
+          Operation *parent = use.getOwner();
+          while (parent && !isa<FuncOp>(parent))
+            parent = parent->getParentOp();
+          return parent == split.funcOp;
+        });
+
+        // Update returnValues entries that reference the own arg, since
+        // replaceUsesWithIf only modifies OpOperands, not standalone vectors.
+        for (auto &rv : split.returnValues)
+          if (rv == ownArg)
+            rv = coerceOp.getResult();
+      }
+    }
   }
 
   // Add return operations to all phase functions and plumb values from earlier

@@ -234,20 +234,46 @@ static LogicalResult convert(hir::CoerceTypeOp op,
 // discarding the type operand and forwarding the converted lhs/rhs operands.
 // Comparison ops additionally pass the result type explicitly since operand
 // and result types may differ in MIR (e.g. uint<1> for comparisons).
+//
+// When one operand has been retyped to a concrete MIR type (via coerce_type)
+// and the other is still !hir.any (e.g. from opaque_unpack), we insert an
+// unrealized_conversion_cast on the !hir.any operand to match. Step 2 folds
+// these casts by retyping the source value.
+
+/// If lhs and rhs have mismatched types where one is !hir.any and the other
+/// is a concrete MIR type, insert an unrealized_conversion_cast on the
+/// !hir.any operand to match. These casts are folded in Step 2.
+static void reconcileOperandTypes(ConversionPatternRewriter &rewriter,
+                                  Location loc, Value &lhs, Value &rhs) {
+  if (lhs.getType() == rhs.getType())
+    return;
+  if (isa<hir::AnyType>(lhs.getType()) && !isa<hir::AnyType>(rhs.getType())) {
+    lhs = UnrealizedConversionCastOp::create(rewriter, loc, rhs.getType(), lhs)
+              .getResult(0);
+  } else if (!isa<hir::AnyType>(lhs.getType()) &&
+             isa<hir::AnyType>(rhs.getType())) {
+    rhs = UnrealizedConversionCastOp::create(rewriter, loc, lhs.getType(), rhs)
+              .getResult(0);
+  }
+}
 
 #define CONVERT_BINARY_OP(HirOp, MirOp)                                        \
   static LogicalResult convert(hir::HirOp op, hir::HirOp::Adaptor adaptor,     \
                                ConversionPatternRewriter &rewriter) {          \
-    rewriter.replaceOpWithNewOp<mir::MirOp>(op, adaptor.getLhs(),              \
-                                            adaptor.getRhs());                 \
+    Value lhs = adaptor.getLhs();                                              \
+    Value rhs = adaptor.getRhs();                                              \
+    reconcileOperandTypes(rewriter, op.getLoc(), lhs, rhs);                    \
+    rewriter.replaceOpWithNewOp<mir::MirOp>(op, lhs, rhs);                     \
     return success();                                                          \
   }
 
 #define CONVERT_CMP_OP(HirOp, MirOp)                                           \
   static LogicalResult convert(hir::HirOp op, hir::HirOp::Adaptor adaptor,     \
                                ConversionPatternRewriter &rewriter) {          \
-    rewriter.replaceOpWithNewOp<mir::MirOp>(                                   \
-        op, adaptor.getLhs().getType(), adaptor.getLhs(), adaptor.getRhs());   \
+    Value lhs = adaptor.getLhs();                                              \
+    Value rhs = adaptor.getRhs();                                              \
+    reconcileOperandTypes(rewriter, op.getLoc(), lhs, rhs);                    \
+    rewriter.replaceOpWithNewOp<mir::MirOp>(op, lhs.getType(), lhs, rhs);      \
     return success();                                                          \
   }
 
@@ -288,23 +314,17 @@ static LogicalResult convert(hir::ReturnOp op, hir::ReturnOp::Adaptor adaptor,
 
 static LogicalResult convert(hir::CallOp op, hir::CallOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  // Validate argument types from constant type operands (not used directly;
-  // the converted operand types are the ground truth).
-  for (auto value : adaptor.getTypeOfArgs()) {
-    mir::TypeAttr attr;
-    if (!matchPattern(value, m_Constant(&attr)))
-      return emitBug(op.getLoc()) << "non-constant argument type";
-  }
-
   // Extract result types from constant type operands and bake them into
-  // the MIR call.
+  // the MIR call. Fall back to !hir.any for unresolvable types (e.g. type
+  // operands threaded via opaque_unpack that haven't been specialized yet).
   SmallVector<Type> resultTypes;
   resultTypes.reserve(adaptor.getTypeOfResults().size());
   for (auto value : adaptor.getTypeOfResults()) {
     mir::TypeAttr attr;
-    if (!matchPattern(value, m_Constant(&attr)))
-      return emitBug(op.getLoc()) << "non-constant result type";
-    resultTypes.push_back(attr.getValue());
+    if (matchPattern(value, m_Constant(&attr)))
+      resultTypes.push_back(attr.getValue());
+    else
+      resultTypes.push_back(hir::AnyType::get(op.getContext()));
   }
 
   rewriter.replaceOpWithNewOp<mir::CallOp>(op, resultTypes, op.getCalleeAttr(),
@@ -451,29 +471,53 @@ void HIRToMIRPass::runOnOperation() {
     }
 
     // Step 2: Convert the hir.func shell to mir.func.
-    // Resolve block argument types by folding unrealized_conversion_casts that
-    // bridge from !hir.any to MIR types.
+    // Resolve value types by folding unrealized_conversion_casts that bridge
+    // from !hir.any to MIR types. This handles casts from coerce_type (on
+    // block args) and from reconcileOperandTypes (on opaque_unpack results
+    // and other non-block-arg values).
+    //
+    // When retyping a value, we propagate the type through ops that have
+    // SameOperandsAndResultType (like mir.add): if the result changes, the
+    // operands must change too, and vice versa. This avoids breaking type
+    // constraints when a cast on a binary op's result retypes it without
+    // updating its operands.
     if (func.getBody().empty())
       continue;
     auto &entryBlock = func.getBody().front();
-    for (auto arg : entryBlock.getArguments()) {
-      for (auto *user : llvm::make_early_inc_range(arg.getUsers())) {
-        auto castOp = dyn_cast<UnrealizedConversionCastOp>(user);
-        if (!castOp || castOp.getNumOperands() != 1 ||
-            castOp.getNumResults() != 1)
-          continue;
-        auto inputType = castOp.getOperand(0).getType();
-        auto resultType = castOp.getResult(0).getType();
-        if (!isa<hir::HIRDialect>(inputType.getDialect()))
-          continue;
-        if (!isa<mir::MIRDialect>(resultType.getDialect()) &&
-            !isa<FunctionType>(resultType))
-          continue;
-        // Replace the cast with the block arg and retype the arg.
-        castOp.getResult(0).replaceAllUsesWith(arg);
-        castOp.erase();
-        arg.setType(resultType);
+
+    // Propagate a concrete type through a value and its defining op chain.
+    // When a value's type is changed from !hir.any to a concrete MIR type,
+    // SameOperandsAndResultType ops need their operands retyped too.
+    std::function<void(Value, Type)> propagateType = [&](Value value,
+                                                         Type newType) {
+      if (value.getType() == newType)
+        return;
+      value.setType(newType);
+      if (auto opResult = dyn_cast<OpResult>(value)) {
+        auto *defOp = opResult.getOwner();
+        if (defOp->hasTrait<OpTrait::SameOperandsAndResultType>()) {
+          for (auto operand : defOp->getOperands())
+            propagateType(operand, newType);
+        }
       }
+    };
+
+    for (auto &op : llvm::make_early_inc_range(entryBlock)) {
+      auto castOp = dyn_cast<UnrealizedConversionCastOp>(&op);
+      if (!castOp || castOp.getNumOperands() != 1 ||
+          castOp.getNumResults() != 1)
+        continue;
+      auto inputType = castOp.getOperand(0).getType();
+      auto resultType = castOp.getResult(0).getType();
+      if (!isa<hir::HIRDialect>(inputType.getDialect()))
+        continue;
+      if (!isa<mir::MIRDialect>(resultType.getDialect()) &&
+          !isa<FunctionType>(resultType))
+        continue;
+      auto source = castOp.getOperand(0);
+      castOp.getResult(0).replaceAllUsesWith(source);
+      castOp.erase();
+      propagateType(source, resultType);
     }
 
     // Check that all block arg types have been resolved. Skip private

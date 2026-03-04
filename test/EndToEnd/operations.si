@@ -1,0 +1,28 @@
+// RUN: silc %s | FileCheck %s
+
+// Test that all arithmetic binary operations are correctly evaluated at compile
+// time through phased execution.
+
+// CHECK-LABEL: mir.func private @main_sub.const0
+// CHECK-NEXT: %c7_int = mir.constant #mir.int<7>
+// CHECK-NEXT: mir.return
+fn sub_const(const a: int, b: int) -> int { a - b }
+fn main_sub() -> int { sub_const(10, 3) }
+
+// CHECK-LABEL: mir.func private @main_mul.const0
+// CHECK-NEXT: %c20_int = mir.constant #mir.int<20>
+// CHECK-NEXT: mir.return
+fn mul_const(const a: int, b: int) -> int { a * b }
+fn main_mul() -> int { mul_const(4, 5) }
+
+// CHECK-LABEL: mir.func private @main_div.const0
+// CHECK-NEXT: %c3_int = mir.constant #mir.int<3>
+// CHECK-NEXT: mir.return
+fn div_const(const a: int, b: int) -> int { a / b }
+fn main_div() -> int { div_const(10, 3) }
+
+// CHECK-LABEL: mir.func private @main_mod.const0
+// CHECK-NEXT: %c1_int = mir.constant #mir.int<1>
+// CHECK-NEXT: mir.return
+fn mod_const(const a: int, b: int) -> int { a % b }
+fn main_mod() -> int { mod_const(10, 3) }
