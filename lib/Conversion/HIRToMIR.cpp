@@ -440,6 +440,12 @@ static bool shouldLower(hir::FuncOp func) {
       for (auto val : spec.getTypeOfResults())
         if (!isResolvableType(val))
           return false;
+    } else if (isa<hir::OpaqueUnpackOp>(&op)) {
+      // Opaque unpack ops indicate that the function has not yet been
+      // specialized with the results of a previous phase's evaluation.
+      // Defer lowering until specialization replaces the unpack with
+      // concrete constant values.
+      return false;
     }
   }
   return true;
@@ -637,6 +643,7 @@ void HIRToMIRPass::runOnOperation() {
   target.markOpRecursivelyLegal<hir::FuncOp>();
   target.addLegalOp<hir::SplitFuncOp>();
   target.markOpRecursivelyLegal<hir::SplitFuncOp>();
+  target.addLegalOp<hir::MultiphaseFuncOp>();
 
   // # Patterns
   ConversionPatternSet patterns(&getContext(), converter);
