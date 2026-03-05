@@ -68,14 +68,14 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
     argValues.push_back(argValue);
   }
 
-  // Use `type_of` to derive argument types from the actual argument values.
-  // Result types are left as inferrable placeholders, since they depend on the
-  // callee signature and will be resolved by the CheckCalls pass.
+  // Derive argument types from the actual argument values, using concrete type
+  // constructors where possible instead of `type_of` ops. Result types are left
+  // as inferrable placeholders, since they depend on the callee signature and
+  // will be resolved by the CheckCalls pass.
   auto calleeFuncOp = cx.funcs.lookup(fnItem);
   SmallVector<Value> typeOfArgs, typeOfResults;
   for (auto arg : argValues)
-    typeOfArgs.push_back(
-        hir::TypeOfOp::create(cx.builder, expr.loc, arg).getResult());
+    typeOfArgs.push_back(hir::getOrCreateTypeOf(cx.builder, expr.loc, arg));
   // TODO: Figure out the return type kind and number of results.
   typeOfResults.push_back(
       hir::InferrableOp::create(cx.builder, expr.loc).getResult());

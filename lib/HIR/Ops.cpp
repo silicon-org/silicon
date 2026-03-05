@@ -909,6 +909,8 @@ Value hir::getTypeOf(Value value) {
             EqOp, NeqOp, LtOp, GtOp, GeqOp, LeqOp>(
           [](auto op) { return op.getResultType(); })
       .Case<CoerceTypeOp>([](CoerceTypeOp op) { return op.getTypeOperand(); })
+      .Case<ConstantFuncOp>([](ConstantFuncOp op) { return op.getFuncType(); })
+      .Case<LetOp>([](LetOp op) { return op.getType(); })
       .Case<CallOp>([&](CallOp op) {
         return op.getTypeOfResults()[result.getResultNumber()];
       })
@@ -921,5 +923,9 @@ Value hir::getTypeOf(Value value) {
 Value hir::getOrCreateTypeOf(OpBuilder &builder, Location loc, Value value) {
   if (auto type = getTypeOf(value))
     return type;
+  if (value.getDefiningOp<ConstantIntOp>())
+    return IntTypeOp::create(builder, loc).getResult();
+  if (value.getDefiningOp<ConstantUnitOp>())
+    return UnitTypeOp::create(builder, loc).getResult();
   return TypeOfOp::create(builder, loc, value).getResult();
 }
