@@ -18,6 +18,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -374,10 +375,45 @@ static LogicalResult convert(UnrealizedConversionCastOp op,
 // dialect conversion, then convert the hir.func shell itself to mir.func by
 // resolving block argument types from unrealized_conversion_casts and gathering
 // result types from the mir.return operands.
+//
+// Only functions whose type operands are all constants are lowered. Functions
+// that depend on unresolved opaque_unpack results for their types are skipped
+// and will be lowered in a later pipeline iteration after specialization.
 //===----------------------------------------------------------------------===//
+
+/// Check whether a function is ready for HIR-to-MIR lowering. A function is
+/// ready if all `coerce_type` type operands can be resolved to constants after
+/// conversion. The only unresolvable sources are block arguments and
+/// `opaque_unpack` results, which carry cross-phase values that haven't been
+/// specialized yet. Type constructors (int_type, etc.) and MIR constants are
+/// always resolvable.
+static bool shouldLower(hir::FuncOp func) {
+  if (func.getBody().empty())
+    return true;
+  for (auto &op : func.getBody().front()) {
+    auto coerce = dyn_cast<hir::CoerceTypeOp>(&op);
+    if (!coerce)
+      continue;
+    auto *defOp = coerce.getTypeOperand().getDefiningOp();
+    if (!defOp)
+      return false; // block argument — unresolved cross-phase value
+    if (isa<hir::OpaqueUnpackOp>(defOp))
+      return false; // opaque_unpack — not yet specialized
+  }
+  return true;
+}
 
 void HIRToMIRPass::runOnOperation() {
   auto moduleOp = getOperation();
+
+  // Pre-compute which functions are ready for lowering.
+  DenseSet<Operation *> funcsToLower;
+  for (auto func : moduleOp.getOps<hir::FuncOp>()) {
+    if (shouldLower(func))
+      funcsToLower.insert(func);
+  }
+  LLVM_DEBUG(llvm::dbgs() << "HIR-to-MIR: " << funcsToLower.size()
+                          << " function(s) ready for lowering\n");
 
   // Set up the type conversion.
   TypeConverter converter;
@@ -424,6 +460,11 @@ void HIRToMIRPass::runOnOperation() {
   config.allowPatternRollback = false;
 
   for (auto func : llvm::make_early_inc_range(moduleOp.getOps<hir::FuncOp>())) {
+    if (!funcsToLower.contains(func)) {
+      LLVM_DEBUG(llvm::dbgs() << "Skipping @" << func.getSymName()
+                              << " (unresolved types)\n");
+      continue;
+    }
     LLVM_DEBUG(llvm::dbgs() << "Lowering @" << func.getSymName() << "\n");
 
     // Step 1: Convert body ops from HIR to MIR.
