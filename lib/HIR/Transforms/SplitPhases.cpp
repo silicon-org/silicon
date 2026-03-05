@@ -371,10 +371,10 @@ void PhaseSplitter::run() {
         // Thread results from the previous phase.
         for (auto result : prevResults) {
           callArgs.push_back(result);
-          auto inferrable = InferrableOp::create(callBuilder, loc);
-          analysis.opPhases[inferrable] = phase;
-          analysis.valuePhases[inferrable.getResult()] = phase;
-          callTypeOfArgs.push_back(inferrable.getResult());
+          auto opaqueType = OpaqueTypeOp::create(callBuilder, loc);
+          analysis.opPhases[opaqueType] = phase;
+          analysis.valuePhases[opaqueType.getResult()] = phase;
+          callTypeOfArgs.push_back(opaqueType.getResult());
         }
 
         // The final phase uses the original unified_call's result types.
@@ -392,10 +392,10 @@ void PhaseSplitter::run() {
           auto retOp =
               cast<ReturnOp>(splitFunc.getBody().front().getTerminator());
           for (unsigned i = 0; i < retOp.getValues().size(); ++i) {
-            auto inferrable = InferrableOp::create(callBuilder, loc);
-            analysis.opPhases[inferrable] = phase;
-            analysis.valuePhases[inferrable.getResult()] = phase;
-            callTypeOfResults.push_back(inferrable.getResult());
+            auto opaqueType = OpaqueTypeOp::create(callBuilder, loc);
+            analysis.opPhases[opaqueType] = phase;
+            analysis.valuePhases[opaqueType.getResult()] = phase;
+            callTypeOfResults.push_back(opaqueType.getResult());
             resultTypes.push_back(retOp.getValues()[i].getType());
           }
         }
@@ -675,12 +675,16 @@ void PhaseSplitter::run() {
       continue;
 
     // In this phase: replace trailing context block args with a single opaque
-    // arg followed by an opaque_unpack.
+    // arg followed by an opaque_unpack. Insert a coerce_type before the unpack
+    // so HIR-to-MIR can determine the block argument's type.
     auto opaqueArg = block.addArgument(anyType, funcOp.getLoc());
     OpBuilder unpackBuilder(&block, block.begin());
+    auto opaqueTypeOp = OpaqueTypeOp::create(unpackBuilder, funcOp.getLoc());
+    auto coerceOp = CoerceTypeOp::create(unpackBuilder, funcOp.getLoc(),
+                                         opaqueArg, opaqueTypeOp.getResult());
     auto unpackOp = OpaqueUnpackOp::create(
         unpackBuilder, funcOp.getLoc(), SmallVector<Type>(contextArgs, anyType),
-        opaqueArg);
+        coerceOp.getResult());
     for (unsigned i = 0; i < contextArgs; ++i)
       block.getArgument(ownArgs + i).replaceAllUsesWith(unpackOp.getResult(i));
     block.eraseArguments(ownArgs, contextArgs);
