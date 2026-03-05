@@ -708,7 +708,7 @@ void PhaseSplitter::run() {
     SmallVector<Value> newReturnTypes(
         prevReturnOp.getTypeOfValues().take_front(prevOwnReturns));
     newReturnTypes.push_back(
-        getOrCreateTypeOf(packBuilder, funcOp.getLoc(), packOp));
+        OpaqueTypeOp::create(packBuilder, funcOp.getLoc()).getResult());
     ReturnOp::create(packBuilder, funcOp.getLoc(), newReturnValues,
                      newReturnTypes);
     prevReturnOp.erase();

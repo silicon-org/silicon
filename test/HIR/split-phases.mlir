@@ -12,7 +12,8 @@ func.func private @dummyB()
 // CHECK:      [[TT:%.+]] = hir.type_type
 // CHECK:      hir.coerce_type %T, [[TT]]
 // CHECK:      [[PACK:%.+]] = hir.opaque_pack(%T)
-// CHECK:      hir.return([[PACK]]) : ({{.*}})
+// CHECK:      [[OT:%.+]] = hir.opaque_type
+// CHECK:      hir.return([[PACK]]) : ([[OT]])
 
 // CHECK-LABEL: hir.func private @Identity.const0(%x, %ctx) -> (result)
 // CHECK:      [[UNPACK:%.+]] = hir.opaque_unpack %ctx
@@ -122,7 +123,8 @@ hir.unified_func @ValueUseAcrossPhases() -> () {
 // CHECK:      [[A0:%.+]] = hir.coerce_type %a, [[INT]]
 // CHECK:      [[TA:%.+]] = hir.type_of [[A0]]
 // CHECK:      [[PACK:%.+]] = hir.opaque_pack([[TA]], %a)
-// CHECK:      hir.return([[PACK]]) : ({{.*}})
+// CHECK:      [[OT:%.+]] = hir.opaque_type
+// CHECK:      hir.return([[PACK]]) : ([[OT]])
 
 // CHECK-LABEL: hir.func private @ConstArg.const0(%b, %ctx) -> (result)
 // CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
@@ -159,7 +161,8 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      [[A0:%.+]] = hir.coerce_type %a, [[INT]]
 // CHECK:      [[TA:%.+]] = hir.type_of [[A0]]
 // CHECK:      [[PACK:%.+]] = hir.opaque_pack([[TA]], %a)
-// CHECK:      hir.return([[PACK]]) : ({{.*}})
+// CHECK:      [[OT:%.+]] = hir.opaque_type
+// CHECK:      hir.return([[PACK]]) : ([[OT]])
 
 // CHECK-LABEL: hir.func private @ThreePhase.const1(%b, %ctx) -> (ctx)
 // CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
@@ -167,7 +170,8 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      [[B0:%.+]] = hir.coerce_type %b, [[INT]]
 // CHECK:      [[TMP:%.+]] = hir.add {{.*}}, [[B0]] :
 // CHECK:      [[PACK:%.+]] = hir.opaque_pack({{.*}}, [[TMP]])
-// CHECK:      hir.return([[PACK]]) : ({{.*}})
+// CHECK:      [[OT:%.+]] = hir.opaque_type
+// CHECK:      hir.return([[PACK]]) : ([[OT]])
 
 // CHECK-LABEL: hir.func private @ThreePhase.const0(%c, %ctx) -> (result)
 // CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
