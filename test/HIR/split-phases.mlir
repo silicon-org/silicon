@@ -10,8 +10,8 @@ func.func private @dummyB()
 
 // CHECK-LABEL: hir.func private @Identity.const1(%T) -> (ctx)
 // CHECK:      [[TT:%.+]] = hir.type_type
-// CHECK:      hir.coerce_type %T, [[TT]]
-// CHECK:      [[PACK:%.+]] = hir.opaque_pack(%T)
+// CHECK:      [[CT:%.+]] = hir.coerce_type %T, [[TT]]
+// CHECK:      [[PACK:%.+]] = hir.opaque_pack([[CT]])
 // CHECK:      [[OT:%.+]] = hir.opaque_type
 // CHECK:      hir.return([[PACK]]) : ([[OT]])
 
@@ -122,7 +122,7 @@ hir.unified_func @ValueUseAcrossPhases() -> () {
 // CHECK:      [[INT:%.+]] = hir.int_type
 // CHECK:      [[A0:%.+]] = hir.coerce_type %a, [[INT]]
 // CHECK:      [[TA:%.+]] = hir.type_of [[A0]]
-// CHECK:      [[PACK:%.+]] = hir.opaque_pack([[TA]], %a)
+// CHECK:      [[PACK:%.+]] = hir.opaque_pack([[TA]], [[A0]])
 // CHECK:      [[OT:%.+]] = hir.opaque_type
 // CHECK:      hir.return([[PACK]]) : ([[OT]])
 
@@ -153,6 +153,41 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Const arg pass-through: verifies that opaque_pack operands use the coerced
+// value instead of the raw block arg. This is the pattern from add-const.si
+// where a const arg flows into the next phase and the coerce_type was dead.
+
+// CHECK-LABEL: hir.func private @ConstArgPassThrough.const1(%a) -> (ctx)
+// CHECK:      [[INT:%.+]] = hir.int_type
+// CHECK:      [[A0:%.+]] = hir.coerce_type %a, [[INT]]
+// CHECK:      [[TA:%.+]] = hir.type_of [[A0]]
+// CHECK:      [[PACK:%.+]] = hir.opaque_pack([[TA]], [[A0]])
+// CHECK:      [[OT:%.+]] = hir.opaque_type
+// CHECK:      hir.return([[PACK]]) : ([[OT]])
+
+// CHECK-LABEL: hir.func private @ConstArgPassThrough.const0(%b, %ctx) -> (result)
+// CHECK-NEXT: [[UNPACK:%.+]] = hir.opaque_unpack %ctx
+// CHECK:      [[INT:%.+]] = hir.int_type
+// CHECK:      [[B0:%.+]] = hir.coerce_type %b, [[INT]]
+// CHECK:      hir.return
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0)
+hir.unified_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %2 = hir.int_type
+  hir.unified_signature (%0, %1) -> (%2)
+} {
+  %ta = hir.type_of %a
+  %tb = hir.type_of %b
+  %t = hir.unify %ta, %tb
+  %0 = hir.add %a, %b : %t
+  %t0 = hir.type_of %0
+  hir.unified_return (%0) : (%t0)
+}
+
+//===----------------------------------------------------------------------===//
 // Three-phase split: const const arg at phase -2, const arg at phase -1,
 // runtime arg at phase 0. Values thread through adjacent phases.
 
@@ -160,7 +195,7 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      [[INT:%.+]] = hir.int_type
 // CHECK:      [[A0:%.+]] = hir.coerce_type %a, [[INT]]
 // CHECK:      [[TA:%.+]] = hir.type_of [[A0]]
-// CHECK:      [[PACK:%.+]] = hir.opaque_pack([[TA]], %a)
+// CHECK:      [[PACK:%.+]] = hir.opaque_pack([[TA]], [[A0]])
 // CHECK:      [[OT:%.+]] = hir.opaque_type
 // CHECK:      hir.return([[PACK]]) : ([[OT]])
 

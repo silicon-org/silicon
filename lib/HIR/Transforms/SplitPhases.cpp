@@ -715,6 +715,37 @@ void PhaseSplitter::run() {
   }
 
   //===--------------------------------------------------------------------===//
+  // Re-apply coerce_type Replacements
+  //
+  // The coerce_type insertion step above ran replaceUsesWithIf before the
+  // opaque pack bundling step. Opaque packs created later reference the raw
+  // block arg, leaving coerce_type dead. Re-apply the replacement so that
+  // opaque_pack operands (and any other remaining raw-arg uses) go through
+  // the coerced value.
+  //===--------------------------------------------------------------------===//
+
+  for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
+    auto &split = splits[phase - minPhase];
+    auto &block = split.funcOp.getBody().front();
+    unsigned ownArgs = numOwnArgs[phase - minPhase];
+    for (unsigned i = 0; i < ownArgs; ++i) {
+      Value ownArg = block.getArgument(i);
+      CoerceTypeOp coerceOp;
+      for (auto *user : ownArg.getUsers()) {
+        if (auto c = dyn_cast<CoerceTypeOp>(user)) {
+          coerceOp = c;
+          break;
+        }
+      }
+      if (!coerceOp)
+        continue;
+      ownArg.replaceUsesWithIf(coerceOp.getResult(), [&](OpOperand &use) {
+        return use.getOwner() != coerceOp;
+      });
+    }
+  }
+
+  //===--------------------------------------------------------------------===//
   // Set Argument and Result Names on Phase Functions
   //
   // Now that each phase function has its final block args and return values,
