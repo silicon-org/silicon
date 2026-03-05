@@ -69,6 +69,8 @@ hir.unified_func @SinglePhase() -> () {
 // CHECK:         hir.signature () -> ()
 // CHECK:       -1: @TwoUnrelatedPhases.const1
 // CHECK:       0: @TwoUnrelatedPhases.const0
+// CHECK-LABEL: hir.multiphase_func @TwoUnrelatedPhases.const() -> ()
+// CHECK:       @TwoUnrelatedPhases.const1
 hir.unified_func @TwoUnrelatedPhases() -> () {
   hir.unified_signature () -> ()
 } {
@@ -99,6 +101,8 @@ hir.unified_func @TwoUnrelatedPhases() -> () {
 // CHECK:         hir.signature () -> ()
 // CHECK:       -1: @ValueUseAcrossPhases.const1
 // CHECK:       0: @ValueUseAcrossPhases.const0
+// CHECK-LABEL: hir.multiphase_func @ValueUseAcrossPhases.const() -> ()
+// CHECK:       @ValueUseAcrossPhases.const1
 hir.unified_func @ValueUseAcrossPhases() -> () {
   hir.unified_signature () -> ()
 } {
@@ -282,6 +286,40 @@ hir.unified_func @ThreePhaseCaller(%z: 0) -> (result: 0) {
   %t2 = hir.inferrable
   %t3 = hir.inferrable
   %r = hir.unified_call @ThreePhase(%a, %b, %z) : (%t0, %t1, %t2) -> (%t3) (!hir.any, !hir.any, !hir.any) -> !hir.any [-2, -1, 0] -> [0]
+  %tr = hir.type_of %r
+  hir.unified_return (%r) : (%tr)
+}
+
+//===----------------------------------------------------------------------===//
+// Internal compile-time phase: a function with no compile-time args that calls
+// a const-arg function with constant arguments, creating an internal phase -1.
+// The multiphase_func should be emitted even though there's only one
+// compile-time phase.
+
+// CHECK-LABEL: hir.func private @InternalPhase.const1() -> (ctx)
+// CHECK: hir.call @ConstArg.const1(
+// CHECK: hir.return
+
+// CHECK-LABEL: hir.func private @InternalPhase.const0(%y, %ctx) -> (result)
+// CHECK: hir.call @ConstArg.const0(
+// CHECK: hir.return
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @InternalPhase(%y: 0) -> (result: 0)
+// CHECK:         hir.signature
+// CHECK:       -1: @InternalPhase.const1
+// CHECK:       0: @InternalPhase.const0
+// CHECK-LABEL: hir.multiphase_func @InternalPhase.const() -> (ctx)
+// CHECK:       @InternalPhase.const1
+hir.unified_func @InternalPhase(%y: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.unified_signature (%0) -> (%0)
+} {
+  %a = hir.constant_int 42
+  %t0 = hir.inferrable
+  %t1 = hir.inferrable
+  %t2 = hir.inferrable
+  %r = hir.unified_call @ConstArg(%a, %y) : (%t0, %t1) -> (%t2) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
   %tr = hir.type_of %r
   hir.unified_return (%r) : (%tr)
 }

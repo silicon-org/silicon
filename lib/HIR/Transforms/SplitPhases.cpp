@@ -837,44 +837,63 @@ void PhaseSplitter::run() {
     unifiedSigOp.erase();
   }
 
-  // Emit a multiphase_func wrapping the compile-time sub-functions if there
-  // are 2+ compile-time phases (phases < 0).
-  if (minPhase <= -2) {
-    SmallVector<Attribute> constFuncAttrs;
-    for (int16_t phase = minPhase; phase < 0; ++phase)
-      constFuncAttrs.push_back(FlatSymbolRefAttr::get(
-          ctx, splits[phase - minPhase].funcOp.getSymName()));
+  // Emit a multiphase_func wrapping the compile-time sub-functions when there
+  // are compile-time phases that need chained evaluation. This includes both
+  // the original case (2+ compile-time phases) and functions with internal
+  // compile-time phases not tied to external args (e.g., from calling a
+  // const-arg function with constant arguments).
+  if (minPhase < 0) {
+    DenseSet<int16_t> externalArgPhases;
+    for (auto phase : sfArgPhases)
+      if (phase < 0)
+        externalArgPhases.insert(static_cast<int16_t>(phase));
 
-    // Only include compile-time args (phase < 0). An arg is "first" if it
-    // enters at the earliest compile-time phase, "last" otherwise.
-    SmallVector<Attribute> mpArgNames;
-    SmallVector<bool> mpArgIsFirst;
-    for (auto [name, phase] : llvm::zip(sfArgNames, sfArgPhases)) {
-      if (phase < 0) {
-        mpArgNames.push_back(name);
-        mpArgIsFirst.push_back(phase == minPhase);
+    bool hasInternalConstPhase = false;
+    for (int16_t phase = minPhase; phase < 0; ++phase) {
+      if (!externalArgPhases.contains(phase)) {
+        hasInternalConstPhase = true;
+        break;
       }
     }
 
-    // One result per value threaded from the last compile-time phase to phase
-    // 0.
-    auto lastConstRetOp = cast<ReturnOp>(
-        splits[-1 - minPhase].funcOp.getBody().back().getTerminator());
-    unsigned numCtx = lastConstRetOp.getValues().size();
-    SmallVector<Attribute> mpResultNames;
-    if (numCtx == 1) {
-      mpResultNames.push_back(sfBuilder.getStringAttr("ctx"));
-    } else {
-      for (unsigned i = 0; i < numCtx; ++i)
-        mpResultNames.push_back(sfBuilder.getStringAttr("ctx" + Twine(i)));
-    }
+    if (minPhase <= -2 || hasInternalConstPhase) {
+      SmallVector<Attribute> constFuncAttrs;
+      for (int16_t phase = minPhase; phase < 0; ++phase)
+        constFuncAttrs.push_back(FlatSymbolRefAttr::get(
+            ctx, splits[phase - minPhase].funcOp.getSymName()));
 
-    MultiphaseFuncOp::create(
-        sfBuilder, sfLoc, sfBuilder.getStringAttr(sfName.getValue() + ".const"),
-        /*sym_visibility=*/StringAttr{}, sfBuilder.getArrayAttr(mpArgNames),
-        sfBuilder.getDenseBoolArrayAttr(mpArgIsFirst),
-        sfBuilder.getArrayAttr(mpResultNames),
-        sfBuilder.getArrayAttr(constFuncAttrs));
+      // Only include compile-time args (phase < 0). An arg is "first" if it
+      // enters at the earliest compile-time phase, "last" otherwise.
+      SmallVector<Attribute> mpArgNames;
+      SmallVector<bool> mpArgIsFirst;
+      for (auto [name, phase] : llvm::zip(sfArgNames, sfArgPhases)) {
+        if (phase < 0) {
+          mpArgNames.push_back(name);
+          mpArgIsFirst.push_back(phase == minPhase);
+        }
+      }
+
+      // One result per value threaded from the last compile-time phase to phase
+      // 0.
+      auto lastConstRetOp = cast<ReturnOp>(
+          splits[-1 - minPhase].funcOp.getBody().back().getTerminator());
+      unsigned numCtx = lastConstRetOp.getValues().size();
+      SmallVector<Attribute> mpResultNames;
+      if (numCtx == 1) {
+        mpResultNames.push_back(sfBuilder.getStringAttr("ctx"));
+      } else {
+        for (unsigned i = 0; i < numCtx; ++i)
+          mpResultNames.push_back(sfBuilder.getStringAttr("ctx" + Twine(i)));
+      }
+
+      MultiphaseFuncOp::create(
+          sfBuilder, sfLoc,
+          sfBuilder.getStringAttr(sfName.getValue() + ".const"),
+          /*sym_visibility=*/StringAttr{}, sfBuilder.getArrayAttr(mpArgNames),
+          sfBuilder.getDenseBoolArrayAttr(mpArgIsFirst),
+          sfBuilder.getArrayAttr(mpResultNames),
+          sfBuilder.getArrayAttr(constFuncAttrs));
+    }
   }
 
   // Erase the unified func now that all data has been extracted.
