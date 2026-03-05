@@ -12,6 +12,8 @@ If you notice any inconsistencies or contradictions, ask the user for clarificat
 Write down any noteworthy or surprising things for you to remember later as concise bullet-point notes in the SESSION.md file.
 If you want to remember a task to be done later, add it to the TODO.md file.
 If you make a change that resolves a todo, remove it from the TODO.md file.
+If you notice a bug or failing test unrelated to your current changes, take a note of it in TODO.md for later fixing.
+If an end-to-end test breaks, consider marking it XFAIL and taking a note in TODO.md -- it's likely that improvements to passes are correct, and the end-to-end tests break for other reasons.
 
 As a first phase of the project, we would like to develop a minimum viable example of the phased execution, HIR/MIR split, and monomorphization of functions.
 That prototype should implement docs/design/phase-splits.md as closely as possible, and we eventually want to be able to commit the examples in that design doc as test cases.
