@@ -577,15 +577,15 @@ void HIRToMIRPass::runOnOperation() {
 
   // # Type Converter
   //
-  // The type-based callback accepts both HIR and MIR types as legal (identity
-  // conversion). The value-based callback resolves unrealized_conversion_cast
-  // values: when a value is defined by a cast from a concrete MIR type to
-  // !hir.any, the adaptor maps it to the MIR-typed input. This is how
-  // signature conversion materializations and pre-existing casts get resolved.
+  // Only MIR types and FunctionType are legal. HIR types (including !hir.any)
+  // must be converted. The value-based callback resolves
+  // unrealized_conversion_cast values: when a value is defined by a cast from
+  // a concrete MIR type to !hir.any, the adaptor maps it to the MIR-typed
+  // input. This is how signature conversion materializations and pre-existing
+  // casts get resolved.
   TypeConverter converter;
   converter.addConversion([](Type type) -> std::optional<Type> {
-    if (isa<mir::MIRDialect>(type.getDialect()) ||
-        isa<hir::HIRDialect>(type.getDialect()) || isa<FunctionType>(type))
+    if (isa<mir::MIRDialect>(type.getDialect()) || isa<FunctionType>(type))
       return type;
     return std::nullopt;
   });
