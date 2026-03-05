@@ -133,6 +133,21 @@ hir.func @BinaryComparison(%a, %b) -> (r0, r1, r2, r3, r4, r5) {
   hir.return (%r0, %r1, %r2, %r3, %r4, %r5) : (%int, %int, %int, %int, %int, %int)
 }
 
+// CHECK-LABEL: mir.func @OpaqueTypes
+hir.func @OpaqueTypes() -> () {
+  // CHECK: mir.constant #mir.type<!mir.opaque>
+  %opaque_type = hir.opaque_type
+  hir.return
+}
+
+// CHECK-LABEL: mir.func @OpaqueArg(%a: !mir.opaque)
+hir.func @OpaqueArg(%a) -> (result) {
+  %opaque = hir.opaque_type
+  %a0 = hir.coerce_type %a, %opaque
+  // CHECK: mir.return %a
+  hir.return (%a0) : (%opaque)
+}
+
 // CHECK-LABEL: mir.func @Casts
 hir.func @Casts() -> (a, b) {
   // CHECK-NEXT: [[TMP1:%.+]] = mir.constant

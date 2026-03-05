@@ -143,6 +143,15 @@ static LogicalResult convert(hir::AnyfuncTypeOp op,
   return success();
 }
 
+static LogicalResult convert(hir::OpaqueTypeOp op,
+                             hir::OpaqueTypeOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  auto type = mir::OpaqueType::get(op.getContext());
+  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
 static LogicalResult convert(hir::FuncTypeOp op,
                              hir::FuncTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
@@ -361,8 +370,8 @@ static bool isResolvableType(Value typeVal) {
     return false; // block arg — unresolved cross-phase value
 
   // Simple type constructors always resolve.
-  if (isa<hir::IntTypeOp, hir::UnitTypeOp, hir::TypeTypeOp, hir::AnyfuncTypeOp>(
-          defOp))
+  if (isa<hir::IntTypeOp, hir::UnitTypeOp, hir::TypeTypeOp, hir::AnyfuncTypeOp,
+          hir::OpaqueTypeOp>(defOp))
     return true;
 
   // UIntTypeOp needs its width to be a constant integer.
@@ -453,6 +462,8 @@ static Type resolveHIRType(Value typeVal) {
     return mir::TypeType::get(ctx);
   if (isa<hir::AnyfuncTypeOp>(defOp))
     return mir::AnyfuncType::get(ctx);
+  if (isa<hir::OpaqueTypeOp>(defOp))
+    return mir::OpaqueType::get(ctx);
   if (auto uintOp = dyn_cast<hir::UIntTypeOp>(defOp)) {
     if (auto widthOp = uintOp.getWidth().getDefiningOp<hir::ConstantIntOp>()) {
       auto width = static_cast<int64_t>(widthOp.getValue().getValue());
@@ -639,6 +650,7 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::TypeTypeOp>(convert);
   patterns.add<hir::UIntTypeOp>(convert);
   patterns.add<hir::AnyfuncTypeOp>(convert);
+  patterns.add<hir::OpaqueTypeOp>(convert);
   patterns.add<hir::FuncTypeOp>(convert);
   patterns.add<hir::InferrableOp>(convert);
   patterns.add<hir::TypeOfOp>(convert);
