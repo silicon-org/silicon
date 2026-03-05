@@ -16,10 +16,8 @@ hir.unified_func @SimpleFoo() -> () {
   // CHECK: [[TMP:%.+]] = builtin.unrealized_conversion_cast
   // CHECK: [[ARG_TY:%.+]] = hir.int_type {a}
   // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
-  // CHECK: [[TMP_TY:%.+]] = hir.type_of [[TMP]]
-  // CHECK: [[UNI_TY:%.+]] = hir.unify [[ARG_TY]], [[TMP_TY]]
   %0 = builtin.unrealized_conversion_cast to !hir.any
-  // CHECK: hir.unified_call @SimpleBar([[TMP]]) : ([[UNI_TY]]) -> ([[RET_TY]]) (!hir.any) -> !hir.any [0] -> [0]
+  // CHECK: hir.unified_call @SimpleBar([[TMP]]) : ([[ARG_TY]]) -> ([[RET_TY]]) (!hir.any) -> !hir.any [0] -> [0]
   %infer0 = hir.inferrable
   %infer1 = hir.inferrable
   %1 = hir.unified_call @SimpleBar(%0) : (%infer0) -> (%infer1) (!hir.any) -> !hir.any [0] -> [0]
@@ -32,6 +30,12 @@ hir.unified_func @SimpleBar(%a: 0) -> (result: 0) {
   %1 = hir.int_type {b}
   hir.unified_signature (%0) -> (%1)
 } {
+  // CHECK: [[ARG_TY:%.+]] = hir.int_type {a}
+  // CHECK: [[COERCED:%.+]] = hir.coerce_type %a, [[ARG_TY]]
+  // CHECK: [[TYPEOF:%.+]] = hir.type_of [[COERCED]]
+  // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
+  // CHECK: [[UNI:%.+]] = hir.unify [[TYPEOF]], [[RET_TY]]
+  // CHECK: hir.unified_return([[COERCED]]) : ([[UNI]])
   %t0 = hir.type_of %a
   hir.unified_return (%a) : (%t0)
 }
@@ -47,9 +51,7 @@ hir.unified_func @DepTypeCaller() -> () {
   %val = builtin.unrealized_conversion_cast to !hir.any
   // CHECK: [[INT_TY:%.+]] = hir.int_type
   // CHECK: [[TYPE_TYPE:%.+]] = hir.type_type
-  // CHECK: [[INT_TY_TYPEOF:%.+]] = hir.type_of [[INT_TY]]
-  // CHECK: [[ARG0_UNI:%.+]] = hir.unify [[TYPE_TYPE]], [[INT_TY_TYPEOF]]
-  // CHECK: hir.unified_call @Identity([[INT_TY]], {{%.+}}) : ([[ARG0_UNI]], {{%.+}}) -> ([[INT_TY]])
+  // CHECK: hir.unified_call @Identity([[INT_TY]], {{%.+}}) : ([[TYPE_TYPE]], [[INT_TY]]) -> ([[INT_TY]])
   %infer0 = hir.inferrable
   %infer1 = hir.inferrable
   %infer2 = hir.inferrable
@@ -62,6 +64,11 @@ hir.unified_func @Identity(%T: -1, %x: 0) -> (result: 0) {
   %type_type = hir.type_type
   hir.unified_signature (%type_type, %T) -> (%T)
 } {
+  // CHECK: [[TT:%.+]] = hir.type_type
+  // CHECK: [[CT:%.+]] = hir.coerce_type %T, [[TT]]
+  // CHECK: [[CX:%.+]] = hir.coerce_type %x, %T
+  // CHECK: [[UNI:%.+]] = hir.unify [[CT]], %T
+  // CHECK: hir.unified_return([[CX]]) : ([[UNI]])
   hir.unified_return (%x) : (%T)
 }
 
@@ -72,10 +79,8 @@ hir.unified_func @NestedFoo() -> () {
   // CHECK: [[TMP:%.+]] = builtin.unrealized_conversion_cast
   // CHECK: [[ARG_TY:%.+]] = hir.int_type {a}
   // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
-  // CHECK: [[TMP_TY:%.+]] = hir.type_of [[TMP]]
-  // CHECK: [[UNI_TY:%.+]] = hir.unify [[ARG_TY]], [[TMP_TY]]
   %0 = builtin.unrealized_conversion_cast to !hir.any
-  // CHECK: hir.unified_call @NestedBar([[TMP]]) : ([[UNI_TY]]) -> ([[RET_TY]]) (!hir.any) -> !hir.any [0] -> [0]
+  // CHECK: hir.unified_call @NestedBar([[TMP]]) : ([[ARG_TY]]) -> ([[RET_TY]]) (!hir.any) -> !hir.any [0] -> [0]
   %infer2 = hir.inferrable
   %infer3 = hir.inferrable
   %1 = hir.unified_call @NestedBar(%0) : (%infer2) -> (%infer3) (!hir.any) -> !hir.any [0] -> [0]
@@ -90,6 +95,12 @@ hir.unified_func @NestedBar(%a: 0) -> (result: 0) {
   %1 = hir.int_type {b}
   hir.unified_signature (%0) -> (%1)
 } {
+  // CHECK: [[ARG_TY:%.+]] = hir.int_type {a}
+  // CHECK: [[COERCED:%.+]] = hir.coerce_type %a, [[ARG_TY]]
+  // CHECK: [[TYPEOF:%.+]] = hir.type_of [[COERCED]]
+  // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
+  // CHECK: [[UNI:%.+]] = hir.unify [[TYPEOF]], [[RET_TY]]
+  // CHECK: hir.unified_return([[COERCED]]) : ([[UNI]])
   %t0 = hir.type_of %a
   hir.unified_return (%a) : (%t0)
 }

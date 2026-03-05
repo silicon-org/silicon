@@ -149,14 +149,58 @@ static void inlineRegion(Region &region, Block &into,
   intoRegion.getBlocks().splice(tailBlock.getIterator(), region.getBlocks());
 }
 
+/// Resolve a type value from the signature region into the body context.
+///
+/// If the value is a signature block argument, it is looked up in the mapping.
+/// Otherwise, the defining op is cloned into the body.
+static Value resolveTypeIntoBody(OpBuilder &builder, Value sigTypeVal,
+                                 IRMapping &sigToBody) {
+  if (auto mapped = sigToBody.lookupOrNull(sigTypeVal))
+    return mapped;
+  auto *defOp = sigTypeVal.getDefiningOp();
+  auto *cloned = builder.clone(*defOp, sigToBody);
+  return cloned->getResult(cast<OpResult>(sigTypeVal).getResultNumber());
+}
+
 LogicalResult CheckCallsPass::checkRegion(Region &region,
                                           const SymbolTable &symbolTable) {
   auto funcOp = cast<UnifiedFuncOp>(region.getParentOp());
+  bool isBody = &funcOp.getBody() == &region;
   LLVM_DEBUG({
-    llvm::dbgs() << "Checking "
-                 << (&funcOp.getSignature() == &region ? "signature" : "body")
-                 << " of " << funcOp.getSymNameAttr() << "\n";
+    llvm::dbgs() << "Checking " << (isBody ? "body" : "signature") << " of "
+                 << funcOp.getSymNameAttr() << "\n";
   });
+
+  // Insert coerce_type annotations on body block args to connect them with
+  // the declared types from the signature. This allows type_of(coerce_type(x,
+  // T)) to fold to T during canonicalization, resolving type_of chains early.
+  IRMapping sigToBody;
+  if (isBody) {
+    auto sigOp = funcOp.getSignatureOp();
+    auto &sigBlock = funcOp.getSignature().front();
+    auto &bodyBlock = funcOp.getBody().front();
+
+    for (auto [sigArg, bodyArg] :
+         llvm::zip(sigBlock.getArguments(), bodyBlock.getArguments()))
+      sigToBody.map(sigArg, bodyArg);
+
+    OpBuilder insertBuilder(&bodyBlock, bodyBlock.begin());
+    for (auto [idx, bodyArg] : llvm::enumerate(bodyBlock.getArguments())) {
+      if (idx >= sigOp.getTypeOfArgs().size())
+        break;
+      Value sigTypeVal = sigOp.getTypeOfArgs()[idx];
+      Value resolvedType =
+          resolveTypeIntoBody(insertBuilder, sigTypeVal, sigToBody);
+
+      auto coerceOp = CoerceTypeOp::create(insertBuilder, bodyArg.getLoc(),
+                                           bodyArg, resolvedType);
+      bodyArg.replaceUsesWithIf(coerceOp.getResult(), [&](OpOperand &use) {
+        return use.getOwner() != coerceOp;
+      });
+    }
+  }
+
+  // Process calls by inlining callee signatures and unifying types.
   region.walk([&](UnifiedCallOp callOp) {
     LLVM_DEBUG(llvm::dbgs() << "- " << callOp << "\n");
 
@@ -184,28 +228,23 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
       blockArg.replaceAllUsesWith(callArg);
     sigBlock.eraseArguments(0, sigBlock.getNumArguments());
 
-    // Unify the declared argument types with the types of the call arguments.
-    // If the call already carries type-of-arg operands (e.g., from codegen),
-    // we also unify those with the signature types. Inferrable placeholders
-    // are replaced directly rather than unified, since they carry no type
-    // information.
+    // Unify the declared argument types with the call's type-of-arg operands.
+    // Inferrable placeholders are replaced directly with the signature type.
+    // Concrete type operands are unified with the signature type.
     SmallVector<Value> unifiedArgTypes;
     unifiedArgTypes.reserve(callOp.getArguments().size());
     auto callTypeOfArgs = callOp.getTypeOfArgs();
-    for (auto [idx, pair] : llvm::enumerate(
-             llvm::zip(terminatorOp.getTypeOfArgs(), callOp.getArguments()))) {
-      auto [sigArgType, callArg] = pair;
+    for (auto [idx, sigArgType] :
+         llvm::enumerate(terminatorOp.getTypeOfArgs())) {
       builder.setInsertionPoint(terminatorOp);
-      auto callArgType = TypeOfOp::create(builder, callArg.getLoc(), callArg);
-      Value unified =
-          UnifyOp::create(builder, callOp.getLoc(), sigArgType, callArgType);
+      Value unified = sigArgType;
       if (idx < callTypeOfArgs.size()) {
         if (auto inferrable =
                 callTypeOfArgs[idx].getDefiningOp<InferrableOp>()) {
           inferrable.replaceAllUsesWith(unified);
           inferrable.erase();
         } else {
-          unified = UnifyOp::create(builder, callOp.getLoc(), unified,
+          unified = UnifyOp::create(builder, callOp.getLoc(), sigArgType,
                                     callTypeOfArgs[idx]);
         }
       }
@@ -243,5 +282,35 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
     terminatorOp.erase();
     inlineRegion(signature, *callOp->getBlock(), callOp->getIterator());
   });
+
+  // Unify body return types with the declared return types from the signature.
+  // This connects the body's inferred return type to the declared type,
+  // enabling InferTypes to resolve them.
+  if (isBody) {
+    auto sigOp = funcOp.getSignatureOp();
+    auto sigRetTypes = sigOp.getTypeOfResults();
+
+    funcOp.getBody().walk([&](UnifiedReturnOp returnOp) {
+      if (returnOp.getTypeOfValues().empty() || sigRetTypes.empty())
+        return;
+
+      OpBuilder builder(returnOp);
+      SmallVector<Value> newTypeOfValues;
+      for (auto [idx, retTypeVal] :
+           llvm::enumerate(returnOp.getTypeOfValues())) {
+        if (idx >= sigRetTypes.size()) {
+          newTypeOfValues.push_back(retTypeVal);
+          continue;
+        }
+        Value resolvedSigRetType =
+            resolveTypeIntoBody(builder, sigRetTypes[idx], sigToBody);
+        Value unified = UnifyOp::create(builder, returnOp.getLoc(), retTypeVal,
+                                        resolvedSigRetType);
+        newTypeOfValues.push_back(unified);
+      }
+      returnOp.getTypeOfValuesMutable().assign(newTypeOfValues);
+    });
+  }
+
   return success();
 }
