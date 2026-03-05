@@ -210,22 +210,21 @@ static LogicalResult convert(hir::UnifyOp op, hir::UnifyOp::Adaptor adaptor,
   return success();
 }
 
-// CoerceTypeOp annotates a value with a type. If the type operand resolves to
-// a mir.constant carrying a TypeAttr, extract the concrete MIR type and emit an
-// unrealized_conversion_cast. The Step 2 fixup below folds these casts into
-// block argument retypes. We use matchPattern/m_Constant to look through any
-// materialization casts the conversion framework may have inserted.
+// CoerceTypeOp annotates a value with a type. After signature conversion,
+// the input already has the correct concrete MIR type from the function
+// boundary. Verify that the input type matches the type operand's constant
+// value, then forward the input.
 static LogicalResult convert(hir::CoerceTypeOp op,
                              hir::CoerceTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
   mir::TypeAttr typeAttr;
   if (matchPattern(adaptor.getTypeOperand(), m_Constant(&typeAttr))) {
-    auto mirType = typeAttr.getValue();
-    if (!isa<hir::AnyType>(mirType)) {
-      rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
-          op, mirType, adaptor.getInput());
-      return success();
-    }
+    auto expectedType = typeAttr.getValue();
+    auto actualType = adaptor.getInput().getType();
+    if (actualType != expectedType && !isa<hir::AnyType>(expectedType))
+      return emitBug(op.getLoc())
+             << "coerce_type type mismatch: input has " << actualType
+             << " but type operand says " << expectedType;
   }
   rewriter.replaceOp(op, adaptor.getInput());
   return success();
@@ -233,48 +232,23 @@ static LogicalResult convert(hir::CoerceTypeOp op,
 
 // Arithmetic/bitwise HIR binary ops lower to the corresponding MIR ops by
 // discarding the type operand and forwarding the converted lhs/rhs operands.
+// After signature conversion, operands already have concrete MIR types.
 // Comparison ops additionally pass the result type explicitly since operand
 // and result types may differ in MIR (e.g. uint<1> for comparisons).
-//
-// When one operand has been retyped to a concrete MIR type (via coerce_type)
-// and the other is still !hir.any (e.g. from opaque_unpack), we insert an
-// unrealized_conversion_cast on the !hir.any operand to match. Step 2 folds
-// these casts by retyping the source value.
-
-/// If lhs and rhs have mismatched types where one is !hir.any and the other
-/// is a concrete MIR type, insert an unrealized_conversion_cast on the
-/// !hir.any operand to match. These casts are folded in Step 2.
-static void reconcileOperandTypes(ConversionPatternRewriter &rewriter,
-                                  Location loc, Value &lhs, Value &rhs) {
-  if (lhs.getType() == rhs.getType())
-    return;
-  if (isa<hir::AnyType>(lhs.getType()) && !isa<hir::AnyType>(rhs.getType())) {
-    lhs = UnrealizedConversionCastOp::create(rewriter, loc, rhs.getType(), lhs)
-              .getResult(0);
-  } else if (!isa<hir::AnyType>(lhs.getType()) &&
-             isa<hir::AnyType>(rhs.getType())) {
-    rhs = UnrealizedConversionCastOp::create(rewriter, loc, lhs.getType(), rhs)
-              .getResult(0);
-  }
-}
 
 #define CONVERT_BINARY_OP(HirOp, MirOp)                                        \
   static LogicalResult convert(hir::HirOp op, hir::HirOp::Adaptor adaptor,     \
                                ConversionPatternRewriter &rewriter) {          \
-    Value lhs = adaptor.getLhs();                                              \
-    Value rhs = adaptor.getRhs();                                              \
-    reconcileOperandTypes(rewriter, op.getLoc(), lhs, rhs);                    \
-    rewriter.replaceOpWithNewOp<mir::MirOp>(op, lhs, rhs);                     \
+    rewriter.replaceOpWithNewOp<mir::MirOp>(op, adaptor.getLhs(),              \
+                                            adaptor.getRhs());                 \
     return success();                                                          \
   }
 
 #define CONVERT_CMP_OP(HirOp, MirOp)                                           \
   static LogicalResult convert(hir::HirOp op, hir::HirOp::Adaptor adaptor,     \
                                ConversionPatternRewriter &rewriter) {          \
-    Value lhs = adaptor.getLhs();                                              \
-    Value rhs = adaptor.getRhs();                                              \
-    reconcileOperandTypes(rewriter, op.getLoc(), lhs, rhs);                    \
-    rewriter.replaceOpWithNewOp<mir::MirOp>(op, lhs.getType(), lhs, rhs);      \
+    rewriter.replaceOpWithNewOp<mir::MirOp>(                                   \
+        op, adaptor.getLhs().getType(), adaptor.getLhs(), adaptor.getRhs());   \
     return success();                                                          \
   }
 
@@ -315,17 +289,13 @@ static LogicalResult convert(hir::ReturnOp op, hir::ReturnOp::Adaptor adaptor,
 
 static LogicalResult convert(hir::CallOp op, hir::CallOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  // Extract result types from constant type operands and bake them into
-  // the MIR call. Fall back to !hir.any for unresolvable types (e.g. type
-  // operands threaded via opaque_unpack that haven't been specialized yet).
   SmallVector<Type> resultTypes;
   resultTypes.reserve(adaptor.getTypeOfResults().size());
   for (auto value : adaptor.getTypeOfResults()) {
     mir::TypeAttr attr;
-    if (matchPattern(value, m_Constant(&attr)))
-      resultTypes.push_back(attr.getValue());
-    else
-      resultTypes.push_back(hir::AnyType::get(op.getContext()));
+    if (!matchPattern(value, m_Constant(&attr)))
+      return emitBug(op.getLoc()) << "non-constant call result type";
+    resultTypes.push_back(attr.getValue());
   }
 
   rewriter.replaceOpWithNewOp<mir::CallOp>(op, resultTypes, op.getCalleeAttr(),
@@ -371,37 +341,225 @@ static LogicalResult convert(UnrealizedConversionCastOp op,
 //===----------------------------------------------------------------------===//
 // HIRToMIR Pass
 //
-// For each hir.func in the module, convert its body ops from HIR to MIR via
-// dialect conversion, then convert the hir.func shell itself to mir.func by
-// resolving block argument types from unrealized_conversion_casts and gathering
-// result types from the mir.return operands.
+// Lower hir.func ops to mir.func ops using MLIR dialect conversion with
+// proper signature conversion. The FuncOp pattern determines argument types
+// from coerce_type ops and result types from the hir.return's typeOfValues,
+// then uses convertRegionTypes to retype block args. Body op patterns see
+// the retyped values through their adaptors.
 //
 // Only functions whose type operands are all constants are lowered. Functions
-// that depend on unresolved opaque_unpack results for their types are skipped
-// and will be lowered in a later pipeline iteration after specialization.
+// with unresolved types are skipped and will be lowered in a later pipeline
+// iteration after specialization.
 //===----------------------------------------------------------------------===//
 
+/// Check whether a type value will resolve to a concrete MIR type after
+/// conversion. Requires the defining op to be a known HIR type constructor
+/// or an already-lowered mir.constant with a TypeAttr.
+static bool isResolvableType(Value typeVal) {
+  auto *defOp = typeVal.getDefiningOp();
+  if (!defOp)
+    return false; // block arg — unresolved cross-phase value
+
+  // Simple type constructors always resolve.
+  if (isa<hir::IntTypeOp, hir::UnitTypeOp, hir::TypeTypeOp, hir::AnyfuncTypeOp>(
+          defOp))
+    return true;
+
+  // UIntTypeOp needs its width to be a constant integer.
+  if (auto uintOp = dyn_cast<hir::UIntTypeOp>(defOp))
+    return uintOp.getWidth().getDefiningOp<hir::ConstantIntOp>() != nullptr;
+
+  // FuncTypeOp needs all of its type operands to be resolvable.
+  if (auto funcTypeOp = dyn_cast<hir::FuncTypeOp>(defOp)) {
+    for (auto arg : funcTypeOp.getTypeOfArgs())
+      if (!isResolvableType(arg))
+        return false;
+    for (auto res : funcTypeOp.getTypeOfResults())
+      if (!isResolvableType(res))
+        return false;
+    return true;
+  }
+
+  // Already-lowered mir.constant with a TypeAttr (from specialization).
+  mir::TypeAttr typeAttr;
+  if (matchPattern(typeVal, m_Constant(&typeAttr)))
+    return !isa<hir::AnyType>(typeAttr.getValue());
+
+  return false;
+}
+
 /// Check whether a function is ready for HIR-to-MIR lowering. A function is
-/// ready if all `coerce_type` type operands can be resolved to constants after
-/// conversion. The only unresolvable sources are block arguments and
-/// `opaque_unpack` results, which carry cross-phase values that haven't been
-/// specialized yet. Type constructors (int_type, etc.) and MIR constants are
-/// always resolvable.
+/// ready when all type operands across all ops can be resolved to concrete
+/// MIR types during conversion. We check every op that has type operands
+/// used to determine output types: coerce_type, call, return, constant_func,
+/// uint_type, func_type, and specialize_func.
+///
+/// Functions with unresolved types are skipped and will be lowered in a later
+/// pipeline iteration after specialization resolves their types.
 static bool shouldLower(hir::FuncOp func) {
   if (func.getBody().empty())
-    return true;
+    return false;
   for (auto &op : func.getBody().front()) {
-    auto coerce = dyn_cast<hir::CoerceTypeOp>(&op);
-    if (!coerce)
-      continue;
-    auto *defOp = coerce.getTypeOperand().getDefiningOp();
-    if (!defOp)
-      return false; // block argument — unresolved cross-phase value
-    if (isa<hir::OpaqueUnpackOp>(defOp))
-      return false; // opaque_unpack — not yet specialized
+    if (auto coerce = dyn_cast<hir::CoerceTypeOp>(&op)) {
+      if (!isResolvableType(coerce.getTypeOperand()))
+        return false;
+    } else if (auto call = dyn_cast<hir::CallOp>(&op)) {
+      for (auto val : call.getTypeOfResults())
+        if (!isResolvableType(val))
+          return false;
+    } else if (auto ret = dyn_cast<hir::ReturnOp>(&op)) {
+      for (auto val : ret.getTypeOfValues())
+        if (!isResolvableType(val))
+          return false;
+    } else if (auto constFunc = dyn_cast<hir::ConstantFuncOp>(&op)) {
+      if (!isResolvableType(constFunc.getFuncType()))
+        return false;
+    } else if (auto uintType = dyn_cast<hir::UIntTypeOp>(&op)) {
+      if (!uintType.getWidth().getDefiningOp<hir::ConstantIntOp>())
+        return false;
+    } else if (auto funcType = dyn_cast<hir::FuncTypeOp>(&op)) {
+      for (auto val : funcType.getTypeOfArgs())
+        if (!isResolvableType(val))
+          return false;
+      for (auto val : funcType.getTypeOfResults())
+        if (!isResolvableType(val))
+          return false;
+    } else if (auto spec = dyn_cast<hir::SpecializeFuncOp>(&op)) {
+      for (auto val : spec.getTypeOfArgs())
+        if (!isResolvableType(val))
+          return false;
+      for (auto val : spec.getTypeOfResults())
+        if (!isResolvableType(val))
+          return false;
+    }
   }
   return true;
 }
+
+/// Resolve the concrete MIR type from an unconverted HIR type value. Used
+/// by the FuncOp pattern to determine block argument types from coerce_type
+/// ops and result types from hir.return's typeOfValues.
+static Type resolveHIRType(Value typeVal) {
+  auto *defOp = typeVal.getDefiningOp();
+  if (!defOp)
+    return hir::AnyType::get(typeVal.getContext());
+
+  auto *ctx = defOp->getContext();
+  if (isa<hir::IntTypeOp>(defOp))
+    return mir::IntType::get(ctx);
+  if (isa<hir::UnitTypeOp>(defOp))
+    return mir::UnitType::get(ctx);
+  if (isa<hir::TypeTypeOp>(defOp))
+    return mir::TypeType::get(ctx);
+  if (isa<hir::AnyfuncTypeOp>(defOp))
+    return mir::AnyfuncType::get(ctx);
+  if (auto uintOp = dyn_cast<hir::UIntTypeOp>(defOp)) {
+    if (auto widthOp = uintOp.getWidth().getDefiningOp<hir::ConstantIntOp>()) {
+      auto width = static_cast<int64_t>(widthOp.getValue().getValue());
+      return mir::UIntType::get(ctx, width);
+    }
+  }
+  if (auto funcTypeOp = dyn_cast<hir::FuncTypeOp>(defOp)) {
+    SmallVector<Type> argTypes, resultTypes;
+    for (auto arg : funcTypeOp.getTypeOfArgs()) {
+      auto t = resolveHIRType(arg);
+      if (isa<hir::AnyType>(t))
+        return hir::AnyType::get(ctx);
+      argTypes.push_back(t);
+    }
+    for (auto res : funcTypeOp.getTypeOfResults()) {
+      auto t = resolveHIRType(res);
+      if (isa<hir::AnyType>(t))
+        return hir::AnyType::get(ctx);
+      resultTypes.push_back(t);
+    }
+    return FunctionType::get(ctx, argTypes, resultTypes);
+  }
+
+  // For mir.constant (from specialization), extract the type directly.
+  mir::TypeAttr typeAttr;
+  if (matchPattern(typeVal, m_Constant(&typeAttr)))
+    return typeAttr.getValue();
+
+  return hir::AnyType::get(typeVal.getContext());
+}
+
+//===----------------------------------------------------------------------===//
+// FuncOp Conversion Pattern
+//
+// Lower hir.func → mir.func by scanning the body for type information:
+// argument types from coerce_type ops, result types from hir.return's
+// typeOfValues. Uses MLIR signature conversion to retype block args from
+// !hir.any to concrete MIR types; the framework inserts materialization
+// casts that body op patterns resolve through their adaptors.
+//===----------------------------------------------------------------------===//
+
+namespace {
+class FuncOpConversion : public OpConversionPattern<hir::FuncOp> {
+public:
+  FuncOpConversion(TypeConverter &converter, MLIRContext *ctx,
+                   const DenseSet<Operation *> *funcsToLower)
+      : OpConversionPattern(converter, ctx), funcsToLower(funcsToLower) {}
+
+  LogicalResult
+  matchAndRewrite(hir::FuncOp func, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!funcsToLower->contains(func))
+      return failure();
+    LLVM_DEBUG(llvm::dbgs() << "Lowering @" << func.getSymName() << "\n");
+
+    auto &entryBlock = func.getBody().front();
+
+    // Determine argument types from coerce_type ops on block args.
+    SmallVector<Type> argTypes;
+    for (auto arg : entryBlock.getArguments()) {
+      Type argType;
+      for (auto *user : arg.getUsers()) {
+        if (auto coerce = dyn_cast<hir::CoerceTypeOp>(user)) {
+          argType = resolveHIRType(coerce.getTypeOperand());
+          break;
+        }
+      }
+      if (!argType)
+        return emitBug(func.getLoc())
+               << "block argument type could not be determined during "
+                  "HIR-to-MIR lowering; add hir.coerce_type";
+      argTypes.push_back(argType);
+    }
+
+    // Determine result types from hir.return typeOfValues.
+    SmallVector<Type> resultTypes;
+    if (auto returnOp = dyn_cast<hir::ReturnOp>(entryBlock.getTerminator())) {
+      for (auto typeVal : returnOp.getTypeOfValues())
+        resultTypes.push_back(resolveHIRType(typeVal));
+    }
+
+    // Create the new mir.func with materialized types.
+    auto funcType = FunctionType::get(func.getContext(), argTypes, resultTypes);
+    auto mirFunc = mir::FuncOp::create(
+        rewriter, func.getLoc(), func.getSymNameAttr(),
+        func.getSymVisibilityAttr(), mlir::TypeAttr::get(funcType),
+        func.getArgNamesAttr(), func.getResultNamesAttr());
+
+    // Move the body and apply signature conversion to retype block args.
+    rewriter.inlineRegionBefore(func.getBody(), mirFunc.getBody(),
+                                mirFunc.getBody().end());
+    TypeConverter::SignatureConversion sigConversion(
+        entryBlock.getNumArguments());
+    for (unsigned i = 0; i < argTypes.size(); ++i)
+      sigConversion.addInputs(i, argTypes[i]);
+    if (failed(rewriter.convertRegionTypes(
+            &mirFunc.getBody(), *getTypeConverter(), &sigConversion)))
+      return failure();
+
+    rewriter.eraseOp(func);
+    return success();
+  }
+
+private:
+  const DenseSet<Operation *> *funcsToLower;
+};
+} // namespace
 
 void HIRToMIRPass::runOnOperation() {
   auto moduleOp = getOperation();
@@ -414,8 +572,16 @@ void HIRToMIRPass::runOnOperation() {
   }
   LLVM_DEBUG(llvm::dbgs() << "HIR-to-MIR: " << funcsToLower.size()
                           << " function(s) ready for lowering\n");
+  if (funcsToLower.empty())
+    return;
 
-  // Set up the type conversion.
+  // # Type Converter
+  //
+  // The type-based callback accepts both HIR and MIR types as legal (identity
+  // conversion). The value-based callback resolves unrealized_conversion_cast
+  // values: when a value is defined by a cast from a concrete MIR type to
+  // !hir.any, the adaptor maps it to the MIR-typed input. This is how
+  // signature conversion materializations and pre-existing casts get resolved.
   TypeConverter converter;
   converter.addConversion([](Type type) -> std::optional<Type> {
     if (isa<mir::MIRDialect>(type.getDialect()) ||
@@ -433,170 +599,78 @@ void HIRToMIRPass::runOnOperation() {
     }
     return std::nullopt;
   });
+  converter.addSourceMaterialization([](OpBuilder &builder, Type type,
+                                        ValueRange inputs,
+                                        Location loc) -> Value {
+    return UnrealizedConversionCastOp::create(builder, loc, type, inputs)
+        .getResult(0);
+  });
+  converter.addTargetMaterialization([](OpBuilder &builder, Type type,
+                                        ValueRange inputs,
+                                        Location loc) -> Value {
+    return UnrealizedConversionCastOp::create(builder, loc, type, inputs)
+        .getResult(0);
+  });
 
-  // Set up the conversion target and config, shared across all functions.
+  // # Conversion Target
+  //
+  // Functions in the lowering set are illegal and converted to mir.func by
+  // the FuncOp pattern. Functions not in the set are recursively legal,
+  // so the framework skips them and their body ops entirely.
   ConversionTarget target(getContext());
   target.addLegalDialect<mir::MIRDialect>();
   target.addIllegalDialect<hir::HIRDialect>();
-  target.addLegalOp<hir::FuncOp>();
+  target.addLegalOp<ModuleOp>();
+  target.addDynamicallyLegalOp<hir::FuncOp>(
+      [&](hir::FuncOp func) { return !funcsToLower.contains(func); });
+  target.markOpRecursivelyLegal<hir::FuncOp>();
+  target.addLegalOp<hir::SplitFuncOp>();
+  target.markOpRecursivelyLegal<hir::SplitFuncOp>();
 
-  // Allow HIR→MIR casts to persist through conversion. CoerceTypeOp creates
-  // these to annotate block args with concrete MIR types; Step 2 folds them
-  // into block arg retypes.
-  target.addDynamicallyLegalOp<UnrealizedConversionCastOp>(
-      [](UnrealizedConversionCastOp op) {
-        if (op.getNumOperands() == 1 && op.getNumResults() == 1) {
-          auto inputType = op.getOperand(0).getType();
-          auto resultType = op.getResult(0).getType();
-          if (isa<hir::HIRDialect>(inputType.getDialect()) &&
-              (isa<mir::MIRDialect>(resultType.getDialect()) ||
-               isa<FunctionType>(resultType)))
-            return true;
-        }
-        return false;
-      });
+  // # Patterns
+  ConversionPatternSet patterns(&getContext(), converter);
+  patterns.add(std::make_unique<FuncOpConversion>(converter, &getContext(),
+                                                  &funcsToLower));
+  patterns.add<hir::ConstantIntOp>(convert);
+  patterns.add<hir::ConstantUnitOp>(convert);
+  patterns.add<hir::ConstantFuncOp>(convert);
+  patterns.add<hir::IntTypeOp>(convert);
+  patterns.add<hir::UnitTypeOp>(convert);
+  patterns.add<hir::TypeTypeOp>(convert);
+  patterns.add<hir::UIntTypeOp>(convert);
+  patterns.add<hir::AnyfuncTypeOp>(convert);
+  patterns.add<hir::FuncTypeOp>(convert);
+  patterns.add<hir::InferrableOp>(convert);
+  patterns.add<hir::TypeOfOp>(convert);
+  patterns.add<hir::UnifyOp>(convert);
+  patterns.add<hir::CoerceTypeOp>(convert);
+  patterns.add<hir::AddOp>(convert);
+  patterns.add<hir::SubOp>(convert);
+  patterns.add<hir::MulOp>(convert);
+  patterns.add<hir::DivOp>(convert);
+  patterns.add<hir::ModOp>(convert);
+  patterns.add<hir::AndOp>(convert);
+  patterns.add<hir::OrOp>(convert);
+  patterns.add<hir::XorOp>(convert);
+  patterns.add<hir::ShlOp>(convert);
+  patterns.add<hir::ShrOp>(convert);
+  patterns.add<hir::EqOp>(convert);
+  patterns.add<hir::NeqOp>(convert);
+  patterns.add<hir::LtOp>(convert);
+  patterns.add<hir::GtOp>(convert);
+  patterns.add<hir::GeqOp>(convert);
+  patterns.add<hir::LeqOp>(convert);
+  patterns.add<hir::SpecializeFuncOp>(convert);
+  patterns.add<hir::ReturnOp>(convert);
+  patterns.add<hir::CallOp>(convert);
+  patterns.add<hir::OpaquePackOp>(convert);
+  patterns.add<hir::OpaqueUnpackOp>(convert);
+  patterns.add<UnrealizedConversionCastOp>(convert);
 
   ConversionConfig config;
   config.allowPatternRollback = false;
 
-  for (auto func : llvm::make_early_inc_range(moduleOp.getOps<hir::FuncOp>())) {
-    if (!funcsToLower.contains(func)) {
-      LLVM_DEBUG(llvm::dbgs() << "Skipping @" << func.getSymName()
-                              << " (unresolved types)\n");
-      continue;
-    }
-    LLVM_DEBUG(llvm::dbgs() << "Lowering @" << func.getSymName() << "\n");
-
-    // Step 1: Convert body ops from HIR to MIR.
-    ConversionPatternSet patterns(&getContext(), converter);
-    patterns.add<hir::ConstantIntOp>(convert);
-    patterns.add<hir::ConstantUnitOp>(convert);
-    patterns.add<hir::ConstantFuncOp>(convert);
-    patterns.add<hir::IntTypeOp>(convert);
-    patterns.add<hir::UnitTypeOp>(convert);
-    patterns.add<hir::TypeTypeOp>(convert);
-    patterns.add<hir::UIntTypeOp>(convert);
-    patterns.add<hir::AnyfuncTypeOp>(convert);
-    patterns.add<hir::FuncTypeOp>(convert);
-    patterns.add<hir::InferrableOp>(convert);
-    patterns.add<hir::TypeOfOp>(convert);
-    patterns.add<hir::UnifyOp>(convert);
-    patterns.add<hir::CoerceTypeOp>(convert);
-    patterns.add<hir::AddOp>(convert);
-    patterns.add<hir::SubOp>(convert);
-    patterns.add<hir::MulOp>(convert);
-    patterns.add<hir::DivOp>(convert);
-    patterns.add<hir::ModOp>(convert);
-    patterns.add<hir::AndOp>(convert);
-    patterns.add<hir::OrOp>(convert);
-    patterns.add<hir::XorOp>(convert);
-    patterns.add<hir::ShlOp>(convert);
-    patterns.add<hir::ShrOp>(convert);
-    patterns.add<hir::EqOp>(convert);
-    patterns.add<hir::NeqOp>(convert);
-    patterns.add<hir::LtOp>(convert);
-    patterns.add<hir::GtOp>(convert);
-    patterns.add<hir::GeqOp>(convert);
-    patterns.add<hir::LeqOp>(convert);
-    patterns.add<hir::SpecializeFuncOp>(convert);
-    patterns.add<hir::ReturnOp>(convert);
-    patterns.add<hir::CallOp>(convert);
-    patterns.add<hir::OpaquePackOp>(convert);
-    patterns.add<hir::OpaqueUnpackOp>(convert);
-    patterns.add<UnrealizedConversionCastOp>(convert);
-
-    if (failed(
-            applyFullConversion(func, target, std::move(patterns), config))) {
-      emitBug(func.getLoc()) << "HIR-to-MIR lowering failed";
-      return signalPassFailure();
-    }
-
-    // Step 2: Convert the hir.func shell to mir.func.
-    // Resolve value types by folding unrealized_conversion_casts that bridge
-    // from !hir.any to MIR types. This handles casts from coerce_type (on
-    // block args) and from reconcileOperandTypes (on opaque_unpack results
-    // and other non-block-arg values).
-    //
-    // When retyping a value, we propagate the type through ops that have
-    // SameOperandsAndResultType (like mir.add): if the result changes, the
-    // operands must change too, and vice versa. This avoids breaking type
-    // constraints when a cast on a binary op's result retypes it without
-    // updating its operands.
-    if (func.getBody().empty())
-      continue;
-    auto &entryBlock = func.getBody().front();
-
-    // Propagate a concrete type through a value and its defining op chain.
-    // When a value's type is changed from !hir.any to a concrete MIR type,
-    // SameOperandsAndResultType ops need their operands retyped too.
-    std::function<void(Value, Type)> propagateType = [&](Value value,
-                                                         Type newType) {
-      if (value.getType() == newType)
-        return;
-      value.setType(newType);
-      if (auto opResult = dyn_cast<OpResult>(value)) {
-        auto *defOp = opResult.getOwner();
-        if (defOp->hasTrait<OpTrait::SameOperandsAndResultType>()) {
-          for (auto operand : defOp->getOperands())
-            propagateType(operand, newType);
-        }
-      }
-    };
-
-    for (auto &op : llvm::make_early_inc_range(entryBlock)) {
-      auto castOp = dyn_cast<UnrealizedConversionCastOp>(&op);
-      if (!castOp || castOp.getNumOperands() != 1 ||
-          castOp.getNumResults() != 1)
-        continue;
-      auto inputType = castOp.getOperand(0).getType();
-      auto resultType = castOp.getResult(0).getType();
-      if (!isa<hir::HIRDialect>(inputType.getDialect()))
-        continue;
-      if (!isa<mir::MIRDialect>(resultType.getDialect()) &&
-          !isa<FunctionType>(resultType))
-        continue;
-      auto source = castOp.getOperand(0);
-      castOp.getResult(0).replaceAllUsesWith(source);
-      castOp.erase();
-      propagateType(source, resultType);
-    }
-
-    // Check that all block arg types have been resolved. Skip private
-    // functions, since const fragments from split_func legitimately have
-    // !hir.any args whose types are resolved during specialization.
-    if (!func.isPrivate()) {
-      for (auto arg : entryBlock.getArguments()) {
-        if (isa<hir::AnyType>(arg.getType())) {
-          emitError(arg.getLoc())
-              << "block argument type could not be determined "
-              << "during HIR-to-MIR lowering; add hir.coerce_type";
-          return signalPassFailure();
-        }
-      }
-    }
-
-    // Gather arg types from the (now-retyped) block arguments.
-    SmallVector<Type> argTypes;
-    for (auto arg : entryBlock.getArguments())
-      argTypes.push_back(arg.getType());
-
-    // Gather result types from the mir.return operands.
-    SmallVector<Type> resultTypes;
-    if (auto returnOp =
-            dyn_cast<mir::ReturnOp>(func.getBody().back().getTerminator()))
-      for (auto operand : returnOp.getOperands())
-        resultTypes.push_back(operand.getType());
-
-    // Create mir::FuncOp with the materialized function type.
-    auto funcType = FunctionType::get(&getContext(), argTypes, resultTypes);
-    OpBuilder builder(func);
-    auto mirFunc = mir::FuncOp::create(
-        builder, func.getLoc(), func.getSymNameAttr(),
-        func.getSymVisibilityAttr(), mlir::TypeAttr::get(funcType),
-        func.getArgNamesAttr(), func.getResultNamesAttr());
-
-    // Move the body from hir.func to mir.func and erase the old op.
-    mirFunc.getBody().takeBody(func.getBody());
-    func.erase();
-  }
+  if (failed(
+          applyFullConversion(moduleOp, target, std::move(patterns), config)))
+    return signalPassFailure();
 }

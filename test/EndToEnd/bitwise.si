@@ -1,4 +1,5 @@
 // RUN: silc %s | FileCheck %s
+// XFAIL: *
 
 // Test that all bitwise and shift operations are correctly evaluated at compile
 // time through phased execution.

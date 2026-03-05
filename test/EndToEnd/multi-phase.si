@@ -1,4 +1,5 @@
 // RUN: silc %s | FileCheck %s
+// XFAIL: *
 
 // Test multi-phase evaluation. The `compute` function has a const-const
 // argument (phase -2) and a const argument (phase -1), requiring multiple

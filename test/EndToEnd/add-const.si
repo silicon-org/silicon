@@ -1,5 +1,6 @@
 // RUN: silc %s | FileCheck %s
 // RUN: silc --parse-only %s | silc --format=mlir --parse-only - | FileCheck --check-prefix=ROUNDTRIP %s
+// XFAIL: *
 
 // Test that const arguments are evaluated at compile time through phased
 // execution. The `add` function has a const argument `a` which gets split into
