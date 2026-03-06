@@ -245,41 +245,21 @@ static LogicalResult convert(hir::CoerceTypeOp op,
 // Comparison ops additionally pass the result type explicitly since operand
 // and result types may differ in MIR (e.g. uint<1> for comparisons).
 
-#define CONVERT_BINARY_OP(HirOp, MirOp)                                        \
-  static LogicalResult convert(hir::HirOp op, hir::HirOp::Adaptor adaptor,     \
-                               ConversionPatternRewriter &rewriter) {          \
-    rewriter.replaceOpWithNewOp<mir::MirOp>(op, adaptor.getLhs(),              \
-                                            adaptor.getRhs());                 \
-    return success();                                                          \
-  }
+template <typename HirOpT, typename MirOpT>
+static LogicalResult convertBinaryOp(HirOpT op,
+                                     typename HirOpT::Adaptor adaptor,
+                                     ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<MirOpT>(op, adaptor.getLhs(), adaptor.getRhs());
+  return success();
+}
 
-#define CONVERT_CMP_OP(HirOp, MirOp)                                           \
-  static LogicalResult convert(hir::HirOp op, hir::HirOp::Adaptor adaptor,     \
-                               ConversionPatternRewriter &rewriter) {          \
-    rewriter.replaceOpWithNewOp<mir::MirOp>(                                   \
-        op, adaptor.getLhs().getType(), adaptor.getLhs(), adaptor.getRhs());   \
-    return success();                                                          \
-  }
-
-CONVERT_BINARY_OP(AddOp, AddOp)
-CONVERT_BINARY_OP(SubOp, SubOp)
-CONVERT_BINARY_OP(MulOp, MulOp)
-CONVERT_BINARY_OP(DivOp, DivOp)
-CONVERT_BINARY_OP(ModOp, ModOp)
-CONVERT_BINARY_OP(AndOp, AndOp)
-CONVERT_BINARY_OP(OrOp, OrOp)
-CONVERT_BINARY_OP(XorOp, XorOp)
-CONVERT_BINARY_OP(ShlOp, ShlOp)
-CONVERT_BINARY_OP(ShrOp, ShrOp)
-CONVERT_CMP_OP(EqOp, EqOp)
-CONVERT_CMP_OP(NeqOp, NeqOp)
-CONVERT_CMP_OP(LtOp, LtOp)
-CONVERT_CMP_OP(GtOp, GtOp)
-CONVERT_CMP_OP(GeqOp, GeqOp)
-CONVERT_CMP_OP(LeqOp, LeqOp)
-
-#undef CONVERT_BINARY_OP
-#undef CONVERT_CMP_OP
+template <typename HirOpT, typename MirOpT>
+static LogicalResult convertCmpOp(HirOpT op, typename HirOpT::Adaptor adaptor,
+                                  ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<MirOpT>(op, adaptor.getLhs().getType(),
+                                      adaptor.getLhs(), adaptor.getRhs());
+  return success();
+}
 
 static LogicalResult convert(hir::MIRConstantOp op,
                              hir::MIRConstantOp::Adaptor adaptor,
@@ -661,22 +641,22 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::TypeOfOp>(convert);
   patterns.add<hir::UnifyOp>(convert);
   patterns.add<hir::CoerceTypeOp>(convert);
-  patterns.add<hir::AddOp>(convert);
-  patterns.add<hir::SubOp>(convert);
-  patterns.add<hir::MulOp>(convert);
-  patterns.add<hir::DivOp>(convert);
-  patterns.add<hir::ModOp>(convert);
-  patterns.add<hir::AndOp>(convert);
-  patterns.add<hir::OrOp>(convert);
-  patterns.add<hir::XorOp>(convert);
-  patterns.add<hir::ShlOp>(convert);
-  patterns.add<hir::ShrOp>(convert);
-  patterns.add<hir::EqOp>(convert);
-  patterns.add<hir::NeqOp>(convert);
-  patterns.add<hir::LtOp>(convert);
-  patterns.add<hir::GtOp>(convert);
-  patterns.add<hir::GeqOp>(convert);
-  patterns.add<hir::LeqOp>(convert);
+  patterns.add<hir::AddOp>(convertBinaryOp<hir::AddOp, mir::AddOp>);
+  patterns.add<hir::SubOp>(convertBinaryOp<hir::SubOp, mir::SubOp>);
+  patterns.add<hir::MulOp>(convertBinaryOp<hir::MulOp, mir::MulOp>);
+  patterns.add<hir::DivOp>(convertBinaryOp<hir::DivOp, mir::DivOp>);
+  patterns.add<hir::ModOp>(convertBinaryOp<hir::ModOp, mir::ModOp>);
+  patterns.add<hir::AndOp>(convertBinaryOp<hir::AndOp, mir::AndOp>);
+  patterns.add<hir::OrOp>(convertBinaryOp<hir::OrOp, mir::OrOp>);
+  patterns.add<hir::XorOp>(convertBinaryOp<hir::XorOp, mir::XorOp>);
+  patterns.add<hir::ShlOp>(convertBinaryOp<hir::ShlOp, mir::ShlOp>);
+  patterns.add<hir::ShrOp>(convertBinaryOp<hir::ShrOp, mir::ShrOp>);
+  patterns.add<hir::EqOp>(convertCmpOp<hir::EqOp, mir::EqOp>);
+  patterns.add<hir::NeqOp>(convertCmpOp<hir::NeqOp, mir::NeqOp>);
+  patterns.add<hir::LtOp>(convertCmpOp<hir::LtOp, mir::LtOp>);
+  patterns.add<hir::GtOp>(convertCmpOp<hir::GtOp, mir::GtOp>);
+  patterns.add<hir::GeqOp>(convertCmpOp<hir::GeqOp, mir::GeqOp>);
+  patterns.add<hir::LeqOp>(convertCmpOp<hir::LeqOp, mir::LeqOp>);
   patterns.add<hir::MIRConstantOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
   patterns.add<hir::CallOp>(convert);

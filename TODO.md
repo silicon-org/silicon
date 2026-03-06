@@ -1,6 +1,5 @@
 - Investigate why `hir.unify` ops survive past InferTypes/canonicalization/CSE all the way to HIR-to-MIR lowering. Ideally they should all be erased by that point, and HIRToMIR should refuse to lower them rather than silently forwarding an operand.
 
-- Prefer C++ templates over macros like `CONVERT_BINARY_OP`
 - Check if the Interpret pass runs entirely on the MIR (or the Common) dialect, and if it does, move it into the MIR dialect.
 - Check if the SpecializeFuncs pass runs entirely on the HIR (or the Common) dialect, and if it does, move it into the HIR dialect.
 
