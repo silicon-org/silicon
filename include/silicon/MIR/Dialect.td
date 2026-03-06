@@ -21,7 +21,6 @@ def MIRDialect : Dialect {
     with all types materialized as MLIR types.
   }];
 
-  let useDefaultAttributePrinterParser = 1;
   let hasConstantMaterializer = 1;
   let dependentDialects = ["silicon::base::BaseDialect"];
   let extraClassDeclaration = [{

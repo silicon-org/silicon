@@ -33,10 +33,6 @@ hir.func @Constants() -> () {
   hir.constant_int 42
   // CHECK: mir.constant #si.unit
   hir.constant_unit
-  // CHECK: mir.constant #si.type
-  // CHECK: mir.constant #mir.func<@foo> : () -> ()
-  %0 = hir.func_type () -> ()
-  hir.constant_func @foo : %0
   hir.return
 }
 
@@ -159,17 +155,12 @@ hir.func @UnresolvedCallArgType(%T) -> () {
 }
 
 // CHECK-LABEL: mir.func @Casts
-hir.func @Casts() -> (a, b) {
+hir.func @Casts() -> (a) {
   // CHECK-NEXT: [[TMP1:%.+]] = mir.constant
   %a0 = mir.constant #si.int<42>
   %a1 = builtin.unrealized_conversion_cast %a0 : !si.int to !hir.any
 
-  // CHECK-NEXT: [[TMP2:%.+]] = mir.constant
-  %b0 = mir.constant #mir.func<@foo> : () -> ()
-  %b1 = builtin.unrealized_conversion_cast %b0 : () -> () to !hir.any
-
   %ta = hir.int_type
-  %tb = hir.anyfunc_type
-  // CHECK: mir.return [[TMP1]], [[TMP2]]
-  hir.return (%a1, %b1) : (%ta, %tb)
+  // CHECK: mir.return [[TMP1]]
+  hir.return (%a1) : (%ta)
 }

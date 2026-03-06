@@ -28,7 +28,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - When you fix a bug, add a lit test that triggers the bug first, to ensure we also commit a regression test alongside the fix.
 - The `--mlir-print-ir-after-all` option is useful to dump IR after each pass, which can help observe as an input gets transformed and where things break.
 - See the @docs/design/ directory for descriptions of how various parts of the compiler should work.
-- Use relative paths for tools such as `build/bin/silicon-opt` or paths such as `test/HIR/basic.mlir`; no absolute paths
+- Use relative paths in shell commands, e.g. `build/bin/silicon-opt` for tools or `test/HIR/basic.mlir` for files; no absolute paths
 - Use `git <cmd>` instead of `git -C ... <cmd>`
 
 ## Conventions

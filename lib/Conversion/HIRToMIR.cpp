@@ -62,26 +62,6 @@ static LogicalResult convert(hir::ConstantUnitOp op,
   return success();
 }
 
-static LogicalResult convert(hir::ConstantFuncOp op,
-                             hir::ConstantFuncOp::Adaptor adaptor,
-                             ConversionPatternRewriter &rewriter) {
-  // Determine the function type.
-  base::TypeAttr funcTypeAttr;
-  if (!matchPattern(adaptor.getFuncType(), m_Constant(&funcTypeAttr)))
-    return emitBug(op.getLoc()) << "non-constant function type";
-
-  auto funcType = dyn_cast<FunctionType>(funcTypeAttr.getValue());
-  if (!funcType)
-    return emitBug(op.getLoc()) << "non-function type";
-
-  // Materialize the constant function.
-  auto attr = mir::FuncAttr::get(
-      op.getContext(), funcType,
-      FlatSymbolRefAttr::get(op.getContext(), op.getValue()));
-  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
-  return success();
-}
-
 //===----------------------------------------------------------------------===//
 // Type Constructors
 //===----------------------------------------------------------------------===//
@@ -379,8 +359,8 @@ static bool isResolvableType(Value typeVal) {
 /// Check whether a function is ready for HIR-to-MIR lowering. A function is
 /// ready when all type operands across all ops can be resolved to concrete
 /// MIR types during conversion. We check every op that has type operands
-/// used to determine output types: coerce_type, call, return, constant_func,
-/// uint_type, func_type, and specialize_func.
+/// used to determine output types: coerce_type, call, return, uint_type,
+/// func_type, and specialize_func.
 ///
 /// Functions with unresolved types are skipped and will be lowered in a later
 /// pipeline iteration after specialization resolves their types.
@@ -402,9 +382,6 @@ static bool shouldLower(hir::FuncOp func) {
       for (auto val : ret.getTypeOfValues())
         if (!isResolvableType(val))
           return false;
-    } else if (auto constFunc = dyn_cast<hir::ConstantFuncOp>(&op)) {
-      if (!isResolvableType(constFunc.getFuncType()))
-        return false;
     } else if (auto uintType = dyn_cast<hir::UIntTypeOp>(&op)) {
       if (!uintType.getWidth().getDefiningOp<hir::ConstantIntOp>())
         return false;
@@ -629,7 +606,6 @@ void HIRToMIRPass::runOnOperation() {
                                                   &funcsToLower));
   patterns.add<hir::ConstantIntOp>(convert);
   patterns.add<hir::ConstantUnitOp>(convert);
-  patterns.add<hir::ConstantFuncOp>(convert);
   patterns.add<hir::IntTypeOp>(convert);
   patterns.add<hir::UnitTypeOp>(convert);
   patterns.add<hir::TypeTypeOp>(convert);

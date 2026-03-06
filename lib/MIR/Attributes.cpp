@@ -14,12 +14,7 @@
 using namespace silicon;
 using namespace mir;
 
-void MIRDialect::registerAttributes() {
-  addAttributes<
-#define GET_ATTRDEF_LIST
-#include "silicon/MIR/Attributes.cpp.inc"
-      >();
-}
+void MIRDialect::registerAttributes() {}
 
 // Pull in the generated attribute definitions.
 #define GET_ATTRDEF_CLASSES

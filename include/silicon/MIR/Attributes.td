@@ -21,15 +21,4 @@ class MIRAttrDef<
   let mnemonic = ?;
 }
 
-def FuncAttr : MIRAttrDef<"Func", [
-  TypedAttrInterface
-]> {
-  let mnemonic = "func";
-  let parameters = (ins
-    AttributeSelfTypeParameter<"", "mlir::FunctionType">:$type,
-    "mlir::FlatSymbolRefAttr":$func
-  );
-  let assemblyFormat = "`<` $func `>`";
-}
-
 #endif // SILICON_MIR_ATTRIBUTES_TD

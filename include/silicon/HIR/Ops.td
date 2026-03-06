@@ -39,12 +39,6 @@ def ConstantUnitOp : HIROp<"constant_unit", [Pure]> {
   let assemblyFormat = "attr-dict";
 }
 
-def ConstantFuncOp : HIROp<"constant_func", [Pure]> {
-  let arguments = (ins FlatSymbolRefAttr:$value, AnyHIRType:$funcType);
-  let results = (outs AnyHIRType:$result);
-  let assemblyFormat = "$value `:` $funcType attr-dict";
-}
-
 //===----------------------------------------------------------------------===//
 // Type Constructors
 //===----------------------------------------------------------------------===//

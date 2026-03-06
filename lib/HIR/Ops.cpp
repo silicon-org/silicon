@@ -964,7 +964,6 @@ Value hir::getTypeOf(Value value) {
             EqOp, NeqOp, LtOp, GtOp, GeqOp, LeqOp>(
           [](auto op) { return op.getResultType(); })
       .Case<CoerceTypeOp>([](CoerceTypeOp op) { return op.getTypeOperand(); })
-      .Case<ConstantFuncOp>([](ConstantFuncOp op) { return op.getFuncType(); })
       .Case<LetOp>([](LetOp op) { return op.getType(); })
       .Case<CallOp>([&](CallOp op) {
         return op.getTypeOfResults()[result.getResultNumber()];

@@ -11,7 +11,3 @@
   Doing so would make for much more focused testing.
 
 - Allow the user to declare `pub fn` in the input language, which translate to public hir.funcs; all others should be private.
-
-- Do we still need `mir::FuncAttr`?
-  This feels like it's just a hold-over of some old pass prototype.
-  If it isn't really needed for the current phase evaluation loop, let's just delete it.

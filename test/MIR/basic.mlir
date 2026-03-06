@@ -11,8 +11,6 @@ unrealized_conversion_cast to !si.anyfunc
 unrealized_conversion_cast to index {attr = #si.type<!si.int>}
 unrealized_conversion_cast to index {attr = #si.int<98765432109876543210987654321>}
 unrealized_conversion_cast to index {attr = #si.unit}
-unrealized_conversion_cast to index {attr = #mir.func<@foo> : (i42) -> (index)}
-
 // CHECK: %c42_int = mir.constant
 %c42_int = mir.constant #si.int<42>
 
