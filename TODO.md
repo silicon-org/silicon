@@ -34,13 +34,4 @@
      The pass should support more than one multiphase_func per split_func if needed, and should not reason about absolute phase numbers beyond ordering.
      This needs rigorous testing and may require updating the phase splits design doc (`docs/design/phase-splits.md`) with the general algorithm.
 
-- Remove `SpecializedFuncAttr`, `SpecializedFuncType`, `SpecializeFuncOp`, and the legacy specialization code path in SpecializeFuncs.cpp.
-  The actual pipeline now uses multiphase chaining + transitive specialization via `hir.mir_constant` and `mir.evaluated_func`.
-  The legacy `SpecializedFuncAttr` mechanism is no longer exercised by any end-to-end test.
-  Also remove or rewrite the tests that depend on it:
-  - `test/Transforms/interpret.mlir`: the `@foo`/`@bar` test uses `mir.specialize_func` and `!mir.specialized_func`; replace with a test that exercises calls with arguments instead.
-  - `test/Transforms/specialize-funcs.mlir`: entirely based on the old mechanism; rewrite with multiphase chaining tests.
-  - `test/MIR/basic.mlir`: remove `!mir.specialized_func` and `#mir.specialized_func` parsing tests.
-  - `test/MIR/canonicalization.mlir`: remove the `ConstSpecializeFunc` test.
-
 - Prefer C++ templates over macros like `CONVERT_BINARY_OP`

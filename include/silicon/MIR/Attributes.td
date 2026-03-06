@@ -59,26 +59,6 @@ def FuncAttr : MIRAttrDef<"Func", [
   let assemblyFormat = "`<` $func `>`";
 }
 
-def SpecializedFuncAttr : MIRAttrDef<"SpecializedFunc", [
-  DeclareAttrInterfaceMethods<TypedAttrInterface>
-]> {
-  let mnemonic = "specialized_func";
-  let parameters = (ins
-    "mlir::FlatSymbolRefAttr":$func,
-    OptionalArrayRefParameter<"mlir::Type">:$args,
-    OptionalArrayRefParameter<"mlir::Type">:$results,
-    OptionalArrayRefParameter<"mlir::Attribute">:$consts
-  );
-  // The quirky syntax is necessary since `ArrayRefParameters` don't parse
-  // properly if they are empty.
-  let assemblyFormat = [{
-    `<` $func `,`
-    `[` (`]`) : ($args^ `]`)? `,`
-    `[` (`]`) : ($results^ `]`)? `,`
-    `[` (`]`) : ($consts^ `]`)? `>`
-  }];
-}
-
 def OpaqueAttr : MIRAttrDef<"Opaque", [
   DeclareAttrInterfaceMethods<TypedAttrInterface>
 ]> {

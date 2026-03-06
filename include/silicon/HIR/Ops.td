@@ -309,24 +309,6 @@ def CallOp : HIROp<"call", [
   }];
 }
 
-def SpecializeFuncOp : HIROp<"specialize_func", [
-  AttrSizedOperandSegments,
-  Pure,
-]> {
-  let arguments = (ins
-    FlatSymbolRefAttr:$func,
-    Variadic<AnyHIRType>:$typeOfArgs,
-    Variadic<AnyHIRType>:$typeOfResults,
-    Variadic<AnyHIRType>:$consts
-  );
-  let results = (outs AnyHIRType);
-  let assemblyFormat = [{
-    $func `(` $typeOfArgs `)` `->` `(` $typeOfResults `)`
-    (`,` $consts^)?
-    attr-dict
-  }];
-}
-
 //===----------------------------------------------------------------------===//
 // Unified Functions and Calls
 //===----------------------------------------------------------------------===//

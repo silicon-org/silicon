@@ -36,28 +36,6 @@ def ConstantOp : MIROp<"constant", [
   let hasFolder = 1;
 }
 
-def SpecializeFuncOp : MIROp<"specialize_func", [
-  AttrSizedOperandSegments,
-  Pure,
-]> {
-  let arguments = (ins
-    FlatSymbolRefAttr:$func,
-    Variadic<TypeType>:$typeOfArgs,
-    Variadic<TypeType>:$typeOfResults,
-    Variadic<AnyType>:$consts
-  );
-  let results = (outs SpecializedFuncType);
-  let assemblyFormat = [{
-    $func `(` $typeOfArgs `)` `->` `(` $typeOfResults `)`
-    (`,` $consts^ `:` type($consts))?
-    attr-dict
-  }];
-  let hasFolder = 1;
-  let extraClassDeclaration = [{
-    SpecializedFuncAttr interpret(FoldAdaptor adaptor);
-  }];
-}
-
 class MIRBinaryOp<string mnemonic>
     : MIROp<mnemonic, [Pure, SameOperandsAndResultType]> {
   let arguments = (ins AnyType:$lhs, AnyType:$rhs);

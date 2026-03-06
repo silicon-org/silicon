@@ -38,10 +38,6 @@ hir.int_type {x = #hir.int<42>}
 %int_type = hir.int_type
 %c42_int = hir.constant_int 42
 
-hir.specialize_func @foo() -> ()
-hir.specialize_func @foo(%int_type) -> (%int_type)
-hir.specialize_func @foo(%int_type) -> (%int_type), %int_type, %c42_int
-
 hir.call @foo() : () -> ()
 hir.call @foo(%int_type) : (%int_type) -> (%int_type)
 hir.call @foo(%int_type, %c42_int) : (%int_type, %int_type) -> (%int_type, %int_type)

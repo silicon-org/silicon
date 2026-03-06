@@ -1,18 +1,5 @@
 // RUN: silicon-opt --interpret %s | FileCheck %s
 
-// CHECK: mir.evaluated_func @foo [#mir.specialized_func<@foo, [], [], [#mir.specialized_func<@bar, [!mir.int], [], []> : !mir.specialized_func]> : !mir.specialized_func]
-mir.func @foo() -> (result: !mir.specialized_func) {
-  %0 = mir.call @bar() : () -> !mir.specialized_func
-  %1 = mir.specialize_func @foo() -> (), %0 : !mir.specialized_func
-  mir.return %1 : !mir.specialized_func
-}
-
-// CHECK: mir.evaluated_func @bar [#mir.specialized_func<@bar, [!mir.int], [], []> : !mir.specialized_func]
-mir.func @bar() -> (result: !mir.specialized_func) {
-  %0 = mir.constant #mir.specialized_func<@bar, [!mir.int], [], []> : !mir.specialized_func
-  mir.return %0 : !mir.specialized_func
-}
-
 //===----------------------------------------------------------------------===//
 // Binary operations: verify that the interpreter correctly evaluates all 16
 // binary ops on constant integer operands.

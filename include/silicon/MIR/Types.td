@@ -47,11 +47,6 @@ def AnyfuncType : MIRTypeDef<"Anyfunc"> {
   let summary = "any function type";
 }
 
-def SpecializedFuncType : MIRTypeDef<"SpecializedFunc"> {
-  let mnemonic = "specialized_func";
-  let summary = "specialized function";
-}
-
 def OpaqueType : MIRTypeDef<"Opaque"> {
   let mnemonic = "opaque";
   let summary = "opaque value bundle passed between phases";

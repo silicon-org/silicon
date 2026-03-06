@@ -288,15 +288,6 @@ static LogicalResult convert(hir::MIRConstantOp op,
   return success();
 }
 
-static LogicalResult convert(hir::SpecializeFuncOp op,
-                             hir::SpecializeFuncOp::Adaptor adaptor,
-                             ConversionPatternRewriter &rewriter) {
-  rewriter.replaceOpWithNewOp<mir::SpecializeFuncOp>(
-      op, op.getFuncAttr(), adaptor.getTypeOfArgs(), adaptor.getTypeOfResults(),
-      adaptor.getConsts());
-  return success();
-}
-
 static LogicalResult convert(hir::ReturnOp op, hir::ReturnOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
   rewriter.replaceOpWithNewOp<mir::ReturnOp>(op, adaptor.getValues());
@@ -442,13 +433,6 @@ static bool shouldLower(hir::FuncOp func) {
         if (!isResolvableType(val))
           return false;
       for (auto val : funcType.getTypeOfResults())
-        if (!isResolvableType(val))
-          return false;
-    } else if (auto spec = dyn_cast<hir::SpecializeFuncOp>(&op)) {
-      for (auto val : spec.getTypeOfArgs())
-        if (!isResolvableType(val))
-          return false;
-      for (auto val : spec.getTypeOfResults())
         if (!isResolvableType(val))
           return false;
     } else if (isa<hir::OpaqueUnpackOp>(&op)) {
@@ -692,7 +676,6 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::GeqOp>(convert);
   patterns.add<hir::LeqOp>(convert);
   patterns.add<hir::MIRConstantOp>(convert);
-  patterns.add<hir::SpecializeFuncOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
   patterns.add<hir::CallOp>(convert);
   patterns.add<hir::OpaquePackOp>(convert);

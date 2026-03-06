@@ -139,12 +139,6 @@ FailureOr<SmallVector<Attribute>> Interpreter::run() {
         value = DynamicAPInt(lhs <= rhs ? 1 : 0);
       frame.values[op->getResult(0)] =
           mir::IntAttr::get(op->getContext(), value);
-    } else if (auto specializeFuncOp = dyn_cast<mir::SpecializeFuncOp>(op)) {
-      auto attr = specializeFuncOp.interpret(
-          mir::SpecializeFuncOp::FoldAdaptor(operands, specializeFuncOp));
-      if (!attr)
-        return op->emitError() << "interpretation failed";
-      frame.values[specializeFuncOp] = attr;
     } else if (auto packOp = dyn_cast<mir::MIROpaquePackOp>(op)) {
       frame.values[packOp] = mir::OpaqueAttr::get(op->getContext(), operands);
     } else if (auto unpackOp = dyn_cast<mir::MIROpaqueUnpackOp>(op)) {

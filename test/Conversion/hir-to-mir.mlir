@@ -57,22 +57,6 @@ hir.func @Calls() -> () {
   hir.return
 }
 
-// CHECK-LABEL: mir.func @FunctionSpecialization
-hir.func @FunctionSpecialization() -> (result) {
-  // CHECK: [[TYPE:%.+]] = mir.constant #mir.type<!mir.int>
-  %0 = hir.int_type
-  // CHECK: [[VALUE:%.+]] = mir.constant #mir.int<42>
-  %1 = hir.constant_int 42
-  // CHECK: mir.constant #mir.type<() -> ()>
-  %2 = hir.func_type () -> ()
-  // CHECK: [[FUNC:%.+]] = mir.constant #mir.func<@bar>
-  %3 = hir.constant_func @bar : %2
-  // CHECK: [[SPEC:%.+]] = mir.specialize_func @foo([[TYPE]]) -> (), [[VALUE]], [[FUNC]]
-  %4 = hir.specialize_func @foo(%0) -> (), %1, %3
-  // CHECK: mir.return [[SPEC]]
-  hir.return (%4) : (%0)
-}
-
 //===----------------------------------------------------------------------===//
 // Binary operations
 //===----------------------------------------------------------------------===//
