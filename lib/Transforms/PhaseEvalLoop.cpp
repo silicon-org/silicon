@@ -9,6 +9,7 @@
 #include "silicon/Conversion/Passes.h"
 #include "silicon/HIR/Ops.h"
 #include "silicon/MIR/Ops.h"
+#include "silicon/MIR/Passes.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
@@ -96,7 +97,7 @@ void PhaseEvalLoopPass::runOnOperation() {
     auto &anyPM = subPipeline.nestAny();
     anyPM.addPass(mlir::createCanonicalizerPass());
     anyPM.addPass(mlir::createCSEPass());
-    subPipeline.addPass(createInterpretPass());
+    subPipeline.addPass(mir::createInterpretPass());
     subPipeline.addPass(createSpecializeFuncsPass());
     auto &anyPM2 = subPipeline.nestAny();
     anyPM2.addPass(mlir::createCanonicalizerPass());

@@ -7,10 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/Base/Attributes.h"
-#include "silicon/HIR/Ops.h"
 #include "silicon/MIR/Ops.h"
+#include "silicon/MIR/Passes.h"
 #include "silicon/Support/MLIR.h"
-#include "silicon/Transforms/Passes.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 
@@ -20,8 +19,10 @@ using namespace silicon;
 #define DEBUG_TYPE "interpret"
 
 namespace silicon {
+namespace mir {
 #define GEN_PASS_DEF_INTERPRETPASS
-#include "silicon/Transforms/Passes.h.inc"
+#include "silicon/MIR/Passes.h.inc"
+} // namespace mir
 } // namespace silicon
 
 namespace {
@@ -170,7 +171,8 @@ FailureOr<SmallVector<Attribute>> Interpreter::run() {
 //===----------------------------------------------------------------------===//
 
 namespace {
-struct InterpretPass : public silicon::impl::InterpretPassBase<InterpretPass> {
+struct InterpretPass
+    : public silicon::mir::impl::InterpretPassBase<InterpretPass> {
   void runOnOperation() override;
 };
 } // namespace

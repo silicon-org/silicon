@@ -11,13 +11,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def InterpretPass : Pass<"interpret", "mlir::ModuleOp"> {
-  let dependentDialects = [
-    "hir::HIRDialect",
-    "mir::MIRDialect",
-  ];
-}
-
 def SpecializeFuncsPass : Pass<"specialize-funcs", "mlir::ModuleOp"> {
   let dependentDialects = [
     "hir::HIRDialect",

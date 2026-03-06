@@ -6,15 +6,20 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SILICON_MIR_MIR_TD
-#define SILICON_MIR_MIR_TD
+#pragma once
 
-include "silicon/MIR/Attributes.td"
-include "silicon/MIR/Dialect.td"
-include "silicon/MIR/Ops.td"
-include "silicon/MIR/Passes.td"
+#include "silicon/MIR/Dialect.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/Pass/Pass.h"
+#include <memory>
+#include <optional>
 
-include "mlir/IR/OpBase.td"
-include "mlir/Pass/PassBase.td"
+namespace silicon {
+namespace mir {
 
-#endif // SILICON_MIR_MIR_TD
+#define GEN_PASS_DECL
+#define GEN_PASS_REGISTRATION
+#include "silicon/MIR/Passes.h.inc"
+
+} // namespace mir
+} // namespace silicon

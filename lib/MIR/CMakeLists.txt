@@ -1,3 +1,5 @@
+add_subdirectory(Transforms)
+
 add_silicon_dialect_library(SiliconMIR
   Attributes.cpp
   Dialect.cpp

@@ -1,5 +1,4 @@
 add_silicon_library(SiliconTransforms
-  Interpret.cpp
   PhaseEvalLoop.cpp
   SpecializeFuncs.cpp
 
@@ -12,4 +11,5 @@ add_silicon_library(SiliconTransforms
   SiliconConversion
   SiliconHIR
   SiliconMIR
+  SiliconMIRTransforms
 )
