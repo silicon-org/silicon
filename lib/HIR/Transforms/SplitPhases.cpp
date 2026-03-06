@@ -793,8 +793,10 @@ void PhaseSplitter::run() {
   // Emit Structural Ops
   //
   // Build a split_func recording the full phase-to-function mapping, and a
-  // multiphase_func wrapping compile-time sub-functions when there are 2+
-  // compile-time phases. The unified func is erased afterward.
+  // multiphase_func wrapping sub-functions when chained evaluation is needed.
+  // The multiphase_func includes phase 0 as its last entry, so the
+  // specialization pass can chain all results through to the final phase.
+  // The unified func is erased afterward.
   //===--------------------------------------------------------------------===//
 
   auto sfLoc = funcOp.getLoc();
@@ -810,13 +812,79 @@ void PhaseSplitter::run() {
                       std::next(lastPhaseFunc->getIterator()));
   auto *ctx = sfBuilder.getContext();
 
-  // Build phase-to-function mapping arrays.
+  // Determine if a multiphase_func is needed. A multiphase_func wraps all
+  // phases (including phase 0) when there are 2+ compile-time phases or
+  // internal compile-time phases not tied to external args.
+  StringAttr mpName;
+  SmallVector<Attribute> mpArgNames;
+  SmallVector<bool> mpArgIsFirst;
+  SmallVector<Attribute> mpResultNames;
+  SmallVector<Attribute> mpFuncAttrs;
+
+  if (minPhase < 0) {
+    DenseSet<int16_t> externalArgPhases;
+    for (auto phase : sfArgPhases)
+      if (phase < 0)
+        externalArgPhases.insert(static_cast<int16_t>(phase));
+
+    bool hasInternalConstPhase = false;
+    for (int16_t phase = minPhase; phase < 0; ++phase) {
+      if (!externalArgPhases.contains(phase)) {
+        hasInternalConstPhase = true;
+        break;
+      }
+    }
+
+    if (minPhase <= -2 || hasInternalConstPhase) {
+      mpName = sfBuilder.getStringAttr(sfName.getValue() + ".const");
+
+      // Collect all sub-functions from minPhase through phase 0.
+      for (int16_t phase = minPhase; phase <= 0; ++phase)
+        mpFuncAttrs.push_back(FlatSymbolRefAttr::get(
+            ctx, splits[phase - minPhase].funcOp.getSymName()));
+
+      // Include compile-time args (phase < 0) and phase-0 args. An arg is
+      // "first" if it enters at the earliest compile-time phase, "last"
+      // otherwise. Phase-0 args are always "last".
+      for (auto [name, phase] : llvm::zip(sfArgNames, sfArgPhases)) {
+        if (phase < 0) {
+          mpArgNames.push_back(name);
+          mpArgIsFirst.push_back(phase == minPhase);
+        }
+      }
+      for (auto [name, phase] : llvm::zip(sfArgNames, sfArgPhases)) {
+        if (phase == 0) {
+          mpArgNames.push_back(name);
+          mpArgIsFirst.push_back(false);
+        }
+      }
+
+      // The multiphase_func's results are the function's own results, since
+      // the last sub-function (phase 0) produces those directly.
+      for (auto name : sfResultNames)
+        mpResultNames.push_back(name);
+    }
+  }
+
+  // Build phase-to-function mapping arrays. When a multiphase_func is
+  // created, it subsumes all entries from minPhase to 0, replaced by a
+  // single entry at phase 0 referencing the multiphase_func.
   SmallVector<int32_t> phaseNumbers;
   SmallVector<Attribute> phaseFuncAttrs;
-  for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
-    phaseNumbers.push_back(phase);
-    phaseFuncAttrs.push_back(FlatSymbolRefAttr::get(
-        ctx, splits[phase - minPhase].funcOp.getSymName()));
+  if (mpName) {
+    phaseNumbers.push_back(0);
+    phaseFuncAttrs.push_back(FlatSymbolRefAttr::get(ctx, mpName));
+    for (int16_t phase = 1; phase <= maxPhase; ++phase) {
+      phaseNumbers.push_back(phase);
+      phaseFuncAttrs.push_back(FlatSymbolRefAttr::get(
+          ctx, splits[phase - minPhase].funcOp.getSymName()));
+    }
+  } else {
+    for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
+      phaseNumbers.push_back(phase);
+      phaseFuncAttrs.push_back(FlatSymbolRefAttr::get(
+          ctx, splits[phase - minPhase].funcOp.getSymName()));
+    }
   }
 
   // Create the split_func.
@@ -841,63 +909,14 @@ void PhaseSplitter::run() {
     unifiedSigOp.erase();
   }
 
-  // Emit a multiphase_func wrapping the compile-time sub-functions when there
-  // are compile-time phases that need chained evaluation. This includes both
-  // the original case (2+ compile-time phases) and functions with internal
-  // compile-time phases not tied to external args (e.g., from calling a
-  // const-arg function with constant arguments).
-  if (minPhase < 0) {
-    DenseSet<int16_t> externalArgPhases;
-    for (auto phase : sfArgPhases)
-      if (phase < 0)
-        externalArgPhases.insert(static_cast<int16_t>(phase));
-
-    bool hasInternalConstPhase = false;
-    for (int16_t phase = minPhase; phase < 0; ++phase) {
-      if (!externalArgPhases.contains(phase)) {
-        hasInternalConstPhase = true;
-        break;
-      }
-    }
-
-    if (minPhase <= -2 || hasInternalConstPhase) {
-      SmallVector<Attribute> constFuncAttrs;
-      for (int16_t phase = minPhase; phase < 0; ++phase)
-        constFuncAttrs.push_back(FlatSymbolRefAttr::get(
-            ctx, splits[phase - minPhase].funcOp.getSymName()));
-
-      // Only include compile-time args (phase < 0). An arg is "first" if it
-      // enters at the earliest compile-time phase, "last" otherwise.
-      SmallVector<Attribute> mpArgNames;
-      SmallVector<bool> mpArgIsFirst;
-      for (auto [name, phase] : llvm::zip(sfArgNames, sfArgPhases)) {
-        if (phase < 0) {
-          mpArgNames.push_back(name);
-          mpArgIsFirst.push_back(phase == minPhase);
-        }
-      }
-
-      // One result per value threaded from the last compile-time phase to phase
-      // 0.
-      auto lastConstRetOp = cast<ReturnOp>(
-          splits[-1 - minPhase].funcOp.getBody().back().getTerminator());
-      unsigned numCtx = lastConstRetOp.getValues().size();
-      SmallVector<Attribute> mpResultNames;
-      if (numCtx == 1) {
-        mpResultNames.push_back(sfBuilder.getStringAttr("ctx"));
-      } else {
-        for (unsigned i = 0; i < numCtx; ++i)
-          mpResultNames.push_back(sfBuilder.getStringAttr("ctx" + Twine(i)));
-      }
-
-      MultiphaseFuncOp::create(
-          sfBuilder, sfLoc,
-          sfBuilder.getStringAttr(sfName.getValue() + ".const"),
-          /*sym_visibility=*/StringAttr{}, sfBuilder.getArrayAttr(mpArgNames),
-          sfBuilder.getDenseBoolArrayAttr(mpArgIsFirst),
-          sfBuilder.getArrayAttr(mpResultNames),
-          sfBuilder.getArrayAttr(constFuncAttrs));
-    }
+  // Emit the multiphase_func if needed.
+  if (mpName) {
+    MultiphaseFuncOp::create(
+        sfBuilder, sfLoc, mpName,
+        /*sym_visibility=*/StringAttr{}, sfBuilder.getArrayAttr(mpArgNames),
+        sfBuilder.getDenseBoolArrayAttr(mpArgIsFirst),
+        sfBuilder.getArrayAttr(mpResultNames),
+        sfBuilder.getArrayAttr(mpFuncAttrs));
   }
 
   // Erase the unified func now that all data has been extracted.
