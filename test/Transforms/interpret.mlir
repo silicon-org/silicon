@@ -188,3 +188,25 @@ mir.func @OuterCaller() -> (result: !si.int) {
   %3 = mir.mul %1, %2 : !si.int
   mir.return %3 : !si.int
 }
+
+//===----------------------------------------------------------------------===//
+// Opaque pack/unpack: verify that the interpreter packs values into an opaque
+// bundle and unpacks them back, preserving the individual attributes.
+
+// CHECK: mir.evaluated_func @test_opaque_pack_unpack [#si.int<30> : !si.int]
+mir.func @test_opaque_pack_unpack() -> (result: !si.int) {
+  %0 = mir.constant #si.int<10> : !si.int
+  %1 = mir.constant #si.int<20> : !si.int
+  %2 = mir.opaque_pack (%0, %1) : (!si.int, !si.int) -> !si.opaque
+  %3, %4 = mir.opaque_unpack %2 : !si.opaque -> !si.int, !si.int
+  %5 = mir.add %3, %4 : !si.int
+  mir.return %5 : !si.int
+}
+
+// CHECK: mir.evaluated_func @test_opaque_single [#si.int<42> : !si.int]
+mir.func @test_opaque_single() -> (result: !si.int) {
+  %0 = mir.constant #si.int<42> : !si.int
+  %1 = mir.opaque_pack (%0) : (!si.int) -> !si.opaque
+  %2 = mir.opaque_unpack %1 : !si.opaque -> !si.int
+  mir.return %2 : !si.int
+}
