@@ -1,8 +1,5 @@
 - Investigate why `hir.unify` ops survive past InferTypes/canonicalization/CSE all the way to HIR-to-MIR lowering. Ideally they should all be erased by that point, and HIRToMIR should refuse to lower them rather than silently forwarding an operand.
 
-- Check if the Interpret pass runs entirely on the MIR (or the Common) dialect, and if it does, move it into the MIR dialect.
-- Check if the SpecializeFuncs pass runs entirely on the HIR (or the Common) dialect, and if it does, move it into the HIR dialect.
-
 - The assembly printer for `mir.evaluated_func` inserts a space after the symbol visibility, e.g. `mir.evaluated_func private  @main.0b`.
   There should only be one space: `mir.evaluated_func private @main.0b`.
   Other ops like `mir.func` already do this correctly.
