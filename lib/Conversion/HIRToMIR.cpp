@@ -213,11 +213,9 @@ static LogicalResult convert(hir::TypeOfOp op, hir::TypeOfOp::Adaptor adaptor,
 
 static LogicalResult convert(hir::UnifyOp op, hir::UnifyOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  // UnifyOp results are consumed as type metadata by BinaryOp, which discards
-  // them during lowering. Replace with a dummy type constant.
-  auto type = hir::AnyType::get(op.getContext());
-  auto attr = base::TypeAttr::get(op.getContext(), type);
-  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  // UnifyOp constrains two type values to be equal. After conversion, both
+  // operands resolve to the same value. Forward the LHS as the result.
+  rewriter.replaceOp(op, adaptor.getLhs());
   return success();
 }
 

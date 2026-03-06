@@ -117,6 +117,20 @@ hir.func @BinaryComparison(%a, %b) -> (r0, r1, r2, r3, r4, r5) {
   hir.return (%r0, %r1, %r2, %r3, %r4, %r5) : (%int, %int, %int, %int, %int, %int)
 }
 
+// Verify that UnifyOp forwards its operand through opaque_pack, rather than
+// replacing it with a dummy !hir.any constant.
+//
+// CHECK-LABEL: mir.func @UnifyInOpaquePack(%T: !si.type)
+hir.func @UnifyInOpaquePack(%T) -> (ctx) {
+  %type_type = hir.type_type
+  %coerced = hir.coerce_type %T, %type_type
+  %unified = hir.unify %coerced, %T
+  // CHECK: mir.opaque_pack(%T) : (!si.type) -> !si.opaque
+  %packed = hir.opaque_pack(%unified)
+  %opaque = hir.opaque_type
+  hir.return (%packed) : (%opaque)
+}
+
 // CHECK-LABEL: mir.func @OpaqueTypes
 hir.func @OpaqueTypes() -> () {
   // CHECK: mir.constant #si.type<!si.opaque>

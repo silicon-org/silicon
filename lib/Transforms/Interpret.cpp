@@ -67,6 +67,10 @@ FailureOr<SmallVector<Attribute>> Interpreter::run() {
     // Special handling for call operations.
     if (auto callOp = dyn_cast<mir::CallOp>(op)) {
       auto calleeOp = symbolTable.lookup<mir::FuncOp>(callOp.getCallee());
+      if (!calleeOp)
+        return op->emitError()
+               << "callee @" << callOp.getCallee()
+               << " is not a mir.func (may not have been lowered yet)";
       auto &newFrame = callStack.emplace_back();
       newFrame.currentOp = &calleeOp.getBody().front().front();
       for (auto [arg, attr] :
