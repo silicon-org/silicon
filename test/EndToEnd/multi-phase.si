@@ -1,5 +1,4 @@
 // RUN: silc %s | FileCheck %s
-// XFAIL: *
 
 // Test multi-phase evaluation. The `compute` function has a const-const
 // argument (phase -2) and a const argument (phase -1), requiring multiple
@@ -13,8 +12,6 @@
 //   const1: 10 + 20 = 30
 //   const0: 30 + 5 = 35
 
-// CHECK-LABEL: mir.func private @main.const0
-// CHECK-NEXT: %c35_int = mir.constant #mir.int<35>
-// CHECK-NEXT: mir.return %c35_int
+// CHECK: mir.evaluated_func {{.*}}@main.const0 [#mir.int<35> : !mir.int]
 fn compute(const const a: int, const b: int, c: int) -> int { a + b + c }
 fn main() -> int { compute(10, 20, 5) }

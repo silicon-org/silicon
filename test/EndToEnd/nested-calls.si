@@ -1,13 +1,11 @@
 // RUN: silc %s | FileCheck %s
-// XFAIL: *
 
 // Test nested function calls with const arguments. The `double` function has a
 // const argument that gets baked in, and `quad` calls it twice. The compiler
 // should specialize `double` for x=5 and evaluate `5 + 5 = 10` at compile time,
 // leaving only `10 + y` and `10 + y` as runtime code.
 
-// CHECK-LABEL: mir.func private @main.const0
-// CHECK: mir.constant #mir.int<22>
+// CHECK: mir.evaluated_func {{.*}}@main.const0 [#mir.int<22> : !mir.int]
 fn double(const x: int, y: int) -> int { x + x + y }
 fn quad(const x: int, y: int) -> int { double(x, y) + double(x, y) }
 fn main() -> int { quad(5, 1) }

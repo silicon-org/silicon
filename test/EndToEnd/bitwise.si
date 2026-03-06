@@ -1,35 +1,24 @@
 // RUN: silc %s | FileCheck %s
-// XFAIL: *
 
 // Test that all bitwise and shift operations are correctly evaluated at compile
 // time through phased execution.
 
-// CHECK-LABEL: mir.func private @main_and.const0
-// CHECK-NEXT: %c2_int = mir.constant #mir.int<2>
-// CHECK-NEXT: mir.return
+// CHECK: mir.evaluated_func {{.*}}@main_and.const0 [#mir.int<2> : !mir.int]
 fn and_const(const a: int, b: int) -> int { a & b }
 fn main_and() -> int { and_const(6, 3) }
 
-// CHECK-LABEL: mir.func private @main_or.const0
-// CHECK-NEXT: %c7_int = mir.constant #mir.int<7>
-// CHECK-NEXT: mir.return
+// CHECK: mir.evaluated_func {{.*}}@main_or.const0 [#mir.int<7> : !mir.int]
 fn or_const(const a: int, b: int) -> int { a | b }
 fn main_or() -> int { or_const(5, 3) }
 
-// CHECK-LABEL: mir.func private @main_xor.const0
-// CHECK-NEXT: %c5_int = mir.constant #mir.int<5>
-// CHECK-NEXT: mir.return
+// CHECK: mir.evaluated_func {{.*}}@main_xor.const0 [#mir.int<5> : !mir.int]
 fn xor_const(const a: int, b: int) -> int { a ^ b }
 fn main_xor() -> int { xor_const(6, 3) }
 
-// CHECK-LABEL: mir.func private @main_shl.const0
-// CHECK-NEXT: %c8_int = mir.constant #mir.int<8>
-// CHECK-NEXT: mir.return
+// CHECK: mir.evaluated_func {{.*}}@main_shl.const0 [#mir.int<8> : !mir.int]
 fn shl_const(const a: int, b: int) -> int { a << b }
 fn main_shl() -> int { shl_const(1, 3) }
 
-// CHECK-LABEL: mir.func private @main_shr.const0
-// CHECK-NEXT: %c4_int = mir.constant #mir.int<4>
-// CHECK-NEXT: mir.return
+// CHECK: mir.evaluated_func {{.*}}@main_shr.const0 [#mir.int<4> : !mir.int]
 fn shr_const(const a: int, b: int) -> int { a >> b }
 fn main_shr() -> int { shr_const(16, 2) }

@@ -1,15 +1,12 @@
 // RUN: silc %s | FileCheck %s
 // RUN: silc --parse-only %s | silc --format=mlir --parse-only - | FileCheck --check-prefix=ROUNDTRIP %s
-// XFAIL: *
 
 // Test that const arguments are evaluated at compile time through phased
 // execution. The `add` function has a const argument `a` which gets split into
 // a separate const-phase function. The compiler evaluates `add(42, 7)` at
 // compile time, producing the constant result 49.
 
-// CHECK-LABEL: mir.func private @main.const0
-// CHECK-NEXT: %c49_int = mir.constant #mir.int<49>
-// CHECK-NEXT: mir.return %c49_int
+// CHECK: mir.evaluated_func {{.*}}@main.const0 [#mir.int<49> : !mir.int]
 
 // ROUNDTRIP: hir.unified_func @add
 // ROUNDTRIP: hir.unified_func @main
