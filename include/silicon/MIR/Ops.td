@@ -131,8 +131,7 @@ def EvaluatedFuncOp : MIROp<"evaluated_func", [Symbol]> {
     ArrayAttr:$results
   );
   let assemblyFormat = [{
-    custom<SymbolVisibility>($sym_visibility)
-    $sym_name $results attr-dict
+    custom<SymbolVisibility>($sym_visibility) $sym_name $results attr-dict
   }];
 }
 

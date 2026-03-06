@@ -5,7 +5,7 @@
 // resolves the result type to !si.int through the full pipeline:
 //   check-calls → infer-types → split-phases → phase-eval-loop
 
-// CHECK: mir.evaluated_func private  @main.0b [#si.int<42> : !si.int, #si.unit : !si.unit]
+// CHECK: mir.evaluated_func private @main.0b [#si.int<42> : !si.int, #si.unit : !si.unit]
 
 hir.unified_func @identity(%T: -1, %x: 0) -> (result: 0) {
   %type_type = hir.type_type
