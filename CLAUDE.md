@@ -21,6 +21,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 
 - Never touch the build/ directory.
 - Never perform a clean rebuild, for example, through `ninja clean`.
+- Never run `ninja` without targets, since that builds too much of LLVM and MLIR.
 - When working on transformation passes, use `silicon-opt` and MLIR input files; these also make good lit tests later.
 - When working on the lexer, parser, AST, or syntax in general, use `silc`.
 - Add `--debug-only=<pass>` to `silicon-opt` to print all `LLVM_DEBUG(...)` lines in a pass.
@@ -38,6 +39,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - Write down anything noteworthy or surprising, and any useful feedback you got from the user to remember later as concise bullet-point notes in the SESSION.md file.
 - The `summary` field in tablegen definitions should be a very concise description of the op; not a full sentence, just a handful of words, and use `"..."` syntax
 - The `description` field in tablegen definitions should contain proper documentation using Markdown; use `[{ ... }]` syntax and break to 80 lines in this specific case
+- Use `[{ ... }]` syntax for assembly formats, to allow for the format to be broken across multiple lines
 
 ## Todos
 
