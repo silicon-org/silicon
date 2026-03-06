@@ -16,9 +16,7 @@ func.func private @dummyB()
 // CHECK:      hir.return([[PACK]]) : ([[OT]])
 
 // CHECK-LABEL: hir.func private @Identity.const0(%x, %ctx) -> (result)
-// CHECK:      [[OT2:%.+]] = hir.opaque_type
-// CHECK:      [[COERCE_CTX:%.+]] = hir.coerce_type %ctx, [[OT2]]
-// CHECK:      [[UNPACK:%.+]] = hir.opaque_unpack [[COERCE_CTX]]
+// CHECK:      [[UNPACK:%.+]] = hir.opaque_unpack %ctx
 // CHECK:      [[X0:%.+]] = hir.coerce_type %x, [[UNPACK]]
 // CHECK:      hir.return([[X0]]) : ([[UNPACK]])
 
@@ -133,9 +131,7 @@ hir.unified_func @ValueUseAcrossPhases() -> () {
 // CHECK:      hir.return([[PACK]]) : ([[OT]])
 
 // CHECK-LABEL: hir.func private @ConstArg.const0(%b, %ctx) -> (result)
-// CHECK-NEXT: [[OT:%.+]] = hir.opaque_type
-// CHECK-NEXT: [[COERCE_CTX:%.+]] = hir.coerce_type %ctx, [[OT]]
-// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack [[COERCE_CTX]]
+// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
 // CHECK:      [[INT:%.+]] = hir.int_type
 // CHECK:      [[B0:%.+]] = hir.coerce_type %b, [[INT]]
 // CHECK:      [[R:%.+]] = hir.add {{.*}}, [[B0]] :
@@ -174,9 +170,7 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      hir.return([[PACK]]) : ([[OT]])
 
 // CHECK-LABEL: hir.func private @ConstArgPassThrough.const0(%b, %ctx) -> (result)
-// CHECK-NEXT: [[OT:%.+]] = hir.opaque_type
-// CHECK-NEXT: [[COERCE_CTX:%.+]] = hir.coerce_type %ctx, [[OT]]
-// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack [[COERCE_CTX]]
+// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
 // CHECK:      [[INT:%.+]] = hir.int_type
 // CHECK:      [[B0:%.+]] = hir.coerce_type %b, [[INT]]
 // CHECK:      hir.return
@@ -210,9 +204,7 @@ hir.unified_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      hir.return([[PACK]]) : ([[OT]])
 
 // CHECK-LABEL: hir.func private @ThreePhase.const1(%b, %ctx) -> (ctx)
-// CHECK-NEXT: [[OT:%.+]] = hir.opaque_type
-// CHECK-NEXT: [[COERCE_CTX:%.+]] = hir.coerce_type %ctx, [[OT]]
-// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack [[COERCE_CTX]]
+// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
 // CHECK:      [[INT:%.+]] = hir.int_type
 // CHECK:      [[B0:%.+]] = hir.coerce_type %b, [[INT]]
 // CHECK:      [[TMP:%.+]] = hir.add {{.*}}, [[B0]] :
@@ -221,9 +213,7 @@ hir.unified_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      hir.return([[PACK]]) : ([[OT]])
 
 // CHECK-LABEL: hir.func private @ThreePhase.const0(%c, %ctx) -> (result)
-// CHECK-NEXT: [[OT:%.+]] = hir.opaque_type
-// CHECK-NEXT: [[COERCE_CTX:%.+]] = hir.coerce_type %ctx, [[OT]]
-// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack [[COERCE_CTX]]
+// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
 // CHECK:      [[INT:%.+]] = hir.int_type
 // CHECK:      [[C0:%.+]] = hir.coerce_type %c, [[INT]]
 // CHECK:      [[RES:%.+]] = hir.add {{.*}}, [[C0]] :

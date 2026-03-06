@@ -675,16 +675,13 @@ void PhaseSplitter::run() {
       continue;
 
     // In this phase: replace trailing context block args with a single opaque
-    // arg followed by an opaque_unpack. Insert a coerce_type before the unpack
-    // so HIR-to-MIR can determine the block argument's type.
+    // arg followed by an opaque_unpack. The opaque context arg feeds directly
+    // into the unpack without an intermediate coerce_type.
     auto opaqueArg = block.addArgument(anyType, funcOp.getLoc());
     OpBuilder unpackBuilder(&block, block.begin());
-    auto opaqueTypeOp = OpaqueTypeOp::create(unpackBuilder, funcOp.getLoc());
-    auto coerceOp = CoerceTypeOp::create(unpackBuilder, funcOp.getLoc(),
-                                         opaqueArg, opaqueTypeOp.getResult());
     auto unpackOp = OpaqueUnpackOp::create(
         unpackBuilder, funcOp.getLoc(), SmallVector<Type>(contextArgs, anyType),
-        coerceOp.getResult());
+        opaqueArg);
     for (unsigned i = 0; i < contextArgs; ++i)
       block.getArgument(ownArgs + i).replaceAllUsesWith(unpackOp.getResult(i));
     block.eraseArguments(ownArgs, contextArgs);
@@ -911,12 +908,12 @@ void PhaseSplitter::run() {
 
   // Emit the multiphase_func if needed.
   if (mpName) {
-    MultiphaseFuncOp::create(
-        sfBuilder, sfLoc, mpName,
-        /*sym_visibility=*/StringAttr{}, sfBuilder.getArrayAttr(mpArgNames),
-        sfBuilder.getDenseBoolArrayAttr(mpArgIsFirst),
-        sfBuilder.getArrayAttr(mpResultNames),
-        sfBuilder.getArrayAttr(mpFuncAttrs));
+    MultiphaseFuncOp::create(sfBuilder, sfLoc, mpName,
+                             /*sym_visibility=*/StringAttr{},
+                             sfBuilder.getArrayAttr(mpArgNames),
+                             sfBuilder.getDenseBoolArrayAttr(mpArgIsFirst),
+                             sfBuilder.getArrayAttr(mpResultNames),
+                             sfBuilder.getArrayAttr(mpFuncAttrs));
   }
 
   // Erase the unified func now that all data has been extracted.

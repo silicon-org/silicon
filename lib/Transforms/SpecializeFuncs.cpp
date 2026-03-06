@@ -65,29 +65,18 @@ struct SpecializeFuncsPass
 
 /// Replace the last block arg (the opaque context) with individual
 /// hir.mir_constant ops for each element of the opaque attribute. Erases the
-/// coerce_type + opaque_unpack chain consuming the context arg.
+/// opaque_unpack consuming the context arg.
 void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
                                               mir::OpaqueAttr opaqueAttr) {
   auto &block = func.getBody().front();
   auto ctxArg = block.getArgument(block.getNumArguments() - 1);
 
-  // Find the coerce_type consuming the context arg.
-  hir::CoerceTypeOp coerceOp;
-  for (auto *user : ctxArg.getUsers()) {
-    if (auto c = dyn_cast<hir::CoerceTypeOp>(user)) {
-      coerceOp = c;
-      break;
-    }
-  }
-
-  // Find the opaque_unpack consuming the coerced value.
+  // Find the opaque_unpack consuming the context arg directly.
   hir::OpaqueUnpackOp unpackOp;
-  if (coerceOp) {
-    for (auto *user : coerceOp.getResult().getUsers()) {
-      if (auto u = dyn_cast<hir::OpaqueUnpackOp>(user)) {
-        unpackOp = u;
-        break;
-      }
+  for (auto *user : ctxArg.getUsers()) {
+    if (auto u = dyn_cast<hir::OpaqueUnpackOp>(user)) {
+      unpackOp = u;
+      break;
     }
   }
 
@@ -110,16 +99,7 @@ void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
                                                 cast<TypedAttr>(elem));
       result.replaceAllUsesWith(constOp.getResult());
     }
-
-    // Erase the unpack, coerce_type, and opaque_type ops.
     unpackOp.erase();
-    if (coerceOp && coerceOp.use_empty()) {
-      auto typeOperand = coerceOp.getTypeOperand();
-      coerceOp.erase();
-      if (auto *defOp = typeOperand.getDefiningOp())
-        if (defOp->use_empty())
-          defOp->erase();
-    }
   }
 
   // Erase the context block arg.

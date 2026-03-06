@@ -909,13 +909,10 @@ OpFoldResult MIRConstantOp::fold(FoldAdaptor) { return getValue(); }
 
 /// Canonicalize `opaque_unpack(mir_constant #mir.opaque<[e0, e1, ...]>)` by
 /// replacing each unpack result with an individual `hir.mir_constant` for the
-/// corresponding element. Also looks through `coerce_type` since the
-/// SplitPhases pass inserts one between the block arg and the unpack.
+/// corresponding element.
 LogicalResult OpaqueUnpackOp::canonicalize(OpaqueUnpackOp op,
                                            PatternRewriter &rewriter) {
   Value input = op.getInput();
-  if (auto coerce = input.getDefiningOp<CoerceTypeOp>())
-    input = coerce.getInput();
 
   auto mirConst = input.getDefiningOp<MIRConstantOp>();
   if (!mirConst)

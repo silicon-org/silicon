@@ -22,10 +22,6 @@
     The same `hir.constant` can materialize `#si.opaque` attributes as HIR values (with type `!hir.any`), replacing the current `hir.mir_constant` op.
     MIR would keep its `mir.constant` but use the common types/attrs (`mir.constant #si.int<42> : !si.int`).
 
-- SplitPhases should not emit `coerce_type` on opaque context block arguments.
-  Currently every block arg gets a `coerce_type` annotation, including the opaque context arg.
-  This forces `OpaqueUnpackOp::canonicalize` to look through `coerce_type` to find the `mir_constant`, and `expandOpaqueContext` in SpecializeFuncs to find and erase the `coerce_type` chain.
-  The opaque context arg should just feed directly into `opaque_unpack` without an intervening `coerce_type`.
 
 - `test/Transforms/interpret.mlir` only tests calls to zero-argument functions.
   Add tests for the interpreter evaluating calls that pass arguments (e.g., a zero-arg function that calls a helper with constant arguments).
