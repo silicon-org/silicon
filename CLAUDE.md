@@ -40,6 +40,9 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - The `summary` field in tablegen definitions should be a very concise description of the op; not a full sentence, just a handful of words, and use `"..."` syntax
 - The `description` field in tablegen definitions should contain proper documentation using Markdown; use `[{ ... }]` syntax and break to 80 lines in this specific case
 - Use `[{ ... }]` syntax for assembly formats, to allow for the format to be broken across multiple lines
+- If you make changes to a pass, dialect, or some specific corner of the code base, add a `[<passname>] ` prefix to the first commit message line
+- Don't refer to line numbers in commit messages
+- Prefer referring to struct, class, and function names instead of C++ file names in commit messages
 
 ## Todos
 

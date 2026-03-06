@@ -144,3 +144,60 @@ mir.func @test_leq() -> (result: !mir.int) {
   %2 = mir.leq %0, %1 : !mir.int -> !mir.int
   mir.return %2 : !mir.int
 }
+
+//===----------------------------------------------------------------------===//
+// Argument-passing calls: verify that the interpreter correctly maps call
+// operands to callee block arguments and propagates the results back.
+
+// Functions with arguments stay as mir.func after the pass; only zero-arg
+// callers are converted to mir.evaluated_func.
+
+// CHECK: mir.func @SingleArgHelper
+mir.func @SingleArgHelper(%x: !mir.int) -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<3> : !mir.int
+  %1 = mir.add %x, %0 : !mir.int
+  mir.return %1 : !mir.int
+}
+
+// CHECK: mir.evaluated_func @SingleArgCaller [#mir.int<10> : !mir.int]
+mir.func @SingleArgCaller() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<7> : !mir.int
+  %1 = mir.call @SingleArgHelper(%0) : (!mir.int) -> !mir.int
+  mir.return %1 : !mir.int
+}
+
+// CHECK: mir.func @MultiArg
+mir.func @MultiArg(%x: !mir.int, %y: !mir.int) -> (result: !mir.int) {
+  %0 = mir.add %x, %y : !mir.int
+  mir.return %0 : !mir.int
+}
+
+// CHECK: mir.evaluated_func @MultiArgCaller [#mir.int<13> : !mir.int]
+mir.func @MultiArgCaller() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<5> : !mir.int
+  %1 = mir.constant #mir.int<8> : !mir.int
+  %2 = mir.call @MultiArg(%0, %1) : (!mir.int, !mir.int) -> !mir.int
+  mir.return %2 : !mir.int
+}
+
+// CHECK: mir.func @LeafSub
+mir.func @LeafSub(%a: !mir.int, %b: !mir.int) -> (result: !mir.int) {
+  %0 = mir.sub %b, %a : !mir.int
+  mir.return %0 : !mir.int
+}
+
+// CHECK: mir.func @Intermediate
+mir.func @Intermediate(%x: !mir.int) -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<10> : !mir.int
+  %1 = mir.call @LeafSub(%x, %0) : (!mir.int, !mir.int) -> !mir.int
+  mir.return %1 : !mir.int
+}
+
+// CHECK: mir.evaluated_func @OuterCaller [#mir.int<20> : !mir.int]
+mir.func @OuterCaller() -> (result: !mir.int) {
+  %0 = mir.constant #mir.int<5> : !mir.int
+  %1 = mir.call @Intermediate(%0) : (!mir.int) -> !mir.int
+  %2 = mir.constant #mir.int<4> : !mir.int
+  %3 = mir.mul %1, %2 : !mir.int
+  mir.return %3 : !mir.int
+}

@@ -22,11 +22,6 @@
     The same `hir.constant` can materialize `#si.opaque` attributes as HIR values (with type `!hir.any`), replacing the current `hir.mir_constant` op.
     MIR would keep its `mir.constant` but use the common types/attrs (`mir.constant #si.int<42> : !si.int`).
 
-
-- `test/Transforms/interpret.mlir` only tests calls to zero-argument functions.
-  Add tests for the interpreter evaluating calls that pass arguments (e.g., a zero-arg function that calls a helper with constant arguments).
-  The `@foo` → `@bar` test calls `@bar()` with no args, and all binary op tests are self-contained zero-arg functions.
-
 - Revise how SplitPhases creates multiphase funcs and groups phases.
   The pass currently compares phases against hardcoded constants like `minPhase < 0` or `minPhase <= -2`, which looks like it encodes a specific pattern from a few examples rather than implementing a general algorithm.
   The correct general process is:
