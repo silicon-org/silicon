@@ -28,9 +28,9 @@ namespace silicon {
 //===----------------------------------------------------------------------===//
 // PhaseEvalLoopPass
 //
-// Iteratively runs HIRToMIR + Interpret + SpecializeFuncs until no
-// multiphase_func ops remain, indicating all compile-time phases have been
-// evaluated. Each iteration peels off one more const phase.
+// Iteratively runs HIRToMIR + canonicalize/CSE + Interpret + SpecializeFuncs +
+// canonicalize/CSE until no multiphase_func ops remain and no HIR functions
+// need lowering. Each iteration peels off one more const phase.
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -43,21 +43,52 @@ struct PhaseEvalLoopPass
 void PhaseEvalLoopPass::runOnOperation() {
   constexpr unsigned maxIterations = 100;
 
-  for (unsigned i = 0; i < maxIterations; ++i) {
-    // Check if any multiphase_func ops remain.
-    bool hasMultiphase = false;
-    getOperation()->walk([&](hir::MultiphaseFuncOp) {
-      hasMultiphase = true;
-      return WalkResult::interrupt();
+  // Count actionable ops: multiphase_func ops whose first sub-function has
+  // been evaluated (ready for chaining), and HIR funcs that don't contain
+  // opaque_unpack ops (ready for lowering). Ops that require further
+  // specialization before they can be processed are not counted.
+  auto countOps = [&]() -> std::pair<unsigned, unsigned> {
+    SymbolTable symTable(getOperation());
+    unsigned numMultiphase = 0;
+    unsigned numHIRFuncs = 0;
+    getOperation()->walk([&](Operation *op) {
+      if (auto mpFunc = dyn_cast<hir::MultiphaseFuncOp>(op)) {
+        // Only count if the first sub-function is actionable: either already
+        // evaluated, or a zero-arg function that can be evaluated. Template
+        // multiphase_func ops whose sub-functions take args are processed
+        // through transitive specialization, not direct evaluation.
+        if (!mpFunc.getPhaseFuncs().empty()) {
+          auto firstSym = cast<FlatSymbolRefAttr>(mpFunc.getPhaseFuncs()[0]);
+          auto name = firstSym.getValue();
+          if (symTable.lookup<mir::EvaluatedFuncOp>(name)) {
+            ++numMultiphase;
+          } else if (auto hirFunc = symTable.lookup<hir::FuncOp>(name)) {
+            if (hirFunc.getBody().front().getNumArguments() == 0)
+              ++numMultiphase;
+          } else if (auto mirFunc = symTable.lookup<mir::FuncOp>(name)) {
+            if (mirFunc.getBody().front().getNumArguments() == 0)
+              ++numMultiphase;
+          }
+        }
+      } else if (auto func = dyn_cast<hir::FuncOp>(op)) {
+        bool hasOpaqueUnpack = false;
+        func.walk([&](hir::OpaqueUnpackOp) { hasOpaqueUnpack = true; });
+        if (!hasOpaqueUnpack)
+          ++numHIRFuncs;
+      }
     });
+    return {numMultiphase, numHIRFuncs};
+  };
 
-    // Also check if any hir::FuncOp ops remain (need HIR-to-MIR lowering).
-    bool hasHIRFuncs = !getOperation().getOps<hir::FuncOp>().empty();
+  for (unsigned i = 0; i < maxIterations; ++i) {
+    auto [numMultiphase, numHIRFuncs] = countOps();
 
-    if (!hasMultiphase && !hasHIRFuncs)
+    if (numMultiphase == 0 && numHIRFuncs == 0)
       break;
 
-    LLVM_DEBUG(llvm::dbgs() << "Phase eval loop iteration " << i << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "Phase eval loop iteration " << i
+                            << " (multiphase=" << numMultiphase
+                            << ", hirFuncs=" << numHIRFuncs << ")\n");
 
     // Build and run the sub-pipeline.
     OpPassManager subPipeline("builtin.module");
@@ -73,5 +104,15 @@ void PhaseEvalLoopPass::runOnOperation() {
 
     if (failed(runPipeline(subPipeline, getOperation())))
       return signalPassFailure();
+
+    // Progress check: verify that something changed by comparing counts.
+    auto [newNumMultiphase, newNumHIRFuncs] = countOps();
+
+    if (newNumMultiphase == numMultiphase && newNumHIRFuncs == numHIRFuncs &&
+        i > 0) {
+      emitBug(getOperation().getLoc())
+          << "phase eval loop made no progress in iteration " << i;
+      return signalPassFailure();
+    }
   }
 }
