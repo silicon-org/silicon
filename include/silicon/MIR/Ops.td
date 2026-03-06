@@ -135,6 +135,31 @@ def CallOp : MIROp<"call"> {
 }
 
 //===----------------------------------------------------------------------===//
+// Evaluated Functions
+//===----------------------------------------------------------------------===//
+
+def EvaluatedFuncOp : MIROp<"evaluated_func", [Symbol]> {
+  let summary = "a fully-evaluated compile-time function";
+  let description = [{
+    Represents the result of interpreting a zero-argument MIR function. The
+    `results` array contains the constant attribute values that the function
+    returned. The original `mir.func` is erased after producing this op.
+
+    The specialization pass uses this to chain evaluated results into the
+    next sub-function of a `hir.multiphase_func`.
+  }];
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<StrAttr>:$sym_visibility,
+    ArrayAttr:$results
+  );
+  let assemblyFormat = [{
+    custom<SymbolVisibility>($sym_visibility)
+    $sym_name $results attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Opaque Bundles
 //===----------------------------------------------------------------------===//
 

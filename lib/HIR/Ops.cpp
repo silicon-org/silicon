@@ -8,6 +8,7 @@
 
 #include "silicon/HIR/Attributes.h"
 #include "silicon/HIR/Ops.h"
+#include "silicon/MIR/Attributes.h"
 #include "silicon/Support/AsmParser.h"
 #include "silicon/Support/MLIR.h"
 #include "llvm/ADT/STLExtras.h"
@@ -892,6 +893,47 @@ UnifiedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
                          << " entries but call has " << getResults().size()
                          << " results";
 
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// MIRConstantOp
+//===----------------------------------------------------------------------===//
+
+/// Fold to the constant attribute value.
+OpFoldResult MIRConstantOp::fold(FoldAdaptor) { return getValue(); }
+
+//===----------------------------------------------------------------------===//
+// OpaqueUnpackOp
+//===----------------------------------------------------------------------===//
+
+/// Canonicalize `opaque_unpack(mir_constant #mir.opaque<[e0, e1, ...]>)` by
+/// replacing each unpack result with an individual `hir.mir_constant` for the
+/// corresponding element. Also looks through `coerce_type` since the
+/// SplitPhases pass inserts one between the block arg and the unpack.
+LogicalResult OpaqueUnpackOp::canonicalize(OpaqueUnpackOp op,
+                                           PatternRewriter &rewriter) {
+  Value input = op.getInput();
+  if (auto coerce = input.getDefiningOp<CoerceTypeOp>())
+    input = coerce.getInput();
+
+  auto mirConst = input.getDefiningOp<MIRConstantOp>();
+  if (!mirConst)
+    return failure();
+
+  auto opaqueAttr = dyn_cast<mir::OpaqueAttr>(mirConst.getValue());
+  if (!opaqueAttr)
+    return failure();
+
+  if (opaqueAttr.getElements().size() != op.getResults().size())
+    return failure();
+
+  SmallVector<Value> replacements;
+  for (auto elem : opaqueAttr.getElements())
+    replacements.push_back(
+        MIRConstantOp::create(rewriter, op.getLoc(), cast<TypedAttr>(elem))
+            .getResult());
+  rewriter.replaceOp(op, replacements);
   return success();
 }
 

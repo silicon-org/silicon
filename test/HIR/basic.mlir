@@ -114,3 +114,7 @@ hir.opaque_type
 %opaque_b = hir.constant_int 42
 %packed = hir.opaque_pack (%opaque_a, %opaque_b)
 %unp_x, %unp_y = hir.opaque_unpack %packed : !hir.any, !hir.any
+
+// mir_constant
+hir.mir_constant #mir.int<42> : !mir.int
+hir.mir_constant #mir.type<!mir.int> : !mir.type

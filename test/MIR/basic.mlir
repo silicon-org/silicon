@@ -74,3 +74,13 @@ unrealized_conversion_cast to index {attr = #mir.opaque<[#mir.int<42>, #mir.type
 // Opaque pack/unpack
 %opaque_ctx = mir.opaque_pack (%c42_int, %int_type) : (!mir.int, !mir.type) -> !mir.opaque
 %opaque_a, %opaque_b = mir.opaque_unpack %opaque_ctx : !mir.opaque -> !mir.int, !mir.type
+
+// Evaluated func
+// CHECK: mir.evaluated_func @eval_test [#mir.int<42> : !mir.int]
+mir.evaluated_func @eval_test [#mir.int<42> : !mir.int]
+
+// CHECK: mir.evaluated_func @eval_multi [#mir.int<1> : !mir.int, #mir.type<!mir.int> : !mir.type]
+mir.evaluated_func @eval_multi [#mir.int<1> : !mir.int, #mir.type<!mir.int> : !mir.type]
+
+// CHECK: mir.evaluated_func private {{.*}}@eval_private [#mir.unit : !mir.unit]
+mir.evaluated_func private @eval_private [#mir.unit : !mir.unit]

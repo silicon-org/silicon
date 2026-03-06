@@ -281,6 +281,13 @@ CONVERT_CMP_OP(LeqOp, LeqOp)
 #undef CONVERT_BINARY_OP
 #undef CONVERT_CMP_OP
 
+static LogicalResult convert(hir::MIRConstantOp op,
+                             hir::MIRConstantOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, op.getValue());
+  return success();
+}
+
 static LogicalResult convert(hir::SpecializeFuncOp op,
                              hir::SpecializeFuncOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
@@ -389,7 +396,8 @@ static bool isResolvableType(Value typeVal) {
     return true;
   }
 
-  // Already-lowered mir.constant with a TypeAttr (from specialization).
+  // ConstantLike op with a TypeAttr (e.g., mir.constant or hir.mir_constant
+  // from specialization).
   mir::TypeAttr typeAttr;
   if (matchPattern(typeVal, m_Constant(&typeAttr)))
     return !isa<hir::AnyType>(typeAttr.getValue());
@@ -493,7 +501,8 @@ static Type resolveHIRType(Value typeVal) {
     return FunctionType::get(ctx, argTypes, resultTypes);
   }
 
-  // For mir.constant (from specialization), extract the type directly.
+  // ConstantLike op with a TypeAttr (e.g., mir.constant or hir.mir_constant
+  // from specialization).
   mir::TypeAttr typeAttr;
   if (matchPattern(typeVal, m_Constant(&typeAttr)))
     return typeAttr.getValue();
@@ -679,6 +688,7 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::GtOp>(convert);
   patterns.add<hir::GeqOp>(convert);
   patterns.add<hir::LeqOp>(convert);
+  patterns.add<hir::MIRConstantOp>(convert);
   patterns.add<hir::SpecializeFuncOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
   patterns.add<hir::CallOp>(convert);

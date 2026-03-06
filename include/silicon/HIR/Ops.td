@@ -9,6 +9,7 @@
 #ifndef SILICON_HIR_OPS_TD
 #define SILICON_HIR_OPS_TD
 
+include "mlir/IR/BuiltinAttributeInterfaces.td"
 include "mlir/IR/OpAsmInterface.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/SymbolInterfaces.td"
@@ -510,6 +511,25 @@ def OpaqueUnpackOp : HIROp<"opaque_unpack", [Pure]> {
   let arguments = (ins AnyHIRType:$input);
   let results = (outs Variadic<AnyHIRType>:$results);
   let assemblyFormat = [{ $input attr-dict `:` type($results) }];
+  let hasCanonicalizeMethod = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// MIR Constant Injection
+//===----------------------------------------------------------------------===//
+
+def MIRConstantOp : HIROp<"mir_constant", [ConstantLike, Pure]> {
+  let summary = "materialize an MIR attribute as an HIR value";
+  let description = [{
+    Injects a concrete MIR attribute (produced by interpretation) into an HIR
+    function during specialization. Lowered to `mir.constant` by HIR-to-MIR.
+  }];
+  let arguments = (ins TypedAttrInterface:$value);
+  let results = (outs AnyHIRType:$result);
+  let assemblyFormat = [{
+    $value attr-dict
+  }];
+  let hasFolder = 1;
 }
 
 #endif // SILICON_HIR_OPS_TD
