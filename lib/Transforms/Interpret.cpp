@@ -37,11 +37,20 @@ struct Interpreter {
   SmallVector<CallFrame> callStack;
 
   Interpreter(SymbolTable &symbolTable) : symbolTable(symbolTable) {}
-  LogicalResult run();
+  FailureOr<SmallVector<Attribute>> run();
 };
 } // namespace
 
-LogicalResult Interpreter::run() {
+//===----------------------------------------------------------------------===//
+// Interpreter Core
+//
+// Walk through the operations of a function body, evaluating each one.
+// Calls are resolved by pushing a new frame onto the call stack. When the
+// top-most frame encounters a return, the constant attribute values are
+// returned without modifying the IR.
+//===----------------------------------------------------------------------===//
+
+FailureOr<SmallVector<Attribute>> Interpreter::run() {
   SmallVector<Attribute> operands;
   while (auto *op = callStack.back().currentOp) {
     auto &frame = callStack.back();
@@ -69,24 +78,9 @@ LogicalResult Interpreter::run() {
 
     // Special handling for return operations.
     if (auto returnOp = dyn_cast<mir::ReturnOp>(op)) {
-      // If this is the top-most call frame, we are interpreting the body of a
-      // function without any arguments. Materialize the constant return values
-      // directly such that the result of interpreting the function is available
-      // in the IR.
-      if (callStack.size() == 1) {
-        auto loc = op->getLoc();
-        auto &region = *op->getParentRegion();
-        region.getBlocks().clear();
-        auto &block = region.emplaceBlock();
-        auto builder = OpBuilder::atBlockBegin(&block);
-        SmallVector<Value> results;
-        results.reserve(operands.size());
-        for (auto operand : operands)
-          results.push_back(
-              mir::ConstantOp::create(builder, loc, cast<TypedAttr>(operand)));
-        mir::ReturnOp::create(builder, loc, results);
-        return success();
-      }
+      // Top-most frame: return the result attributes.
+      if (callStack.size() == 1)
+        return SmallVector<Attribute>(operands);
 
       // Otherwise copy the results into the parent call frame and continue
       // there.
@@ -167,8 +161,16 @@ LogicalResult Interpreter::run() {
 
     frame.currentOp = op->getNextNode();
   }
-  return success();
+  return SmallVector<Attribute>{};
 }
+
+//===----------------------------------------------------------------------===//
+// InterpretPass
+//
+// Evaluates zero-argument MIR functions and produces `mir.evaluated_func` ops
+// with the constant result attributes. The original `mir.func` is erased.
+// Chaining and specialization are handled separately by SpecializeFuncsPass.
+//===----------------------------------------------------------------------===//
 
 namespace {
 struct InterpretPass : public silicon::impl::InterpretPassBase<InterpretPass> {
@@ -176,183 +178,42 @@ struct InterpretPass : public silicon::impl::InterpretPassBase<InterpretPass> {
 };
 } // namespace
 
-/// Check whether a function body has been fully evaluated, i.e., consists only
-/// of `mir.constant` and `mir.return` operations.
-static bool isFullyEvaluated(mir::FuncOp func) {
-  return llvm::all_of(func.getBody().front(), [](Operation &op) {
-    return isa<mir::ConstantOp, mir::ReturnOp>(op);
-  });
-}
-
-/// Collect the constant return values from a fully-evaluated function body.
-/// Returns an empty vector if any return operand is not a constant.
-static SmallVector<Attribute> collectReturnConstants(mir::FuncOp func) {
-  auto returnOp = cast<mir::ReturnOp>(func.getBody().front().getTerminator());
-  SmallVector<Attribute> result;
-  for (auto operand : returnOp.getOperands()) {
-    auto constOp = operand.getDefiningOp<mir::ConstantOp>();
-    if (!constOp)
-      return {};
-    result.push_back(constOp.getValue());
-  }
-  return result;
-}
-
-//===----------------------------------------------------------------------===//
-// InterpretPass
-//
-// Iteratively interprets zero-argument MIR-body functions, then uses
-// `hir.split_func` phase maps to chain evaluated results into the next
-// sub-function. For `hir.multiphase_func` ops, collapses them as their
-// sub-functions get evaluated. Repeats until no more progress is made.
-//===----------------------------------------------------------------------===//
-
 void InterpretPass::runOnOperation() {
   auto &symbolTable = getAnalysis<SymbolTable>();
 
-  bool changed = true;
-  while (changed) {
-    changed = false;
+  // Collect functions to evaluate and their results. We collect first to avoid
+  // invalidating the symbol table during iteration (callees must remain
+  // available while being resolved by the interpreter).
+  SmallVector<std::pair<mir::FuncOp, SmallVector<Attribute>>> evaluated;
 
-    // Interpret zero-argument functions whose bodies contain MIR ops.
-    for (auto func : getOperation().getOps<mir::FuncOp>()) {
-      if (func.getBody().getNumArguments() > 0)
-        continue;
-      if (!func.getBody().front().getTerminator() ||
-          !isa<mir::ReturnOp>(func.getBody().front().getTerminator()))
-        continue;
-      if (isFullyEvaluated(func))
-        continue;
+  for (auto func : getOperation().getOps<mir::FuncOp>()) {
+    if (func.getBody().getNumArguments() > 0)
+      continue;
+    if (!func.getBody().front().getTerminator() ||
+        !isa<mir::ReturnOp>(func.getBody().front().getTerminator()))
+      continue;
 
-      LLVM_DEBUG(llvm::dbgs() << "Interpreting @" << func.getSymName() << "\n");
-      Interpreter interpreter(symbolTable);
-      interpreter.callStack.emplace_back();
-      interpreter.callStack.back().currentOp = &func.getBody().front().front();
-      if (failed(interpreter.run()))
-        return signalPassFailure();
-      // The body was rewritten; update argNames and function_type to match.
-      func.setArgNamesAttr(ArrayAttr::get(&getContext(), {}));
-      SmallVector<Type> resultTypes;
-      if (auto returnOp = func.getReturnOp())
-        for (auto operand : returnOp.getOperands())
-          resultTypes.push_back(operand.getType());
-      func.setFunctionTypeAttr(mlir::TypeAttr::get(
-          FunctionType::get(&getContext(), {}, resultTypes)));
-      changed = true;
-    }
+    LLVM_DEBUG(llvm::dbgs() << "Interpreting @" << func.getSymName() << "\n");
+    Interpreter interpreter(symbolTable);
+    interpreter.callStack.emplace_back();
+    interpreter.callStack.back().currentOp = &func.getBody().front().front();
+    auto result = interpreter.run();
+    if (failed(result))
+      return signalPassFailure();
 
-    // Use split_func phase maps to chain evaluated results into the next
-    // sub-function. The phaseNumbers and phaseFuncs are parallel arrays stored
-    // in ascending phase order. When a phase's function is fully evaluated,
-    // materialize its return constants as the trailing block arguments of the
-    // next phase's function.
-    for (auto splitFunc : getOperation().getOps<hir::SplitFuncOp>()) {
-      auto phaseFuncs = splitFunc.getPhaseFuncs();
-      for (unsigned i = 0; i + 1 < phaseFuncs.size(); ++i) {
-        auto curSym = cast<FlatSymbolRefAttr>(phaseFuncs[i]);
-        auto curFunc = symbolTable.lookup<mir::FuncOp>(curSym.getValue());
-        if (!curFunc || curFunc.getBody().getNumArguments() > 0)
-          continue;
-        if (!isFullyEvaluated(curFunc))
-          continue;
+    evaluated.push_back({func, std::move(*result)});
+  }
 
-        auto returnConsts = collectReturnConstants(curFunc);
-        if (returnConsts.empty() &&
-            curFunc.getBody().front().getTerminator()->getNumOperands() > 0)
-          continue;
+  // Replace each evaluated function with a mir.evaluated_func op.
+  for (auto &[func, resultAttrs] : evaluated) {
+    LLVM_DEBUG(llvm::dbgs() << "Evaluated @" << func.getSymName() << " -> [");
+    LLVM_DEBUG(llvm::interleaveComma(resultAttrs, llvm::dbgs()));
+    LLVM_DEBUG(llvm::dbgs() << "]\n");
 
-        auto nextSym = cast<FlatSymbolRefAttr>(phaseFuncs[i + 1]);
-        auto nextFunc = symbolTable.lookup<mir::FuncOp>(nextSym.getValue());
-        if (!nextFunc)
-          continue;
-
-        // The chained values occupy the trailing block arguments. The leading
-        // arguments are the "own" arguments of the next sub-function.
-        unsigned numChained = returnConsts.size();
-        if (numChained > nextFunc.getBody().getNumArguments())
-          continue;
-        unsigned numOwn = nextFunc.getBody().getNumArguments() - numChained;
-
-        LLVM_DEBUG(llvm::dbgs()
-                   << "Chaining " << curSym << " -> " << nextSym << "\n");
-        auto &nextBlock = nextFunc.getBody().front();
-        OpBuilder builder(&nextBlock, nextBlock.begin());
-        for (unsigned j = 0; j < numChained; ++j) {
-          auto arg = nextBlock.getArgument(numOwn + j);
-          auto constOp = mir::ConstantOp::create(
-              builder, arg.getLoc(), cast<TypedAttr>(returnConsts[j]));
-          arg.replaceAllUsesWith(constOp);
-        }
-        nextBlock.eraseArguments(numOwn, numChained);
-        // Update argNames and function_type to match the new block arg count.
-        SmallVector<Attribute> newArgNames(nextFunc.getArgNames().begin(),
-                                           nextFunc.getArgNames().end());
-        if (newArgNames.size() > numOwn)
-          newArgNames.resize(numOwn);
-        nextFunc.setArgNamesAttr(ArrayAttr::get(&getContext(), newArgNames));
-        SmallVector<Type> newArgTypes;
-        for (unsigned j = 0; j < numOwn; ++j)
-          newArgTypes.push_back(nextBlock.getArgument(j).getType());
-        SmallVector<Type> resultTypes;
-        if (auto returnOp = nextFunc.getReturnOp())
-          for (auto operand : returnOp.getOperands())
-            resultTypes.push_back(operand.getType());
-        nextFunc.setFunctionTypeAttr(mlir::TypeAttr::get(
-            FunctionType::get(&getContext(), newArgTypes, resultTypes)));
-        changed = true;
-      }
-    }
-
-    // Collapse multiphase_func ops whose sub-functions have all been evaluated.
-    // When the first sub-function is fully evaluated, remove it from the list.
-    // When only one sub-function remains, erase the multiphase_func entirely.
-    for (auto mpFunc : llvm::make_early_inc_range(
-             getOperation().getOps<hir::MultiphaseFuncOp>())) {
-      auto phaseFuncs = mpFunc.getPhaseFuncs();
-
-      // Count how many leading sub-functions have been fully evaluated.
-      unsigned numDone = 0;
-      for (auto sym : phaseFuncs) {
-        auto func = symbolTable.lookup<mir::FuncOp>(
-            cast<FlatSymbolRefAttr>(sym).getValue());
-        if (!func || !isFullyEvaluated(func))
-          break;
-        ++numDone;
-      }
-      if (numDone == 0)
-        continue;
-
-      // If all or all-but-one sub-functions are done, erase the op entirely.
-      if (phaseFuncs.size() - numDone <= 1) {
-        mpFunc.erase();
-      } else {
-        SmallVector<Attribute> newPhaseFuncs(phaseFuncs.begin() + numDone,
-                                             phaseFuncs.end());
-        auto *ctx = mpFunc.getContext();
-        mpFunc.setPhaseFuncsAttr(ArrayAttr::get(ctx, newPhaseFuncs));
-
-        // Remove args that were classified as "first" since they belonged to
-        // the now-evaluated sub-functions.
-        auto argIsFirst = mpFunc.getArgIsFirst();
-        SmallVector<StringRef> newArgNames;
-        SmallVector<bool> newArgIsFirst;
-        auto argNames = mpFunc.getArgNames();
-        for (unsigned k = 0; k < argNames.size(); ++k) {
-          if (!argIsFirst[k]) {
-            newArgNames.push_back(cast<StringAttr>(argNames[k]).getValue());
-            newArgIsFirst.push_back(false);
-          }
-        }
-        // The first remaining "last" arg becomes "first" in the new ordering.
-        if (!newArgIsFirst.empty())
-          newArgIsFirst[0] = true;
-        SmallVector<Attribute> nameAttrs;
-        for (auto n : newArgNames)
-          nameAttrs.push_back(StringAttr::get(ctx, n));
-        mpFunc.setArgNamesAttr(ArrayAttr::get(ctx, nameAttrs));
-        mpFunc.setArgIsFirstAttr(DenseBoolArrayAttr::get(ctx, newArgIsFirst));
-      }
-      changed = true;
-    }
+    OpBuilder builder(func);
+    mir::EvaluatedFuncOp::create(builder, func.getLoc(), func.getSymNameAttr(),
+                                 func.getSymVisibilityAttr(),
+                                 builder.getArrayAttr(resultAttrs));
+    symbolTable.erase(func);
   }
 }
