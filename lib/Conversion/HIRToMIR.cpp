@@ -193,8 +193,16 @@ static LogicalResult convert(hir::TypeOfOp op, hir::TypeOfOp::Adaptor adaptor,
 
 static LogicalResult convert(hir::UnifyOp op, hir::UnifyOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  // UnifyOp constrains two type values to be equal. After conversion, both
-  // operands resolve to the same value. Forward the LHS as the result.
+  // UnifyOp constrains two type values to be equal. InferTypes and
+  // canonicalization should eliminate all unify ops before HIR-to-MIR
+  // lowering. If a unify op survives to this point, it indicates a bug
+  // in the earlier passes. The only exception is when both operands have
+  // already been resolved to the same value after conversion (e.g., after
+  // coerce_type forwarding), in which case we can safely forward.
+  if (adaptor.getLhs() != adaptor.getRhs())
+    return emitBug(op.getLoc())
+           << "hir.unify survived to HIR-to-MIR lowering with "
+              "different operands; InferTypes should have eliminated it";
   rewriter.replaceOp(op, adaptor.getLhs());
   return success();
 }
