@@ -421,6 +421,9 @@ static bool shouldLower(hir::FuncOp func) {
       if (!isResolvableType(coerce.getTypeOperand()))
         return false;
     } else if (auto call = dyn_cast<hir::CallOp>(&op)) {
+      for (auto val : call.getTypeOfArgs())
+        if (!isResolvableType(val))
+          return false;
       for (auto val : call.getTypeOfResults())
         if (!isResolvableType(val))
           return false;

@@ -1,8 +1,5 @@
 - `dependent-type.mlir` test segfaults — the phased evaluation pipeline crashes when processing functions with dependent types (`identity(%T: -1, %x: 0)` where the result type depends on the first argument).
 
-- `shouldLower` in HIRToMIR.cpp only checks `call.getTypeOfResults()`, not `call.getTypeOfArgs()`.
-  It should check both to avoid attempting to lower calls with unresolvable arg types.
-
 - SplitPhases generates wrong structure for functions with all-external const phases.
   For `fn compute(const const a: int, const b: int, c: int)` (phases -2, -1, 0 all externally visible), the current code produces `multiphase_func @compute.const(first a, last b, last c)` with three sub-functions.
   This is wrong: a `multiphase_func` is for eagerly evaluating internal const phases that require no input arguments.

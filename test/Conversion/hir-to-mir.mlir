@@ -148,6 +148,18 @@ hir.func @OpaqueArg(%a) -> (result) {
   hir.return (%a0) : (%opaque)
 }
 
+// Verify that a hir.func with unresolved typeOfArgs in a call is not lowered.
+// The outer function has a block argument used as a type operand for the call,
+// so shouldLower must return false for it and leave it as hir.func.
+//
+// CHECK-LABEL: hir.func @UnresolvedCallArgType
+// CHECK-NOT: mir.func @UnresolvedCallArgType
+hir.func @UnresolvedCallArgType(%T) -> () {
+  %x = hir.constant_int 0
+  hir.call @identity(%x) : (%T) -> ()
+  hir.return
+}
+
 // CHECK-LABEL: mir.func @Casts
 hir.func @Casts() -> (a, b) {
   // CHECK-NEXT: [[TMP1:%.+]] = mir.constant
