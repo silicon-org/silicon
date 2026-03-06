@@ -3,18 +3,18 @@
 // Test that all arithmetic binary operations are correctly evaluated at compile
 // time through phased execution.
 
-// CHECK: mir.evaluated_func {{.*}}@main_sub.const0 [#mir.int<7> : !mir.int]
+// CHECK: mir.evaluated_func {{.*}}@main_sub.0b [#mir.int<7> : !mir.int]
 fn sub_const(const a: int, b: int) -> int { a - b }
 fn main_sub() -> int { sub_const(10, 3) }
 
-// CHECK: mir.evaluated_func {{.*}}@main_mul.const0 [#mir.int<20> : !mir.int]
+// CHECK: mir.evaluated_func {{.*}}@main_mul.0b [#mir.int<20> : !mir.int]
 fn mul_const(const a: int, b: int) -> int { a * b }
 fn main_mul() -> int { mul_const(4, 5) }
 
-// CHECK: mir.evaluated_func {{.*}}@main_div.const0 [#mir.int<3> : !mir.int]
+// CHECK: mir.evaluated_func {{.*}}@main_div.0b [#mir.int<3> : !mir.int]
 fn div_const(const a: int, b: int) -> int { a / b }
 fn main_div() -> int { div_const(10, 3) }
 
-// CHECK: mir.evaluated_func {{.*}}@main_mod.const0 [#mir.int<1> : !mir.int]
+// CHECK: mir.evaluated_func {{.*}}@main_mod.0b [#mir.int<1> : !mir.int]
 fn mod_const(const a: int, b: int) -> int { a % b }
 fn main_mod() -> int { mod_const(10, 3) }

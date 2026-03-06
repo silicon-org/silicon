@@ -18,3 +18,6 @@
 - MLIR `ArrayAttr` printing includes type annotations on each element (e.g., `#mir.int<5> : !mir.int` not just `#mir.int<5>`). This affects CHECK lines for `evaluated_func`.
 - `SmallPtrSet` cannot be used with MLIR op types (no `PointerLikeTypeTraits` specialization). Use `SmallVector` + `is_contained` instead.
 - Use a custom parser/printer like `custom<SymbolVisibility>($sym_visibility)` for visibility keywords (`private`, `nested`).
+- SplitPhases now uses a general phase-grouping algorithm: external phases (from arg/result phases) define group boundaries. Internal phases accumulate into the next external phase's group. Multi-phase groups get a `multiphase_func`; standalone groups map directly to `FuncOp`. The old `.const<N>` / `.dyn<N>` naming is replaced by `.<groupIdx>` (standalone) and `.<groupIdx><letter>` (multi-phase).
+- When SplitPhases erases a `unified_func` and creates a `split_func` with the same name, the `SymbolTable` must be explicitly updated: `symbolTable.erase(funcOp)` then `symbolTable.insert(splitFuncOp)`. Without this, callers processed later can't find the callee's `split_func`.
+- `UnifiedCallOp` verifier now accepts both `unified_func` and `split_func` callees, since SplitPhases processes functions in topological order and a callee may already be split when the caller is verified.

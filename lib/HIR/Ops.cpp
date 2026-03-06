@@ -849,23 +849,39 @@ UnifiedReturnOp UnifiedFuncOp::getReturnOp() {
 LogicalResult
 UnifiedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   auto callee = getCalleeAttr();
-  auto func = symbolTable.lookupNearestSymbolFrom<UnifiedFuncOp>(getOperation(),
-                                                                 callee);
-  if (!func)
+
+  // The callee may be a unified_func (before splitting) or a split_func
+  // (after the callee has been split but the caller hasn't yet).
+  unsigned expectedArgs, expectedResults;
+  ArrayRef<int32_t> calleeArgPhases, calleeResultPhases;
+  if (auto func = symbolTable.lookupNearestSymbolFrom<UnifiedFuncOp>(
+          getOperation(), callee)) {
+    auto sigOp = func.getSignatureOp();
+    expectedArgs = sigOp.getTypeOfArgs().size();
+    expectedResults = sigOp.getTypeOfResults().size();
+    calleeArgPhases = func.getArgPhases();
+    calleeResultPhases = func.getResultPhases();
+  } else if (auto splitFunc = symbolTable.lookupNearestSymbolFrom<SplitFuncOp>(
+                 getOperation(), callee)) {
+    auto sigOp = splitFunc.getSignatureOp();
+    expectedArgs = sigOp.getTypeOfArgs().size();
+    expectedResults = sigOp.getTypeOfResults().size();
+    calleeArgPhases = splitFunc.getArgPhases();
+    calleeResultPhases = splitFunc.getResultPhases();
+  } else {
     return emitOpError() << "callee " << callee
-                         << " does not reference a valid `hir.unified_func`";
+                         << " does not reference a valid `hir.unified_func` or "
+                            "`hir.split_func`";
+  }
 
-  auto sigOp = func.getSignatureOp();
-
-  if (getArguments().size() != sigOp.getTypeOfArgs().size())
+  if (getArguments().size() != expectedArgs)
     return emitOpError() << "has " << getArguments().size()
                          << " arguments, but " << callee << " expects "
-                         << sigOp.getTypeOfArgs().size();
+                         << expectedArgs;
 
-  if (getResults().size() != sigOp.getTypeOfResults().size())
+  if (getResults().size() != expectedResults)
     return emitOpError() << "has " << getResults().size() << " results, but "
-                         << callee << " expects "
-                         << sigOp.getTypeOfResults().size();
+                         << callee << " expects " << expectedResults;
 
   if (getArgPhases().size() != getArguments().size())
     return emitOpError() << "argPhases has " << getArgPhases().size()
@@ -877,10 +893,10 @@ UnifiedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
                          << " entries but call has " << getResults().size()
                          << " results";
 
-  if (getArgPhases() != func.getArgPhases())
+  if (getArgPhases() != calleeArgPhases)
     return emitOpError() << "argPhases do not match callee " << callee;
 
-  if (getResultPhases() != func.getResultPhases())
+  if (getResultPhases() != calleeResultPhases)
     return emitOpError() << "resultPhases do not match callee " << callee;
 
   if (getTypeOfArgs().size() != getArguments().size())

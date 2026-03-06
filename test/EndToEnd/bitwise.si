@@ -3,22 +3,22 @@
 // Test that all bitwise and shift operations are correctly evaluated at compile
 // time through phased execution.
 
-// CHECK: mir.evaluated_func {{.*}}@main_and.const0 [#mir.int<2> : !mir.int]
+// CHECK: mir.evaluated_func {{.*}}@main_and.0b [#mir.int<2> : !mir.int]
 fn and_const(const a: int, b: int) -> int { a & b }
 fn main_and() -> int { and_const(6, 3) }
 
-// CHECK: mir.evaluated_func {{.*}}@main_or.const0 [#mir.int<7> : !mir.int]
+// CHECK: mir.evaluated_func {{.*}}@main_or.0b [#mir.int<7> : !mir.int]
 fn or_const(const a: int, b: int) -> int { a | b }
 fn main_or() -> int { or_const(5, 3) }
 
-// CHECK: mir.evaluated_func {{.*}}@main_xor.const0 [#mir.int<5> : !mir.int]
+// CHECK: mir.evaluated_func {{.*}}@main_xor.0b [#mir.int<5> : !mir.int]
 fn xor_const(const a: int, b: int) -> int { a ^ b }
 fn main_xor() -> int { xor_const(6, 3) }
 
-// CHECK: mir.evaluated_func {{.*}}@main_shl.const0 [#mir.int<8> : !mir.int]
+// CHECK: mir.evaluated_func {{.*}}@main_shl.0b [#mir.int<8> : !mir.int]
 fn shl_const(const a: int, b: int) -> int { a << b }
 fn main_shl() -> int { shl_const(1, 3) }
 
-// CHECK: mir.evaluated_func {{.*}}@main_shr.const0 [#mir.int<4> : !mir.int]
+// CHECK: mir.evaluated_func {{.*}}@main_shr.0b [#mir.int<4> : !mir.int]
 fn shr_const(const a: int, b: int) -> int { a >> b }
 fn main_shr() -> int { shr_const(16, 2) }

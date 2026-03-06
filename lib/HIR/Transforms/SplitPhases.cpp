@@ -140,6 +140,14 @@ struct PhaseSplit {
   SmallVector<Value> returnTypeOperands;
 };
 
+/// A group of consecutive phases. A group ends when an externally visible
+/// phase is reached. Trailing internal phases after the last external phase
+/// form their own group.
+struct PhaseGroup {
+  SmallVector<int16_t> phases;
+  bool hasExternalPhase = false;
+};
+
 struct PhaseSplitter {
   PhaseSplitter(PhaseAnalysis &analysis, SymbolTable &symbolTable)
       : analysis(analysis), symbolTable(symbolTable), funcOp(analysis.funcOp) {}
@@ -186,28 +194,81 @@ void PhaseSplitter::run() {
   LLVM_DEBUG(llvm::dbgs() << "- Phases range [" << minPhase << ", " << maxPhase
                           << "]\n");
 
-  // Create a separate function for each phase. Phases ≤ 0 are named
-  // `.constN` (N = -phase); phases > 0 are named `.dynN`. We iterate in
-  // reverse execution order so each new insertion goes before the previous,
-  // resulting in the earlier-executing (more-const) phases appearing first
-  // in the module.
+  //===--------------------------------------------------------------------===//
+  // Compute External Phases and Group Phases
+  //
+  // External phases are those with caller-provided arguments or caller-visible
+  // results. We walk minPhase..maxPhase, accumulating phases into groups. A
+  // group ends when an externally visible phase is reached. Trailing internal
+  // phases form their own group.
+  //===--------------------------------------------------------------------===//
+
+  DenseSet<int16_t> externalPhases;
+  for (auto phase : funcOp.getArgPhases())
+    externalPhases.insert(static_cast<int16_t>(phase));
+  for (auto phase : funcOp.getResultPhases())
+    externalPhases.insert(static_cast<int16_t>(phase));
+
+  SmallVector<PhaseGroup> groups;
+  {
+    PhaseGroup current;
+    for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
+      current.phases.push_back(phase);
+      if (externalPhases.contains(phase)) {
+        current.hasExternalPhase = true;
+        groups.push_back(std::move(current));
+        current = {};
+      }
+    }
+    if (!current.phases.empty())
+      groups.push_back(std::move(current));
+  }
+
+  LLVM_DEBUG({
+    for (auto [idx, group] : llvm::enumerate(groups)) {
+      llvm::dbgs() << "- Group " << idx << ": [";
+      llvm::interleaveComma(group.phases, llvm::dbgs());
+      llvm::dbgs() << "]" << (group.hasExternalPhase ? " (external)" : "")
+                   << "\n";
+    }
+  });
+
+  //===--------------------------------------------------------------------===//
+  // Create Per-Phase Functions
+  //
+  // Name per-phase functions using group-based convention:
+  // - Standalone group (1 phase): @name.<groupIdx>
+  // - Multi-phase group: @name.<groupIdx><letter> (a, b, c, ...)
+  // We iterate in reverse so earlier phases appear first in the module.
+  //===--------------------------------------------------------------------===//
+
   OpBuilder builder(funcOp);
   auto privateAttr = builder.getStringAttr("private");
   SmallVector<PhaseSplit> splits(maxPhase - minPhase + 1);
-  for (int16_t phase = maxPhase; phase >= minPhase; --phase) {
-    auto name = phase <= 0 ? builder.getStringAttr(funcOp.getSymName() +
-                                                   ".const" + Twine(-phase))
-                           : builder.getStringAttr(funcOp.getSymName() +
-                                                   ".dyn" + Twine(phase));
-    auto emptyArray = builder.getArrayAttr({});
-    auto phaseFuncOp = FuncOp::create(builder, funcOp.getLoc(), name,
-                                      privateAttr, emptyArray, emptyArray);
-    if (phase != 0)
-      phaseFuncOp.getBody().emplaceBlock();
-    symbolTable.insert(phaseFuncOp);
-    builder.setInsertionPoint(phaseFuncOp);
-    splits[phase - minPhase].funcOp = phaseFuncOp;
-    splits[phase - minPhase].phase = phase;
+  for (int groupIdx = groups.size() - 1; groupIdx >= 0; --groupIdx) {
+    auto &group = groups[groupIdx];
+    bool isMulti = group.phases.size() > 1;
+    for (int posIdx = group.phases.size() - 1; posIdx >= 0; --posIdx) {
+      int16_t phase = group.phases[posIdx];
+      StringAttr name;
+      if (isMulti) {
+        char letter = 'a' + posIdx;
+        name = builder.getStringAttr(funcOp.getSymName() + "." +
+                                     Twine(groupIdx) + Twine(letter));
+      } else {
+        name =
+            builder.getStringAttr(funcOp.getSymName() + "." + Twine(groupIdx));
+      }
+      auto emptyArray = builder.getArrayAttr({});
+      auto phaseFuncOp = FuncOp::create(builder, funcOp.getLoc(), name,
+                                        privateAttr, emptyArray, emptyArray);
+      if (phase != 0)
+        phaseFuncOp.getBody().emplaceBlock();
+      symbolTable.insert(phaseFuncOp);
+      builder.setInsertionPoint(phaseFuncOp);
+      splits[phase - minPhase].funcOp = phaseFuncOp;
+      splits[phase - minPhase].phase = phase;
+    }
   }
 
   // Handle the return operation. Return values and their type operands are
@@ -308,18 +369,34 @@ void PhaseSplitter::run() {
         calleeMaxPhase = std::max(calleeMaxPhase, static_cast<int16_t>(p));
       }
 
-      // Discover all split functions by name. If any are missing, the callee
-      // wasn't split; skip this call.
+      // Look up the callee's split_func and build a phase-to-function mapping
+      // by walking its entries. MultiphaseFuncOps expand to their
+      // sub-functions.
+      auto calleeSplitFunc = symbolTable.lookup<SplitFuncOp>(calleeName);
+      if (!calleeSplitFunc)
+        continue;
+
       SmallVector<std::pair<int16_t, FuncOp>> splitFuncs;
-      for (int16_t phase = calleeMinPhase; phase <= calleeMaxPhase; ++phase) {
-        auto name = phase <= 0 ? (calleeName + ".const" + Twine(-phase)).str()
-                               : (calleeName + ".dyn" + Twine(phase)).str();
-        auto func = symbolTable.lookup<FuncOp>(name);
-        if (!func) {
-          splitFuncs.clear();
-          break;
+      {
+        auto phaseNums = calleeSplitFunc.getPhaseNumbers();
+        auto phaseFuncRefs = calleeSplitFunc.getPhaseFuncs();
+
+        // Reconstruct the callee's full phase range from its split_func
+        // entries. Each entry is either a standalone FuncOp (1 phase) or a
+        // MultiphaseFuncOp (multiple phases). We walk them in order.
+        int16_t phase = calleeMinPhase;
+        for (auto [entryPhase, funcRef] : llvm::zip(phaseNums, phaseFuncRefs)) {
+          auto name = cast<FlatSymbolRefAttr>(funcRef).getValue();
+          if (auto mpFunc = symbolTable.lookup<MultiphaseFuncOp>(name)) {
+            for (auto subRef : mpFunc.getPhaseFuncs()) {
+              auto subName = cast<FlatSymbolRefAttr>(subRef).getValue();
+              splitFuncs.push_back(
+                  {phase++, symbolTable.lookup<FuncOp>(subName)});
+            }
+          } else {
+            splitFuncs.push_back({phase++, symbolTable.lookup<FuncOp>(name)});
+          }
         }
-        splitFuncs.push_back({phase, func});
       }
       if (splitFuncs.empty())
         continue;
@@ -751,8 +828,9 @@ void PhaseSplitter::run() {
   //
   // Now that each phase function has its final block args and return values,
   // assign meaningful names. Own args get their original names from the
-  // unified func; the opaque context arg (if any) gets named "ctx". Phase 0's
-  // own results get the unified func's result names; context returns get "ctx".
+  // unified func; the opaque context arg (if any) gets named "ctx". The
+  // external phase matching the result phases gets the unified func's result
+  // names; context returns get "ctx".
   //===--------------------------------------------------------------------===//
 
   for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
@@ -770,15 +848,16 @@ void PhaseSplitter::run() {
       phaseArgNames.push_back(builder.getStringAttr("ctx"));
     split.funcOp.setArgNamesAttr(builder.getArrayAttr(phaseArgNames));
 
-    // Build resultNames: unified func's result names for phase 0's own
-    // results, "ctx" for context returns.
+    // Build resultNames: the phase matching the result phases gets the unified
+    // func's result names; context returns get "ctx".
     SmallVector<Attribute> phaseResultNames;
     if (auto retOp = split.funcOp.getReturnOp()) {
       unsigned ownReturns = numOwnReturns[phase - minPhase];
-      if (phase == 0) {
-        auto rn = funcOp.getResultNames();
-        for (unsigned i = 0; i < ownReturns && i < rn.size(); ++i)
-          phaseResultNames.push_back(rn[i]);
+      // Check if this phase has user-visible results.
+      for (auto [name, resultPhase] :
+           llvm::zip(funcOp.getResultNames(), funcOp.getResultPhases())) {
+        if (static_cast<int16_t>(resultPhase) == phase)
+          phaseResultNames.push_back(name);
       }
       if (retOp.getValues().size() > ownReturns)
         phaseResultNames.push_back(builder.getStringAttr("ctx"));
@@ -789,11 +868,11 @@ void PhaseSplitter::run() {
   //===--------------------------------------------------------------------===//
   // Emit Structural Ops
   //
-  // Build a split_func recording the full phase-to-function mapping, and a
-  // multiphase_func wrapping sub-functions when chained evaluation is needed.
-  // The multiphase_func includes phase 0 as its last entry, so the
-  // specialization pass can chain all results through to the final phase.
-  // The unified func is erased afterward.
+  // Build a split_func with one entry per group. Standalone groups (1 phase)
+  // map directly to a FuncOp. Multi-phase groups get a multiphase_func
+  // wrapping their sub-functions. The representative phase for each group in
+  // the split_func is the last phase (the externally visible one, or the last
+  // internal phase for trailing groups).
   //===--------------------------------------------------------------------===//
 
   auto sfLoc = funcOp.getLoc();
@@ -809,78 +888,71 @@ void PhaseSplitter::run() {
                       std::next(lastPhaseFunc->getIterator()));
   auto *ctx = sfBuilder.getContext();
 
-  // Determine if a multiphase_func is needed. A multiphase_func wraps all
-  // phases (including phase 0) when there are 2+ compile-time phases or
-  // internal compile-time phases not tied to external args.
-  StringAttr mpName;
-  SmallVector<Attribute> mpArgNames;
-  SmallVector<bool> mpArgIsFirst;
-  SmallVector<Attribute> mpResultNames;
-  SmallVector<Attribute> mpFuncAttrs;
-
-  if (minPhase < 0) {
-    DenseSet<int16_t> externalArgPhases;
-    for (auto phase : sfArgPhases)
-      if (phase < 0)
-        externalArgPhases.insert(static_cast<int16_t>(phase));
-
-    bool hasInternalConstPhase = false;
-    for (int16_t phase = minPhase; phase < 0; ++phase) {
-      if (!externalArgPhases.contains(phase)) {
-        hasInternalConstPhase = true;
-        break;
-      }
-    }
-
-    if (minPhase <= -2 || hasInternalConstPhase) {
-      mpName = sfBuilder.getStringAttr(sfName.getValue() + ".const");
-
-      // Collect all sub-functions from minPhase through phase 0.
-      for (int16_t phase = minPhase; phase <= 0; ++phase)
-        mpFuncAttrs.push_back(FlatSymbolRefAttr::get(
-            ctx, splits[phase - minPhase].funcOp.getSymName()));
-
-      // Include compile-time args (phase < 0) and phase-0 args. An arg is
-      // "first" if it enters at the earliest compile-time phase, "last"
-      // otherwise. Phase-0 args are always "last".
-      for (auto [name, phase] : llvm::zip(sfArgNames, sfArgPhases)) {
-        if (phase < 0) {
-          mpArgNames.push_back(name);
-          mpArgIsFirst.push_back(phase == minPhase);
-        }
-      }
-      for (auto [name, phase] : llvm::zip(sfArgNames, sfArgPhases)) {
-        if (phase == 0) {
-          mpArgNames.push_back(name);
-          mpArgIsFirst.push_back(false);
-        }
-      }
-
-      // The multiphase_func's results are the function's own results, since
-      // the last sub-function (phase 0) produces those directly.
-      for (auto name : sfResultNames)
-        mpResultNames.push_back(name);
-    }
-  }
-
-  // Build phase-to-function mapping arrays. When a multiphase_func is
-  // created, it subsumes all entries from minPhase to 0, replaced by a
-  // single entry at phase 0 referencing the multiphase_func.
+  // Build phase-to-function mapping arrays and collect multiphase_func info.
   SmallVector<int32_t> phaseNumbers;
   SmallVector<Attribute> phaseFuncAttrs;
-  if (mpName) {
-    phaseNumbers.push_back(0);
-    phaseFuncAttrs.push_back(FlatSymbolRefAttr::get(ctx, mpName));
-    for (int16_t phase = 1; phase <= maxPhase; ++phase) {
-      phaseNumbers.push_back(phase);
+
+  struct MultiphaseInfo {
+    StringAttr name;
+    SmallVector<Attribute> argNames;
+    SmallVector<bool> argIsFirst;
+    SmallVector<Attribute> resultNames;
+    SmallVector<Attribute> subFuncAttrs;
+  };
+  SmallVector<MultiphaseInfo, 2> multiphaseInfos;
+
+  for (auto [groupIdx, group] : llvm::enumerate(groups)) {
+    int16_t repPhase = group.phases.back();
+    phaseNumbers.push_back(repPhase);
+
+    if (group.phases.size() == 1) {
+      // Standalone group: split_func entry points directly to the func.
       phaseFuncAttrs.push_back(FlatSymbolRefAttr::get(
-          ctx, splits[phase - minPhase].funcOp.getSymName()));
-    }
-  } else {
-    for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
-      phaseNumbers.push_back(phase);
-      phaseFuncAttrs.push_back(FlatSymbolRefAttr::get(
-          ctx, splits[phase - minPhase].funcOp.getSymName()));
+          ctx, splits[repPhase - minPhase].funcOp.getSymName()));
+    } else {
+      // Multi-phase group: create a multiphase_func.
+      auto mpName =
+          sfBuilder.getStringAttr(funcOp.getSymName() + "." + Twine(groupIdx));
+      phaseFuncAttrs.push_back(FlatSymbolRefAttr::get(ctx, mpName));
+
+      MultiphaseInfo mp;
+      mp.name = mpName;
+
+      // Collect sub-function references.
+      for (auto phase : group.phases)
+        mp.subFuncAttrs.push_back(FlatSymbolRefAttr::get(
+            ctx, splits[phase - minPhase].funcOp.getSymName()));
+
+      // "first" args: only opaque context from a prior group. The first phase
+      // of the group gets a ctx arg only if it's not the very first phase.
+      int16_t firstPhase = group.phases.front();
+      if (firstPhase > minPhase) {
+        mp.argNames.push_back(sfBuilder.getStringAttr("ctx"));
+        mp.argIsFirst.push_back(true);
+      }
+
+      // "last" args: user-visible args at the group's external phase (if any).
+      if (group.hasExternalPhase) {
+        for (auto [name, argPhase] : llvm::zip(sfArgNames, sfArgPhases)) {
+          if (static_cast<int16_t>(argPhase) == repPhase) {
+            mp.argNames.push_back(name);
+            mp.argIsFirst.push_back(false);
+          }
+        }
+      }
+
+      // Results: user results at the external phase + ctx if not last group.
+      if (group.hasExternalPhase) {
+        for (auto [name, resultPhase] :
+             llvm::zip(sfResultNames, sfResultPhases)) {
+          if (static_cast<int16_t>(resultPhase) == repPhase)
+            mp.resultNames.push_back(name);
+        }
+      }
+      if (static_cast<unsigned>(groupIdx) + 1 < groups.size())
+        mp.resultNames.push_back(sfBuilder.getStringAttr("ctx"));
+
+      multiphaseInfos.push_back(std::move(mp));
     }
   }
 
@@ -906,18 +978,21 @@ void PhaseSplitter::run() {
     unifiedSigOp.erase();
   }
 
-  // Emit the multiphase_func if needed.
-  if (mpName) {
-    MultiphaseFuncOp::create(sfBuilder, sfLoc, mpName,
-                             /*sym_visibility=*/StringAttr{},
-                             sfBuilder.getArrayAttr(mpArgNames),
-                             sfBuilder.getDenseBoolArrayAttr(mpArgIsFirst),
-                             sfBuilder.getArrayAttr(mpResultNames),
-                             sfBuilder.getArrayAttr(mpFuncAttrs));
+  // Emit multiphase_funcs for multi-phase groups.
+  for (auto &mp : multiphaseInfos) {
+    auto mpOp = MultiphaseFuncOp::create(
+        sfBuilder, sfLoc, mp.name,
+        /*sym_visibility=*/StringAttr{}, sfBuilder.getArrayAttr(mp.argNames),
+        sfBuilder.getDenseBoolArrayAttr(mp.argIsFirst),
+        sfBuilder.getArrayAttr(mp.resultNames),
+        sfBuilder.getArrayAttr(mp.subFuncAttrs));
+    symbolTable.insert(mpOp);
   }
 
-  // Erase the unified func now that all data has been extracted.
+  // Erase the unified func and register the split_func in the symbol table
+  // so that callers processed later can look it up.
   symbolTable.erase(funcOp);
+  symbolTable.insert(splitFuncOp);
 }
 
 namespace {
