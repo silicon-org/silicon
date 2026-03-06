@@ -6,11 +6,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/Base/Attributes.h"
+#include "silicon/Base/Dialect.h"
+#include "silicon/Base/Types.h"
 #include "silicon/Conversion/Passes.h"
 #include "silicon/HIR/Dialect.h"
 #include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Types.h"
-#include "silicon/MIR/Attributes.h"
 #include "silicon/MIR/Dialect.h"
 #include "silicon/MIR/Ops.h"
 #include "silicon/Support/MLIR.h"
@@ -47,7 +49,7 @@ struct HIRToMIRPass : public silicon::impl::HIRToMIRPassBase<HIRToMIRPass> {
 static LogicalResult convert(hir::ConstantIntOp op,
                              hir::ConstantIntOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  auto attr = mir::IntAttr::get(op.getContext(), op.getValue().getValue());
+  auto attr = base::IntAttr::get(op.getContext(), op.getValue().getValue());
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -55,7 +57,7 @@ static LogicalResult convert(hir::ConstantIntOp op,
 static LogicalResult convert(hir::ConstantUnitOp op,
                              hir::ConstantUnitOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  auto attr = mir::UnitAttr::get(op.getContext());
+  auto attr = base::UnitAttr::get(op.getContext());
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -64,7 +66,7 @@ static LogicalResult convert(hir::ConstantFuncOp op,
                              hir::ConstantFuncOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
   // Determine the function type.
-  mir::TypeAttr funcTypeAttr;
+  base::TypeAttr funcTypeAttr;
   if (!matchPattern(adaptor.getFuncType(), m_Constant(&funcTypeAttr)))
     return emitBug(op.getLoc()) << "non-constant function type";
 
@@ -86,8 +88,8 @@ static LogicalResult convert(hir::ConstantFuncOp op,
 
 static LogicalResult convert(hir::IntTypeOp op, hir::IntTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  auto type = mir::IntType::get(op.getContext());
-  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  auto type = base::IntType::get(op.getContext());
+  auto attr = base::TypeAttr::get(op.getContext(), type);
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -95,8 +97,8 @@ static LogicalResult convert(hir::IntTypeOp op, hir::IntTypeOp::Adaptor adaptor,
 static LogicalResult convert(hir::UnitTypeOp op,
                              hir::UnitTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  auto type = mir::UnitType::get(op.getContext());
-  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  auto type = base::UnitType::get(op.getContext());
+  auto attr = base::TypeAttr::get(op.getContext(), type);
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -104,8 +106,8 @@ static LogicalResult convert(hir::UnitTypeOp op,
 static LogicalResult convert(hir::TypeTypeOp op,
                              hir::TypeTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  auto type = mir::TypeType::get(op.getContext());
-  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  auto type = base::TypeType::get(op.getContext());
+  auto attr = base::TypeAttr::get(op.getContext(), type);
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -114,7 +116,7 @@ static LogicalResult convert(hir::UIntTypeOp op,
                              hir::UIntTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
   auto widthOperand = adaptor.getWidth();
-  mir::IntAttr widthAttr;
+  base::IntAttr widthAttr;
   if (!matchPattern(widthOperand, m_Constant(&widthAttr)))
     return emitBug(op.getLoc()) << "non-constant uint width";
   const auto &width = widthAttr.getValue();
@@ -128,8 +130,8 @@ static LogicalResult convert(hir::UIntTypeOp op,
     return emitBug(op.getLoc()) << "excessive uint width " << width;
 
   // Materialize the constant uint type.
-  auto type = mir::UIntType::get(op.getContext(), static_cast<int64_t>(width));
-  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  auto type = base::UIntType::get(op.getContext(), static_cast<int64_t>(width));
+  auto attr = base::TypeAttr::get(op.getContext(), type);
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -137,8 +139,8 @@ static LogicalResult convert(hir::UIntTypeOp op,
 static LogicalResult convert(hir::AnyfuncTypeOp op,
                              hir::AnyfuncTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  auto type = mir::AnyfuncType::get(op.getContext());
-  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  auto type = base::AnyfuncType::get(op.getContext());
+  auto attr = base::TypeAttr::get(op.getContext(), type);
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -146,8 +148,8 @@ static LogicalResult convert(hir::AnyfuncTypeOp op,
 static LogicalResult convert(hir::OpaqueTypeOp op,
                              hir::OpaqueTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  auto type = mir::OpaqueType::get(op.getContext());
-  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  auto type = base::OpaqueType::get(op.getContext());
+  auto attr = base::TypeAttr::get(op.getContext(), type);
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -159,7 +161,7 @@ static LogicalResult convert(hir::FuncTypeOp op,
   SmallVector<Type> argTypes;
   argTypes.reserve(adaptor.getTypeOfArgs().size());
   for (auto value : adaptor.getTypeOfArgs()) {
-    mir::TypeAttr attr;
+    base::TypeAttr attr;
     if (!matchPattern(value, m_Constant(&attr)))
       return emitBug(op.getLoc()) << "non-constant argument type";
     argTypes.push_back(attr.getValue());
@@ -169,7 +171,7 @@ static LogicalResult convert(hir::FuncTypeOp op,
   SmallVector<Type> resultTypes;
   resultTypes.reserve(adaptor.getTypeOfResults().size());
   for (auto value : adaptor.getTypeOfResults()) {
-    mir::TypeAttr attr;
+    base::TypeAttr attr;
     if (!matchPattern(value, m_Constant(&attr)))
       return emitBug(op.getLoc()) << "non-constant result type";
     resultTypes.push_back(attr.getValue());
@@ -177,7 +179,7 @@ static LogicalResult convert(hir::FuncTypeOp op,
 
   // Materialize the constant function type.
   auto type = FunctionType::get(op.getContext(), argTypes, resultTypes);
-  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  auto attr = base::TypeAttr::get(op.getContext(), type);
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -194,7 +196,7 @@ static LogicalResult convert(hir::InferrableOp op,
   // yet resolved; these always carry !hir.any at the MLIR level, matching the
   // original behavior of the removed DirectCallOp.
   auto type = hir::AnyType::get(op.getContext());
-  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  auto attr = base::TypeAttr::get(op.getContext(), type);
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -204,7 +206,7 @@ static LogicalResult convert(hir::TypeOfOp op, hir::TypeOfOp::Adaptor adaptor,
   // TypeOfOp results are consumed as type metadata by BinaryOp and ReturnOp,
   // which discard them during lowering. Replace with a dummy type constant.
   auto type = hir::AnyType::get(op.getContext());
-  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  auto attr = base::TypeAttr::get(op.getContext(), type);
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -214,7 +216,7 @@ static LogicalResult convert(hir::UnifyOp op, hir::UnifyOp::Adaptor adaptor,
   // UnifyOp results are consumed as type metadata by BinaryOp, which discards
   // them during lowering. Replace with a dummy type constant.
   auto type = hir::AnyType::get(op.getContext());
-  auto attr = mir::TypeAttr::get(op.getContext(), type);
+  auto attr = base::TypeAttr::get(op.getContext(), type);
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -226,7 +228,7 @@ static LogicalResult convert(hir::UnifyOp op, hir::UnifyOp::Adaptor adaptor,
 static LogicalResult convert(hir::CoerceTypeOp op,
                              hir::CoerceTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  mir::TypeAttr typeAttr;
+  base::TypeAttr typeAttr;
   if (matchPattern(adaptor.getTypeOperand(), m_Constant(&typeAttr))) {
     auto expectedType = typeAttr.getValue();
     auto actualType = adaptor.getInput().getType();
@@ -299,7 +301,7 @@ static LogicalResult convert(hir::CallOp op, hir::CallOp::Adaptor adaptor,
   SmallVector<Type> resultTypes;
   resultTypes.reserve(adaptor.getTypeOfResults().size());
   for (auto value : adaptor.getTypeOfResults()) {
-    mir::TypeAttr attr;
+    base::TypeAttr attr;
     if (!matchPattern(value, m_Constant(&attr)))
       return emitBug(op.getLoc()) << "non-constant call result type";
     resultTypes.push_back(attr.getValue());
@@ -313,7 +315,7 @@ static LogicalResult convert(hir::CallOp op, hir::CallOp::Adaptor adaptor,
 static LogicalResult convert(hir::OpaquePackOp op,
                              hir::OpaquePackOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  auto opaqueType = mir::OpaqueType::get(op.getContext());
+  auto opaqueType = base::OpaqueType::get(op.getContext());
   rewriter.replaceOpWithNewOp<mir::MIROpaquePackOp>(op, opaqueType,
                                                     adaptor.getOperands());
   return success();
@@ -335,7 +337,7 @@ static LogicalResult convert(UnrealizedConversionCastOp op,
     auto input = op.getOperand(0).getType();
     auto output = op.getResult(0).getType();
     if (isa<hir::HIRDialect>(output.getDialect())) {
-      if (isa<mir::MIRDialect>(input.getDialect()) ||
+      if (isa<base::BaseDialect, mir::MIRDialect>(input.getDialect()) ||
           isa<FunctionType>(input)) {
         rewriter.replaceOp(op, adaptor.getOperands()[0]);
         return success();
@@ -389,7 +391,7 @@ static bool isResolvableType(Value typeVal) {
 
   // ConstantLike op with a TypeAttr (e.g., mir.constant or hir.mir_constant
   // from specialization).
-  mir::TypeAttr typeAttr;
+  base::TypeAttr typeAttr;
   if (matchPattern(typeVal, m_Constant(&typeAttr)))
     return !isa<hir::AnyType>(typeAttr.getValue());
 
@@ -456,19 +458,19 @@ static Type resolveHIRType(Value typeVal) {
 
   auto *ctx = defOp->getContext();
   if (isa<hir::IntTypeOp>(defOp))
-    return mir::IntType::get(ctx);
+    return base::IntType::get(ctx);
   if (isa<hir::UnitTypeOp>(defOp))
-    return mir::UnitType::get(ctx);
+    return base::UnitType::get(ctx);
   if (isa<hir::TypeTypeOp>(defOp))
-    return mir::TypeType::get(ctx);
+    return base::TypeType::get(ctx);
   if (isa<hir::AnyfuncTypeOp>(defOp))
-    return mir::AnyfuncType::get(ctx);
+    return base::AnyfuncType::get(ctx);
   if (isa<hir::OpaqueTypeOp>(defOp))
-    return mir::OpaqueType::get(ctx);
+    return base::OpaqueType::get(ctx);
   if (auto uintOp = dyn_cast<hir::UIntTypeOp>(defOp)) {
     if (auto widthOp = uintOp.getWidth().getDefiningOp<hir::ConstantIntOp>()) {
       auto width = static_cast<int64_t>(widthOp.getValue().getValue());
-      return mir::UIntType::get(ctx, width);
+      return base::UIntType::get(ctx, width);
     }
   }
   if (auto funcTypeOp = dyn_cast<hir::FuncTypeOp>(defOp)) {
@@ -490,7 +492,7 @@ static Type resolveHIRType(Value typeVal) {
 
   // ConstantLike op with a TypeAttr (e.g., mir.constant or hir.mir_constant
   // from specialization).
-  mir::TypeAttr typeAttr;
+  base::TypeAttr typeAttr;
   if (matchPattern(typeVal, m_Constant(&typeAttr)))
     return typeAttr.getValue();
 
@@ -598,7 +600,8 @@ void HIRToMIRPass::runOnOperation() {
   // casts get resolved.
   TypeConverter converter;
   converter.addConversion([](Type type) -> std::optional<Type> {
-    if (isa<mir::MIRDialect>(type.getDialect()) || isa<FunctionType>(type))
+    if (isa<base::BaseDialect, mir::MIRDialect>(type.getDialect()) ||
+        isa<FunctionType>(type))
       return type;
     return std::nullopt;
   });
@@ -606,7 +609,8 @@ void HIRToMIRPass::runOnOperation() {
     if (auto castOp = value.getDefiningOp<UnrealizedConversionCastOp>()) {
       if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
         auto type = castOp.getOperand(0).getType();
-        if (isa<mir::MIRDialect>(type.getDialect()) || isa<FunctionType>(type))
+        if (isa<base::BaseDialect, mir::MIRDialect>(type.getDialect()) ||
+            isa<FunctionType>(type))
           return type;
       }
     }
@@ -631,7 +635,7 @@ void HIRToMIRPass::runOnOperation() {
   // the FuncOp pattern. Functions not in the set are recursively legal,
   // so the framework skips them and their body ops entirely.
   ConversionTarget target(getContext());
-  target.addLegalDialect<mir::MIRDialect>();
+  target.addLegalDialect<base::BaseDialect, mir::MIRDialect>();
   target.addIllegalDialect<hir::HIRDialect>();
   target.addLegalOp<ModuleOp>();
   target.addDynamicallyLegalOp<hir::FuncOp>(

@@ -1,3 +1,4 @@
+add_subdirectory(Base)
 add_subdirectory(Codegen)
 add_subdirectory(Conversion)
 add_subdirectory(HIR)
@@ -18,6 +19,7 @@ add_silicon_library(SiliconRegisterDialects
   MLIRFuncDialect
   MLIRFuncInlinerExtension
   MLIRIR
+  SiliconBase
   SiliconHIR
   SiliconMIR
 )

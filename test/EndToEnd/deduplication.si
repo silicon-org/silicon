@@ -3,8 +3,8 @@
 // Test that the same function called multiple times with different const args
 // produces distinct specializations.
 
-// CHECK-DAG: mir.constant #mir.int<10>
-// CHECK-DAG: mir.constant #mir.int<20>
+// CHECK-DAG: mir.constant #si.int<10>
+// CHECK-DAG: mir.constant #si.int<20>
 
 fn add_const(const a: int, b: int) -> int { a + b }
 fn caller(x: int) -> int { add_const(10, x) + add_const(20, x) }

@@ -9,7 +9,6 @@
 #pragma once
 
 #include "silicon/MIR/Attributes.h"
-#include "silicon/MIR/Types.h"
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Dialect.h"

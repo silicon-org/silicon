@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/Base/Attributes.h"
 #include "silicon/HIR/Ops.h"
-#include "silicon/MIR/Attributes.h"
 #include "silicon/MIR/Ops.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Transforms/Passes.h"
@@ -48,7 +48,7 @@ struct SpecializeFuncsPass
 
   /// Expand an opaque context arg in a function: replace the last block arg
   /// with individual hir.mir_constant ops derived from the opaque attribute.
-  void expandOpaqueContext(hir::FuncOp func, mir::OpaqueAttr opaqueAttr);
+  void expandOpaqueContext(hir::FuncOp func, base::OpaqueAttr opaqueAttr);
 
   /// Transitively specialize callees that receive hir.mir_constant opaque
   /// arguments.
@@ -62,7 +62,7 @@ struct SpecializeFuncsPass
 /// hir.mir_constant ops for each element of the opaque attribute. Erases the
 /// opaque_unpack consuming the context arg.
 void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
-                                              mir::OpaqueAttr opaqueAttr) {
+                                              base::OpaqueAttr opaqueAttr) {
   auto &block = func.getBody().front();
   auto ctxArg = block.getArgument(block.getNumArguments() - 1);
 
@@ -126,7 +126,7 @@ void SpecializeFuncsPass::transitiveSpecialize(hir::FuncOp func,
   for (auto callOp : callsToSpecialize) {
     auto lastArg = callOp.getArguments().back();
     auto mirConst = lastArg.getDefiningOp<hir::MIRConstantOp>();
-    auto opaqueAttr = dyn_cast<mir::OpaqueAttr>(mirConst.getValue());
+    auto opaqueAttr = dyn_cast<base::OpaqueAttr>(mirConst.getValue());
     if (!opaqueAttr)
       continue;
 
@@ -226,7 +226,7 @@ void SpecializeFuncsPass::runOnOperation() {
             << " results, expected 1 (opaque pack)";
         return signalPassFailure();
       }
-      auto opaqueAttr = dyn_cast<mir::OpaqueAttr>(resultAttrs[0]);
+      auto opaqueAttr = dyn_cast<base::OpaqueAttr>(resultAttrs[0]);
       if (!opaqueAttr) {
         emitBug(evalFunc.getLoc())
             << "evaluated_func result is not an opaque attribute";

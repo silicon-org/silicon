@@ -16,7 +16,7 @@ include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
-include "silicon/HIR/Attributes.td"
+include "silicon/Base/Attributes.td"
 include "silicon/HIR/Dialect.td"
 include "silicon/HIR/Types.td"
 

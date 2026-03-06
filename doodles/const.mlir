@@ -80,9 +80,9 @@ func @bar {
 // dump 1379
 
 hir.func @bar {
-^bb0(%arg0: !mir.int):
-  %0 = mir.constant_int 1379 : !mir.int
-  %1 = mir.add %0, %arg0 : !mir.int
-  mir.dump_int %1 : !mir.int
+^bb0(%arg0: !si.int):
+  %0 = mir.constant_int 1379 : !si.int
+  %1 = mir.add %0, %arg0 : !si.int
+  mir.dump_int %1 : !si.int
   hir.return
 }

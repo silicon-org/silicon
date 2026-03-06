@@ -9,7 +9,6 @@
 #ifndef SILICON_HIR_HIR_TD
 #define SILICON_HIR_HIR_TD
 
-include "silicon/HIR/Attributes.td"
 include "silicon/HIR/Dialect.td"
 include "silicon/HIR/Ops.td"
 include "silicon/HIR/Passes.td"

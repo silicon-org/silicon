@@ -6,9 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "silicon/HIR/Attributes.h"
+#include "silicon/Base/Attributes.h"
 #include "silicon/HIR/Ops.h"
-#include "silicon/MIR/Attributes.h"
 #include "silicon/Support/AsmParser.h"
 #include "silicon/Support/MLIR.h"
 #include "llvm/ADT/STLExtras.h"
@@ -18,16 +17,17 @@ using namespace silicon;
 using namespace hir;
 
 // Handle `custom<IntAttr>` parsing.
-static ParseResult parseIntAttr(OpAsmParser &parser, IntAttr &value) {
+static ParseResult parseIntAttr(OpAsmParser &parser, base::IntAttr &value) {
   auto result = mlir::FieldParser<DynamicAPInt>::parse(parser);
   if (failed(result))
     return failure();
-  value = IntAttr::get(parser.getContext(), *result);
+  value = base::IntAttr::get(parser.getContext(), *result);
   return success();
 }
 
 // Handle `custom<IntAttr>` printing.
-static void printIntAttr(OpAsmPrinter &printer, Operation *op, IntAttr value) {
+static void printIntAttr(OpAsmPrinter &printer, Operation *op,
+                         base::IntAttr value) {
   printer << value.getValue();
 }
 
@@ -934,7 +934,7 @@ LogicalResult OpaqueUnpackOp::canonicalize(OpaqueUnpackOp op,
   if (!mirConst)
     return failure();
 
-  auto opaqueAttr = dyn_cast<mir::OpaqueAttr>(mirConst.getValue());
+  auto opaqueAttr = dyn_cast<base::OpaqueAttr>(mirConst.getValue());
   if (!opaqueAttr)
     return failure();
 

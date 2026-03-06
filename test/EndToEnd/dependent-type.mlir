@@ -3,13 +3,13 @@
 
 // Test dependent types in function signatures: the result type of `identity`
 // depends on its first argument T. When called with T = int, the compiler
-// resolves the result type to !mir.int through the full pipeline:
+// resolves the result type to !si.int through the full pipeline:
 //   check-calls → infer-types → split-phases → phase-eval-loop
 
-// CHECK-LABEL: mir.func private @main.0b() -> (r0: !mir.int, r1: !mir.unit)
-// CHECK-NEXT:    %c42_int = mir.constant #mir.int<42> : !mir.int
-// CHECK-NEXT:    %unit = mir.constant #mir.unit : !mir.unit
-// CHECK-NEXT:    mir.return %c42_int, %unit : !mir.int, !mir.unit
+// CHECK-LABEL: mir.func private @main.0b() -> (r0: !si.int, r1: !si.unit)
+// CHECK-NEXT:    %c42_int = mir.constant #si.int<42> : !si.int
+// CHECK-NEXT:    %unit = mir.constant #si.unit : !si.unit
+// CHECK-NEXT:    mir.return %c42_int, %unit : !si.int, !si.unit
 
 hir.unified_func @identity(%T: -1, %x: 0) -> (result: 0) {
   %type_type = hir.type_type

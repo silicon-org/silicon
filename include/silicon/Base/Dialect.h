@@ -6,14 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SILICON_MIR_MIR_TD
-#define SILICON_MIR_MIR_TD
+#pragma once
 
-include "silicon/MIR/Attributes.td"
-include "silicon/MIR/Dialect.td"
-include "silicon/MIR/Ops.td"
+#include "mlir/IR/Dialect.h"
 
-include "mlir/IR/OpBase.td"
-include "mlir/Pass/PassBase.td"
-
-#endif // SILICON_MIR_MIR_TD
+// Pull in the generated dialect definition.
+#include "silicon/Base/Dialect.h.inc"

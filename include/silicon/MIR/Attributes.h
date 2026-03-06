@@ -8,10 +8,7 @@
 
 #pragma once
 
-#include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/Types.h"
-#include "llvm/ADT/DynamicAPInt.h"
+#include "silicon/Base/Attributes.h"
 
 #define GET_ATTRDEF_CLASSES
 #include "silicon/MIR/Attributes.h.inc"

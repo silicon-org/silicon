@@ -6,10 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/Base/Attributes.h"
 #include "silicon/HIR/Ops.h"
-#include "silicon/MIR/Attributes.h"
 #include "silicon/MIR/Ops.h"
-#include "silicon/MIR/Types.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Transforms/Passes.h"
 #include "llvm/ADT/STLExtras.h"
@@ -100,8 +99,8 @@ FailureOr<SmallVector<Attribute>> Interpreter::run() {
                    mir::AndOp, mir::OrOp, mir::XorOp, mir::ShlOp, mir::ShrOp,
                    mir::EqOp, mir::NeqOp, mir::LtOp, mir::GtOp, mir::GeqOp,
                    mir::LeqOp>(op)) {
-      auto lhs = cast<mir::IntAttr>(operands[0]).getValue();
-      auto rhs = cast<mir::IntAttr>(operands[1]).getValue();
+      auto lhs = cast<base::IntAttr>(operands[0]).getValue();
+      auto rhs = cast<base::IntAttr>(operands[1]).getValue();
       DynamicAPInt value;
       if (isa<mir::AddOp>(op))
         value = lhs + rhs;
@@ -138,11 +137,11 @@ FailureOr<SmallVector<Attribute>> Interpreter::run() {
       else if (isa<mir::LeqOp>(op))
         value = DynamicAPInt(lhs <= rhs ? 1 : 0);
       frame.values[op->getResult(0)] =
-          mir::IntAttr::get(op->getContext(), value);
+          base::IntAttr::get(op->getContext(), value);
     } else if (auto packOp = dyn_cast<mir::MIROpaquePackOp>(op)) {
-      frame.values[packOp] = mir::OpaqueAttr::get(op->getContext(), operands);
+      frame.values[packOp] = base::OpaqueAttr::get(op->getContext(), operands);
     } else if (auto unpackOp = dyn_cast<mir::MIROpaqueUnpackOp>(op)) {
-      auto opaqueAttr = cast<mir::OpaqueAttr>(operands[0]);
+      auto opaqueAttr = cast<base::OpaqueAttr>(operands[0]);
       for (auto [result, elem] :
            llvm::zip(unpackOp.getResults(), opaqueAttr.getElements()))
         frame.values[result] = elem;

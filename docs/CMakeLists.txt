@@ -12,6 +12,7 @@ macro(collect_doc dst src)
 endmacro()
 
 # Dialects
+collect_doc(internals/dialects/Base.md ${SILICON_BINARY_DIR}/include/silicon/Base/Dialect.md)
 collect_doc(internals/dialects/HIR.md ${SILICON_BINARY_DIR}/include/silicon/HIR/Dialect.md)
 collect_doc(internals/dialects/MIR.md ${SILICON_BINARY_DIR}/include/silicon/MIR/Dialect.md)
 

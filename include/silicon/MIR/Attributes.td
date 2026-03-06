@@ -13,39 +13,12 @@ include "silicon/MIR/Dialect.td"
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/BuiltinAttributeInterfaces.td"
 
-def DynamicAPIntParameter : AttrOrTypeParameter<"llvm::DynamicAPInt", ""> {
-  let comparator = "$_lhs == $_rhs";
-}
-
 class MIRAttrDef<
   string name,
   list<Trait> traits = [],
   string baseCppClass = "mlir::Attribute"
 > : AttrDef<MIRDialect, name, traits, baseCppClass> {
   let mnemonic = ?;
-}
-
-def MIRTypeAttr : MIRAttrDef<"Type", [
-  DeclareAttrInterfaceMethods<TypedAttrInterface>
-]> {
-  let mnemonic = "type";
-  let parameters = (ins "mlir::Type":$value);
-  let assemblyFormat = "`<` $value `>`";
-}
-
-def IntAttr : MIRAttrDef<"Int", [
-  DeclareAttrInterfaceMethods<TypedAttrInterface>
-]> {
-  let mnemonic = "int";
-  let parameters = (ins DynamicAPIntParameter:$value);
-  let assemblyFormat = "`<` $value `>`";
-}
-
-def MIRUnitAttr : MIRAttrDef<"Unit", [
-  DeclareAttrInterfaceMethods<TypedAttrInterface>
-]> {
-  let mnemonic = "unit";
-  let assemblyFormat = "";
 }
 
 def FuncAttr : MIRAttrDef<"Func", [
@@ -57,19 +30,6 @@ def FuncAttr : MIRAttrDef<"Func", [
     "mlir::FlatSymbolRefAttr":$func
   );
   let assemblyFormat = "`<` $func `>`";
-}
-
-def OpaqueAttr : MIRAttrDef<"Opaque", [
-  DeclareAttrInterfaceMethods<TypedAttrInterface>
-]> {
-  let mnemonic = "opaque";
-  let summary = "opaque bundle of values passed between phases";
-  let parameters = (ins
-    OptionalArrayRefParameter<"mlir::Attribute">:$elements
-  );
-  let assemblyFormat = [{
-    `<` `[` (`]`) : ($elements^ `]`)? `>`
-  }];
 }
 
 #endif // SILICON_MIR_ATTRIBUTES_TD

@@ -6,14 +6,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SILICON_MIR_MIR_TD
-#define SILICON_MIR_MIR_TD
+#include "silicon/Base/Dialect.h"
+#include "silicon/Support/MLIR.h"
+#include "mlir/IR/DialectImplementation.h"
 
-include "silicon/MIR/Attributes.td"
-include "silicon/MIR/Dialect.td"
-include "silicon/MIR/Ops.td"
+using namespace silicon;
+using namespace base;
 
-include "mlir/IR/OpBase.td"
-include "mlir/Pass/PassBase.td"
+void BaseDialect::initialize() {
+  registerTypes();
+  registerAttributes();
+}
 
-#endif // SILICON_MIR_MIR_TD
+// Pull in the generated dialect definition.
+#include "silicon/Base/Dialect.cpp.inc"

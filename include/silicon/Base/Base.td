@@ -6,11 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#pragma once
+#ifndef SILICON_BASE_BASE_TD
+#define SILICON_BASE_BASE_TD
 
-#include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/Types.h"
+include "silicon/Base/Attributes.td"
+include "silicon/Base/Dialect.td"
+include "silicon/Base/Types.td"
 
-#define GET_TYPEDEF_CLASSES
-#include "silicon/MIR/Types.h.inc"
+include "mlir/IR/OpBase.td"
+include "mlir/Pass/PassBase.td"
+
+#endif // SILICON_BASE_BASE_TD

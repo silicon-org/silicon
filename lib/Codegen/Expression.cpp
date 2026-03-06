@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/Base/Attributes.h"
 #include "silicon/Codegen/Context.h"
-#include "silicon/HIR/Attributes.h"
 #include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Types.h"
 #include "silicon/Support/MLIR.h"
@@ -20,7 +20,7 @@ using namespace codegen;
 static Value convert(ast::NumLitExpr &expr, Context &cx) {
   return hir::ConstantIntOp::create(
       cx.builder, expr.loc,
-      hir::IntAttr::get(cx.module.getContext(), DynamicAPInt(expr.value)));
+      base::IntAttr::get(cx.module.getContext(), DynamicAPInt(expr.value)));
 }
 
 /// Handle identifier expressions.

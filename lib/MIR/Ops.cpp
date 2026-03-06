@@ -6,14 +6,16 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/Base/Attributes.h"
+#include "silicon/Base/Types.h"
 #include "silicon/MIR/Attributes.h"
 #include "silicon/MIR/Ops.h"
-#include "silicon/MIR/Types.h"
 #include "silicon/Support/AsmParser.h"
 #include "silicon/Support/MLIR.h"
 
 using namespace mlir;
 using namespace silicon;
+using namespace base;
 using namespace mir;
 
 // Pull in the generated dialect definition.
@@ -41,11 +43,11 @@ static bool getAttrAbbrev(llvm::raw_ostream &os, Attribute attr) {
         os << 'c' << attr.getValue();
         return true;
       })
-      .Case<mir::UnitAttr>([&](auto attr) {
+      .Case<base::UnitAttr>([&](auto attr) {
         os << "unit";
         return true;
       })
-      .Case<mir::TypeAttr>(
+      .Case<base::TypeAttr>(
           [&](auto attr) { return getTypeAbbrev(os, attr.getValue()); })
       .Default([](auto) { return false; });
 }

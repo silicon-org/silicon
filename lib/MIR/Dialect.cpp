@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/Base/Dialect.h"
 #include "silicon/MIR/Dialect.h"
 #include "silicon/MIR/Ops.h"
 #include "silicon/Support/MLIR.h"
@@ -15,8 +16,7 @@ using namespace silicon;
 using namespace mir;
 
 void MIRDialect::initialize() {
-  // Register types and attributes.
-  registerTypes();
+  // Register attributes.
   registerAttributes();
 
   // Register operations.

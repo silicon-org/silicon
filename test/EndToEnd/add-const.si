@@ -6,7 +6,7 @@
 // a separate const-phase function. The compiler evaluates `add(42, 7)` at
 // compile time, producing the constant result 49.
 
-// CHECK: mir.evaluated_func {{.*}}@main.0b [#mir.int<49> : !mir.int]
+// CHECK: mir.evaluated_func {{.*}}@main.0b [#si.int<49> : !si.int]
 
 // ROUNDTRIP: hir.unified_func @add
 // ROUNDTRIP: hir.unified_func @main

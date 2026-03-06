@@ -18,7 +18,6 @@ include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "silicon/MIR/Attributes.td"
 include "silicon/MIR/Dialect.td"
-include "silicon/MIR/Types.td"
 
 // Base class for the operations in this dialect.
 class MIROp<string mnemonic, list<Trait> traits = []> :

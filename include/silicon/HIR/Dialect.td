@@ -21,11 +21,10 @@ def HIRDialect : Dialect {
     during constant evaluation and type checking.
   }];
 
-  let useDefaultAttributePrinterParser = 1;
   let useDefaultTypePrinterParser = 1;
+  let dependentDialects = ["silicon::base::BaseDialect"];
   let extraClassDeclaration = [{
     void registerTypes();
-    void registerAttributes();
   }];
 }
 

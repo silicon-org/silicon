@@ -6,50 +6,50 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SILICON_MIR_TYPES_TD
-#define SILICON_MIR_TYPES_TD
+#ifndef SILICON_BASE_TYPES_TD
+#define SILICON_BASE_TYPES_TD
 
-include "silicon/MIR/Dialect.td"
+include "silicon/Base/Dialect.td"
 include "mlir/IR/AttrTypeBase.td"
 
-class MIRTypeDef<
+class BaseTypeDef<
   string name,
   list<Trait> traits = [],
   string baseCppClass = "mlir::Type"
-> : TypeDef<MIRDialect, name, traits, baseCppClass> {
+> : TypeDef<BaseDialect, name, traits, baseCppClass> {
   let mnemonic = ?;
 }
 
-def TypeType : MIRTypeDef<"Type"> {
+def TypeType : BaseTypeDef<"Type"> {
   let mnemonic = "type";
   let summary = "a value representing a type";
 }
 
-def IntType : MIRTypeDef<"Int"> {
+def IntType : BaseTypeDef<"Int"> {
   let mnemonic = "int";
   let summary = "generic integer type";
 }
 
-def UIntType : MIRTypeDef<"UInt"> {
+def UIntType : BaseTypeDef<"UInt"> {
   let mnemonic = "uint";
   let summary = "sized unsigned integer type";
   let parameters = (ins "uint64_t":$width);
   let assemblyFormat = "`<` $width `>`";
 }
 
-def UnitType : MIRTypeDef<"Unit"> {
+def UnitType : BaseTypeDef<"Unit"> {
   let mnemonic = "unit";
   let summary = "unit type";
 }
 
-def AnyfuncType : MIRTypeDef<"Anyfunc"> {
+def AnyfuncType : BaseTypeDef<"Anyfunc"> {
   let mnemonic = "anyfunc";
   let summary = "any function type";
 }
 
-def OpaqueType : MIRTypeDef<"Opaque"> {
+def OpaqueType : BaseTypeDef<"Opaque"> {
   let mnemonic = "opaque";
   let summary = "opaque value bundle passed between phases";
 }
 
-#endif // SILICON_MIR_TYPES_TD
+#endif // SILICON_BASE_TYPES_TD

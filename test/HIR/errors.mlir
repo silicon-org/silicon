@@ -210,8 +210,8 @@ hir.multiphase_func @empty_phases() -> (out) []
 
 // -----
 
-// expected-error @below {{block argument must have type !hir.any, got '!mir.int'}}
+// expected-error @below {{block argument must have type !hir.any, got '!si.int'}}
 "hir.func"() ({
-^bb0(%arg0: !mir.int):
+^bb0(%arg0: !si.int):
   "mir.return"() : () -> ()
 }) {sym_name = "bad_block_arg_type", argNames = ["arg0"], resultNames = []} : () -> ()

@@ -12,6 +12,6 @@
 //   const1: 10 + 20 = 30
 //   const0: 30 + 5 = 35
 
-// CHECK: mir.evaluated_func {{.*}}@main.0c [#mir.int<35> : !mir.int]
+// CHECK: mir.evaluated_func {{.*}}@main.0c [#si.int<35> : !si.int]
 fn compute(const const a: int, const b: int, c: int) -> int { a + b + c }
 fn main() -> int { compute(10, 20, 5) }

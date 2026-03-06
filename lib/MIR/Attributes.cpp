@@ -8,7 +8,6 @@
 
 #include "silicon/MIR/Attributes.h"
 #include "silicon/MIR/Dialect.h"
-#include "silicon/MIR/Types.h"
 #include "silicon/Support/AsmParser.h"
 #include "silicon/Support/MLIR.h"
 
@@ -25,27 +24,3 @@ void MIRDialect::registerAttributes() {
 // Pull in the generated attribute definitions.
 #define GET_ATTRDEF_CLASSES
 #include "silicon/MIR/Attributes.cpp.inc"
-
-//===----------------------------------------------------------------------===//
-// TypeAttr
-//===----------------------------------------------------------------------===//
-
-Type TypeAttr::getType() const { return TypeType::get(getContext()); }
-
-//===----------------------------------------------------------------------===//
-// IntAttr
-//===----------------------------------------------------------------------===//
-
-Type IntAttr::getType() const { return IntType::get(getContext()); }
-
-//===----------------------------------------------------------------------===//
-// UnitAttr
-//===----------------------------------------------------------------------===//
-
-Type UnitAttr::getType() const { return UnitType::get(getContext()); }
-
-//===----------------------------------------------------------------------===//
-// OpaqueAttr
-//===----------------------------------------------------------------------===//
-
-Type OpaqueAttr::getType() const { return OpaqueType::get(getContext()); }

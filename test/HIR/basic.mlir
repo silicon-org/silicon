@@ -33,7 +33,7 @@ func.func @Foo(%arg0: !hir.any, %arg1: !hir.any, %arg2: !hir.any, %arg3: i1) {
   return
 }
 
-hir.int_type {x = #hir.int<42>}
+hir.int_type {x = #si.int<42>}
 
 %int_type = hir.int_type
 %c42_int = hir.constant_int 42
@@ -112,5 +112,5 @@ hir.opaque_type
 %unp_x, %unp_y = hir.opaque_unpack %packed : !hir.any, !hir.any
 
 // mir_constant
-hir.mir_constant #mir.int<42> : !mir.int
-hir.mir_constant #mir.type<!mir.int> : !mir.type
+hir.mir_constant #si.int<42> : !si.int
+hir.mir_constant #si.type<!si.int> : !si.type

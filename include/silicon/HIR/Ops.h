@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "silicon/HIR/Attributes.h"
+#include "silicon/Base/Attributes.h"
 #include "silicon/HIR/Types.h"
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/Builders.h"

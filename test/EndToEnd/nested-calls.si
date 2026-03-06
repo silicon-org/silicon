@@ -5,7 +5,7 @@
 // should specialize `double` for x=5 and evaluate `5 + 5 = 10` at compile time,
 // leaving only `10 + y` and `10 + y` as runtime code.
 
-// CHECK: mir.evaluated_func {{.*}}@main.0b [#mir.int<22> : !mir.int]
+// CHECK: mir.evaluated_func {{.*}}@main.0b [#si.int<22> : !si.int]
 fn double(const x: int, y: int) -> int { x + x + y }
 fn quad(const x: int, y: int) -> int { double(x, y) + double(x, y) }
 fn main() -> int { quad(5, 1) }
