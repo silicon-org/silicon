@@ -28,8 +28,10 @@ struct DeclareItems : public ast::Visitor<DeclareItems> {
       argPhases.push_back(arg->phase);
     resultPhases.push_back(item.resultPhase);
     auto *ctx = cx.module.getContext();
+    auto visibility =
+        item.isPublic ? StringAttr{} : StringAttr::get(ctx, "private");
     auto func = hir::UnifiedFuncOp::create(
-        cx.builder, item.loc, cx.builder.getStringAttr(item.name), StringAttr{},
+        cx.builder, item.loc, cx.builder.getStringAttr(item.name), visibility,
         mlir::DenseI32ArrayAttr::get(ctx, argPhases),
         mlir::DenseI32ArrayAttr::get(ctx, resultPhases),
         mlir::ArrayAttr::get(ctx, {}), mlir::ArrayAttr::get(ctx, {}));

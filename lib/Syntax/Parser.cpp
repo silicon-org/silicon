@@ -66,13 +66,20 @@ ast::Root *Parser::parseRoot() {
 }
 
 ast::Item *Parser::parseItem() {
+  // Parse optional `pub` visibility modifier.
+  auto pub = consumeIf(TokenKind::Kw_pub);
+
   // Parse function definitions.
   if (auto kw = consumeIf(TokenKind::Kw_fn))
-    return parseFnItem(kw);
+    return parseFnItem(kw, pub);
 
   // If we get here we didn't find a keyword that starts an item.
-  if (!token.isError())
-    mlir::emitError(loc()) << "expected item, found " << token;
+  if (!token.isError()) {
+    if (pub)
+      mlir::emitError(loc()) << "expected `fn` after `pub`, found " << token;
+    else
+      mlir::emitError(loc()) << "expected item, found " << token;
+  }
   return {};
 }
 
@@ -80,7 +87,7 @@ ast::Item *Parser::parseItem() {
 // Functions
 //===----------------------------------------------------------------------===//
 
-ast::FnItem *Parser::parseFnItem(Token kw) {
+ast::FnItem *Parser::parseFnItem(Token kw, Token pub) {
   // Parse the function name.
   auto name = require(TokenKind::Ident, "function name");
   if (!name)
@@ -107,8 +114,14 @@ ast::FnItem *Parser::parseFnItem(Token kw) {
   int resultPhase = 0;
   if (consumeIf(TokenKind::Arrow)) {
     while (true) {
-      if (consumeIf(TokenKind::Kw_const)) { --resultPhase; continue; }
-      if (consumeIf(TokenKind::Kw_dyn))   { ++resultPhase; continue; }
+      if (consumeIf(TokenKind::Kw_const)) {
+        --resultPhase;
+        continue;
+      }
+      if (consumeIf(TokenKind::Kw_dyn)) {
+        ++resultPhase;
+        continue;
+      }
       break;
     }
     returnType = parseType();
@@ -122,6 +135,7 @@ ast::FnItem *Parser::parseFnItem(Token kw) {
     return {};
 
   return ast.create<ast::FnItem>({{ast::ItemKind::Fn, loc(name)},
+                                  static_cast<bool>(pub),
                                   name.spelling,
                                   ast.array(args),
                                   returnType,
@@ -134,8 +148,14 @@ ast::FnArg *Parser::parseFnArg() {
   // argument one phase earlier (−1), each `dyn` one phase later (+1).
   int phase = 0;
   while (true) {
-    if (consumeIf(TokenKind::Kw_const)) { --phase; continue; }
-    if (consumeIf(TokenKind::Kw_dyn))   { ++phase; continue; }
+    if (consumeIf(TokenKind::Kw_const)) {
+      --phase;
+      continue;
+    }
+    if (consumeIf(TokenKind::Kw_dyn)) {
+      ++phase;
+      continue;
+    }
     break;
   }
 

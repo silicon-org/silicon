@@ -19,7 +19,7 @@ struct Parser {
 
   ast::Root *parseRoot();
   ast::Item *parseItem();
-  ast::FnItem *parseFnItem(Token kw);
+  ast::FnItem *parseFnItem(Token kw, Token pub = {});
   ast::FnArg *parseFnArg();
   ast::Type *parseType();
   ast::Expr *parseExpr(ast::Precedence minPrec = ast::Precedence::Min);

@@ -1,7 +1,7 @@
 // RUN: silc --parse-only %s | FileCheck %s
 
 // Ensure we can call functions without result.
-// CHECK-LABEL: hir.unified_func @unitResult1() -> (result: 0)
+// CHECK-LABEL: hir.unified_func private @unitResult1() -> (result: 0)
 // CHECK: [[UNIT:%.+]] = hir.unit_type
 // CHECK-NEXT: hir.unified_signature () -> ([[UNIT]])
 fn unitResult1() {}

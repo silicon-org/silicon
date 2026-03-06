@@ -13,22 +13,21 @@ using namespace silicon;
 ParseResult silicon::parseSymbolVisibility(OpAsmParser &parser,
                                            StringAttr &attr) {
   StringRef visibility;
-  auto loc = parser.getCurrentLocation();
-  if (failed(parser.parseOptionalKeyword(&visibility)) ||
-      visibility == "public") {
+  if (failed(parser.parseOptionalKeyword(&visibility))) {
     attr = {};
     return success();
   }
-  if (visibility == "private" || visibility == "nested") {
+  if (visibility == "public" || visibility == "private" ||
+      visibility == "nested") {
     attr = parser.getBuilder().getStringAttr(visibility);
     return success();
   }
-  return parser.emitError(loc)
+  return parser.emitError(parser.getCurrentLocation())
          << "expected 'public', 'private', or 'nested' visibility";
 }
 
 void silicon::printSymbolVisibility(OpAsmPrinter &p, Operation *op,
                                     StringAttr attr) {
-  if (attr && attr != "public")
+  if (attr)
     p << attr.getValue() << " ";
 }

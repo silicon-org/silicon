@@ -102,6 +102,7 @@ struct Item {
 
 /// A function declaration.
 struct FnItem : public Item {
+  bool isPublic = false;
   StringRef name;
   ArrayRef<FnArg *> args;
   Type *returnType; // optional
