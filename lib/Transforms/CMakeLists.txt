@@ -1,6 +1,5 @@
 add_silicon_library(SiliconTransforms
   PhaseEvalLoop.cpp
-  SpecializeFuncs.cpp
 
   DEPENDS
   SiliconTransformsHeaders
@@ -10,6 +9,7 @@ add_silicon_library(SiliconTransforms
   MLIRTransforms
   SiliconConversion
   SiliconHIR
+  SiliconHIRTransforms
   SiliconMIR
   SiliconMIRTransforms
 )

@@ -8,9 +8,9 @@
 
 #include "silicon/Base/Attributes.h"
 #include "silicon/HIR/Ops.h"
+#include "silicon/HIR/Passes.h"
 #include "silicon/MIR/Ops.h"
 #include "silicon/Support/MLIR.h"
-#include "silicon/Transforms/Passes.h"
 #include "mlir/IR/IRMapping.h"
 #include "llvm/Support/Debug.h"
 
@@ -20,8 +20,10 @@ using namespace silicon;
 #define DEBUG_TYPE "specialize-funcs"
 
 namespace silicon {
+namespace hir {
 #define GEN_PASS_DEF_SPECIALIZEFUNCSPASS
-#include "silicon/Transforms/Passes.h.inc"
+#include "silicon/HIR/Passes.h.inc"
+} // namespace hir
 } // namespace silicon
 
 //===----------------------------------------------------------------------===//
@@ -43,7 +45,7 @@ namespace silicon {
 
 namespace {
 struct SpecializeFuncsPass
-    : public silicon::impl::SpecializeFuncsPassBase<SpecializeFuncsPass> {
+    : public silicon::hir::impl::SpecializeFuncsPassBase<SpecializeFuncsPass> {
   void runOnOperation() override;
 
   /// Expand an opaque context arg in a function: replace the last block arg

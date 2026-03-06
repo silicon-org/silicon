@@ -11,13 +11,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def SpecializeFuncsPass : Pass<"specialize-funcs", "mlir::ModuleOp"> {
-  let dependentDialects = [
-    "hir::HIRDialect",
-    "mir::MIRDialect",
-  ];
-}
-
 def PhaseEvalLoopPass : Pass<"phase-eval-loop", "mlir::ModuleOp"> {
   let summary = "Iteratively lower, interpret, and specialize until all "
     "compile-time phases are evaluated";
