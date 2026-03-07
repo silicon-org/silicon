@@ -219,6 +219,35 @@ struct InterpretPass
 };
 } // namespace
 
+/// Check whether a function transitively calls any module function. Module
+/// functions represent hardware and cannot be interpreted, so any caller that
+/// depends on a module result must also be kept as a function.
+static bool callsModule(mir::FuncOp func, SymbolTable &symbolTable) {
+  SmallVector<mir::FuncOp> worklist = {func};
+  DenseSet<Operation *> visited;
+  while (!worklist.empty()) {
+    auto current = worklist.pop_back_val();
+    if (!visited.insert(current).second)
+      continue;
+    bool found = false;
+    current.walk([&](mir::CallOp callOp) {
+      if (found)
+        return;
+      auto callee = symbolTable.lookup<mir::FuncOp>(callOp.getCallee());
+      if (!callee)
+        return;
+      if (callee.getIsModuleAttr()) {
+        found = true;
+        return;
+      }
+      worklist.push_back(callee);
+    });
+    if (found)
+      return true;
+  }
+  return false;
+}
+
 void InterpretPass::runOnOperation() {
   auto &symbolTable = getAnalysis<SymbolTable>();
 
@@ -232,6 +261,11 @@ void InterpretPass::runOnOperation() {
       continue;
     if (!func.getBody().front().getTerminator() ||
         !isa<mir::ReturnOp>(func.getBody().front().getTerminator()))
+      continue;
+    // Module functions represent hardware and must not be interpreted away.
+    // Functions that transitively call modules also cannot be interpreted,
+    // since their results depend on hardware outputs.
+    if (func.getIsModuleAttr() || callsModule(func, symbolTable))
       continue;
 
     LLVM_DEBUG(llvm::dbgs() << "Interpreting @" << func.getSymName() << "\n");

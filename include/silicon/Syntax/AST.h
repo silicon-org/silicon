@@ -103,6 +103,7 @@ struct Item {
 /// A function declaration.
 struct FnItem : public Item {
   bool isPublic = false;
+  bool isModule = false;
   /// Function-level phase offset applied to all arguments and the return type.
   /// Negative means `const` (earlier phase), positive means `dyn` (later
   /// phase). Multiple modifiers stack additively.

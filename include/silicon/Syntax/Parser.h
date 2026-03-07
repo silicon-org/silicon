@@ -19,7 +19,8 @@ struct Parser {
 
   ast::Root *parseRoot();
   ast::Item *parseItem();
-  ast::FnItem *parseFnItem(Token kw, Token pub = {}, int functionPhase = 0);
+  ast::FnItem *parseFnItem(Token kw, Token pub = {}, int functionPhase = 0,
+                           bool isModule = false);
   ast::FnArg *parseFnArg();
   ast::Type *parseType();
   ast::Expr *parseExpr(ast::Precedence minPrec = ast::Precedence::Min);

@@ -17,6 +17,7 @@ The following keywords currently have functionality in the Silicon language.
 - **`else`**: Define a fallback branch in an `if` expression.
 - **`fn`**: Declare a function.
 - **`if`**: Branch conditionally based on an expression.
+- **`mod`**: Declare a hardware module. Has the same syntax and semantics as `fn`, but signals that the function describes hardware and will eventually be lowered to a hardware module.
 - **`int`**: The generic signed integer type.
 - **`let`**: Bind a variable in the current scope, with an optional type annotation and initializer.
 - **`pub`**: Make a function visible outside its module.

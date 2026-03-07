@@ -48,11 +48,23 @@ hir.func public @public_visibility2() -> () {}
 hir.func private @private_visibility() -> () {}
 hir.func nested @nested_visibility() -> () {}
 
+// Test isModule attribute on func
+hir.func @FuncWithIsModule() -> () attributes {isModule} {}
+
 // Test return with operands
 hir.func @ReturnWithOperands() -> (result) {
   %t = hir.int_type
   %0 = hir.constant_int 42
   hir.return %0 : %t
+}
+
+// Test isModule on unified_func
+hir.unified_func @UnifiedModule(%a: 0) -> (result: 0) attributes {isModule} {
+  %0 = hir.int_type
+  hir.unified_signature (%0) -> (%0)
+} {
+  %0 = hir.type_of %a
+  hir.unified_return %a : %0
 }
 
 hir.unified_func @UnifiedSimple(%a: 0, %b: -1) -> (result: 0) {

@@ -35,7 +35,8 @@ struct DeclareItems : public ast::Visitor<DeclareItems> {
         cx.builder, item.loc, cx.builder.getStringAttr(item.name), visibility,
         mlir::DenseI32ArrayAttr::get(ctx, argPhases),
         mlir::DenseI32ArrayAttr::get(ctx, resultPhases),
-        mlir::ArrayAttr::get(ctx, {}), mlir::ArrayAttr::get(ctx, {}));
+        mlir::ArrayAttr::get(ctx, {}), mlir::ArrayAttr::get(ctx, {}),
+        item.isModule ? mlir::UnitAttr::get(ctx) : mlir::UnitAttr{});
     cx.funcs.insert({&item, func});
     cx.symbolTable.insert(func);
   }

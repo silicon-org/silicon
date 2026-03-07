@@ -591,7 +591,8 @@ public:
     auto mirFunc = mir::FuncOp::create(
         rewriter, func.getLoc(), func.getSymNameAttr(),
         func.getSymVisibilityAttr(), mlir::TypeAttr::get(funcType),
-        func.getArgNamesAttr(), func.getResultNamesAttr());
+        func.getArgNamesAttr(), func.getResultNamesAttr(),
+        func.getIsModuleAttr());
 
     // Move the body and apply signature conversion to retype block args.
     rewriter.inlineRegionBefore(func.getBody(), mirFunc.getBody(),

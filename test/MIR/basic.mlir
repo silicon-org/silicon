@@ -58,6 +58,12 @@ mir.func private @Private() -> () {
   mir.return
 }
 
+// CHECK-LABEL: mir.func @Module
+// CHECK-SAME: attributes {isModule}
+mir.func @Module(%x: !si.int) -> (result: !si.int) attributes {isModule} {
+  mir.return %x : !si.int
+}
+
 // Opaque type and attribute
 unrealized_conversion_cast to !si.opaque
 unrealized_conversion_cast to index {attr = #si.opaque<[#si.int<42>, #si.type<!si.int>]>}

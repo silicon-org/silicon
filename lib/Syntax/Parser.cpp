@@ -88,14 +88,17 @@ ast::Item *Parser::parseItem() {
     break;
   }
 
-  // Parse function definitions.
+  // Parse function and module definitions.
   if (auto kw = consumeIf(TokenKind::Kw_fn))
     return parseFnItem(kw, pub, functionPhase);
+  if (auto kw = consumeIf(TokenKind::Kw_mod))
+    return parseFnItem(kw, pub, functionPhase, /*isModule=*/true);
 
   // If we get here we didn't find a keyword that starts an item.
   if (!token.isError()) {
     if (pub)
-      mlir::emitError(loc()) << "expected `fn` after `pub`, found " << token;
+      mlir::emitError(loc())
+          << "expected `fn` or `mod` after `pub`, found " << token;
     else
       mlir::emitError(loc()) << "expected item, found " << token;
   }
@@ -106,7 +109,8 @@ ast::Item *Parser::parseItem() {
 // Functions
 //===----------------------------------------------------------------------===//
 
-ast::FnItem *Parser::parseFnItem(Token kw, Token pub, int functionPhase) {
+ast::FnItem *Parser::parseFnItem(Token kw, Token pub, int functionPhase,
+                                 bool isModule) {
   // Parse the function name.
   auto name = require(TokenKind::Ident, "function name");
   if (!name)
@@ -155,6 +159,7 @@ ast::FnItem *Parser::parseFnItem(Token kw, Token pub, int functionPhase) {
 
   return ast.create<ast::FnItem>({{ast::ItemKind::Fn, loc(name)},
                                   static_cast<bool>(pub),
+                                  isModule,
                                   functionPhase,
                                   name.spelling,
                                   ast.array(args),

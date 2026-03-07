@@ -67,3 +67,12 @@ const dyn fn const_dyn_fn() { 0 }
 
 // CHECK-LABEL: name: "pub_const_fn"
 pub const fn pub_const_fn() { 0 }
+
+// CHECK-LABEL: name: "simple_mod"
+mod simple_mod() { 0 }
+
+// CHECK-LABEL: name: "pub_mod"
+pub mod pub_mod() { 0 }
+
+// CHECK-LABEL: name: "const_mod"
+const mod const_mod() { 0 }

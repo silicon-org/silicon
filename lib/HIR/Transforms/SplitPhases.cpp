@@ -272,8 +272,14 @@ void PhaseSplitter::run() {
             builder.getStringAttr(funcOp.getSymName() + "." + Twine(groupIdx));
       }
       auto emptyArray = builder.getArrayAttr({});
-      auto phaseFuncOp = FuncOp::create(builder, funcOp.getLoc(), name,
-                                        privateAttr, emptyArray, emptyArray);
+      // Only the last phase of a module gets the isModule marker. Earlier
+      // phases are plain compile-time evaluation; the final phase is the
+      // actual hardware description.
+      auto isModuleAttr =
+          (phase == maxPhase) ? funcOp.getIsModuleAttr() : mlir::UnitAttr{};
+      auto phaseFuncOp =
+          FuncOp::create(builder, funcOp.getLoc(), name, privateAttr,
+                         emptyArray, emptyArray, isModuleAttr);
       if (phase != 0)
         phaseFuncOp.getBody().emplaceBlock();
       symbolTable.insert(phaseFuncOp);

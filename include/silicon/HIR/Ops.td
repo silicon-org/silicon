@@ -268,7 +268,8 @@ def FuncOp : HIROp<"func", [
     SymbolNameAttr:$sym_name,
     OptionalAttr<StrAttr>:$sym_visibility,
     ArrayAttr:$argNames,
-    ArrayAttr:$resultNames
+    ArrayAttr:$resultNames,
+    OptionalAttr<UnitAttr>:$isModule
   );
   let regions = (region AnyRegion:$body);
   let hasCustomAssemblyFormat = 1;
@@ -341,7 +342,8 @@ def UnifiedFuncOp : HIROp<"unified_func", [
     DenseI32ArrayAttr:$argPhases,
     DenseI32ArrayAttr:$resultPhases,
     ArrayAttr:$argNames,
-    ArrayAttr:$resultNames
+    ArrayAttr:$resultNames,
+    OptionalAttr<UnitAttr>:$isModule
   );
   let regions = (region
     MinSizedRegion<1>:$signature,

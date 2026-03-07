@@ -42,7 +42,7 @@ _COLORS = {
 _TOKENS = [
     ("whitespace", r"\s+"),
     ("comment",    r"//[^\n]*"),
-    ("keyword",    r"\b(?:const|dyn|else|fn|for|if|let|loop|match|pub|return|while)\b"),
+    ("keyword",    r"\b(?:const|dyn|else|fn|for|if|let|loop|match|mod|pub|return|while)\b"),
     ("type",       r"\b(?:int|uint)\b"),
     ("bool",       r"\b(?:true|false)\b"),
     ("hex",        r"0x[0-9a-fA-F_]+"),

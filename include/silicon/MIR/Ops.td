@@ -82,7 +82,8 @@ def FuncOp : MIROp<"func", [
     OptionalAttr<StrAttr>:$sym_visibility,
     TypeAttrOf<FunctionType>:$function_type,
     ArrayAttr:$argNames,
-    ArrayAttr:$resultNames
+    ArrayAttr:$resultNames,
+    OptionalAttr<UnitAttr>:$isModule
   );
   let regions = (region AnyRegion:$body);
   let hasCustomAssemblyFormat = 1;

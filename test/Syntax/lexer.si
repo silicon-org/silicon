@@ -3,6 +3,9 @@
 // CHECK: identifier `hello`
 hello
 
+// CHECK: keyword `mod`
+mod
+
 // CHECK: keyword `return`
 return
 

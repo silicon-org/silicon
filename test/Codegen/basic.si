@@ -246,6 +246,34 @@ fn returnWithValue() -> int { return 42 }
 // CHECK: hir.unified_return [[U]]
 fn returnWithoutValue() { return }
 
+//===----------------------------------------------------------------------===//
+// Module declarations
+//===----------------------------------------------------------------------===//
+
+// Ensure `mod` produces a unified_func with `isModule` attribute.
+// CHECK-LABEL: hir.unified_func private @testModDecl
+// CHECK-SAME: attributes {isModule}
+mod testModDecl(a: int) -> int { a }
+
+// Ensure `fn` does not produce `isModule`.
+// CHECK-LABEL: hir.unified_func private @testFnNoModule
+// CHECK-NOT: isModule
+fn testFnNoModule(a: int) -> int { a }
+
+// Ensure `pub mod` works.
+// CHECK-LABEL: hir.unified_func @testPubMod
+// CHECK-SAME: attributes {isModule}
+pub mod testPubMod(a: int) -> int { a }
+
+// Ensure `const mod` works.
+// CHECK-LABEL: hir.unified_func private @testConstMod
+// CHECK-SAME: attributes {isModule}
+const mod testConstMod(const a: int) -> int { a }
+
+//===----------------------------------------------------------------------===//
+// Return expressions
+//===----------------------------------------------------------------------===//
+
 // Ensure early return works: `return` terminates the current block and any
 // subsequent code ends up in an unreachable block.
 // CHECK-LABEL: hir.unified_func private @earlyReturn
