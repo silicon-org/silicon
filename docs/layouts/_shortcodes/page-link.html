@@ -1,0 +1,6 @@
+{{- $ref := .Get 0 -}}
+{{- with .Page.GetPage $ref -}}
+<a href="{{ .RelPermalink }}">{{ .Title }}</a>
+{{- else -}}
+{{- errorf "page-link: page %q not found (referenced from %s)" $ref .Page.File.Path -}}
+{{- end -}}

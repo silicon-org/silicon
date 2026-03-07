@@ -25,6 +25,7 @@ collect_doc(internals/passes/Transforms.md ${SILICON_BINARY_DIR}/include/silicon
 # Static documents
 file(GLOB_RECURSE static_docs RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS *.md)
 list(FILTER static_docs EXCLUDE REGEX "^themes/")
+list(FILTER static_docs EXCLUDE REGEX "^layouts/")
 foreach(doc ${static_docs})
   collect_doc(${doc} ${CMAKE_CURRENT_SOURCE_DIR}/${doc})
 endforeach()
@@ -41,6 +42,7 @@ if(HUGO)
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_BINARY_DIR}/website
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/hugo.toml ${docdir}/hugo.toml
     COMMAND ${CMAKE_COMMAND} -E create_symlink ${CMAKE_CURRENT_SOURCE_DIR}/themes ${docdir}/themes
+    COMMAND ${CMAKE_COMMAND} -E create_symlink ${CMAKE_CURRENT_SOURCE_DIR}/layouts ${docdir}/layouts
     COMMAND ${HUGO} --source ${docdir} --destination ${CMAKE_BINARY_DIR}/website
     COMMENT "Building website"
   )

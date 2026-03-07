@@ -120,7 +120,7 @@ tools/
 - **Working on syntax** (lexer, parser, AST): edit under `lib/Syntax/` and `include/silicon/Syntax/`, test with `silc`.
 - **Working on passes** (transformations, lowerings): edit under `lib/Transforms/` or `lib/Conversion/`, test with `silicon-opt` and MLIR input files.
 - **Adding a new IR op**: define it in the relevant `.td` file under `include/silicon/`, then add parsing tests to the corresponding `basic.mlir` and verifier tests to `errors.mlir`.
-- **Reading the design docs**: see [Design]({{< relref "design" >}}) for the phased execution model and HIR/MIR split.
+- **Reading the design docs**: see {{< page-link "/design" >}} for the phased execution model and HIR/MIR split.
 
 Before committing, run `clang-format` on any changed C++ files.
 Formatting is enforced by CI before merging.

@@ -45,4 +45,4 @@ fn precedence(a: int, b: int, c: int) -> int {
 ```
 
 This is parsed as `a + (b * c)`, not `(a + b) * c`.
-See [Appendix: Operators and Symbols]({{< relref "language/appendix/operators" >}}) for the full precedence table.
+See {{< page-link "/language/appendix/operators" >}} for the full precedence table.
