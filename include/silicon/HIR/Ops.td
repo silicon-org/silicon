@@ -448,7 +448,7 @@ def SplitFuncOp : HIROp<"split_func", [
 }
 
 def MultiphaseFuncOp : HIROp<"multiphase_func", [
-  DeclareOpInterfaceMethods<Symbol, ["canDiscardOnUseEmpty"]>,
+  Symbol,
 ]> {
   let summary = "A chain of sub-functions evaluated iteratively, one phase at a time";
   let description = [{
@@ -457,8 +457,8 @@ def MultiphaseFuncOp : HIROp<"multiphase_func", [
     in order. Arguments are marked `first` or `last` to indicate whether they
     are available from the first or last sub-phase.
 
-    Multiphase funcs are never discardable by SymbolDCE, even when private.
-    They are referenced by split funcs but not through standard symbol uses.
+    Multiphase funcs are always private. They are kept alive by SymbolDCE
+    through the `FlatSymbolRefAttr` references in their parent split func.
   }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,

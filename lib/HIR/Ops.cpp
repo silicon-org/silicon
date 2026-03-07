@@ -417,8 +417,6 @@ void SplitFuncOp::getAsmBlockArgumentNames(Region &region,
 // MultiphaseFuncOp
 //===----------------------------------------------------------------------===//
 
-bool MultiphaseFuncOp::canDiscardOnUseEmpty() { return false; }
-
 // # Custom Parser for MultiphaseFuncOp
 //
 // The assembly format is:

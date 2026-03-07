@@ -1,1 +1,0 @@
-- Only the split func should inherit the unified func visibility; any mulitphase or other func generated as subfunction of the split func should be private.
