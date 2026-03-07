@@ -790,6 +790,36 @@ void PhaseSplitter::run() {
     }
   }
 
+  //===--------------------------------------------------------------------===//
+  // Dissolve ExprOps
+  //
+  // After phase splitting, ExprOps have served their purpose as phase
+  // annotation boundaries. Inline their bodies into the parent block and
+  // replace results with the yielded values.
+  //===--------------------------------------------------------------------===//
+
+  for (auto &split : splits) {
+    SmallVector<ExprOp> exprOps;
+    split.funcOp.walk<WalkOrder::PostOrder>(
+        [&](ExprOp op) { exprOps.push_back(op); });
+    for (auto exprOp : exprOps) {
+      auto &body = exprOp.getBody().front();
+      auto yieldOp = cast<YieldOp>(body.getTerminator());
+      for (auto [result, operand] :
+           llvm::zip(exprOp.getResults(), yieldOp.getOperands())) {
+        result.replaceAllUsesWith(operand);
+        for (auto &rv : split.returnValues)
+          if (rv == result)
+            rv = operand;
+      }
+      yieldOp.erase();
+      auto *parentBlock = exprOp->getBlock();
+      parentBlock->getOperations().splice(exprOp->getIterator(),
+                                          body.getOperations());
+      exprOp.erase();
+    }
+  }
+
   // Record the number of "own" block args and return values for each phase
   // function before cross-phase threading adds context values. These counts
   // are used afterward to bundle context values into opaque packs.

@@ -54,10 +54,7 @@ hir.unified_func @SinglePhase() -> () {
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: hir.func private @TwoUnrelatedPhases.0a() -> ()
-// CHECK-NEXT: hir.expr
-// CHECK-NEXT:   func.call @dummyA
-// CHECK-NEXT:   hir.yield
-// CHECK-NEXT: }
+// CHECK-NEXT: func.call @dummyA
 // CHECK-NEXT: hir.return
 
 // CHECK-LABEL: hir.func private @TwoUnrelatedPhases.0b() -> ()
@@ -88,8 +85,7 @@ hir.unified_func @TwoUnrelatedPhases() -> () {
 
 // CHECK-LABEL: hir.func private @ValueUseAcrossPhases.0a() -> ()
 // CHECK: [[C42:%.+]] = hir.constant_int 42
-// CHECK: [[TMP:%.+]] = hir.expr
-// CHECK:   hir.constant_int 1337
+// CHECK: [[TMP:%.+]] = hir.constant_int 1337
 // CHECK: hir.add [[C42]], [[TMP]] :
 // CHECK: hir.return
 
@@ -505,8 +501,7 @@ hir.unified_func @Adder(%a: 0, %b: 0) -> (result: 0) {
 }
 
 // CHECK-LABEL: hir.func private @PullExpr.0a() -> (ctx)
-// CHECK:      hir.expr
-// CHECK:        hir.call @Adder.0(
+// CHECK:      hir.call @Adder.0(
 // CHECK:      hir.call @ConstArg.0(
 // CHECK:      hir.return
 
@@ -540,4 +535,78 @@ hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
   %r = hir.unified_call @ConstArg(%key, %y) : (%kt, %yt) -> (%rt) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
   %rrt = hir.type_of %r
   hir.unified_return %r : %rrt
+}
+
+//===----------------------------------------------------------------------===//
+// Nested ExprOps: an outer ExprOp at the current phase containing an inner
+// ExprOp shifted to an earlier phase. After splitting, both ExprOps are
+// dissolved — the inner's ops land in the earlier phase function and the
+// outer's remaining ops stay in the current phase.
+
+// CHECK-LABEL: hir.func private @NestedExpr.0a() -> ()
+// CHECK-NOT: hir.expr
+// CHECK: func.call @dummyA
+// CHECK: hir.return
+
+// CHECK-LABEL: hir.func private @NestedExpr.0b() -> ()
+// CHECK-NOT: hir.expr
+// CHECK: func.call @dummyB
+// CHECK: hir.return
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @NestedExpr() -> ()
+// CHECK:         hir.signature () -> ()
+// CHECK:       0: @NestedExpr.0
+// CHECK-LABEL: hir.multiphase_func @NestedExpr.0() -> ()
+// CHECK:       @NestedExpr.0a
+// CHECK:       @NestedExpr.0b
+hir.unified_func @NestedExpr() -> () {
+  hir.unified_signature () -> ()
+} {
+  hir.expr {
+    hir.expr attributes {const = -1} {
+      func.call @dummyA() : () -> ()
+      hir.yield
+    }
+    func.call @dummyB() : () -> ()
+    hir.yield
+  }
+  hir.unified_return
+}
+
+//===----------------------------------------------------------------------===//
+// Nested ExprOps with value flow: the inner ExprOp produces a value at an
+// earlier phase that flows through cross-phase threading to the outer ExprOp.
+
+// CHECK-LABEL: hir.func private @NestedExprValue.0a() -> ()
+// CHECK-NOT: hir.expr
+// CHECK: hir.constant_int 100
+// CHECK: hir.return
+
+// CHECK-LABEL: hir.func private @NestedExprValue.0b() -> ()
+// CHECK-NOT: hir.expr
+// CHECK: [[V:%.+]] = hir.constant_int 100
+// CHECK: hir.add [[V]], [[V]] :
+// CHECK: hir.return
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @NestedExprValue() -> ()
+// CHECK:         hir.signature () -> ()
+// CHECK:       0: @NestedExprValue.0
+// CHECK-LABEL: hir.multiphase_func @NestedExprValue.0() -> ()
+// CHECK:       @NestedExprValue.0a
+// CHECK:       @NestedExprValue.0b
+hir.unified_func @NestedExprValue() -> () {
+  hir.unified_signature () -> ()
+} {
+  hir.expr {
+    %0 = hir.expr : !hir.any attributes {const = -1} {
+      %1 = hir.constant_int 100
+      hir.yield %1 : !hir.any
+    }
+    %t = hir.type_of %0
+    %2 = hir.add %0, %0 : %t
+    hir.yield
+  }
+  hir.unified_return
 }

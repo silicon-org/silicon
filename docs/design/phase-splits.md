@@ -22,11 +22,11 @@ hir.unified_func @foo(%a: -3, %b: -1) -> (c: 0) {
   %a.type = hir.unified_call @doU() : () -> (%type_type: 0)               // phase -4
   %a0 = hir.coerce_type %a : %a.type                                      // phase -3
   %a1 = hir.unified_call @doV(%a0) : (%a.type: 0) -> (%a.type: 0)         // phase -3
-  %a2 = hir.const { hir.yield %a1 }                                       // phase -2
+  %a2 = hir.expr -1 { hir.yield %a1 }                                     // phase -2
   %b.type = hir.unified_call @doW(%a2) : (%a.type: 0) -> (%type_type: 0)  // phase -2
   %b0 = hir.coerce_type %b : %b.type                                      // phase -1
   %b1 = hir.unified_call @doX(%b0) : (%b.type: 0) -> (%b.type: 0)         // phase -1
-  %b2 = hir.const { hir.yield %b1 }                                       // phase 0
+  %b2 = hir.expr -1 { hir.yield %b1 }                                     // phase 0
   %c = hir.unified_call @doY(%b2) : (%b.type: 0) -> (%int_type: 0)        // phase 0
   hir.return %c : %int_type
 }
@@ -38,7 +38,7 @@ Results indicate in which phase they are computed.
 The return op assigns these phases to its operands, and back-propagates phase requirements across the function body.
 Uses of a value as a type require that the type is available in the phase before the op that uses it as a type.
 This enforces that we evaluate all types to constant values in the preceding phase, such that they can then be absorbed into the MIR lowering for the next phase.
-Ops like `hir.const` and `hir.dyn` introduce an additional phase shift.
+An `hir.expr` op introduces an additional phase shift (`hir.expr -1` for `const`, `hir.expr 1` for `dyn`).
 Constant-like ops don't have any phase requirements, since they are trivially copied to whichever phase they are needed in.
 
 The above example is roughly equivalent to the following input:
@@ -151,6 +151,10 @@ The original `@foo` unified function had 5 internal phases in total.
 However, only 3 of these are visible to the outside when looking at the function arguments and results.
 The split function only lists separate functions for the externally visible phases.
 All internal phases are absorbed into multiphase functions.
+
+Note that `hir.expr` does not appear in the split IR.
+This op serves as phase annotation boundary in the unified IR, shifting the phase of its contents during phase analysis.
+The phase splitting pass moves each op to its phase function and removes the empty `hir.expr` ops.
 
 The HIR operations `hir.opaque_type`, `hir.opaque_pack`, and `hir.opaque_unpack` allow multiple SSA values to be packed into and unpacked from a single SSA value.
 This allows functions to bundle op internal state that needs to flow between execution phases.
@@ -314,7 +318,7 @@ A single unified call invokes `@foo`.
 The argument and result phases of the call dictate most of the other phases in the surrounding operations.
 The calls to `@doU` and `@doW` compute the types of `%a` and `%b`, and `@doV` computes a value that feeds into `@doW`.
 These were likely inlined from foo's signature region and type computation chain into the call site by the CheckCalls pass earlier.
-We omit a few `hir.const` ops to group calls to these functions more closely together into phases.
+We omit a few `hir.expr -1` ops to group calls to these functions more closely together into phases.
 This is just for illustrative purposes to highlight that the phase structure around a call to `@foo` can differ significantly from the phase structure of `@foo` itself.
 The interesting additions are calls to `@makeA`, `@makeB`, and `@consumeC`.
 Since the type of `%b` is dependent on the type of `%a`, an earlier type inference pass has likely propagated the type of `%b` onto the result of the call to `@makeB`.
