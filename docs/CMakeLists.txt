@@ -5,7 +5,8 @@ macro(collect_doc dst src)
   add_custom_command(
     OUTPUT ${docdir}/${dst}
     COMMAND ${Python3_EXECUTABLE} ${collect_py} ${src} ${docdir}/${dst}
-    DEPENDS ${collect_py} ${src} silicon-headers
+      --silc $<TARGET_FILE:silc>
+    DEPENDS ${collect_py} ${src} silicon-headers silc
     COMMENT "Collecting docs ${dst}"
   )
   list(APPEND collected_docs ${docdir}/${dst})
