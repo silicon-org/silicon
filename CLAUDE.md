@@ -61,3 +61,10 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 
 - If you add or change an op, type, attribute, or pass, make sure to add or update the `summary` and `description` fields
 - Pass descriptions should contain detailed documentation of what they are designed to do; these are part of the internals documentation on the website
+- When touching any user-visible part of the compiler, check if `docs/examples/` and `docs/language/` need updating and add a TODO.md entry as a reminder:
+  - Lexer changes (new tokens, operators, keywords): `docs/language/appendix/keywords.md`, `docs/language/appendix/operators.md`, and any examples using affected syntax
+  - Parser changes (new syntax, changed grammar): relevant pages in `docs/examples/basics/` and `docs/language/`; new example pages for new language features
+  - Codegen changes (new ops from AST, changed semantics): `docs/examples/` pages reflecting behavior
+  - Type system changes: `docs/examples/basics/types.md`
+  - Phased execution changes: `docs/examples/phased-execution/`
+  - New language features: corresponding example pages and language reference sections
