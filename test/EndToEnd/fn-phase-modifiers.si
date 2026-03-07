@@ -1,0 +1,26 @@
+// RUN: silc %s | FileCheck %s
+
+// Test that function-level phase modifiers (`const fn`, `dyn fn`) compile
+// through the full pipeline. These shift all argument and result phases
+// uniformly, requiring SplitPhases to move block args to later (dyn) or
+// earlier (const) phase functions, and SpecializeFuncs to dissolve
+// multiphase_func ops with zero-result evaluated functions.
+
+// CHECK: mir.func private @const_fn.0(%x: !si.int) -> (result: !si.int)
+// CHECK: mir.evaluated_func {{.*}}@const_fn.1 []
+const fn const_fn(x: int) -> int { x }
+
+// CHECK: mir.func private @dyn_fn.0b(%a: !si.int) -> (result: !si.int)
+// CHECK: hir.split_func private @dyn_fn(%a: 1) -> (result: 1)
+dyn fn dyn_fn(a: int) -> int { a }
+
+// CHECK: mir.func private @const_const_fn.0(%x: !si.int) -> (result: !si.int)
+// CHECK: mir.evaluated_func {{.*}}@const_const_fn.1b []
+const const fn const_const_fn(x: int) -> int { x }
+
+// CHECK: mir.func private @cancel_fn.0(%x: !si.int) -> (result: !si.int)
+// CHECK-NOT: hir.multiphase_func @cancel_fn
+const dyn fn cancel_fn(x: int) -> int { x }
+
+// CHECK: mir.func private @pub_const_fn.0(%x: !si.int) -> (result: !si.int)
+pub const fn pub_const_fn(x: int) -> int { x }

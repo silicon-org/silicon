@@ -238,6 +238,61 @@ void SpecializeFuncsPass::runOnOperation() {
         continue;
       }
 
+      // If the evaluated function has no results, there's no context to
+      // chain into the next sub-function. Just remove it and continue.
+      if (resultAttrs.empty()) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  No results to chain, removing evaluated func\n");
+        symbolTable.erase(evalFunc);
+        SmallVector<Attribute> newPhaseFuncs(phaseFuncs.begin() + 1,
+                                             phaseFuncs.end());
+
+        // Remove "first" args from the multiphase_func.
+        auto argIsFirst = mpFunc.getArgIsFirst();
+        SmallVector<Attribute> newArgNames;
+        SmallVector<bool> newArgIsFirst;
+        for (unsigned k = 0; k < mpFunc.getArgNames().size(); ++k) {
+          if (!argIsFirst[k]) {
+            newArgNames.push_back(mpFunc.getArgNames()[k]);
+            newArgIsFirst.push_back(false);
+          }
+        }
+        if (!newArgIsFirst.empty())
+          newArgIsFirst[0] = true;
+
+        if (newPhaseFuncs.size() <= 1) {
+          for (auto splitFunc : getOperation().getOps<hir::SplitFuncOp>()) {
+            auto pfAttrs = splitFunc.getPhaseFuncs();
+            bool updated = false;
+            SmallVector<Attribute> updatedPhaseFuncs(pfAttrs.begin(),
+                                                     pfAttrs.end());
+            for (unsigned i = 0; i < pfAttrs.size(); ++i) {
+              if (cast<FlatSymbolRefAttr>(pfAttrs[i]).getValue() ==
+                  mpFunc.getSymName()) {
+                updatedPhaseFuncs[i] = newPhaseFuncs.empty()
+                                           ? FlatSymbolRefAttr{}
+                                           : newPhaseFuncs[0];
+                updated = true;
+                break;
+              }
+            }
+            if (updated)
+              splitFunc.setPhaseFuncsAttr(
+                  ArrayAttr::get(&getContext(), updatedPhaseFuncs));
+          }
+          mpFunc.erase();
+        } else {
+          mpFunc.setPhaseFuncsAttr(
+              ArrayAttr::get(&getContext(), newPhaseFuncs));
+          mpFunc.setArgNamesAttr(ArrayAttr::get(&getContext(), newArgNames));
+          mpFunc.setArgIsFirstAttr(
+              DenseBoolArrayAttr::get(&getContext(), newArgIsFirst));
+        }
+
+        changed = true;
+        continue;
+      }
+
       // Find the next sub-function.
       auto nextSym = cast<FlatSymbolRefAttr>(phaseFuncs[1]);
       auto nextFunc = symbolTable.lookup<hir::FuncOp>(nextSym.getValue());

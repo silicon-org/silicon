@@ -303,43 +303,46 @@ void PhaseSplitter::run() {
   // Move all operations to phase 0 initially.
   splits[0 - minPhase].funcOp.getBody().takeBody(funcOp.getBody());
 
-  // Track where each unified func arg ended up after const arg movement.
-  // Const args map to their new block arg in the origin phase function;
-  // phase-0 args map to the remaining block args in the phase-0 function.
+  // Track where each unified func arg ended up after shifted arg movement.
+  // Shifted args (phase != 0) map to their new block arg in the target phase
+  // function; phase-0 args map to the remaining block args in the phase-0
+  // function.
   SmallVector<Value> unifiedArgValues(funcOp.getArgPhases().size());
 
   // Move shifted-phase body block arguments to their respective phase
-  // functions. We create block args in each const arg's origin phase, replace
-  // all uses, and let cross-phase value threading handle multi-hop forwarding.
+  // functions. We create block args in each arg's target phase, replace all
+  // uses, and let cross-phase value threading handle multi-hop forwarding.
+  // This handles both const args (phase < 0) and dyn args (phase > 0).
   {
     auto &phase0Block = splits[0 - minPhase].funcOp.getBody().front();
 
-    // Collect const args and their phases first to avoid iterator invalidation.
-    SmallVector<std::pair<unsigned, int16_t>> constArgs;
+    // Collect shifted args and their phases first to avoid iterator
+    // invalidation.
+    SmallVector<std::pair<unsigned, int16_t>> shiftedArgs;
     for (auto [idx, phase] : llvm::enumerate(funcOp.getArgPhases())) {
       int16_t argPhase = static_cast<int16_t>(phase);
-      if (argPhase < 0)
-        constArgs.push_back({idx, argPhase});
+      if (argPhase != 0)
+        shiftedArgs.push_back({idx, argPhase});
     }
-    llvm::sort(constArgs);
+    llvm::sort(shiftedArgs);
 
-    // Step 1: Create a block arg in each const arg's origin phase function.
+    // Step 1: Create a block arg in each shifted arg's target phase function.
     SmallVector<std::pair<unsigned, Value>> replacements;
     SmallVector<unsigned> argsToErase;
-    for (auto [idx, argPhase] : constArgs) {
+    for (auto [idx, argPhase] : shiftedArgs) {
       auto bodyArg = phase0Block.getArgument(idx);
       LLVM_DEBUG(llvm::dbgs() << "- Moving body arg " << idx << " to phase "
                               << argPhase << "\n");
-      auto &constBlock = splits[argPhase - minPhase].funcOp.getBody().front();
+      auto &targetBlock = splits[argPhase - minPhase].funcOp.getBody().front();
       Value ownArg =
-          constBlock.addArgument(bodyArg.getType(), bodyArg.getLoc());
+          targetBlock.addArgument(bodyArg.getType(), bodyArg.getLoc());
       unifiedArgValues[idx] = ownArg;
       replacements.push_back({idx, ownArg});
       argsToErase.push_back(idx);
     }
 
-    // Step 2: Replace all uses of old body block args with the origin-phase
-    // values. Cross-phase value threading will handle forwarding to later
+    // Step 2: Replace all uses of old body block args with the target-phase
+    // values. Cross-phase value threading will handle forwarding to other
     // phases as needed. Also update returnTypeOperands, which hold Value
     // handles that replaceAllUsesWith won't touch.
     for (auto &[idx, ownArg] : replacements) {
@@ -358,7 +361,7 @@ void PhaseSplitter::run() {
     // Fill in phase-0 args (those that remained in the phase-0 block).
     unsigned phase0ArgIdx = 0;
     for (unsigned i = 0; i < unifiedArgValues.size(); ++i) {
-      if (unifiedArgValues[i]) // already filled (const arg)
+      if (unifiedArgValues[i]) // already filled (shifted arg)
         continue;
       unifiedArgValues[i] = phase0Block.getArgument(phase0ArgIdx++);
     }
