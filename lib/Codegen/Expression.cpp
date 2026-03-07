@@ -155,9 +155,11 @@ static Value convert(ast::BlockExpr &block, Context &cx) {
   return hir::ConstantUnitOp::create(cx.builder, block.loc);
 }
 
-/// Handle const expressions.
+/// Handle const expressions. The phase shift of -1 indicates that the
+/// expression should be evaluated one phase earlier than its parent.
 static Value convert(ast::ConstExpr &expr, Context &cx) {
-  return cx.withinExpr([&] { return cx.convertExpr(*expr.value); });
+  return cx.withinExpr([&] { return cx.convertExpr(*expr.value); },
+                       /*phaseShift=*/-1);
 }
 
 /// Emit an error for unimplemented expressions.

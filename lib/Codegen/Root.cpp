@@ -69,7 +69,7 @@ LogicalResult Context::convertAST(AST &ast) {
   return success();
 }
 
-Value Context::withinExpr(llvm::function_ref<Value()> fn) {
+Value Context::withinExpr(llvm::function_ref<Value()> fn, int phaseShift) {
   // Populate a region with ops.
   Region region;
   auto ip = builder.saveInsertionPoint();
@@ -112,6 +112,9 @@ Value Context::withinExpr(llvm::function_ref<Value()> fn) {
   hir::YieldOp::create(builder, value.getLoc(), value);
   builder.restoreInsertionPoint(ip);
   auto op = hir::ExprOp::create(builder, value.getLoc(), value.getType());
+  if (phaseShift != 0)
+    op->setAttr("const",
+                builder.getIntegerAttr(builder.getIntegerType(32), phaseShift));
   op.getRegion().takeBody(region);
   return op.getResult(0);
 }

@@ -196,9 +196,10 @@ fn letBindingNoType() -> int {
 // Const expressions
 //===----------------------------------------------------------------------===//
 
-// Ensure `const { ... }` with side effects produces `hir.expr` and `hir.yield`.
+// Ensure `const { ... }` with side effects produces `hir.expr` with a
+// `const = -1` phase shift attribute and `hir.yield`.
 // CHECK-LABEL: hir.unified_func private @constExpr
-// CHECK: hir.expr : !hir.any {
+// CHECK: hir.expr : !hir.any attributes {const = -1 : i32} {
 // CHECK:   hir.unified_call @unitResult1()
 // CHECK:   hir.yield
 // CHECK: }
