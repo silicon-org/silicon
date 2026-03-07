@@ -1,0 +1,7 @@
+// Use Iosevka as the monospace font for code blocks and inline code.
+code,
+pre,
+.book-menu code,
+kbd {
+  font-family: "Iosevka", monospace;
+}
