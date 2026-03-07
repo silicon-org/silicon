@@ -26,8 +26,7 @@ collect_doc(internals/passes/Transforms.md ${SILICON_BINARY_DIR}/include/silicon
 
 # Static documents
 file(GLOB_RECURSE static_docs RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS *.md)
-list(FILTER static_docs EXCLUDE REGEX "^themes/")
-list(FILTER static_docs EXCLUDE REGEX "^layouts/")
+list(FILTER static_docs EXCLUDE REGEX "^hugo/")
 foreach(doc ${static_docs})
   collect_doc(${doc} ${CMAKE_CURRENT_SOURCE_DIR}/${doc})
 endforeach()
@@ -38,13 +37,14 @@ add_dependencies(silicon-docs SiliconDocFiles)
 
 # Build the website with Hugo. We copy hugo.toml and symlink the theme into
 # the build docs directory, so Hugo runs entirely inside the build tree.
+set(hugodir ${CMAKE_CURRENT_SOURCE_DIR}/hugo)
 find_program(HUGO hugo)
 if(HUGO)
   add_custom_target(silicon-website
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_BINARY_DIR}/website
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/hugo.toml ${docdir}/hugo.toml
-    COMMAND ${CMAKE_COMMAND} -E create_symlink ${CMAKE_CURRENT_SOURCE_DIR}/themes ${docdir}/themes
-    COMMAND ${CMAKE_COMMAND} -E create_symlink ${CMAKE_CURRENT_SOURCE_DIR}/layouts ${docdir}/layouts
+    COMMAND ${CMAKE_COMMAND} -E copy ${hugodir}/hugo.toml ${docdir}/hugo.toml
+    COMMAND ${CMAKE_COMMAND} -E create_symlink ${hugodir}/themes ${docdir}/themes
+    COMMAND ${CMAKE_COMMAND} -E create_symlink ${hugodir}/layouts ${docdir}/layouts
     COMMAND ${HUGO} --source ${docdir} --destination ${CMAKE_BINARY_DIR}/website
     COMMENT "Building website"
   )
