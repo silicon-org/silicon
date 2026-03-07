@@ -959,7 +959,7 @@ void PhaseSplitter::run() {
   // Create the split_func.
   auto splitFuncOp = SplitFuncOp::create(
       sfBuilder, sfLoc, sfName,
-      /*sym_visibility=*/StringAttr{}, sfArgNames,
+      /*sym_visibility=*/funcOp.getSymVisibilityAttr(), sfArgNames,
       sfBuilder.getDenseI32ArrayAttr(sfArgPhases), sfResultNames,
       sfBuilder.getDenseI32ArrayAttr(sfResultPhases),
       sfBuilder.getDenseI32ArrayAttr(phaseNumbers),
@@ -982,7 +982,8 @@ void PhaseSplitter::run() {
   for (auto &mp : multiphaseInfos) {
     auto mpOp = MultiphaseFuncOp::create(
         sfBuilder, sfLoc, mp.name,
-        /*sym_visibility=*/StringAttr{}, sfBuilder.getArrayAttr(mp.argNames),
+        /*sym_visibility=*/funcOp.getSymVisibilityAttr(),
+        sfBuilder.getArrayAttr(mp.argNames),
         sfBuilder.getDenseBoolArrayAttr(mp.argIsFirst),
         sfBuilder.getArrayAttr(mp.resultNames),
         sfBuilder.getArrayAttr(mp.subFuncAttrs));

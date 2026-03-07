@@ -393,6 +393,36 @@ hir.split_func @PreSplit(%a: -1, %b: 0) -> (result: 0) {
   0: @PreSplit.1
 ]
 
+//===----------------------------------------------------------------------===//
+// Visibility inheritance: a public unified_func should produce public
+// split_func and multiphase_func ops.
+
+// CHECK-LABEL: hir.func private @PublicVis.0a() -> ()
+// CHECK: hir.return
+
+// CHECK-LABEL: hir.func private @PublicVis.0b() -> ()
+// CHECK: hir.return
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func public @PublicVis() -> ()
+// CHECK:         hir.signature () -> ()
+// CHECK:       0: @PublicVis.0
+// CHECK-LABEL: hir.multiphase_func public @PublicVis.0() -> ()
+// CHECK:       @PublicVis.0a
+// CHECK:       @PublicVis.0b
+hir.unified_func public @PublicVis() -> () {
+  hir.unified_signature () -> ()
+} {
+  func.call @dummyB() : () -> ()
+  hir.expr attributes {const = -1} {
+    func.call @dummyA() : () -> ()
+    hir.yield
+  }
+  hir.unified_return
+}
+
+//===----------------------------------------------------------------------===//
+
 // CHECK-LABEL: hir.func private @CallsPreSplit.0a
 // CHECK: hir.call @PreSplit.0(
 // CHECK: hir.return

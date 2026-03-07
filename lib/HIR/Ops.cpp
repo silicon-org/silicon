@@ -398,6 +398,8 @@ LogicalResult SplitFuncOp::verifyRegions() {
   return success();
 }
 
+bool SplitFuncOp::canDiscardOnUseEmpty() { return false; }
+
 SignatureOp SplitFuncOp::getSignatureOp() {
   return cast<SignatureOp>(getSignature().back().getTerminator());
 }
@@ -414,6 +416,8 @@ void SplitFuncOp::getAsmBlockArgumentNames(Region &region,
 //===----------------------------------------------------------------------===//
 // MultiphaseFuncOp
 //===----------------------------------------------------------------------===//
+
+bool MultiphaseFuncOp::canDiscardOnUseEmpty() { return false; }
 
 // # Custom Parser for MultiphaseFuncOp
 //

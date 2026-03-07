@@ -414,7 +414,7 @@ def SignatureOp : HIROp<"signature", [
 
 def SplitFuncOp : HIROp<"split_func", [
   IsolatedFromAbove,
-  Symbol,
+  DeclareOpInterfaceMethods<Symbol, ["canDiscardOnUseEmpty"]>,
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
 ]> {
   let summary = "Records how a unified function was split into per-phase functions";
@@ -423,6 +423,10 @@ def SplitFuncOp : HIROp<"split_func", [
     into separate per-phase functions. It preserves the original function's
     signature (for library callers) and maps phase numbers to the generated
     per-phase `hir.func` ops.
+
+    Split funcs are never discardable by SymbolDCE, even when private.
+    They serve as top-level entry points into the phased evaluation pipeline
+    and are not referenced by other ops via symbol uses.
   }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,
@@ -444,7 +448,7 @@ def SplitFuncOp : HIROp<"split_func", [
 }
 
 def MultiphaseFuncOp : HIROp<"multiphase_func", [
-  Symbol,
+  DeclareOpInterfaceMethods<Symbol, ["canDiscardOnUseEmpty"]>,
 ]> {
   let summary = "A chain of sub-functions evaluated iteratively, one phase at a time";
   let description = [{
@@ -452,6 +456,9 @@ def MultiphaseFuncOp : HIROp<"multiphase_func", [
     itself spans multiple internal sub-phases. The sub-functions are evaluated
     in order. Arguments are marked `first` or `last` to indicate whether they
     are available from the first or last sub-phase.
+
+    Multiphase funcs are never discardable by SymbolDCE, even when private.
+    They are referenced by split funcs but not through standard symbol uses.
   }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,
