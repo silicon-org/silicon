@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from highlight import highlight_blocks
 
 parser = argparse.ArgumentParser()
 parser.add_argument("src", type=Path)
@@ -45,12 +46,10 @@ if not re.search(r"^title\s*:", front, re.MULTILINE):
     front += f"title: \"{title}\"\n"
 text = f"---\n{front}---\n{text}"
 
-args.dst.parent.mkdir(parents=True, exist_ok=True)
-args.dst.write_text(text)
-
 # If `--silc` is provided and the source file is not under a `design/`
-# directory, extract all ```silicon fenced code blocks from the final text and
+# directory, extract all ```silicon fenced code blocks from the text and
 # compile each one with `silc`. Collect all failures and report them at the end.
+# This runs before highlighting so the fenced blocks are still intact.
 
 if args.silc and "design/" not in str(args.src):
     failures = []
@@ -78,3 +77,9 @@ if args.silc and "design/" not in str(args.src):
                 print(f"  silc: {stderr.strip()}", file=sys.stderr)
             print(file=sys.stderr)
         sys.exit(1)
+
+# Replace ```silicon code blocks with syntax-highlighted HTML and write the
+# output file.
+text = highlight_blocks(text)
+args.dst.parent.mkdir(parents=True, exist_ok=True)
+args.dst.write_text(text)

@@ -1,12 +1,13 @@
 # Helper that copies a documentation file from source to destination.
 set(docdir ${CMAKE_BINARY_DIR}/docs)
 set(collect_py ${CMAKE_CURRENT_SOURCE_DIR}/collect.py)
+set(highlight_py ${CMAKE_CURRENT_SOURCE_DIR}/highlight.py)
 macro(collect_doc dst src)
   add_custom_command(
     OUTPUT ${docdir}/${dst}
     COMMAND ${Python3_EXECUTABLE} ${collect_py} ${src} ${docdir}/${dst}
       --silc $<TARGET_FILE:silc>
-    DEPENDS ${collect_py} ${src} silicon-headers silc
+    DEPENDS ${collect_py} ${highlight_py} ${src} silicon-headers silc
     COMMENT "Collecting docs ${dst}"
   )
   list(APPEND collected_docs ${docdir}/${dst})
