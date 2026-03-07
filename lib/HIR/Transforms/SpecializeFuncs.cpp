@@ -57,6 +57,11 @@ struct SpecializeFuncsPass
   void transitiveSpecialize(hir::FuncOp func, SymbolTable &symbolTable);
 
   unsigned specCounter = 0;
+
+  /// Cache of specializations keyed on (original callee symbol, OpaqueAttr).
+  /// Avoids creating redundant clones when multiple call sites pass the same
+  /// opaque constant to the same callee.
+  DenseMap<std::pair<StringAttr, Attribute>, StringAttr> specCache;
 };
 } // namespace
 
@@ -142,6 +147,26 @@ void SpecializeFuncsPass::transitiveSpecialize(hir::FuncOp func,
     if (!llvm::is_contained(templateFuncs, calleeFunc))
       templateFuncs.push_back(calleeFunc);
 
+    // Check the specialization cache to avoid redundant clones.
+    auto key =
+        std::make_pair(calleeFunc.getSymNameAttr(), Attribute(opaqueAttr));
+    auto cacheIt = specCache.find(key);
+    if (cacheIt != specCache.end()) {
+      // Reuse existing specialization.
+      auto specName = cacheIt->second;
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Reusing cached specialization @" << specName << "\n");
+      OpBuilder builder(callOp);
+      SmallVector<Value> newArgs(callOp.getArguments().drop_back());
+      SmallVector<Value> newTypeOfArgs(callOp.getTypeOfArgs().drop_back());
+      auto newCallOp = hir::CallOp::create(
+          builder, callOp.getLoc(), callOp.getResultTypes(), specName, newArgs,
+          newTypeOfArgs, callOp.getTypeOfResults());
+      callOp.replaceAllUsesWith(newCallOp.getResults());
+      callOp.erase();
+      continue;
+    }
+
     // Clone the callee.
     OpBuilder builder(calleeFunc);
     builder.setInsertionPointAfter(calleeFunc);
@@ -150,6 +175,7 @@ void SpecializeFuncsPass::transitiveSpecialize(hir::FuncOp func,
         (calleeFunc.getSymName() + "_" + Twine(specCounter++)).str();
     cloned.setSymName(specName);
     symbolTable.insert(cloned);
+    specCache[key] = cloned.getSymNameAttr();
 
     // Expand the opaque context in the clone.
     expandOpaqueContext(cloned, opaqueAttr);

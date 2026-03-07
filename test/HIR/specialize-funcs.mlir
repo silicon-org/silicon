@@ -185,3 +185,79 @@ hir.multiphase_func @SingleSub.0() -> () [
 
 // CHECK-NOT: mir.evaluated_func @SingleSub.0a
 // CHECK-NOT: hir.multiphase_func @SingleSub.0
+
+//===----------------------------------------------------------------------===//
+// Two calls to the same callee with distinct opaque constants produce two
+// distinct specializations.
+
+hir.func private @callee2(%a, %ctx) -> (result) {
+  %0 = hir.opaque_unpack %ctx : !hir.any
+  %1 = hir.add %a, %0 : %0
+  hir.return(%1) : (%0)
+}
+
+hir.func private @TwoCalls.0b(%x, %ctx) -> (result) {
+  %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %opaqueA = hir.mir_constant #si.opaque<[#si.int<7>]> : !si.opaque
+  %opaqueB = hir.mir_constant #si.opaque<[#si.int<8>]> : !si.opaque
+  %3 = hir.call @callee2(%x, %opaqueA) : (%0, %0) -> (%0)
+  %4 = hir.call @callee2(%x, %opaqueB) : (%0, %0) -> (%0)
+  hir.return(%4) : (%0)
+}
+
+mir.evaluated_func @TwoCalls.0a [#si.opaque<[#si.type<!si.int>, #si.int<5>]> : !si.opaque]
+
+hir.split_func @TwoCalls(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.signature (%0) -> (%0)
+} [
+  0: @TwoCalls.0
+]
+
+hir.multiphase_func @TwoCalls.0(last x) -> (result) [
+  @TwoCalls.0a,
+  @TwoCalls.0b
+]
+
+// CHECK-LABEL: hir.func private @callee2_{{[0-9]+}}(%a) -> (result)
+// CHECK:         hir.mir_constant #si.int<8>
+// CHECK-LABEL: hir.func private @callee2_{{[0-9]+}}(%a) -> (result)
+// CHECK:         hir.mir_constant #si.int<7>
+
+//===----------------------------------------------------------------------===//
+// Two calls to the same callee with identical opaque constants reuse a single
+// specialization.
+
+hir.func private @callee3(%a, %ctx) -> (result) {
+  %0 = hir.opaque_unpack %ctx : !hir.any
+  %1 = hir.add %a, %0 : %0
+  hir.return(%1) : (%0)
+}
+
+hir.func private @Dedup.0b(%x1, %x2, %ctx) -> (result) {
+  %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %opaqueA = hir.mir_constant #si.opaque<[#si.int<7>]> : !si.opaque
+  %opaqueB = hir.mir_constant #si.opaque<[#si.int<7>]> : !si.opaque
+  %3 = hir.call @callee3(%x1, %opaqueA) : (%0, %0) -> (%0)
+  %4 = hir.call @callee3(%x2, %opaqueB) : (%0, %0) -> (%0)
+  hir.return(%4) : (%0)
+}
+
+mir.evaluated_func @Dedup.0a [#si.opaque<[#si.type<!si.int>, #si.int<5>]> : !si.opaque]
+
+hir.split_func @Dedup(%x1: 0, %x2: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.signature (%0, %0) -> (%0)
+} [
+  0: @Dedup.0
+]
+
+hir.multiphase_func @Dedup.0(last x1, last x2) -> (result) [
+  @Dedup.0a,
+  @Dedup.0b
+]
+
+// Only one specialization of callee3 should be produced.
+// CHECK-LABEL: hir.func private @callee3_{{[0-9]+}}(%a) -> (result)
+// CHECK:         hir.mir_constant #si.int<7>
+// CHECK-NOT:   hir.func private @callee3_{{[0-9]+}}
