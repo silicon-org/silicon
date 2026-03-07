@@ -9,7 +9,7 @@
 #include "silicon/Base/Attributes.h"
 #include "silicon/Base/Dialect.h"
 #include "silicon/Base/Types.h"
-#include "silicon/Conversion/Passes.h"
+#include "silicon/Conversion/Passes.h" // IWYU pragma: keep
 #include "silicon/HIR/Dialect.h"
 #include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Types.h"
@@ -20,7 +20,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/DenseSet.h" // IWYU pragma: keep
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -194,17 +194,29 @@ static LogicalResult convert(hir::TypeOfOp op, hir::TypeOfOp::Adaptor adaptor,
 static LogicalResult convert(hir::UnifyOp op, hir::UnifyOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
   // UnifyOp constrains two type values to be equal. InferTypes and
-  // canonicalization should eliminate all unify ops before HIR-to-MIR
-  // lowering. If a unify op survives to this point, it indicates a bug
-  // in the earlier passes. The only exception is when both operands have
-  // already been resolved to the same value after conversion (e.g., after
-  // coerce_type forwarding), in which case we can safely forward.
-  if (adaptor.getLhs() != adaptor.getRhs())
-    return emitBug(op.getLoc())
-           << "hir.unify survived to HIR-to-MIR lowering with "
-              "different operands; InferTypes should have eliminated it";
-  rewriter.replaceOp(op, adaptor.getLhs());
-  return success();
+  // canonicalization should eliminate most unify ops before HIR-to-MIR
+  // lowering. Surviving unify ops are handled here by comparing the
+  // converted operands: if they are the same SSA value or have the same
+  // constant value, we forward one of them. Otherwise, this indicates a
+  // type mismatch that earlier passes should have caught.
+  if (adaptor.getLhs() == adaptor.getRhs()) {
+    rewriter.replaceOp(op, adaptor.getLhs());
+    return success();
+  }
+
+  // Check if both operands are constants with the same value, which can
+  // happen when two separate type constructor ops produce the same type.
+  Attribute lhsAttr, rhsAttr;
+  if (matchPattern(adaptor.getLhs(), m_Constant(&lhsAttr)) &&
+      matchPattern(adaptor.getRhs(), m_Constant(&rhsAttr)) &&
+      lhsAttr == rhsAttr) {
+    rewriter.replaceOp(op, adaptor.getLhs());
+    return success();
+  }
+
+  return emitBug(op.getLoc())
+         << "hir.unify survived to HIR-to-MIR lowering with "
+            "different operands; InferTypes should have eliminated it";
 }
 
 // CoerceTypeOp annotates a value with a type. After signature conversion,
@@ -346,14 +358,14 @@ static bool isResolvableType(Value typeVal) {
 
   // FuncTypeOp needs all of its type operands to be resolvable.
   if (auto funcTypeOp = dyn_cast<hir::FuncTypeOp>(defOp)) {
-    for (auto arg : funcTypeOp.getTypeOfArgs())
-      if (!isResolvableType(arg))
-        return false;
-    for (auto res : funcTypeOp.getTypeOfResults())
-      if (!isResolvableType(res))
-        return false;
-    return true;
+    return llvm::all_of(funcTypeOp.getTypeOfArgs(), isResolvableType) &&
+           llvm::all_of(funcTypeOp.getTypeOfResults(), isResolvableType);
   }
+
+  // UnifyOp is resolvable if both operands are resolvable.
+  if (auto unifyOp = dyn_cast<hir::UnifyOp>(defOp))
+    return isResolvableType(unifyOp.getLhs()) &&
+           isResolvableType(unifyOp.getRhs());
 
   // ConstantLike op with a TypeAttr (e.g., mir.constant or hir.mir_constant
   // from specialization).
@@ -452,6 +464,11 @@ static Type resolveHIRType(Value typeVal) {
     }
     return FunctionType::get(ctx, argTypes, resultTypes);
   }
+
+  // UnifyOp resolves to the lhs type (both sides should be the same after
+  // type inference; the convert pattern for UnifyOp will catch mismatches).
+  if (auto unifyOp = dyn_cast<hir::UnifyOp>(defOp))
+    return resolveHIRType(unifyOp.getLhs());
 
   // ConstantLike op with a TypeAttr (e.g., mir.constant or hir.mir_constant
   // from specialization).

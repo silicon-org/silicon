@@ -142,6 +142,19 @@ hir.func @OpaqueArg(%a) -> (result) {
   hir.return %a0 : %opaque
 }
 
+// Verify that hir.unify in return type position is handled correctly when both
+// operands resolve to the same type.
+//
+// CHECK-LABEL: mir.func @UnifyInReturnType
+// CHECK: mir.return
+hir.func @UnifyInReturnType() -> (result) {
+  %int = hir.int_type
+  %int2 = hir.int_type
+  %ty = hir.unify %int, %int2
+  %c0 = hir.constant_int 0
+  hir.return %c0 : %ty
+}
+
 // Verify that a hir.func with unresolved typeOfArgs in a call is not lowered.
 // The outer function has a block argument used as a type operand for the call,
 // so shouldLower must return false for it and leave it as hir.func.

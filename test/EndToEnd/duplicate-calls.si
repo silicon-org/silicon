@@ -1,0 +1,17 @@
+// RUN: silc %s | FileCheck %s
+
+// Test that calling the same function multiple times with the same arguments
+// compiles correctly. Previously, this would cause a "phase eval loop made no
+// progress" error because hir.unify ops in return type positions were not
+// recognized as resolvable types during HIR-to-MIR lowering.
+
+// CHECK: mir.evaluated_func {{.*}}@main.0 [#si.int<0> : !si.int]
+fn main() -> int {
+  let x = foo(1, 2);
+  let y = foo(1, 2);
+  x ^ y
+}
+
+fn foo(a: int, b: int) -> int {
+  a + b
+}
