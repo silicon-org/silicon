@@ -123,7 +123,7 @@ def highlight(code: str) -> str:
         f'-moz-tab-size:4;-o-tab-size:4;tab-size:4;">'
         f'<code class="language-silicon" data-lang="silicon">'
         f"{wrapped}"
-        f"</code></pre></div>"
+        f"</code></pre></div>\n"
     )
 
 
