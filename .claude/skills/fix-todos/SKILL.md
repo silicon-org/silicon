@@ -19,3 +19,5 @@ The subagent should:
 2. Execute the plan
 3. Remove the corresponding item from TODO.md
 4. Commit the changes
+
+Additional instructions provided by the user: $ARGUMENTS
