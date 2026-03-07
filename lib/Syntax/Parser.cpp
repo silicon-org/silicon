@@ -54,6 +54,10 @@ Token Parser::require(TokenKind kind, const Twine &msg) {
 // Grammar
 //===----------------------------------------------------------------------===//
 
+// The recursive descent parser below uses mutual recursion extensively. Silence
+// the clang-tidy `misc-no-recursion` warning for the entire section.
+// NOLINTBEGIN(misc-no-recursion)
+
 ast::Root *Parser::parseRoot() {
   SmallVector<ast::Item *> items;
   while (token) {
@@ -254,7 +258,6 @@ static std::optional<ast::BinaryOp> getBinaryOp(TokenKind kind) {
   }
 }
 
-// NOLINTNEXTLINE(misc-no-recursion)
 ast::Expr *Parser::parseExpr(ast::Precedence minPrec) {
   // Parse a primary expression first. This will form the LHS of any operators
   // that may follow.
@@ -330,7 +333,6 @@ ast::Expr *Parser::parseExpr(ast::Precedence minPrec) {
   return lhs;
 }
 
-// NOLINTNEXTLINE(misc-no-recursion)
 ast::Expr *Parser::parsePrimaryExpr() {
   // Parse identifiers.
   if (auto ident = consumeIf(TokenKind::Ident))
@@ -463,7 +465,6 @@ ast::NumLitExpr *Parser::parseNumberLiteral(Token lit) {
       {{ast::ExprKind::NumLit, loc(lit)}, value});
 }
 
-// NOLINTNEXTLINE(misc-no-recursion)
 ast::BlockExpr *Parser::parseBlockExpr() {
   auto lcurly = require(TokenKind::LCurly);
   if (!lcurly)
@@ -519,7 +520,6 @@ ast::BlockExpr *Parser::parseBlockExpr() {
 // Statements
 //===----------------------------------------------------------------------===//
 
-// NOLINTNEXTLINE(misc-no-recursion)
 Parser::ExprOrStmt Parser::parseStmtOrExpr() {
   // Ignore stray semicolons.
   if (auto token = consumeIf(TokenKind::Semicolon))
@@ -557,3 +557,5 @@ Parser::ExprOrStmt Parser::parseStmtOrExpr() {
   // Otherwise this is an expression.
   return parseExpr();
 }
+
+// NOLINTEND(misc-no-recursion)
