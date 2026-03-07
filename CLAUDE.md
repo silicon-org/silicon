@@ -49,6 +49,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - Prefer referring to struct, class, and function names instead of C++ file names in commit messages
 - Every behaviour and code path of a pass must be covered in a corresponding lit test; every error message a pass can generate must be covered in an error lit test
 - Address any compiler warnings you encounter, unless they are caused by external code such as CIRCT, MLIR, LLVM
+- When a subagent makes changes to code, your LSP diagnostics may be stale; run check-silicon to refresh
 
 ## Todos
 
