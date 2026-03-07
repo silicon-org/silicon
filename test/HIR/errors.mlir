@@ -38,17 +38,6 @@ hir.unified_func @foo() -> () {
 
 // -----
 
-hir.unified_func @foo() -> () {
-  hir.unified_signature () -> ()
-} {
-  // expected-error @below {{can only appear in the last block}}
-  hir.unified_return
-^bb1:
-  hir.unified_return
-}
-
-// -----
-
 // expected-error @below {{requires `hir.unified_return` terminator in the body}}
 hir.unified_func @foo() -> () {
   hir.unified_signature () -> ()

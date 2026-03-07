@@ -210,3 +210,31 @@ fn constExpr() -> int { const { unitResult1() } }
 // CHECK-NOT: hir.expr
 // CHECK: hir.constant_int 7
 fn constExprInlined() -> int { const { 7 } }
+
+//===----------------------------------------------------------------------===//
+// Return expressions
+//===----------------------------------------------------------------------===//
+
+// Ensure `return <value>` produces a `hir.unified_return` with the value.
+// CHECK-LABEL: hir.unified_func private @returnWithValue
+// CHECK: [[V:%.+]] = hir.constant_int 42
+// CHECK: hir.unified_return [[V]]
+fn returnWithValue() -> int { return 42 }
+
+// Ensure `return` without a value produces a `hir.unified_return` with a unit.
+// CHECK-LABEL: hir.unified_func private @returnWithoutValue
+// CHECK: [[U:%.+]] = hir.constant_unit
+// CHECK: hir.unified_return [[U]]
+fn returnWithoutValue() { return }
+
+// Ensure early return works: `return` terminates the current block and any
+// subsequent code ends up in an unreachable block.
+// CHECK-LABEL: hir.unified_func private @earlyReturn
+// CHECK: [[V:%.+]] = hir.constant_int 1
+// CHECK: hir.unified_return [[V]]
+// CHECK: hir.constant_int 2
+// CHECK: hir.unified_return
+fn earlyReturn() -> int {
+  return 1;
+  2
+}

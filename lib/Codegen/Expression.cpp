@@ -162,6 +162,38 @@ static Value convert(ast::ConstExpr &expr, Context &cx) {
                        /*phaseShift=*/-1);
 }
 
+/// Handle return expressions. Emits a `hir.unified_return` terminator for the
+/// current block and creates a new unreachable block to absorb any subsequent
+/// code. The new block's argument serves as a placeholder value.
+static Value convert(ast::ReturnExpr &expr, Context &cx) {
+  // Convert the return value, or create a unit value if absent.
+  Value value;
+  if (expr.value) {
+    value = cx.convertExpr(*expr.value);
+    if (!value)
+      return {};
+  } else {
+    value = hir::ConstantUnitOp::create(cx.builder, expr.loc);
+  }
+
+  // Emit the return op as a terminator for the current block.
+  auto valueType = hir::getOrCreateTypeOf(cx.builder, expr.loc, value);
+  hir::UnifiedReturnOp::create(cx.builder, expr.loc, ValueRange{value},
+                               ValueRange{valueType});
+
+  // Create a new unreachable block to catch any code after the return. The
+  // block argument acts as a placeholder value for the enclosing expression.
+  auto *block = cx.builder.getInsertionBlock();
+  auto *region = block->getParent();
+  auto *deadBlock = new Block();
+  region->push_back(deadBlock);
+  auto placeholder = deadBlock->addArgument(
+      hir::AnyType::get(cx.module.getContext()), expr.loc);
+  cx.builder.setInsertionPointToStart(deadBlock);
+
+  return placeholder;
+}
+
 /// Emit an error for unimplemented expressions.
 static Value convert(ast::Expr &expr, Context &) {
   emitBug(expr.loc) << "unsupported expression kind `" << expr.getTypeName()
