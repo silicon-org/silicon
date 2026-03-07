@@ -481,3 +481,63 @@ hir.unified_func @CallsPreSplit(%y: 0) -> (result: 0) {
   %tr = hir.type_of %r
   hir.unified_return %r : %tr
 }
+
+//===----------------------------------------------------------------------===//
+// Phase back-propagation: ExprOp wrapping a call to a single-phase function
+// with only floating operands, passed to a const arg. The ExprOp should be
+// pulled to the required phase (-1) so no error is emitted.
+
+// CHECK-LABEL: hir.func private @Adder.0
+// CHECK:      hir.add
+// CHECK:      hir.return
+
+// CHECK-NOT: hir.unified_func @Adder
+// CHECK-LABEL: hir.split_func @Adder(%a: 0, %b: 0) -> (result: 0)
+hir.unified_func @Adder(%a: 0, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.unified_signature (%0, %0) -> (%0)
+} {
+  %ta = hir.type_of %a
+  %tb = hir.type_of %b
+  %t = hir.unify %ta, %tb
+  %r = hir.add %a, %b : %t
+  hir.unified_return %r : %t
+}
+
+// CHECK-LABEL: hir.func private @PullExpr.0a() -> (ctx)
+// CHECK:      hir.expr
+// CHECK:        hir.call @Adder.0(
+// CHECK:      hir.call @ConstArg.0(
+// CHECK:      hir.return
+
+// CHECK-LABEL: hir.func private @PullExpr.0b(%y, %ctx) -> (result)
+// CHECK:      hir.opaque_unpack
+// CHECK:      hir.call @ConstArg.1(
+// CHECK:      hir.return
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @PullExpr(%y: 0) -> (result: 0)
+// CHECK:       0: @PullExpr.0
+// CHECK-LABEL: hir.multiphase_func @PullExpr.0(last y) -> (result)
+// CHECK:       @PullExpr.0a
+// CHECK:       @PullExpr.0b
+hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.unified_signature (%0) -> (%0)
+} {
+  %c19 = hir.constant_int 19
+  %c23 = hir.constant_int 23
+  %key = hir.expr : !hir.any {
+    %t0 = hir.int_type
+    %t1 = hir.int_type
+    %ti = hir.inferrable
+    %t = hir.unified_call @Adder(%c19, %c23) : (%t0, %t1) -> (%ti) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+    hir.yield %t : !hir.any
+  }
+  %kt = hir.type_of %key
+  %yt = hir.type_of %y
+  %rt = hir.inferrable
+  %r = hir.unified_call @ConstArg(%key, %y) : (%kt, %yt) -> (%rt) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  %rrt = hir.type_of %r
+  hir.unified_return %r : %rrt
+}

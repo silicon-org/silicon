@@ -42,6 +42,8 @@ namespace {
 struct PhaseAnalysis {
   PhaseAnalysis(UnifiedFuncOp funcOp) : funcOp(funcOp) {}
   void analyze();
+  void pullPhases();
+  void refreshPhases();
   int16_t getValuePhase(Value value) const;
   LogicalResult checkCallArgPhases();
 
@@ -50,6 +52,16 @@ struct PhaseAnalysis {
 
   /// Phases for all values: body block args and op results.
   DenseMap<Value, int16_t> valuePhases;
+
+private:
+  /// Try to pull a value (and its transitive dependencies) to an earlier phase.
+  /// Returns true if the pull succeeded.
+  bool pullValueToPhase(Value value, int16_t targetPhase);
+
+  /// Re-compute phases for all ops inside a region, using `floor` as the
+  /// minimum phase. This mirrors the forward analysis logic but with an updated
+  /// floor.
+  void recomputeRegionPhases(Region &region, int16_t floor);
 };
 } // namespace
 
@@ -130,6 +142,171 @@ LogicalResult PhaseAnalysis::checkCallArgPhases() {
     }
   });
   return anyErrors ? failure() : success();
+}
+
+//===----------------------------------------------------------------------===//
+// Phase Back-Propagation
+//
+// After the forward analysis, some values may be assigned a later phase than
+// necessary. When a call requires an argument at an earlier phase, we attempt
+// to "pull" the value (and its transitive dependencies) to the required phase.
+// This succeeds when all operands and captured values are already available at
+// the target phase (e.g., they are floating constants). Block arguments cannot
+// be pulled since their phase is fixed by the function signature.
+//===----------------------------------------------------------------------===//
+
+void PhaseAnalysis::pullPhases() {
+  funcOp.getBody().walk([&](UnifiedCallOp callOp) {
+    for (auto [arg, phase] :
+         llvm::zip(callOp.getArguments(), callOp.getArgPhases())) {
+      int16_t required = static_cast<int16_t>(phase);
+      int16_t available = getValuePhase(arg);
+      if (available > required)
+        pullValueToPhase(arg, required);
+    }
+  });
+}
+
+bool PhaseAnalysis::pullValueToPhase(Value value, int16_t targetPhase) {
+  int16_t current = getValuePhase(value);
+  if (current <= targetPhase)
+    return true;
+
+  // Block arguments have fixed phases; cannot pull.
+  if (isa<BlockArgument>(value))
+    return false;
+
+  auto *defOp = value.getDefiningOp();
+  assert(defOp);
+
+  // Check feasibility: all direct operands must be pullable.
+  for (auto operand : defOp->getOperands()) {
+    if (getValuePhase(operand) > targetPhase &&
+        !pullValueToPhase(operand, targetPhase))
+      return false;
+  }
+
+  // For region-bearing ops (ExprOp, IfOp), check that all values captured
+  // from the enclosing scope are available at the target phase.
+  for (auto &region : defOp->getRegions()) {
+    for (auto &block : region) {
+      for (auto &nestedOp : block) {
+        for (auto operand : nestedOp.getOperands()) {
+          // Only check operands defined outside this op's regions.
+          auto *operandParent = operand.getParentRegion();
+          bool isCapture = true;
+          for (auto &r : defOp->getRegions()) {
+            if (r.isAncestor(operandParent)) {
+              isCapture = false;
+              break;
+            }
+          }
+          if (isCapture) {
+            if (getValuePhase(operand) > targetPhase &&
+                !pullValueToPhase(operand, targetPhase))
+              return false;
+          }
+        }
+      }
+    }
+  }
+
+  // All checks passed — update phases.
+  LLVM_DEBUG({
+    llvm::dbgs() << "- Pulling to phase " << targetPhase << ": ";
+    defOp->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
+    llvm::dbgs() << "\n";
+  });
+  opPhases[defOp] = targetPhase;
+  for (auto result : defOp->getResults())
+    valuePhases[result] = targetPhase;
+
+  // Re-compute phases for nested regions with the new floor.
+  for (auto &region : defOp->getRegions())
+    recomputeRegionPhases(region, targetPhase);
+
+  // Shift arg/result phase attributes on any unified_calls inside the pulled
+  // op's regions. The decomposition code uses these attributes to place
+  // per-phase calls; without shifting, the decomposed calls would be placed at
+  // the original absolute phases, which no longer match the containing op's
+  // phase.
+  int16_t delta = targetPhase - current;
+  if (delta != 0) {
+    for (auto &region : defOp->getRegions()) {
+      region.walk([&](UnifiedCallOp callOp) {
+        auto shiftPhases = [&](ArrayRef<int32_t> phases) {
+          SmallVector<int32_t> shifted;
+          for (auto p : phases)
+            shifted.push_back(p + delta);
+          return shifted;
+        };
+        callOp.setArgPhasesAttr(DenseI32ArrayAttr::get(
+            callOp.getContext(), shiftPhases(callOp.getArgPhases())));
+        callOp.setResultPhasesAttr(DenseI32ArrayAttr::get(
+            callOp.getContext(), shiftPhases(callOp.getResultPhases())));
+      });
+    }
+  }
+
+  return true;
+}
+
+/// Re-run forward phase computation to propagate pulled phases to users. After
+/// pulling a value to an earlier phase, pure ops that depend on it (like
+/// `type_of` or `unify`) may also need earlier phases. This pass takes the min
+/// of the existing and recomputed phase, preserving any pull-induced phases
+/// while propagating their effects forward.
+void PhaseAnalysis::refreshPhases() {
+  funcOp.getBody().walk<WalkOrder::PreOrder>([&](Operation *op) {
+    auto *parentOp = op->getParentOp();
+    int16_t parentPhase = opPhases.at(parentOp);
+    bool isTopLevel = isa<UnifiedFuncOp>(parentOp);
+    int16_t floor = isTopLevel ? INT16_MIN : parentPhase;
+
+    IntegerAttr constAttr;
+    int16_t phase;
+    if (isa<ExprOp>(op) &&
+        (constAttr = op->getAttrOfType<IntegerAttr>("const"))) {
+      phase = parentPhase + constAttr.getInt();
+    } else if (!isa<ExprOp, IfOp>(op) && mlir::isMemoryEffectFree(op)) {
+      phase = floor;
+      for (auto operand : op->getOperands())
+        phase = std::max(phase, getValuePhase(operand));
+    } else {
+      phase = parentPhase;
+    }
+
+    // Keep the earlier of existing (possibly pulled) and recomputed phase.
+    auto &existing = opPhases[op];
+    phase = std::min(existing, phase);
+    existing = phase;
+    for (auto result : op->getResults())
+      valuePhases[result] = phase;
+  });
+}
+
+void PhaseAnalysis::recomputeRegionPhases(Region &region, int16_t floor) {
+  region.walk<WalkOrder::PreOrder>([&](Operation *op) {
+    int16_t parentPhase = opPhases.at(op->getParentOp());
+
+    // ExprOps with a `const` attribute shift relative to their parent.
+    IntegerAttr constAttr;
+    int16_t phase;
+    if (isa<ExprOp>(op) &&
+        (constAttr = op->getAttrOfType<IntegerAttr>("const"))) {
+      phase = parentPhase + constAttr.getInt();
+    } else if (!isa<ExprOp, IfOp>(op) && mlir::isMemoryEffectFree(op)) {
+      phase = floor;
+      for (auto operand : op->getOperands())
+        phase = std::max(phase, getValuePhase(operand));
+    } else {
+      phase = parentPhase;
+    }
+
+    opPhases[op] = phase;
+    for (auto result : op->getResults())
+      valuePhases[result] = phase;
+  });
 }
 
 namespace {
@@ -469,7 +646,7 @@ void PhaseSplitter::run() {
       // Determine the phase that produces the unified_call's actual results.
       // This is the maximum result phase, which may differ from
       // calleeMaxPhase when dyn args extend the callee beyond its results.
-      int16_t maxResultPhase = 0;
+      int16_t maxResultPhase = INT16_MIN;
       for (auto p : resultPhases)
         maxResultPhase = std::max(maxResultPhase, static_cast<int16_t>(p));
 
@@ -1080,6 +1257,8 @@ void SplitPhasesPass::runOnOperation() {
   for (auto op : getOperation().getOps<UnifiedFuncOp>()) {
     auto &[funcOp, analysis] = analyses.emplace_back(op, op);
     analysis.analyze();
+    analysis.pullPhases();
+    analysis.refreshPhases();
     if (failed(analysis.checkCallArgPhases()))
       anyErrors = true;
   }
