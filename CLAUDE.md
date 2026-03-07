@@ -31,6 +31,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - Always use relative paths in bash commands, no absolute paths
 - Use `git <cmd>` instead of `git -C ... <cmd>`
 - Put temporary files into a local tmp/ directory
+- Dialect-specific passes are self-contained: HIRTransforms cannot link against MIR, MIRTransforms cannot link against HIR, but both can link against Base; cross-dialect passes go into lib/Transforms/, and conversions between dialects go into lib/Conversions/.
 
 ## Conventions
 
@@ -47,6 +48,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - Don't refer to line numbers in commit messages
 - Prefer referring to struct, class, and function names instead of C++ file names in commit messages
 - Every behaviour and code path of a pass must be covered in a corresponding lit test; every error message a pass can generate must be covered in an error lit test
+- Address any compiler warnings you encounter, unless they are caused by external code such as CIRCT, MLIR, LLVM
 
 ## Todos
 
