@@ -1,0 +1,20 @@
+// RUN: silc --parse-only --split-input-file --verify-diagnostics %s
+
+// Ensure too many arguments produces an error.
+fn callee(a: int, b: int) -> int { a }
+// expected-error @+1 {{call to `callee` expects 2 arguments, but got 3}}
+fn caller() -> int { callee(1, 2, 3) }
+
+// -----
+
+// Ensure too few arguments produces an error.
+fn callee2(a: int, b: int) -> int { a }
+// expected-error @+1 {{call to `callee2` expects 2 arguments, but got 1}}
+fn caller2() -> int { callee2(1) }
+
+// -----
+
+// Ensure zero arguments when one is expected produces an error.
+fn callee3(a: int) -> int { a }
+// expected-error @+1 {{call to `callee3` expects 1 arguments, but got 0}}
+fn caller3() -> int { callee3() }

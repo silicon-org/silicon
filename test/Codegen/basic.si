@@ -1,10 +1,206 @@
 // RUN: silc --parse-only %s | FileCheck %s
 
-// Ensure we can call functions without result.
+//===----------------------------------------------------------------------===//
+// Unit results and calls without arguments
+//===----------------------------------------------------------------------===//
+
+// Ensure a function without explicit return type gets a unit return.
 // CHECK-LABEL: hir.unified_func private @unitResult1() -> (result: 0)
 // CHECK: [[UNIT:%.+]] = hir.unit_type
 // CHECK-NEXT: hir.unified_signature () -> ([[UNIT]])
+// CHECK: hir.constant_unit
+// CHECK: hir.unified_return
 fn unitResult1() {}
+
+// Ensure calling a unit-returning function produces a `hir.unified_call`.
+// CHECK-LABEL: hir.unified_func private @unitResult2
+// CHECK: hir.inferrable
+// CHECK: hir.unified_call @unitResult1()
 fn unitResult2() {
   unitResult1();
 }
+
+//===----------------------------------------------------------------------===//
+// Number literals
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: hir.unified_func private @numLiteral
+// CHECK: hir.constant_int 42
+fn numLiteral() -> int { 42 }
+
+//===----------------------------------------------------------------------===//
+// Binary operations
+//===----------------------------------------------------------------------===//
+
+// Ensure each binary operator produces the corresponding HIR op, along with
+// `hir.type_of` and `hir.unify` for operand type unification.
+
+// CHECK-LABEL: hir.unified_func private @testAdd
+// CHECK: hir.type_of %a
+// CHECK: hir.type_of %b
+// CHECK: hir.unify
+// CHECK: hir.add %a, %b
+fn testAdd(a: int, b: int) -> int { a + b }
+
+// CHECK-LABEL: hir.unified_func private @testSub
+// CHECK: hir.sub %a, %b
+fn testSub(a: int, b: int) -> int { a - b }
+
+// CHECK-LABEL: hir.unified_func private @testMul
+// CHECK: hir.mul %a, %b
+fn testMul(a: int, b: int) -> int { a * b }
+
+// CHECK-LABEL: hir.unified_func private @testDiv
+// CHECK: hir.div %a, %b
+fn testDiv(a: int, b: int) -> int { a / b }
+
+// CHECK-LABEL: hir.unified_func private @testMod
+// CHECK: hir.mod %a, %b
+fn testMod(a: int, b: int) -> int { a % b }
+
+// CHECK-LABEL: hir.unified_func private @testAnd
+// CHECK: hir.and %a, %b
+fn testAnd(a: int, b: int) -> int { a & b }
+
+// CHECK-LABEL: hir.unified_func private @testOr
+// CHECK: hir.or %a, %b
+fn testOr(a: int, b: int) -> int { a | b }
+
+// CHECK-LABEL: hir.unified_func private @testXor
+// CHECK: hir.xor %a, %b
+fn testXor(a: int, b: int) -> int { a ^ b }
+
+// CHECK-LABEL: hir.unified_func private @testShl
+// CHECK: hir.shl %a, %b
+fn testShl(a: int, b: int) -> int { a << b }
+
+// CHECK-LABEL: hir.unified_func private @testShr
+// CHECK: hir.shr %a, %b
+fn testShr(a: int, b: int) -> int { a >> b }
+
+// CHECK-LABEL: hir.unified_func private @testEq
+// CHECK: hir.eq %a, %b
+fn testEq(a: int, b: int) -> int { a == b }
+
+// CHECK-LABEL: hir.unified_func private @testNeq
+// CHECK: hir.neq %a, %b
+fn testNeq(a: int, b: int) -> int { a != b }
+
+// CHECK-LABEL: hir.unified_func private @testLt
+// CHECK: hir.lt %a, %b
+fn testLt(a: int, b: int) -> int { a < b }
+
+// CHECK-LABEL: hir.unified_func private @testGt
+// CHECK: hir.gt %a, %b
+fn testGt(a: int, b: int) -> int { a > b }
+
+// CHECK-LABEL: hir.unified_func private @testGeq
+// CHECK: hir.geq %a, %b
+fn testGeq(a: int, b: int) -> int { a >= b }
+
+// CHECK-LABEL: hir.unified_func private @testLeq
+// CHECK: hir.leq %a, %b
+fn testLeq(a: int, b: int) -> int { a <= b }
+
+//===----------------------------------------------------------------------===//
+// Operator precedence
+//===----------------------------------------------------------------------===//
+
+// Ensure `*` binds tighter than `+`: `a + b * c` is `add(a, mul(b, c))`.
+// CHECK-LABEL: hir.unified_func private @precMulBeforeAdd
+// CHECK: [[T:%.+]] = hir.mul %b, %c
+// CHECK: hir.add %a, [[T]]
+fn precMulBeforeAdd(a: int, b: int, c: int) -> int { a + b * c }
+
+// Ensure `+` binds tighter than `<<`: `a << b + c` is `shl(a, add(b, c))`.
+// CHECK-LABEL: hir.unified_func private @precAddBeforeShl
+// CHECK: [[T:%.+]] = hir.add %b, %c
+// CHECK: hir.shl %a, [[T]]
+fn precAddBeforeShl(a: int, b: int, c: int) -> int { a << b + c }
+
+// Ensure `<<` binds tighter than `<`: `a < b << c` is `lt(a, shl(b, c))`.
+// CHECK-LABEL: hir.unified_func private @precShlBeforeRel
+// CHECK: [[T:%.+]] = hir.shl %b, %c
+// CHECK: hir.lt %a, [[T]]
+fn precShlBeforeRel(a: int, b: int, c: int) -> int { a < b << c }
+
+// Ensure `<` binds tighter than `==`: `a == b < c` is `eq(a, lt(b, c))`.
+// CHECK-LABEL: hir.unified_func private @precRelBeforeEq
+// CHECK: [[T:%.+]] = hir.lt %b, %c
+// CHECK: hir.eq %a, [[T]]
+fn precRelBeforeEq(a: int, b: int, c: int) -> int { a == b < c }
+
+// Ensure `&` binds tighter than `^`: `a ^ b & c` is `xor(a, and(b, c))`.
+// CHECK-LABEL: hir.unified_func private @precAndBeforeXor
+// CHECK: [[T:%.+]] = hir.and %b, %c
+// CHECK: hir.xor %a, [[T]]
+fn precAndBeforeXor(a: int, b: int, c: int) -> int { a ^ b & c }
+
+// Ensure `^` binds tighter than `|`: `a | b ^ c` is `or(a, xor(b, c))`.
+// CHECK-LABEL: hir.unified_func private @precXorBeforeOr
+// CHECK: [[T:%.+]] = hir.xor %b, %c
+// CHECK: hir.or %a, [[T]]
+fn precXorBeforeOr(a: int, b: int, c: int) -> int { a | b ^ c }
+
+//===----------------------------------------------------------------------===//
+// Left associativity
+//===----------------------------------------------------------------------===//
+
+// Ensure `a - b - c` is `(a - b) - c` (left-associative).
+// CHECK-LABEL: hir.unified_func private @leftAssoc
+// CHECK: [[T:%.+]] = hir.sub %a, %b
+// CHECK: hir.sub [[T]], %c
+fn leftAssoc(a: int, b: int, c: int) -> int { a - b - c }
+
+//===----------------------------------------------------------------------===//
+// Calls with arguments
+//===----------------------------------------------------------------------===//
+
+// Ensure calls with arguments produce a `hir.unified_call` with operands
+// and `hir.type_of` for argument types.
+// CHECK-LABEL: hir.unified_func private @callWithArgs
+// CHECK: [[TX:%.+]] = hir.type_of %x
+// CHECK: [[TY:%.+]] = hir.type_of %y
+// CHECK: hir.inferrable
+// CHECK: hir.unified_call @testAdd(%x, %y) : ([[TX]], [[TY]])
+fn callWithArgs(x: int, y: int) -> int { testAdd(x, y) }
+
+//===----------------------------------------------------------------------===//
+// Let bindings
+//===----------------------------------------------------------------------===//
+
+// Ensure let bindings flow through as SSA values.
+// CHECK-LABEL: hir.unified_func private @letBinding
+// CHECK: [[V:%.+]] = hir.constant_int 42
+// CHECK: hir.unified_return([[V]])
+fn letBinding() -> int {
+  let x: int = 42;
+  x
+}
+
+// Ensure let bindings without a type annotation work the same way.
+// CHECK-LABEL: hir.unified_func private @letBindingNoType
+// CHECK: [[V:%.+]] = hir.constant_int 7
+// CHECK: hir.unified_return([[V]])
+fn letBindingNoType() -> int {
+  let x = 7;
+  x
+}
+
+//===----------------------------------------------------------------------===//
+// Const expressions
+//===----------------------------------------------------------------------===//
+
+// Ensure `const { ... }` with side effects produces `hir.expr` and `hir.yield`.
+// CHECK-LABEL: hir.unified_func private @constExpr
+// CHECK: hir.expr : !hir.any {
+// CHECK:   hir.unified_call @unitResult1()
+// CHECK:   hir.yield
+// CHECK: }
+fn constExpr() -> int { const { unitResult1() } }
+
+// Ensure `const { ... }` without side effects inlines directly (no `hir.expr`).
+// CHECK-LABEL: hir.unified_func private @constExprInlined
+// CHECK-NOT: hir.expr
+// CHECK: hir.constant_int 7
+fn constExprInlined() -> int { const { 7 } }
