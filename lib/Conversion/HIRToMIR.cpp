@@ -367,6 +367,10 @@ static bool isResolvableType(Value typeVal) {
     return isResolvableType(unifyOp.getLhs()) &&
            isResolvableType(unifyOp.getRhs());
 
+  // CoerceTypeOp forwards its input; resolvable if the input is.
+  if (auto coerceOp = dyn_cast<hir::CoerceTypeOp>(defOp))
+    return isResolvableType(coerceOp.getInput());
+
   // ConstantLike op with a TypeAttr (e.g., mir.constant or hir.mir_constant
   // from specialization).
   base::TypeAttr typeAttr;
@@ -469,6 +473,10 @@ static Type resolveHIRType(Value typeVal) {
   // type inference; the convert pattern for UnifyOp will catch mismatches).
   if (auto unifyOp = dyn_cast<hir::UnifyOp>(defOp))
     return resolveHIRType(unifyOp.getLhs());
+
+  // CoerceTypeOp forwards its input value, so resolve the input's type.
+  if (auto coerceOp = dyn_cast<hir::CoerceTypeOp>(defOp))
+    return resolveHIRType(coerceOp.getInput());
 
   // ConstantLike op with a TypeAttr (e.g., mir.constant or hir.mir_constant
   // from specialization).
