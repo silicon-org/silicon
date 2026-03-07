@@ -22,6 +22,26 @@ fn simple(a: int) -> int { 0 }
 // CHECK-NEXT: hir.unified_signature ([[A_TYPE]], [[B_TYPE]], [[C_TYPE]]) -> ([[UNIT_TYPE]])
 fn dependent_types(a: int, const b: int, c: uint<b>) {}
 
+// CHECK-LABEL: hir.unified_func private @dyn_arg
+// CHECK-SAME: (%x: 1) -> (result: 0)
+fn dyn_arg(dyn x: int) -> int { x }
+
+// CHECK-LABEL: hir.unified_func private @dyn_return
+// CHECK-SAME: (%x: 0) -> (result: 1)
+fn dyn_return(x: int) -> dyn int { x }
+
+// CHECK-LABEL: hir.unified_func private @const_dyn_cancel
+// CHECK-SAME: (%x: 0) -> (result: 0)
+fn const_dyn_cancel(const dyn x: int) -> const dyn int { x }
+
+// CHECK-LABEL: hir.unified_func private @dyn_dyn_arg
+// CHECK-SAME: (%x: 2) -> (result: 0)
+fn dyn_dyn_arg(dyn dyn x: int) -> int { x }
+
+// CHECK-LABEL: hir.unified_func private @mixed_args
+// CHECK-SAME: (%a: -1, %b: 1) -> (result: 0)
+fn mixed_args(const a: int, dyn b: int) -> int { a }
+
 // CHECK: hir.unified_func private @private_func() -> (result: 0)
 fn private_func() {}
 
