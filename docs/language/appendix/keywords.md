@@ -12,8 +12,8 @@ This appendix provides a quick reference for all keywords, organized by whether 
 
 The following keywords currently have functionality in the Silicon language.
 
-- **`const`**: Mark a function argument or result as computed in an earlier phase earlier and being constant now, or wrap an expression in a `const { ... }` block to evaluate before the surrounding code runs.
-- **`dyn`**: Mark a function argument or result as computed in a later phase and being unknown now, or wrap an expression in a `dyn { ... }` block to evaluate after the surrounding code runs.
+- **`const`**: Mark a function argument or result as computed in an earlier phase and being constant now, wrap an expression in a `const { ... }` block to evaluate before the surrounding code runs, or place before `fn` to shift all phases of a function earlier. Multiple modifiers stack: `const const fn` shifts by -2.
+- **`dyn`**: Mark a function argument or result as computed in a later phase and being unknown now, wrap an expression in a `dyn { ... }` block to evaluate after the surrounding code runs, or place before `fn` to shift all phases of a function later. Modifiers can be mixed: `const dyn fn` cancels out to a net shift of 0.
 - **`else`**: Define a fallback branch in an `if` expression.
 - **`fn`**: Declare a function.
 - **`if`**: Branch conditionally based on an expression.
