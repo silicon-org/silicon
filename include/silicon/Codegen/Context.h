@@ -38,8 +38,8 @@ struct Context {
   LogicalResult convertStmt(ast::Stmt &stmt);
 
   /// Execute a function with the builder positioned inside an expression
-  /// wrapper op. If \p phaseShift is non-zero, sets a `const` attribute on the
-  /// resulting `ExprOp` to indicate a phase shift relative to the parent.
+  /// wrapper op. The \p phaseShift is set on the resulting `ExprOp` to indicate
+  /// a phase shift relative to the parent.
   Value withinExpr(llvm::function_ref<Value()> fn, int phaseShift = 0);
 };
 

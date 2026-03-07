@@ -53,7 +53,7 @@ hir.unified_func @PullFails(%x: 0, %y: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.unified_signature (%0, %0) -> (%0)
 } {
-  %val = hir.expr : !hir.any {
+  %val = hir.expr 0 : !hir.any {
     %t0 = hir.type_of %x
     %t1 = hir.type_of %y
     %t = hir.unify %t0, %t1

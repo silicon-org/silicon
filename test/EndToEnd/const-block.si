@@ -8,8 +8,8 @@
 //
 // XFAIL reason: SplitPhases does not yet handle ExprOp regions that contain
 // calls, because the call and its type ops span different phases and the
-// region isolation check fails. The codegen correctly emits `const = -1` on the
-// ExprOp, but the downstream pass needs further work.
+// region isolation check fails. The codegen correctly emits a phaseShift of -1
+// on the ExprOp, but the downstream pass needs further work.
 
 // CHECK: mir.evaluated_func {{.*}}@main
 fn noargs() -> int { 42 }

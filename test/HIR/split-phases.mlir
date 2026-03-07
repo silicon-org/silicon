@@ -72,7 +72,7 @@ hir.unified_func @TwoUnrelatedPhases() -> () {
   hir.unified_signature () -> ()
 } {
   func.call @dummyB() : () -> ()
-  hir.expr attributes {const = -1} {
+  hir.expr -1 {
     func.call @dummyA() : () -> ()
     hir.yield
   }
@@ -103,7 +103,7 @@ hir.unified_func @ValueUseAcrossPhases() -> () {
   hir.unified_signature () -> ()
 } {
   %0 = hir.constant_int 42
-  %1 = hir.expr : !hir.any attributes {const = -1} {
+  %1 = hir.expr -1 : !hir.any {
     %3 = hir.constant_int 1337
     hir.yield %3 : !hir.any
   }
@@ -353,7 +353,7 @@ hir.unified_func @LeadingExternal(%a: -2, %c: 0) -> (result: 0) {
   %ta = hir.type_of %a
   %tc = hir.type_of %c
   %t = hir.unify %ta, %tc
-  hir.expr attributes {const = -1} {
+  hir.expr -1 {
     hir.yield
   }
   %0 = hir.add %a, %c : %t
@@ -410,7 +410,7 @@ hir.unified_func public @PublicVis() -> () {
   hir.unified_signature () -> ()
 } {
   func.call @dummyB() : () -> ()
-  hir.expr attributes {const = -1} {
+  hir.expr -1 {
     func.call @dummyA() : () -> ()
     hir.yield
   }
@@ -522,7 +522,7 @@ hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
 } {
   %c19 = hir.constant_int 19
   %c23 = hir.constant_int 23
-  %key = hir.expr : !hir.any {
+  %key = hir.expr 0 : !hir.any {
     %t0 = hir.int_type
     %t1 = hir.int_type
     %ti = hir.inferrable
@@ -563,8 +563,8 @@ hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
 hir.unified_func @NestedExpr() -> () {
   hir.unified_signature () -> ()
 } {
-  hir.expr {
-    hir.expr attributes {const = -1} {
+  hir.expr 0 {
+    hir.expr -1 {
       func.call @dummyA() : () -> ()
       hir.yield
     }
@@ -599,8 +599,8 @@ hir.unified_func @NestedExpr() -> () {
 hir.unified_func @NestedExprValue() -> () {
   hir.unified_signature () -> ()
 } {
-  hir.expr {
-    %0 = hir.expr : !hir.any attributes {const = -1} {
+  hir.expr 0 {
+    %0 = hir.expr -1 : !hir.any {
       %1 = hir.constant_int 100
       hir.yield %1 : !hir.any
     }

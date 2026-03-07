@@ -98,10 +98,18 @@ def ExprOp : HIROp<"expr", [
   RecursiveMemoryEffects,
 ]> {
   let summary = "Region to execute as a single expression";
+  let description = [{
+    Groups a sequence of ops into a single expression that yields results.
+    The `phaseShift` attribute indicates a phase shift relative to the parent
+    scope: negative values shift towards earlier (more constant) phases,
+    positive values shift towards later (more dynamic) phases, and zero
+    indicates no shift.
+  }];
+  let arguments = (ins SI32Attr:$phaseShift);
   let results = (outs Variadic<AnyType>:$results);
   let regions = (region MinSizedRegion<1>:$body);
   let assemblyFormat = [{
-    (`:` type($results)^)? attr-dict-with-keyword $body
+    $phaseShift (`:` type($results)^)? attr-dict-with-keyword $body
   }];
 }
 

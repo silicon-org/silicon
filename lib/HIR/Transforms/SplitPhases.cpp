@@ -33,8 +33,8 @@ namespace {
 /// Compute the earliest available phase for each op and value in a unified
 /// function. This uses a forward PreOrder walk: each op's phase is determined
 /// by its parent's phase and its operands' phases (for pure ops), or just the
-/// parent's phase (for side-effecting ops). ExprOps with a `const` attribute
-/// shift relative to their parent.
+/// parent's phase (for side-effecting ops). ExprOps with a non-zero
+/// `phaseShift` attribute shift relative to their parent.
 ///
 /// Constants and other pure ops with no operands get INT16_MIN, meaning they
 /// float to whatever phase needs them. This is clipped to minPhase during
@@ -91,19 +91,18 @@ void PhaseAnalysis::analyze() {
     bool isTopLevel = isa<UnifiedFuncOp>(parentOp);
     int16_t floor = isTopLevel ? INT16_MIN : parentPhase;
 
-    // ExprOps with a `const` attribute shift relative to their parent.
-    IntegerAttr constAttr;
+    // ExprOps with a non-zero phaseShift shift relative to their parent.
     int16_t phase;
-    if (isa<ExprOp>(op) &&
-        (constAttr = op->getAttrOfType<IntegerAttr>("const"))) {
-      phase = parentPhase + constAttr.getInt();
+    if (auto exprOp = dyn_cast<ExprOp>(op); exprOp && exprOp.getPhaseShift()) {
+      phase = parentPhase + exprOp.getPhaseShift();
     } else if (!isa<ExprOp, IfOp>(op) && mlir::isMemoryEffectFree(op)) {
       // Pure ops: phase is max of floor and all operand phases.
       phase = floor;
       for (auto operand : op->getOperands())
         phase = std::max(phase, getValuePhase(operand));
     } else {
-      // Side-effecting ops (and ExprOps without const): inherit parent phase.
+      // Side-effecting ops (and ExprOps without phaseShift): inherit parent
+      // phase.
       phase = parentPhase;
     }
 
@@ -263,11 +262,9 @@ void PhaseAnalysis::refreshPhases() {
     bool isTopLevel = isa<UnifiedFuncOp>(parentOp);
     int16_t floor = isTopLevel ? INT16_MIN : parentPhase;
 
-    IntegerAttr constAttr;
     int16_t phase;
-    if (isa<ExprOp>(op) &&
-        (constAttr = op->getAttrOfType<IntegerAttr>("const"))) {
-      phase = parentPhase + constAttr.getInt();
+    if (auto exprOp = dyn_cast<ExprOp>(op); exprOp && exprOp.getPhaseShift()) {
+      phase = parentPhase + exprOp.getPhaseShift();
     } else if (!isa<ExprOp, IfOp>(op) && mlir::isMemoryEffectFree(op)) {
       phase = floor;
       for (auto operand : op->getOperands())
@@ -289,12 +286,10 @@ void PhaseAnalysis::recomputeRegionPhases(Region &region, int16_t floor) {
   region.walk<WalkOrder::PreOrder>([&](Operation *op) {
     int16_t parentPhase = opPhases.at(op->getParentOp());
 
-    // ExprOps with a `const` attribute shift relative to their parent.
-    IntegerAttr constAttr;
+    // ExprOps with a non-zero phaseShift shift relative to their parent.
     int16_t phase;
-    if (isa<ExprOp>(op) &&
-        (constAttr = op->getAttrOfType<IntegerAttr>("const"))) {
-      phase = parentPhase + constAttr.getInt();
+    if (auto exprOp = dyn_cast<ExprOp>(op); exprOp && exprOp.getPhaseShift()) {
+      phase = parentPhase + exprOp.getPhaseShift();
     } else if (!isa<ExprOp, IfOp>(op) && mlir::isMemoryEffectFree(op)) {
       phase = floor;
       for (auto operand : op->getOperands())

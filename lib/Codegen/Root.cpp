@@ -113,10 +113,8 @@ Value Context::withinExpr(llvm::function_ref<Value()> fn, int phaseShift) {
   // the region in an expr op.
   hir::YieldOp::create(builder, value.getLoc(), value);
   builder.restoreInsertionPoint(ip);
-  auto op = hir::ExprOp::create(builder, value.getLoc(), value.getType());
-  if (phaseShift != 0)
-    op->setAttr("const",
-                builder.getIntegerAttr(builder.getIntegerType(32), phaseShift));
+  auto op = hir::ExprOp::create(builder, value.getLoc(), value.getType(),
+                                phaseShift);
   op.getRegion().takeBody(region);
   return op.getResult(0);
 }

@@ -197,9 +197,9 @@ fn letBindingNoType() -> int {
 //===----------------------------------------------------------------------===//
 
 // Ensure `const { ... }` with side effects produces `hir.expr` with a
-// `const = -1` phase shift attribute and `hir.yield`.
+// phase shift of -1 and `hir.yield`.
 // CHECK-LABEL: hir.unified_func private @constExpr
-// CHECK: hir.expr : !hir.any attributes {const = -1 : i32} {
+// CHECK: hir.expr -1 : !hir.any {
 // CHECK:   hir.unified_call @unitResult1()
 // CHECK:   hir.yield
 // CHECK: }
@@ -216,9 +216,9 @@ fn constExprInlined() -> int { const { 7 } }
 //===----------------------------------------------------------------------===//
 
 // Ensure `dyn { ... }` with side effects produces `hir.expr` with a
-// `const = 1` phase shift attribute and `hir.yield`.
+// phase shift of +1 and `hir.yield`.
 // CHECK-LABEL: hir.unified_func private @dynExpr
-// CHECK: hir.expr : !hir.any attributes {const = 1 : i32} {
+// CHECK: hir.expr 1 : !hir.any {
 // CHECK:   hir.unified_call @unitResult1()
 // CHECK:   hir.yield
 // CHECK: }
