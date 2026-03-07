@@ -19,6 +19,7 @@
 #include "circt/Support/ConversionPatternSet.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -475,9 +476,13 @@ static Type resolveHIRType(Value typeVal) {
 namespace {
 class FuncOpConversion : public OpConversionPattern<hir::FuncOp> {
 public:
+  using ArgTypeMap = DenseMap<StringAttr, SmallVector<Type>>;
+
   FuncOpConversion(TypeConverter &converter, MLIRContext *ctx,
-                   const DenseSet<Operation *> *funcsToLower)
-      : OpConversionPattern(converter, ctx), funcsToLower(funcsToLower) {}
+                   const DenseSet<Operation *> *funcsToLower,
+                   const ArgTypeMap *sigArgTypes)
+      : OpConversionPattern(converter, ctx), funcsToLower(funcsToLower),
+        sigArgTypes(sigArgTypes) {}
 
   LogicalResult
   matchAndRewrite(hir::FuncOp func, OpAdaptor adaptor,
@@ -488,9 +493,17 @@ public:
 
     auto &entryBlock = func.getBody().front();
 
-    // Determine argument types from coerce_type ops on block args.
+    // Determine argument types from coerce_type ops on block args, falling
+    // back to the split_func signature when coerce_type has been DCE'd (e.g.
+    // for unused dyn arguments).
     SmallVector<Type> argTypes;
-    for (auto arg : entryBlock.getArguments()) {
+    const SmallVector<Type> *fallbackTypes = nullptr;
+    if (sigArgTypes) {
+      auto it = sigArgTypes->find(func.getSymNameAttr());
+      if (it != sigArgTypes->end())
+        fallbackTypes = &it->second;
+    }
+    for (auto [idx, arg] : llvm::enumerate(entryBlock.getArguments())) {
       Type argType;
       for (auto *user : arg.getUsers()) {
         if (auto coerce = dyn_cast<hir::CoerceTypeOp>(user)) {
@@ -498,6 +511,8 @@ public:
           break;
         }
       }
+      if (!argType && fallbackTypes && idx < fallbackTypes->size())
+        argType = (*fallbackTypes)[idx];
       if (!argType)
         return emitBug(func.getLoc())
                << "block argument type could not be determined during "
@@ -536,11 +551,54 @@ public:
 
 private:
   const DenseSet<Operation *> *funcsToLower;
+  const ArgTypeMap *sigArgTypes;
 };
 } // namespace
 
 void HIRToMIRPass::runOnOperation() {
   auto moduleOp = getOperation();
+
+  // Build a fallback map from split_func signatures so that block args
+  // whose coerce_type was DCE'd (e.g. unused dyn args) can still resolve
+  // their types during lowering.
+  FuncOpConversion::ArgTypeMap sigArgTypes;
+  for (auto splitFunc : moduleOp.getOps<hir::SplitFuncOp>()) {
+    auto sigOp = splitFunc.getSignatureOp();
+    auto typeOfArgs = sigOp.getTypeOfArgs();
+    auto argPhases = splitFunc.getArgPhases();
+    auto phaseNumbers = splitFunc.getPhaseNumbers();
+    auto phaseFuncRefs = splitFunc.getPhaseFuncs();
+
+    // Build per-phase arg type lists, resolving HIR type values to MIR types.
+    DenseMap<int16_t, SmallVector<Type>> phaseArgTypes;
+    for (auto [typeVal, phase] : llvm::zip(typeOfArgs, argPhases))
+      phaseArgTypes[static_cast<int16_t>(phase)].push_back(
+          resolveHIRType(typeVal));
+
+    // Map each phase func name to its arg types. MultiphaseFuncOps expand to
+    // their sub-functions; the first sub-function gets the args.
+    int16_t phase =
+        phaseNumbers.empty() ? 0 : static_cast<int16_t>(phaseNumbers.front());
+    for (auto [entryPhase, funcRef] : llvm::zip(phaseNumbers, phaseFuncRefs)) {
+      auto name = cast<FlatSymbolRefAttr>(funcRef).getValue();
+      if (auto mpFunc =
+              SymbolTable::lookupNearestSymbolFrom<hir::MultiphaseFuncOp>(
+                  splitFunc, StringAttr::get(moduleOp.getContext(), name))) {
+        for (auto subRef : mpFunc.getPhaseFuncs()) {
+          auto subName = cast<FlatSymbolRefAttr>(subRef).getValue();
+          auto subNameAttr = StringAttr::get(moduleOp.getContext(), subName);
+          if (auto it = phaseArgTypes.find(phase); it != phaseArgTypes.end())
+            sigArgTypes[subNameAttr] = it->second;
+          ++phase;
+        }
+      } else {
+        auto nameAttr = StringAttr::get(moduleOp.getContext(), name);
+        if (auto it = phaseArgTypes.find(phase); it != phaseArgTypes.end())
+          sigArgTypes[nameAttr] = it->second;
+        ++phase;
+      }
+    }
+  }
 
   // Pre-compute which functions are ready for lowering.
   DenseSet<Operation *> funcsToLower;
@@ -611,7 +669,7 @@ void HIRToMIRPass::runOnOperation() {
   // # Patterns
   ConversionPatternSet patterns(&getContext(), converter);
   patterns.add(std::make_unique<FuncOpConversion>(converter, &getContext(),
-                                                  &funcsToLower));
+                                                  &funcsToLower, &sigArgTypes));
   patterns.add<hir::ConstantIntOp>(convert);
   patterns.add<hir::ConstantUnitOp>(convert);
   patterns.add<hir::IntTypeOp>(convert);

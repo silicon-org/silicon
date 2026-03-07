@@ -460,9 +460,25 @@ void PhaseSplitter::run() {
         phaseTypeOfArgs[static_cast<int16_t>(phase)].push_back(type);
       }
 
+      // Determine the phase that produces the unified_call's actual results.
+      // This is the maximum result phase, which may differ from
+      // calleeMaxPhase when dyn args extend the callee beyond its results.
+      int16_t maxResultPhase = 0;
+      for (auto p : resultPhases)
+        maxResultPhase = std::max(maxResultPhase, static_cast<int16_t>(p));
+
+      // Collect which result indices belong to which phase.
+      DenseSet<int16_t> resultPhaseSet;
+      for (auto p : resultPhases)
+        resultPhaseSet.insert(static_cast<int16_t>(p));
+
       // Chain calls from earliest phase to latest. Each call gets its own
       // phase's arguments plus all results from the previous phase's call.
+      // The call at the result phase produces the unified_call's original
+      // result types; all other phases use opaque types derived from the
+      // split function's return op.
       SmallVector<Value> prevResults;
+      SmallVector<Value> unifiedCallReplacements;
       for (auto &[phase, splitFunc] : splitFuncs) {
         SmallVector<Value> callArgs(phaseArgs[phase]);
         SmallVector<Value> callTypeOfArgs(phaseTypeOfArgs[phase]);
@@ -476,21 +492,27 @@ void PhaseSplitter::run() {
           callTypeOfArgs.push_back(opaqueType.getResult());
         }
 
-        // The final phase uses the original unified_call's result types.
-        // Intermediate phases determine their result count from the split
+        // The result phase uses the original unified_call's result types.
+        // All other phases determine their result count from the split
         // function's return op.
-        bool isFinal = (phase == calleeMaxPhase);
+        bool isResultPhase = (phase == maxResultPhase);
         SmallVector<Value> callTypeOfResults;
         SmallVector<Type> resultTypes;
-        if (isFinal) {
+        if (isResultPhase) {
           callTypeOfResults.append(callOp.getTypeOfResults().begin(),
                                    callOp.getTypeOfResults().end());
           resultTypes.append(callOp.getResultTypes().begin(),
                              callOp.getResultTypes().end());
-        } else {
+        }
+
+        // For non-result phases (and result phases that also forward context
+        // to later phases), add opaque result types for the split function's
+        // return values beyond the unified_call's own results.
+        if (!isResultPhase || phase != calleeMaxPhase) {
           auto retOp =
               cast<ReturnOp>(splitFunc.getBody().front().getTerminator());
-          for (unsigned i = 0; i < retOp.getValues().size(); ++i) {
+          unsigned startIdx = isResultPhase ? callOp.getNumResults() : 0;
+          for (unsigned i = startIdx; i < retOp.getValues().size(); ++i) {
             auto opaqueType = OpaqueTypeOp::create(callBuilder, loc);
             analysis.opPhases[opaqueType] = phase;
             analysis.valuePhases[opaqueType.getResult()] = phase;
@@ -507,6 +529,13 @@ void PhaseSplitter::run() {
         for (auto result : call.getResults())
           analysis.valuePhases[result] = phase;
         prevResults.assign(call.getResults().begin(), call.getResults().end());
+
+        // Capture the results from the result phase as replacements for the
+        // original unified_call.
+        if (isResultPhase) {
+          for (unsigned i = 0; i < callOp.getNumResults(); ++i)
+            unifiedCallReplacements.push_back(call.getResult(i));
+        }
       }
 
       // Update any return values that reference the old unified call's results.
@@ -516,11 +545,11 @@ void PhaseSplitter::run() {
       for (auto &split : splits)
         for (auto &rv : split.returnValues)
           for (auto [oldResult, newResult] :
-               llvm::zip(callOp.getResults(), prevResults))
+               llvm::zip(callOp.getResults(), unifiedCallReplacements))
             if (rv == oldResult)
               rv = newResult;
 
-      callOp.replaceAllUsesWith(prevResults);
+      callOp.replaceAllUsesWith(unifiedCallReplacements);
       callOp.erase();
     }
   }
@@ -549,8 +578,10 @@ void PhaseSplitter::run() {
       opPhase = minPhase;
     if (opPhase != phase) {
       LLVM_DEBUG({
-        llvm::dbgs() << "- Moving to phase " << opPhase << ": ";
-        op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
+        llvm::dbgs() << "- Moving to phase " << opPhase << ": "
+                     << op->getName();
+        if (op->getNumResults() > 0)
+          llvm::dbgs() << " (" << op->getNumResults() << " results)";
         llvm::dbgs() << "\n";
       });
       auto &split = splits[opPhase - minPhase];
@@ -561,11 +592,7 @@ void PhaseSplitter::run() {
     // If this is an `ExprOp`, push its nested operations onto the worklist,
     // since those might move to a different phase as well.
     if (auto exprOp = dyn_cast<ExprOp>(op)) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "- Descending into ";
-        op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-        llvm::dbgs() << "\n";
-      });
+      LLVM_DEBUG(llvm::dbgs() << "- Descending into " << op->getName() << "\n");
       for (auto &block : llvm::reverse(exprOp.getBody()))
         worklist.push_back({opPhase, block.begin(), block.end()});
     } else {
@@ -721,9 +748,8 @@ void PhaseSplitter::run() {
             if (defOp && mlir::isMemoryEffectFree(defOp) &&
                 defOp->getNumOperands() == 0) {
               LLVM_DEBUG({
-                llvm::dbgs() << "- Cloning into phase " << phase << ": ";
-                defOp->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-                llvm::dbgs() << "\n";
+                llvm::dbgs() << "- Cloning into phase " << phase << ": "
+                             << defOp->getName() << "\n";
               });
               auto &block = split.funcOp.getBody().front();
               OpBuilder cloneBuilder(&block, block.begin());
@@ -733,10 +759,9 @@ void PhaseSplitter::run() {
             } else {
               // Add an argument to the current split function.
               LLVM_DEBUG({
-                llvm::dbgs() << "- Creating arg in phase " << phase << " for ";
-                operand.get().print(llvm::dbgs(),
-                                    OpPrintingFlags().skipRegions());
-                llvm::dbgs() << "\n";
+                llvm::dbgs()
+                    << "- Creating arg in phase " << phase << " for value from "
+                    << operand.get().getDefiningOp()->getName() << "\n";
               });
               value = split.funcOp.getBody().front().addArgument(
                   operand.get().getType(), operand.get().getLoc());
