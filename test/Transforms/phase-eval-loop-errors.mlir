@@ -20,6 +20,7 @@ module {
     0: @good.0
   ]
 
+  // expected-note @below {{hir.func @stuck.0 could not be lowered to MIR}}
   hir.func private @stuck.0(%T) -> (result) {
     %0 = hir.constant_int 0
     %1 = hir.coerce_type %0, %T

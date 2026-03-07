@@ -113,8 +113,25 @@ void PhaseEvalLoopPass::runOnOperation() {
 
     if (newNumMultiphase == numMultiphase && newNumHIRFuncs == numHIRFuncs &&
         i > 0) {
-      emitBug(getOperation().getLoc())
-          << "phase eval loop made no progress in iteration " << i;
+      auto diag = emitBug(getOperation().getLoc())
+                  << "phase eval loop made no progress in iteration " << i;
+
+      // List remaining HIR funcs that couldn't be lowered.
+      getOperation()->walk([&](hir::FuncOp func) {
+        bool hasOpaqueUnpack = false;
+        func.walk([&](hir::OpaqueUnpackOp) { hasOpaqueUnpack = true; });
+        if (hasOpaqueUnpack)
+          return;
+        diag.attachNote(func.getLoc()) << "hir.func @" << func.getSymName()
+                                       << " could not be lowered to MIR";
+      });
+
+      getOperation()->walk([&](hir::MultiphaseFuncOp mpFunc) {
+        diag.attachNote(mpFunc.getLoc())
+            << "hir.multiphase_func @" << mpFunc.getSymName()
+            << " still pending";
+      });
+
       return signalPassFailure();
     }
   }
