@@ -154,7 +154,7 @@ def TypeOfOp : HIROp<"type_of", [Pure]> {
   let hasCanonicalizeMethod = 1;
 }
 
-def CoerceTypeOp : HIROp<"coerce_type", []> {
+def CoerceTypeOp : HIROp<"coerce_type", [Pure]> {
   let summary = "Coerce a value to a given type";
   let arguments = (ins AnyHIRType:$input, AnyHIRType:$typeOperand);
   let results = (outs AnyHIRType:$result);

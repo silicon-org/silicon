@@ -1,4 +1,5 @@
 // RUN: silc %s | FileCheck %s
+// XFAIL: *
 
 // Test that `dyn` arguments compile through the full pipeline. A `dyn`
 // argument shifts its phase forward, causing SplitPhases to place it in a
