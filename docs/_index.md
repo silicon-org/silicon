@@ -9,5 +9,7 @@ The compiler is built on top of [CIRCT](https://circt.llvm.org/), [MLIR](https:/
 This documentation is organized into a few distinct parts:
 
 - [Getting Started]({{< relref "getting-started" >}}) -- clone, build, and explore the project
+- [Language]({{< relref "language" >}}) -- a guide to the Silicon language
+- [Examples]({{< relref "examples" >}}) -- annotated Silicon examples
 - [Design]({{< relref "design" >}}) -- goals and architecture of the language and compiler
 - [Internals]({{< relref "internals" >}}) -- compiler IR dialects and transformation passes
