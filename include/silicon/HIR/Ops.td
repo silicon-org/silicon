@@ -270,7 +270,7 @@ def ReturnOp : HIROp<"return", [
     Variadic<AnyHIRType>:$typeOfValues
   );
   let assemblyFormat = [{
-    (`(` $values^ `)` `:` `(` $typeOfValues `)`)? attr-dict
+    ($values^ `:` $typeOfValues)? attr-dict
   }];
 }
 
@@ -365,7 +365,7 @@ def UnifiedReturnOp : HIROp<"unified_return", [
     Variadic<AnyHIRType>:$typeOfValues
   );
   let assemblyFormat = [{
-    (`(` $values^ `)` `:` `(` $typeOfValues `)`)? attr-dict
+    ($values^ `:` $typeOfValues)? attr-dict
   }];
 }
 

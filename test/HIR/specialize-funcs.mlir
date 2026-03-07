@@ -8,7 +8,7 @@
 hir.func private @BasicChain.0b(%x, %ctx) -> (result) {
   %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %2 = hir.add %x, %1 : %0
-  hir.return(%2) : (%0)
+  hir.return %2 : %0
 }
 
 mir.evaluated_func @BasicChain.0a [#si.opaque<[#si.type<!si.int>, #si.int<42>]> : !si.opaque]
@@ -45,13 +45,13 @@ hir.func private @ThreePhase.0b(%ctx) -> (ctx) {
   %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %2 = hir.opaque_pack(%0, %1)
   %3 = hir.opaque_type
-  hir.return(%2) : (%3)
+  hir.return %2 : %3
 }
 
 hir.func private @ThreePhase.0c(%y, %ctx) -> (result) {
   %0:2 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %1 = hir.add %y, %0#1 : %0#0
-  hir.return(%1) : (%0#0)
+  hir.return %1 : %0#0
 }
 
 mir.evaluated_func @ThreePhase.0a [#si.opaque<[#si.type<!si.int>, #si.int<10>]> : !si.opaque]
@@ -88,7 +88,7 @@ hir.multiphase_func @ThreePhase.0(last y) -> (result) [
 
 hir.func private @NoUnpack.0b(%x, %ctx) -> (result) {
   %0 = hir.coerce_type %ctx, %x
-  hir.return(%0) : (%x)
+  hir.return %0 : %x
 }
 
 mir.evaluated_func @NoUnpack.0a [#si.opaque<[#si.int<99>]> : !si.opaque]
@@ -124,7 +124,7 @@ hir.multiphase_func @NoUnpack.0(last x) -> (result) [
 hir.func private @callee(%a, %ctx) -> (result) {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.add %a, %0 : %0
-  hir.return(%1) : (%0)
+  hir.return %1 : %0
 }
 
 // This function calls @callee with an hir.mir_constant opaque as the last arg.
@@ -134,7 +134,7 @@ hir.func private @TransSpec.0b(%x, %ctx) -> (result) {
   %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %opaque = hir.mir_constant #si.opaque<[#si.int<7>]> : !si.opaque
   %3 = hir.call @callee(%x, %opaque) : (%0, %0) -> (%0)
-  hir.return(%3) : (%0)
+  hir.return %3 : %0
 }
 
 mir.evaluated_func @TransSpec.0a [#si.opaque<[#si.type<!si.int>, #si.int<5>]> : !si.opaque]
@@ -193,7 +193,7 @@ hir.multiphase_func @SingleSub.0() -> () [
 hir.func private @callee2(%a, %ctx) -> (result) {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.add %a, %0 : %0
-  hir.return(%1) : (%0)
+  hir.return %1 : %0
 }
 
 hir.func private @TwoCalls.0b(%x, %ctx) -> (result) {
@@ -202,7 +202,7 @@ hir.func private @TwoCalls.0b(%x, %ctx) -> (result) {
   %opaqueB = hir.mir_constant #si.opaque<[#si.int<8>]> : !si.opaque
   %3 = hir.call @callee2(%x, %opaqueA) : (%0, %0) -> (%0)
   %4 = hir.call @callee2(%x, %opaqueB) : (%0, %0) -> (%0)
-  hir.return(%4) : (%0)
+  hir.return %4 : %0
 }
 
 mir.evaluated_func @TwoCalls.0a [#si.opaque<[#si.type<!si.int>, #si.int<5>]> : !si.opaque]
@@ -231,7 +231,7 @@ hir.multiphase_func @TwoCalls.0(last x) -> (result) [
 hir.func private @callee3(%a, %ctx) -> (result) {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.add %a, %0 : %0
-  hir.return(%1) : (%0)
+  hir.return %1 : %0
 }
 
 hir.func private @Dedup.0b(%x1, %x2, %ctx) -> (result) {
@@ -240,7 +240,7 @@ hir.func private @Dedup.0b(%x1, %x2, %ctx) -> (result) {
   %opaqueB = hir.mir_constant #si.opaque<[#si.int<7>]> : !si.opaque
   %3 = hir.call @callee3(%x1, %opaqueA) : (%0, %0) -> (%0)
   %4 = hir.call @callee3(%x2, %opaqueB) : (%0, %0) -> (%0)
-  hir.return(%4) : (%0)
+  hir.return %4 : %0
 }
 
 mir.evaluated_func @Dedup.0a [#si.opaque<[#si.type<!si.int>, #si.int<5>]> : !si.opaque]

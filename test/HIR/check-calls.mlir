@@ -35,9 +35,9 @@ hir.unified_func @SimpleBar(%a: 0) -> (result: 0) {
   // CHECK: [[TYPEOF:%.+]] = hir.type_of [[COERCED]]
   // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
   // CHECK: [[UNI:%.+]] = hir.unify [[TYPEOF]], [[RET_TY]]
-  // CHECK: hir.unified_return([[COERCED]]) : ([[UNI]])
+  // CHECK: hir.unified_return [[COERCED]] : [[UNI]]
   %t0 = hir.type_of %a
-  hir.unified_return (%a) : (%t0)
+  hir.unified_return %a : %t0
 }
 
 //===----------------------------------------------------------------------===//
@@ -68,8 +68,8 @@ hir.unified_func @Identity(%T: -1, %x: 0) -> (result: 0) {
   // CHECK: [[CT:%.+]] = hir.coerce_type %T, [[TT]]
   // CHECK: [[CX:%.+]] = hir.coerce_type %x, %T
   // CHECK: [[UNI:%.+]] = hir.unify [[CT]], %T
-  // CHECK: hir.unified_return([[CX]]) : ([[UNI]])
-  hir.unified_return (%x) : (%T)
+  // CHECK: hir.unified_return [[CX]] : [[UNI]]
+  hir.unified_return %x : %T
 }
 
 //===----------------------------------------------------------------------===//
@@ -100,7 +100,7 @@ hir.unified_func @NestedBar(%a: 0) -> (result: 0) {
   // CHECK: [[TYPEOF:%.+]] = hir.type_of [[COERCED]]
   // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
   // CHECK: [[UNI:%.+]] = hir.unify [[TYPEOF]], [[RET_TY]]
-  // CHECK: hir.unified_return([[COERCED]]) : ([[UNI]])
+  // CHECK: hir.unified_return [[COERCED]] : [[UNI]]
   %t0 = hir.type_of %a
-  hir.unified_return (%a) : (%t0)
+  hir.unified_return %a : %t0
 }

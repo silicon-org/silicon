@@ -6,7 +6,7 @@
 
 hir.func private @BadCount.0b(%ctx) -> (result) {
   %0 = hir.opaque_unpack %ctx : !hir.any
-  hir.return(%0) : (%0)
+  hir.return %0 : %0
 }
 
 // expected-error @below {{compiler bug: evaluated_func has 2 results, expected 1 (opaque pack)}}
@@ -32,7 +32,7 @@ hir.multiphase_func @BadCount.0() -> (result) [
 
 hir.func private @NotOpaque.0b(%ctx) -> (result) {
   %0 = hir.opaque_unpack %ctx : !hir.any
-  hir.return(%0) : (%0)
+  hir.return %0 : %0
 }
 
 // expected-error @below {{compiler bug: evaluated_func result is not an opaque attribute}}

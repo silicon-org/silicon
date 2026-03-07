@@ -15,7 +15,7 @@ hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
   %t1 = hir.unify %t0b, %tc
   %1 = hir.add %0, %c : %t1
   %t1b = hir.type_of %1
-  hir.unified_return (%1) : (%t1b)
+  hir.unified_return %1 : %t1b
 }
 
 hir.unified_func @BadCaller(%x: 0, %y: 0, %z: 0) -> (result: 0) {
@@ -30,5 +30,5 @@ hir.unified_func @BadCaller(%x: 0, %y: 0, %z: 0) -> (result: 0) {
   // expected-error @below {{call argument requires phase -1 but value is only available at phase 0}}
   %r = hir.unified_call @ThreePhase(%x, %y, %z) : (%t0, %t1, %t2) -> (%t3) (!hir.any, !hir.any, !hir.any) -> !hir.any [-2, -1, 0] -> [0]
   %tr = hir.type_of %r
-  hir.unified_return (%r) : (%tr)
+  hir.unified_return %r : %tr
 }

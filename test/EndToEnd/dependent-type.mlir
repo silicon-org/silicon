@@ -11,7 +11,7 @@ hir.unified_func @identity(%T: -1, %x: 0) -> (result: 0) {
   %type_type = hir.type_type
   hir.unified_signature (%type_type, %T) -> (%T)
 } {
-  hir.unified_return (%x) : (%T)
+  hir.unified_return %x : %T
 }
 
 hir.unified_func @main() -> (r0: 0, r1: 0) {
@@ -31,5 +31,5 @@ hir.unified_func @main() -> (r0: 0, r1: 0) {
   %cunit = hir.constant_unit
   %r1 = hir.unified_call @identity(%unit_type, %cunit) : (%type_type, %unit_type) -> (%unit_type) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
 
-  hir.unified_return (%r0, %r1) : (%int_type, %unit_type)
+  hir.unified_return %r0, %r1 : %int_type, %unit_type
 }

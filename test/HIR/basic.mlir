@@ -52,7 +52,7 @@ hir.func nested @nested_visibility() -> () {}
 hir.func @ReturnWithOperands() -> (result) {
   %t = hir.int_type
   %0 = hir.constant_int 42
-  hir.return(%0) : (%t)
+  hir.return %0 : %t
 }
 
 hir.unified_func @UnifiedSimple(%a: 0, %b: -1) -> (result: 0) {
@@ -60,7 +60,7 @@ hir.unified_func @UnifiedSimple(%a: 0, %b: -1) -> (result: 0) {
   hir.unified_signature (%0, %0) -> (%0)
 } {
   %0 = hir.type_of %a
-  hir.unified_return(%a) : (%0)
+  hir.unified_return %a : %0
 }
 hir.unified_call @UnifiedSimple(%c42_int, %c42_int) : (%int_type, %int_type) -> (%int_type) (!hir.any, !hir.any) -> !hir.any [0, -1] -> [0]
 hir.unified_call @UnifiedSimple(%c42_int, %c42_int) : (%int_type, %int_type) -> (%int_type) (!hir.any, !hir.any) -> !hir.any [0, -1] -> [0]
