@@ -177,6 +177,18 @@ void PhaseSplitter::run() {
     maxPhase = std::max(maxPhase, phase);
   }
 
+  // Extend the phase range based on the function's declared arg/result phases.
+  // These may lie outside the range of computed op/value phases (e.g., a `dyn`
+  // return type shifts the result to a later phase).
+  for (auto p : funcOp.getArgPhases()) {
+    minPhase = std::min(minPhase, static_cast<int16_t>(p));
+    maxPhase = std::max(maxPhase, static_cast<int16_t>(p));
+  }
+  for (auto p : funcOp.getResultPhases()) {
+    minPhase = std::min(minPhase, static_cast<int16_t>(p));
+    maxPhase = std::max(maxPhase, static_cast<int16_t>(p));
+  }
+
   // Extend the phase range based on UnifiedCallOps in the body. The call's
   // arg/result phases are absolute in the caller's frame, so the caller needs
   // split functions covering those phases.
@@ -271,14 +283,21 @@ void PhaseSplitter::run() {
     }
   }
 
-  // Handle the return operation. Return values and their type operands are
-  // added to phase 0's split. The return op itself is erased since each phase
-  // will get its own.
+  // Handle the return operation. Each return value and its type operand are
+  // placed in the split matching its declared result phase. If a value is
+  // defined in an earlier phase, cross-phase threading will create context
+  // returns and block args to forward it. The return op itself is erased since
+  // each phase will get its own.
   auto returnOp = funcOp.getReturnOp();
-  for (auto value : returnOp.getValues())
-    splits[0 - minPhase].returnValues.push_back(value);
-  for (auto type : returnOp.getTypeOfValues())
-    splits[0 - minPhase].returnTypeOperands.push_back(type);
+  auto resultPhases = funcOp.getResultPhases();
+  for (auto [idx, value] : llvm::enumerate(returnOp.getValues())) {
+    int16_t resultPhase = static_cast<int16_t>(resultPhases[idx]);
+    splits[resultPhase - minPhase].returnValues.push_back(value);
+  }
+  for (auto [idx, type] : llvm::enumerate(returnOp.getTypeOfValues())) {
+    int16_t resultPhase = static_cast<int16_t>(resultPhases[idx]);
+    splits[resultPhase - minPhase].returnTypeOperands.push_back(type);
+  }
   returnOp.erase();
 
   // Move all operations to phase 0 initially.
@@ -489,12 +508,14 @@ void PhaseSplitter::run() {
 
       // Update any return values that reference the old unified call's results.
       // These are not IR uses (the unified_return was already erased), so
-      // replaceAllUsesWith won't touch them.
-      for (auto &rv : splits[0 - minPhase].returnValues)
-        for (auto [oldResult, newResult] :
-             llvm::zip(callOp.getResults(), prevResults))
-          if (rv == oldResult)
-            rv = newResult;
+      // replaceAllUsesWith won't touch them. Return values may be in any split
+      // (depending on result phases), so check all of them.
+      for (auto &split : splits)
+        for (auto &rv : split.returnValues)
+          for (auto [oldResult, newResult] :
+               llvm::zip(callOp.getResults(), prevResults))
+            if (rv == oldResult)
+              rv = newResult;
 
       callOp.replaceAllUsesWith(prevResults);
       callOp.erase();

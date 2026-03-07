@@ -423,6 +423,38 @@ hir.unified_func public @PublicVis() -> () {
 
 //===----------------------------------------------------------------------===//
 
+//===----------------------------------------------------------------------===//
+// Shifted result phase: the return value lives at phase 0, but the declared
+// result phase is 1 (as with `-> dyn int`). The value should flow through
+// as a context return from phase 0 and appear as the result of phase 1.
+
+// CHECK-LABEL: hir.func private @DynReturn.0(%x) -> (ctx)
+// CHECK:      [[INT:%.+]] = hir.int_type
+// CHECK:      [[X0:%.+]] = hir.coerce_type %x, [[INT]]
+// CHECK:      [[PACK:%.+]] = hir.opaque_pack([[X0]]
+// CHECK:      [[OT:%.+]] = hir.opaque_type
+// CHECK:      hir.return [[PACK]] : [[OT]]
+
+// CHECK-LABEL: hir.func private @DynReturn.1(%ctx) -> (result)
+// CHECK:      [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:      hir.return [[UNPACK]]#0 : [[UNPACK]]#1
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @DynReturn(%x: 0) -> (result: 1)
+// CHECK:         hir.signature
+// CHECK:       0: @DynReturn.0
+// CHECK:       1: @DynReturn.1
+hir.unified_func @DynReturn(%x: 0) -> (result: 1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  hir.unified_signature (%0) -> (%1)
+} {
+  %tx = hir.type_of %x
+  hir.unified_return %x : %tx
+}
+
+//===----------------------------------------------------------------------===//
+
 // CHECK-LABEL: hir.func private @CallsPreSplit.0a
 // CHECK: hir.call @PreSplit.0(
 // CHECK: hir.return
