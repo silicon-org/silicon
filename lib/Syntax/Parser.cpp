@@ -371,6 +371,14 @@ ast::Expr *Parser::parsePrimaryExpr() {
     return ast.create<ast::ConstExpr>({{ast::ExprKind::Const, loc(kw)}, value});
   }
 
+  // Parse dynamic expressions.
+  if (auto kw = consumeIf(TokenKind::Kw_dyn)) {
+    auto *value = parseBlockExpr();
+    if (!value)
+      return {};
+    return ast.create<ast::DynExpr>({{ast::ExprKind::Dyn, loc(kw)}, value});
+  }
+
   // Parse unary operators.
   if (auto op = getUnaryOp(token.kind)) {
     auto opToken = consume();

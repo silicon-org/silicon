@@ -375,6 +375,13 @@ struct ConstExpr : public Expr {
   }
 };
 
+/// A dynamic expression.
+struct DynExpr : public Expr {
+  Expr *value;
+  AST_VISIT_DEF(DynExpr) { AST_VISIT(value); }
+  static bool classof(const Expr *expr) { return expr->kind == ExprKind::Dyn; }
+};
+
 /// Call `fn` with the concrete subclass of `expr` and optional `args`.
 template <typename Callable, typename... Args>
 decltype(auto) visit(ast::Expr &expr, Callable &&fn, Args &&...args) {

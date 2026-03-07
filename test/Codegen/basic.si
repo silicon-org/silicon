@@ -212,6 +212,25 @@ fn constExpr() -> int { const { unitResult1() } }
 fn constExprInlined() -> int { const { 7 } }
 
 //===----------------------------------------------------------------------===//
+// Dyn expressions
+//===----------------------------------------------------------------------===//
+
+// Ensure `dyn { ... }` with side effects produces `hir.expr` with a
+// `const = 1` phase shift attribute and `hir.yield`.
+// CHECK-LABEL: hir.unified_func private @dynExpr
+// CHECK: hir.expr : !hir.any attributes {const = 1 : i32} {
+// CHECK:   hir.unified_call @unitResult1()
+// CHECK:   hir.yield
+// CHECK: }
+fn dynExpr() -> int { dyn { unitResult1() } }
+
+// Ensure `dyn { ... }` without side effects inlines directly (no `hir.expr`).
+// CHECK-LABEL: hir.unified_func private @dynExprInlined
+// CHECK-NOT: hir.expr
+// CHECK: hir.constant_int 7
+fn dynExprInlined() -> int { dyn { 7 } }
+
+//===----------------------------------------------------------------------===//
 // Return expressions
 //===----------------------------------------------------------------------===//
 

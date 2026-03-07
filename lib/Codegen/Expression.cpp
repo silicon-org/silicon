@@ -162,6 +162,13 @@ static Value convert(ast::ConstExpr &expr, Context &cx) {
                        /*phaseShift=*/-1);
 }
 
+/// Handle dyn expressions. The phase shift of +1 indicates that the
+/// expression should be evaluated one phase later than its parent.
+static Value convert(ast::DynExpr &expr, Context &cx) {
+  return cx.withinExpr([&] { return cx.convertExpr(*expr.value); },
+                       /*phaseShift=*/+1);
+}
+
 /// Handle return expressions. Emits a `hir.unified_return` terminator for the
 /// current block and creates a new unreachable block to absorb any subsequent
 /// code. The new block's argument serves as a placeholder value.

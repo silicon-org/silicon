@@ -34,3 +34,21 @@ fn precedence() {
   // CHECK:       value: 4
   1 * 2 + 3 / 4;
 }
+
+// CHECK-LABEL: name: "const_block"
+fn const_block() {
+  // CHECK: result: ConstExpr
+  // CHECK:   value: BlockExpr
+  // CHECK:     result: NumLitExpr
+  // CHECK:       value: 42
+  const { 42 }
+}
+
+// CHECK-LABEL: name: "dyn_block"
+fn dyn_block() {
+  // CHECK: result: DynExpr
+  // CHECK:   value: BlockExpr
+  // CHECK:     result: NumLitExpr
+  // CHECK:       value: 42
+  dyn { 42 }
+}

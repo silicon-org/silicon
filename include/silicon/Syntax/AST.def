@@ -50,6 +50,7 @@ AST_EXPR(Return)
 AST_EXPR(Index)
 AST_EXPR(Slice)
 AST_EXPR(Const)
+AST_EXPR(Dyn)
 
 #undef AST_EXPR
 
