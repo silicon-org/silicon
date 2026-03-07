@@ -25,7 +25,6 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - When working on transformation passes, use `silicon-opt` and MLIR input files; these also make good lit tests later.
 - When working on the lexer, parser, AST, or syntax in general, use `silc`.
 - Add `--debug-only=<pass>` to `silicon-opt` to print all `LLVM_DEBUG(...)` lines in a pass.
-- When you fix a bug, add a lit test that triggers the bug first, to ensure we also commit a regression test alongside the fix.
 - The `--mlir-print-ir-after-all` option is useful to dump IR after each pass, which can help observe as an input gets transformed and where things break.
 - See the @docs/design/ directory for descriptions of how various parts of the compiler should work.
 - Always use relative paths in bash commands, no absolute paths
@@ -37,7 +36,6 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 
 - Code lives in the `silicon` C++ namespace.
 - One sentence per line in Markdown files; don't break long lines.
-- When you add new IR ops, add parsing tests to the corresponding `basic.mlir` file, and check that the verifier catches errors by adding to the corresponding `errors.mlir`.
 - Run clang-format on changed files before git add and git commit.
 - If you notice any inconsistencies or contradictions, ask the user for clarification.
 - Write down anything noteworthy or surprising, and any useful feedback you got from the user to remember later as concise bullet-point notes in the SESSION.md file.
@@ -47,11 +45,10 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - If you make changes to a pass, dialect, or some specific corner of the code base, add a `[<passname>] ` prefix to the first commit message line
 - Don't refer to line numbers in commit messages
 - Prefer referring to struct, class, and function names instead of C++ file names in commit messages
-- Every behaviour and code path of a pass must be covered in a corresponding lit test; every error message a pass can generate must be covered in an error lit test
 - Address any compiler warnings you encounter, unless they are caused by external code such as CIRCT, MLIR, LLVM
 - When a subagent makes changes to code, your LSP diagnostics may be stale; run check-silicon to refresh
 - Do not feed inputs into tools via `cat`, stdin, or by `echo`ing them to a file; write the file yourself and then call the tool
-- Never commit code for which `check-silicon` does not pass cleanly; if necessary, mark a test as XFAIL and add a TODO.md item to fix it later
+- This is a compiler; it should be very eager to error out with compiler bugs or error diagnostics instead of silently passing through unclear input, or resorting to fallbacks -- the thing should break loudly and often, such that we can nail down unclear behavior
 
 ## Todos
 
@@ -73,3 +70,11 @@ See @docs/getting-started.md for build commands, project layout, and where to st
   - Phased execution changes: `docs/examples/phased-execution/`
   - New language features: corresponding example pages and language reference sections
 - In the documentation, use the custom `page-link` shortcode to refer to other pages
+
+## Testing
+
+- Every IR ops needs a parsing test in the corresponding `basic.mlir` file, and a check that the verifier catches errors by adding to the corresponding `errors.mlir`
+- When you fix a bug, add a lit test that triggers the bug first, to ensure we also commit a regression test alongside the fix.
+- Every behaviour and code path of a pass or conversion must be covered in a corresponding lit test; every error message a pass can generate must be covered in an error lit test
+- Never commit code for which `check-silicon` does not pass cleanly; if necessary, mark a test as XFAIL and add a TODO.md item to fix it later
+- Prefer focused per-pass lit tests over integration tests; we want to precisely check the behavior of individual passes, and have tests cover as little of the compiler pipeline as possible.
