@@ -37,7 +37,7 @@ namespace cl = llvm::cl;
 // Command Line Options
 //===----------------------------------------------------------------------===//
 
-enum class LoweringMode { Parse, Full };
+enum class LoweringMode { Parse, HIR, MIR, HW };
 enum class Format { Silicon, MLIR };
 
 struct Opt {
@@ -66,8 +66,14 @@ struct Opt {
   cl::opt<LoweringMode> loweringMode{
       cl::desc("Specify how to process the input:"),
       cl::values(clEnumValN(LoweringMode::Parse, "parse-only",
-                            "Emit the IR immediately after parsing")),
-      cl::init(LoweringMode::Full)};
+                            "Emit the IR immediately after parsing"),
+                 clEnumValN(LoweringMode::HIR, "ir-hir",
+                            "Stop after split-phases (HIR level)"),
+                 clEnumValN(LoweringMode::MIR, "ir-mir",
+                            "Stop after phase evaluation (MIR level)"),
+                 clEnumValN(LoweringMode::HW, "ir-hw",
+                            "Full pipeline including CIRCT lowering")),
+      cl::init(LoweringMode::HW)};
 
   cl::opt<Format> format{
       "format",
@@ -113,11 +119,22 @@ static void populatePasses(PassManager &pm) {
   pm.addPass(hir::createSplitPhasesPass());
   addCleanup(pm);
 
+  if (opt.loweringMode == LoweringMode::HIR)
+    return;
+
   // Iteratively lower, interpret, and specialize until all compile-time phases
   // are evaluated.
   pm.addPass(createPhaseEvalLoopPass());
   addCleanup(pm);
   pm.addPass(mlir::createSymbolDCEPass());
+
+  if (opt.loweringMode == LoweringMode::MIR)
+    return;
+
+  // Lower module call graphs to CIRCT hw/comb, erase all remaining Silicon
+  // dialect ops.
+  pm.addPass(createMIRToCIRCTPass());
+  addCleanup(pm);
 }
 
 //===----------------------------------------------------------------------===//

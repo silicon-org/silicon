@@ -1,4 +1,4 @@
-// RUN: silc %s | FileCheck %s
+// RUN: silc --ir-mir %s | FileCheck %s
 
 // Test that the same function called multiple times with different const args
 // produces distinct specializations.

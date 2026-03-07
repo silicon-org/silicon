@@ -1,4 +1,4 @@
-// RUN: silc %s | FileCheck %s
+// RUN: silc --ir-mir %s | FileCheck %s
 
 // Test nested function calls with const arguments. The `double` function has a
 // const argument that gets baked in, and `quad` calls it twice. The compiler

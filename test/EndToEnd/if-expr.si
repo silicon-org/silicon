@@ -1,4 +1,4 @@
-// RUN: silc %s | FileCheck %s
+// RUN: silc --ir-mir %s | FileCheck %s
 
 // Test if/else expressions evaluated at compile time. The const function
 // `pick` returns one of two values based on a condition, and `main` calls

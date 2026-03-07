@@ -1,4 +1,4 @@
-// RUN: silc %s | FileCheck %s
+// RUN: silc --ir-mir %s | FileCheck %s
 
 // Test that all arithmetic binary operations are correctly evaluated at compile
 // time through phased execution.

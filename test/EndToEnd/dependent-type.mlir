@@ -1,4 +1,4 @@
-// RUN: silc %s | FileCheck %s
+// RUN: silc --ir-mir %s | FileCheck %s
 
 // Test dependent types in function signatures: the result type of `identity`
 // depends on its first argument T. When called with T = int, the compiler

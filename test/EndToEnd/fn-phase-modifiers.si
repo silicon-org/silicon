@@ -1,4 +1,4 @@
-// RUN: silc %s | FileCheck %s
+// RUN: silc --ir-mir %s | FileCheck %s
 
 // Test that function-level phase modifiers (`const fn`, `dyn fn`) compile
 // through the full pipeline. These shift all argument and result phases

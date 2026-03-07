@@ -1,22 +1,37 @@
-// RUN: silc %s | FileCheck %s
+// RUN: silc --ir-mir %s | FileCheck --check-prefix=MIR %s
+// RUN: silc %s | FileCheck --check-prefix=HW %s
 
 // Test that `mod` flows through the pipeline and the final-phase module body
 // survives as a `mir.func` with `isModule`, rather than being interpreted away.
 // The const argument is still evaluated at compile time, but the resulting
 // module function is preserved as hardware.
 
+// ---- MIR-level checks ----
+
 // The module's const phase is evaluated normally.
-// CHECK-NOT: mir.func{{.*}}@identity.0a
+// MIR-NOT: mir.func{{.*}}@identity.0a
 
 // The module's last-phase function should survive with isModule, specialized
 // with the constant argument inlined.
-// CHECK: mir.func private @identity.{{[^ ]*}}() -> (result: !si.int) attributes {isModule}
-// CHECK:   %c42_int = mir.constant #si.int<42>
-// CHECK:   mir.return %c42_int
+// MIR: mir.func private @identity.{{[^ ]*}}() -> (result: !si.int) attributes {isModule}
+// MIR:   %c42_int = mir.constant #si.int<42>
+// MIR:   mir.return %c42_int
 
 // The caller should call the module instead of being fully evaluated.
-// CHECK: mir.func private @main.{{[^ ]*}}() -> (result: !si.int)
-// CHECK:   mir.call @identity.
-// CHECK:   mir.return
+// MIR: mir.func private @main.{{[^ ]*}}() -> (result: !si.int)
+// MIR:   mir.call @identity.
+// MIR:   mir.return
+
+// ---- HW-level checks ----
+
+// The module should be lowered to hw.module.
+// HW: hw.module @identity.{{[^ ]*}}
+// HW:   hw.constant 42
+// HW:   hw.output
+
+// The caller should instantiate the module.
+// HW: hw.module @main.{{[^ ]*}}
+// HW:   hw.instance
+// HW:   hw.output
 mod identity(const a: int) -> int { a }
 fn main() -> int { identity(42) }

@@ -11,6 +11,8 @@
 #include "silicon/HIR/Dialect.h"
 #include "silicon/HIR/Ops.h"
 #include "silicon/MIR/Dialect.h"
+#include "circt/Dialect/Comb/CombDialect.h"
+#include "circt/Dialect/HW/HWDialect.h"
 #include "mlir/Pass/Pass.h"
 #include <memory>
 #include <optional>

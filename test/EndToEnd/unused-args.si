@@ -1,4 +1,4 @@
-// RUN: silc %s | FileCheck %s
+// RUN: silc --ir-mir %s | FileCheck %s
 // XFAIL: *
 
 // Test that functions with unused arguments compile successfully. The

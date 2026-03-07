@@ -1,4 +1,4 @@
-// RUN: silc %s | FileCheck %s
+// RUN: silc --ir-mir %s | FileCheck %s
 
 // Test that calling the same function multiple times with the same arguments
 // compiles correctly. Previously, this would cause a "phase eval loop made no
