@@ -30,6 +30,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - See the @docs/design/ directory for descriptions of how various parts of the compiler should work.
 - Always use relative paths in bash commands, no absolute paths
 - Use `git <cmd>` instead of `git -C ... <cmd>`
+- Put temporary files into a local tmp/ directory
 
 ## Conventions
 

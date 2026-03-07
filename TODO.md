@@ -1,0 +1,4 @@
+- Make `hir.unified_return` print as `hir.unified_return %a, %b, %c : %d, %e, %f` instead of `hir.unified_return(...) : (...)`
+- Let bindings with a type should unify that type with the type of the expression assigned to them.
+- Print `#si.type<!si.unit>` with SSA name `%unit_type`.
+- Split functions should inherit the visibility of the original unified func.
