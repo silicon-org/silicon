@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/Codegen/Context.h"
+#include "silicon/HIR/Ops.h"
+#include "silicon/HIR/Types.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Syntax/AST.h"
 
@@ -33,6 +35,13 @@ static LogicalResult convert(ast::LetStmt &stmt, Context &cx) {
   if (stmt.value)
     if (!(value = cx.convertExpr(*stmt.value)))
       return failure();
+
+  // Unify the declared type with the type of the value expression.
+  if (type && value) {
+    auto valueType = hir::getOrCreateTypeOf(cx.builder, stmt.loc, value);
+    cx.builder.createOrFold<hir::UnifyOp>(
+        stmt.loc, hir::AnyType::get(cx.module.getContext()), type, valueType);
+  }
 
   // Add the value to the bindings table.
   if (!value)

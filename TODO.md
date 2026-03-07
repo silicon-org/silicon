@@ -1,2 +1,1 @@
-- Let bindings with a type should unify that type with the type of the expression assigned to them.
 - Only the split func should inherit the unified func visibility; any mulitphase or other func generated as subfunction of the split func should be private.

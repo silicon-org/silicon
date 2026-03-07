@@ -169,18 +169,23 @@ fn callWithArgs(x: int, y: int) -> int { testAdd(x, y) }
 // Let bindings
 //===----------------------------------------------------------------------===//
 
-// Ensure let bindings flow through as SSA values.
+// Ensure let bindings with a type annotation unify the declared type with the
+// type of the value expression.
 // CHECK-LABEL: hir.unified_func private @letBinding
+// CHECK: [[T:%.+]] = hir.int_type
 // CHECK: [[V:%.+]] = hir.constant_int 42
+// CHECK: [[VT:%.+]] = hir.int_type
+// CHECK: hir.unify [[T]], [[VT]]
 // CHECK: hir.unified_return [[V]]
 fn letBinding() -> int {
   let x: int = 42;
   x
 }
 
-// Ensure let bindings without a type annotation work the same way.
+// Ensure let bindings without a type annotation produce no unify op.
 // CHECK-LABEL: hir.unified_func private @letBindingNoType
 // CHECK: [[V:%.+]] = hir.constant_int 7
+// CHECK-NOT: hir.unify
 // CHECK: hir.unified_return [[V]]
 fn letBindingNoType() -> int {
   let x = 7;
