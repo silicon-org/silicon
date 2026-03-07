@@ -974,6 +974,15 @@ Value hir::getTypeOf(Value value) {
       .Case<UnifiedCallOp>([&](UnifiedCallOp op) {
         return op.getTypeOfResults()[result.getResultNumber()];
       })
+      .Case<IfOp>([&](IfOp op) -> Value {
+        // The type of an if result is the type of the corresponding yield
+        // value in the then branch. Both branches must agree.
+        auto &thenBlock = op.getThenRegion().front();
+        if (auto yieldOp = dyn_cast<YieldOp>(thenBlock.getTerminator()))
+          if (result.getResultNumber() < yieldOp.getOperands().size())
+            return getTypeOf(yieldOp.getOperands()[result.getResultNumber()]);
+        return {};
+      })
       .Default([](Operation *) { return Value(); });
 }
 

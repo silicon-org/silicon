@@ -199,6 +199,14 @@ hir.multiphase_func @empty_phases() -> (out) []
 
 // -----
 
+// YieldOp must be inside an ExprOp or IfOp
+func.func @yield_outside() {
+  // expected-error @below {{'hir.yield' op expects parent op to be one of 'hir.expr, hir.if'}}
+  hir.yield
+}
+
+// -----
+
 // expected-error @below {{block argument must have type !hir.any, got '!si.int'}}
 "hir.func"() ({
 ^bb0(%arg0: !si.int):

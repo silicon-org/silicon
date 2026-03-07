@@ -105,12 +105,34 @@ def ExprOp : HIROp<"expr", [
   }];
 }
 
+def IfOp : HIROp<"if", [
+  RecursiveMemoryEffects,
+]> {
+  let summary = "conditional expression with then/else regions";
+  let description = [{
+    Evaluates one of two regions based on a condition value. Both the then
+    and else regions must be present and must yield the same number of
+    results via `hir.yield`. The condition is an `!hir.any` value that is
+    expected to resolve to a boolean-like integer during interpretation.
+  }];
+  let arguments = (ins AnyHIRType:$condition);
+  let results = (outs Variadic<AnyHIRType>:$results);
+  let regions = (region
+    MinSizedRegion<1>:$thenRegion,
+    MinSizedRegion<1>:$elseRegion
+  );
+  let assemblyFormat = [{
+    $condition (`:` type($results)^)? attr-dict-with-keyword $thenRegion
+    `else` $elseRegion
+  }];
+}
+
 def YieldOp : HIROp<"yield", [
-  HasParent<"ExprOp">,
+  HasParent<"ExprOp, IfOp">,
   Pure,
   Terminator,
 ]> {
-  let summary = "Yield result values from an expression op";
+  let summary = "Yield result values from an expression or if op";
   let arguments = (ins Variadic<AnyType>:$operands);
   let assemblyFormat = [{
     ($operands^ `:` type($operands))? attr-dict

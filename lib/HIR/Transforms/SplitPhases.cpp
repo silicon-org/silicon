@@ -85,7 +85,7 @@ void PhaseAnalysis::analyze() {
     if (isa<ExprOp>(op) &&
         (constAttr = op->getAttrOfType<IntegerAttr>("const"))) {
       phase = parentPhase + constAttr.getInt();
-    } else if (!isa<ExprOp>(op) && mlir::isMemoryEffectFree(op)) {
+    } else if (!isa<ExprOp, IfOp>(op) && mlir::isMemoryEffectFree(op)) {
       // Pure ops: phase is max of floor and all operand phases.
       phase = floor;
       for (auto operand : op->getOperands())
@@ -589,11 +589,17 @@ void PhaseSplitter::run() {
       op->moveBefore(block, block->end());
     }
 
-    // If this is an `ExprOp`, push its nested operations onto the worklist,
-    // since those might move to a different phase as well.
+    // If this is an `ExprOp` or `IfOp`, push its nested operations onto the
+    // worklist, since those might move to a different phase as well.
     if (auto exprOp = dyn_cast<ExprOp>(op)) {
       LLVM_DEBUG(llvm::dbgs() << "- Descending into " << op->getName() << "\n");
       for (auto &block : llvm::reverse(exprOp.getBody()))
+        worklist.push_back({opPhase, block.begin(), block.end()});
+    } else if (auto ifOp = dyn_cast<IfOp>(op)) {
+      LLVM_DEBUG(llvm::dbgs() << "- Descending into " << op->getName() << "\n");
+      for (auto &block : llvm::reverse(ifOp.getThenRegion()))
+        worklist.push_back({opPhase, block.begin(), block.end()});
+      for (auto &block : llvm::reverse(ifOp.getElseRegion()))
         worklist.push_back({opPhase, block.begin(), block.end()});
     } else {
       // TODO: Otherwise ensure that any nested operations have been assigned

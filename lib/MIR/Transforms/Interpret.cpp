@@ -38,6 +38,12 @@ struct Interpreter {
 
   Interpreter(SymbolTable &symbolTable) : symbolTable(symbolTable) {}
   FailureOr<SmallVector<Attribute>> run();
+
+  /// Execute a single non-control-flow op within the given value map. Returns
+  /// failure if the op is unsupported. Handles constants, binary ops, opaque
+  /// pack/unpack, if ops, and conversion casts.
+  LogicalResult executeOp(Operation *op, ArrayRef<Attribute> operands,
+                          DenseMap<Value, Attribute> &values);
 };
 } // namespace
 
@@ -47,8 +53,100 @@ struct Interpreter {
 // Walk through the operations of a function body, evaluating each one.
 // Calls are resolved by pushing a new frame onto the call stack. When the
 // top-most frame encounters a return, the constant attribute values are
-// returned without modifying the IR.
+// returned without modifying the IR. The executeOp helper handles individual
+// non-control-flow ops and is reused for evaluating ops inside if regions.
 //===----------------------------------------------------------------------===//
+
+/// Execute a single non-control-flow op, storing results in the value map.
+LogicalResult Interpreter::executeOp(Operation *op,
+                                     ArrayRef<Attribute> operands,
+                                     DenseMap<Value, Attribute> &values) {
+  if (auto constOp = dyn_cast<mir::ConstantOp>(op)) {
+    values[constOp] = constOp.getValue();
+  } else if (isa<mir::AddOp, mir::SubOp, mir::MulOp, mir::DivOp, mir::ModOp,
+                 mir::AndOp, mir::OrOp, mir::XorOp, mir::ShlOp, mir::ShrOp,
+                 mir::EqOp, mir::NeqOp, mir::LtOp, mir::GtOp, mir::GeqOp,
+                 mir::LeqOp>(op)) {
+    auto lhs = cast<base::IntAttr>(operands[0]).getValue();
+    auto rhs = cast<base::IntAttr>(operands[1]).getValue();
+    DynamicAPInt value;
+    if (isa<mir::AddOp>(op))
+      value = lhs + rhs;
+    else if (isa<mir::SubOp>(op))
+      value = lhs - rhs;
+    else if (isa<mir::MulOp>(op))
+      value = lhs * rhs;
+    else if (isa<mir::DivOp>(op))
+      value = lhs / rhs;
+    else if (isa<mir::ModOp>(op))
+      value = lhs % rhs;
+    // Bitwise and shift ops use int64_t since DynamicAPInt does not
+    // support these operations directly.
+    else if (isa<mir::AndOp>(op))
+      value = DynamicAPInt(int64_t(lhs) & int64_t(rhs));
+    else if (isa<mir::OrOp>(op))
+      value = DynamicAPInt(int64_t(lhs) | int64_t(rhs));
+    else if (isa<mir::XorOp>(op))
+      value = DynamicAPInt(int64_t(lhs) ^ int64_t(rhs));
+    else if (isa<mir::ShlOp>(op))
+      value = DynamicAPInt(int64_t(lhs) << int64_t(rhs));
+    else if (isa<mir::ShrOp>(op))
+      value = DynamicAPInt(int64_t(lhs) >> int64_t(rhs));
+    else if (isa<mir::EqOp>(op))
+      value = DynamicAPInt(lhs == rhs ? 1 : 0);
+    else if (isa<mir::NeqOp>(op))
+      value = DynamicAPInt(lhs != rhs ? 1 : 0);
+    else if (isa<mir::LtOp>(op))
+      value = DynamicAPInt(lhs < rhs ? 1 : 0);
+    else if (isa<mir::GtOp>(op))
+      value = DynamicAPInt(lhs > rhs ? 1 : 0);
+    else if (isa<mir::GeqOp>(op))
+      value = DynamicAPInt(lhs >= rhs ? 1 : 0);
+    else if (isa<mir::LeqOp>(op))
+      value = DynamicAPInt(lhs <= rhs ? 1 : 0);
+    values[op->getResult(0)] = base::IntAttr::get(op->getContext(), value);
+  } else if (auto ifOp = dyn_cast<mir::IfOp>(op)) {
+    // Evaluate the condition and execute the chosen region's block.
+    auto condAttr = cast<base::IntAttr>(operands[0]);
+    bool condTrue = condAttr.getValue() != 0;
+    auto &region = condTrue ? ifOp.getThenRegion() : ifOp.getElseRegion();
+
+    for (auto &innerOp : region.front()) {
+      if (auto yieldOp = dyn_cast<mir::YieldOp>(&innerOp)) {
+        for (auto [result, yieldOperand] :
+             llvm::zip(ifOp.getResults(), yieldOp.getOperands()))
+          values[result] = values.lookup(yieldOperand);
+        break;
+      }
+
+      // Gather operands for the inner op.
+      SmallVector<Attribute> innerOperands(innerOp.getNumOperands());
+      for (auto [attr, operand] :
+           llvm::zip(innerOperands, innerOp.getOpOperands())) {
+        attr = values.lookup(operand.get());
+        if (!attr)
+          return innerOp.emitError()
+                 << "missing value for operand #" << operand.getOperandNumber();
+      }
+
+      if (failed(executeOp(&innerOp, innerOperands, values)))
+        return failure();
+    }
+  } else if (auto packOp = dyn_cast<mir::MIROpaquePackOp>(op)) {
+    values[packOp] = base::OpaqueAttr::get(op->getContext(), operands);
+  } else if (auto unpackOp = dyn_cast<mir::MIROpaqueUnpackOp>(op)) {
+    auto opaqueAttr = cast<base::OpaqueAttr>(operands[0]);
+    for (auto [result, elem] :
+         llvm::zip(unpackOp.getResults(), opaqueAttr.getElements()))
+      values[result] = elem;
+  } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
+    for (auto [result, attr] : llvm::zip(castOp.getResults(), operands))
+      values[result] = attr;
+  } else {
+    return op->emitError() << "operation not supported by interpreter";
+  }
+  return success();
+}
 
 FailureOr<SmallVector<Attribute>> Interpreter::run() {
   SmallVector<Attribute> operands;
@@ -97,65 +195,9 @@ FailureOr<SmallVector<Attribute>> Interpreter::run() {
       continue;
     }
 
-    // Handle all other operations.
-    if (auto constOp = dyn_cast<mir::ConstantOp>(op)) {
-      frame.values[constOp] = constOp.getValue();
-    } else if (isa<mir::AddOp, mir::SubOp, mir::MulOp, mir::DivOp, mir::ModOp,
-                   mir::AndOp, mir::OrOp, mir::XorOp, mir::ShlOp, mir::ShrOp,
-                   mir::EqOp, mir::NeqOp, mir::LtOp, mir::GtOp, mir::GeqOp,
-                   mir::LeqOp>(op)) {
-      auto lhs = cast<base::IntAttr>(operands[0]).getValue();
-      auto rhs = cast<base::IntAttr>(operands[1]).getValue();
-      DynamicAPInt value;
-      if (isa<mir::AddOp>(op))
-        value = lhs + rhs;
-      else if (isa<mir::SubOp>(op))
-        value = lhs - rhs;
-      else if (isa<mir::MulOp>(op))
-        value = lhs * rhs;
-      else if (isa<mir::DivOp>(op))
-        value = lhs / rhs;
-      else if (isa<mir::ModOp>(op))
-        value = lhs % rhs;
-      // Bitwise and shift ops use int64_t since DynamicAPInt does not
-      // support these operations directly.
-      else if (isa<mir::AndOp>(op))
-        value = DynamicAPInt(int64_t(lhs) & int64_t(rhs));
-      else if (isa<mir::OrOp>(op))
-        value = DynamicAPInt(int64_t(lhs) | int64_t(rhs));
-      else if (isa<mir::XorOp>(op))
-        value = DynamicAPInt(int64_t(lhs) ^ int64_t(rhs));
-      else if (isa<mir::ShlOp>(op))
-        value = DynamicAPInt(int64_t(lhs) << int64_t(rhs));
-      else if (isa<mir::ShrOp>(op))
-        value = DynamicAPInt(int64_t(lhs) >> int64_t(rhs));
-      else if (isa<mir::EqOp>(op))
-        value = DynamicAPInt(lhs == rhs ? 1 : 0);
-      else if (isa<mir::NeqOp>(op))
-        value = DynamicAPInt(lhs != rhs ? 1 : 0);
-      else if (isa<mir::LtOp>(op))
-        value = DynamicAPInt(lhs < rhs ? 1 : 0);
-      else if (isa<mir::GtOp>(op))
-        value = DynamicAPInt(lhs > rhs ? 1 : 0);
-      else if (isa<mir::GeqOp>(op))
-        value = DynamicAPInt(lhs >= rhs ? 1 : 0);
-      else if (isa<mir::LeqOp>(op))
-        value = DynamicAPInt(lhs <= rhs ? 1 : 0);
-      frame.values[op->getResult(0)] =
-          base::IntAttr::get(op->getContext(), value);
-    } else if (auto packOp = dyn_cast<mir::MIROpaquePackOp>(op)) {
-      frame.values[packOp] = base::OpaqueAttr::get(op->getContext(), operands);
-    } else if (auto unpackOp = dyn_cast<mir::MIROpaqueUnpackOp>(op)) {
-      auto opaqueAttr = cast<base::OpaqueAttr>(operands[0]);
-      for (auto [result, elem] :
-           llvm::zip(unpackOp.getResults(), opaqueAttr.getElements()))
-        frame.values[result] = elem;
-    } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
-      for (auto [result, attr] : llvm::zip(castOp.getResults(), operands))
-        frame.values[result] = attr;
-    } else {
-      return op->emitError() << "operation not supported by interpreter";
-    }
+    // Handle all other operations via the shared executeOp helper.
+    if (failed(executeOp(op, operands, frame.values)))
+      return failure();
 
     frame.currentOp = op->getNextNode();
   }

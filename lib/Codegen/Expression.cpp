@@ -155,6 +155,49 @@ static Value convert(ast::BlockExpr &block, Context &cx) {
   return hir::ConstantUnitOp::create(cx.builder, block.loc);
 }
 
+/// Handle if/else expressions. Create an `hir.if` op with then and else
+/// regions. If the else branch is absent, a unit-yielding else block is
+/// generated.
+static Value convert(ast::IfExpr &expr, Context &cx) {
+  auto condition = cx.convertExpr(*expr.condition);
+  if (!condition)
+    return {};
+
+  // Create the hir.if op with a single !hir.any result.
+  auto anyType = hir::AnyType::get(cx.module.getContext());
+  auto ifOp =
+      hir::IfOp::create(cx.builder, expr.loc, TypeRange{anyType}, condition);
+
+  // Build the then region.
+  {
+    auto ip = cx.builder.saveInsertionPoint();
+    cx.builder.setInsertionPointToStart(&ifOp.getThenRegion().emplaceBlock());
+    auto thenValue = cx.convertExpr(*expr.thenExpr);
+    if (!thenValue)
+      return {};
+    hir::YieldOp::create(cx.builder, expr.loc, ValueRange{thenValue});
+    cx.builder.restoreInsertionPoint(ip);
+  }
+
+  // Build the else region.
+  {
+    auto ip = cx.builder.saveInsertionPoint();
+    cx.builder.setInsertionPointToStart(&ifOp.getElseRegion().emplaceBlock());
+    if (expr.elseExpr) {
+      auto elseValue = cx.convertExpr(*expr.elseExpr);
+      if (!elseValue)
+        return {};
+      hir::YieldOp::create(cx.builder, expr.loc, ValueRange{elseValue});
+    } else {
+      auto unitValue = hir::ConstantUnitOp::create(cx.builder, expr.loc);
+      hir::YieldOp::create(cx.builder, expr.loc, ValueRange{unitValue});
+    }
+    cx.builder.restoreInsertionPoint(ip);
+  }
+
+  return ifOp.getResult(0);
+}
+
 /// Handle const expressions. The phase shift of -1 indicates that the
 /// expression should be evaluated one phase earlier than its parent.
 static Value convert(ast::ConstExpr &expr, Context &cx) {

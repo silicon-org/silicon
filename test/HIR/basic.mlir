@@ -74,6 +74,26 @@ hir.expr : !hir.any, !hir.any {
   hir.yield %0, %1 : !hir.any, !hir.any
 }
 
+// if/else expression
+func.func @IfElse(%cond: !hir.any, %x: !hir.any, %y: !hir.any) {
+  %0 = hir.if %cond : !hir.any {
+    hir.yield %x : !hir.any
+  } else {
+    hir.yield %y : !hir.any
+  }
+  return
+}
+
+// if without results
+func.func @IfNoResults(%cond: !hir.any) {
+  hir.if %cond {
+    hir.yield
+  } else {
+    hir.yield
+  }
+  return
+}
+
 // split_func with args, results, signature, and phase map
 hir.split_func @SplitExample(%a: -3, %b: -1) -> (c: 0) {
   %st0 = hir.int_type

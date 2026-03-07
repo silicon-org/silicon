@@ -274,6 +274,13 @@ static LogicalResult convert(hir::ReturnOp op, hir::ReturnOp::Adaptor adaptor,
   return success();
 }
 
+/// Lower hir.yield to mir.yield, forwarding operands.
+static LogicalResult convert(hir::YieldOp op, hir::YieldOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<mir::YieldOp>(op, adaptor.getOperands());
+  return success();
+}
+
 static LogicalResult convert(hir::CallOp op, hir::CallOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
   SmallVector<Type> resultTypes;
@@ -391,40 +398,43 @@ static bool isResolvableType(Value typeVal) {
 static bool shouldLower(hir::FuncOp func) {
   if (func.getBody().empty())
     return false;
-  for (auto &op : func.getBody().front()) {
-    if (auto coerce = dyn_cast<hir::CoerceTypeOp>(&op)) {
+  bool ready = true;
+  func.walk([&](Operation *op) {
+    if (!ready)
+      return;
+    if (auto coerce = dyn_cast<hir::CoerceTypeOp>(op)) {
       if (!isResolvableType(coerce.getTypeOperand()))
-        return false;
-    } else if (auto call = dyn_cast<hir::CallOp>(&op)) {
+        ready = false;
+    } else if (auto call = dyn_cast<hir::CallOp>(op)) {
       for (auto val : call.getTypeOfArgs())
         if (!isResolvableType(val))
-          return false;
+          ready = false;
       for (auto val : call.getTypeOfResults())
         if (!isResolvableType(val))
-          return false;
-    } else if (auto ret = dyn_cast<hir::ReturnOp>(&op)) {
+          ready = false;
+    } else if (auto ret = dyn_cast<hir::ReturnOp>(op)) {
       for (auto val : ret.getTypeOfValues())
         if (!isResolvableType(val))
-          return false;
-    } else if (auto uintType = dyn_cast<hir::UIntTypeOp>(&op)) {
+          ready = false;
+    } else if (auto uintType = dyn_cast<hir::UIntTypeOp>(op)) {
       if (!uintType.getWidth().getDefiningOp<hir::ConstantIntOp>())
-        return false;
-    } else if (auto funcType = dyn_cast<hir::FuncTypeOp>(&op)) {
+        ready = false;
+    } else if (auto funcType = dyn_cast<hir::FuncTypeOp>(op)) {
       for (auto val : funcType.getTypeOfArgs())
         if (!isResolvableType(val))
-          return false;
+          ready = false;
       for (auto val : funcType.getTypeOfResults())
         if (!isResolvableType(val))
-          return false;
-    } else if (isa<hir::OpaqueUnpackOp>(&op)) {
+          ready = false;
+    } else if (isa<hir::OpaqueUnpackOp>(op)) {
       // Opaque unpack ops indicate that the function has not yet been
       // specialized with the results of a previous phase's evaluation.
       // Defer lowering until specialization replaces the unpack with
       // concrete constant values.
-      return false;
+      ready = false;
     }
-  }
-  return true;
+  });
+  return ready;
 }
 
 /// Resolve the concrete MIR type from an unconverted HIR type value. Used
@@ -496,6 +506,44 @@ static Type resolveHIRType(Value typeVal) {
 // !hir.any to concrete MIR types; the framework inserts materialization
 // casts that body op patterns resolve through their adaptors.
 //===----------------------------------------------------------------------===//
+
+/// Lower hir.if to mir.if, converting both regions in place. Result types are
+/// resolved from the HIR type information available on the yield values
+/// (via getTypeOf), falling back to !hir.any for unknown types.
+namespace {
+class IfOpConversion : public OpConversionPattern<hir::IfOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(hir::IfOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Determine result types from the type information on yield values.
+    SmallVector<Type> resultTypes;
+    for (auto result : op.getResults()) {
+      auto typeVal = hir::getTypeOf(result);
+      if (typeVal)
+        resultTypes.push_back(resolveHIRType(typeVal));
+      else
+        resultTypes.push_back(adaptor.getCondition().getType());
+    }
+
+    auto mirIf = mir::IfOp::create(rewriter, op.getLoc(), resultTypes,
+                                   adaptor.getCondition());
+
+    // Move then region.
+    rewriter.inlineRegionBefore(op.getThenRegion(), mirIf.getThenRegion(),
+                                mirIf.getThenRegion().end());
+
+    // Move else region.
+    rewriter.inlineRegionBefore(op.getElseRegion(), mirIf.getElseRegion(),
+                                mirIf.getElseRegion().end());
+
+    rewriter.replaceOp(op, mirIf.getResults());
+    return success();
+  }
+};
+} // namespace
 
 namespace {
 class FuncOpConversion : public OpConversionPattern<hir::FuncOp> {
@@ -669,6 +717,8 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::LeqOp>(convertCmpOp<hir::LeqOp, mir::LeqOp>);
   patterns.add<hir::MIRConstantOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
+  patterns.add<hir::YieldOp>(convert);
+  patterns.add(std::make_unique<IfOpConversion>(converter, &getContext()));
   patterns.add<hir::CallOp>(convert);
   patterns.add<hir::OpaquePackOp>(convert);
   patterns.add<hir::OpaqueUnpackOp>(convert);
