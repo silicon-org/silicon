@@ -50,6 +50,8 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - Every behaviour and code path of a pass must be covered in a corresponding lit test; every error message a pass can generate must be covered in an error lit test
 - Address any compiler warnings you encounter, unless they are caused by external code such as CIRCT, MLIR, LLVM
 - When a subagent makes changes to code, your LSP diagnostics may be stale; run check-silicon to refresh
+- Do not feed inputs into tools via `cat`, stdin, or by `echo`ing them to a file; write the file yourself and then call the tool
+- Never commit code for which `check-silicon` does not pass cleanly; if necessary, mark a test as XFAIL and add a TODO.md item to fix it later
 
 ## Todos
 
@@ -70,3 +72,4 @@ See @docs/getting-started.md for build commands, project layout, and where to st
   - Type system changes: `docs/examples/basics/types.md`
   - Phased execution changes: `docs/examples/phased-execution/`
   - New language features: corresponding example pages and language reference sections
+- In the documentation, use the custom `page-link` shortcode to refer to other pages
