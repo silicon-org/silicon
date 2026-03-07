@@ -3,5 +3,8 @@
 !.editorconfig
 !.clang-format
 !.clang-tidy
+!/.claude
+/.claude/*
+!/.claude/skills
 /build
 /tmp
