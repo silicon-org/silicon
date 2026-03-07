@@ -47,7 +47,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - Prefer referring to struct, class, and function names instead of C++ file names in commit messages
 - Address any compiler warnings you encounter, unless they are caused by external code such as CIRCT, MLIR, LLVM
 - When a subagent makes changes to code, your LSP diagnostics may be stale; run check-silicon to refresh
-- Do not feed inputs into tools via `cat`, stdin, or by `echo`ing them to a file; write the file yourself and then call the tool
+- Do not feed inputs into tools via `cat`, stdin, or by `echo`ing them to a file; `Write` the file yourself and then call the tool
 - This is a compiler; it should be very eager to error out with compiler bugs or error diagnostics instead of silently passing through unclear input, or resorting to fallbacks -- the thing should break loudly and often, such that we can nail down unclear behavior
 
 ## Todos
