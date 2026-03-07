@@ -8,49 +8,63 @@ To be expanded into a proper design document later.
 ### Types as SSA Values
 
 - All HIR values have MLIR type `!hir.any`; the "actual" type of a value is represented as a separate SSA value, threaded alongside data through the IR.
-- Type constructor ops (`hir.int_type`, `hir.uint_type`, `hir.ref_type`, `hir.func_type`, `hir.type_type`, etc.) produce type values.
+- Type constructor ops (`hir.int_type`, `hir.uint_type`, `hir.ref_type`, `hir.func_type`, `hir.type_type`, `hir.unit_type`, `hir.anyfunc_type`, `hir.opaque_type`) produce type values.
+  All are `Pure` but not `ConstantLike`.
 - `hir.type_of %v` extracts the type of a value as an SSA value.
+  Has a folder (extracts type from `unified_call` results) and a canonicalizer (creates `type_of` ops from call type operands).
 - `hir.coerce_type %v, %t` annotates a value with a declared type (used at function entry for arguments, and at call sites for results).
 
 ### Inference Variables
 
 - `hir.inferrable` creates a free type variable (placeholder for an unknown type/value).
 - Codegen emits these for call result types, since the callee's signature hasn't been inspected yet at that point.
-- CheckCalls later resolves most of them by inlining the callee's signature at the call site and replacing the inferrables with the signature's computed types.
+- CheckCalls later resolves most of them by directly replacing inferrables with the callee's signature types (see below).
 
 ### Unification
 
 - `hir.unify %a, %b` asserts that two SSA values must be equal; produces a result that replaces both.
 - The op is `Commutative`, `Pure`, `SameOperandsAndResultType`, and folds when both operands are identical.
-- Codegen emits unify ops for binary operand types (`hir.unify %lhsType, %rhsType`), and CheckCalls emits them to constrain argument/result types against the callee signature.
+- CheckCalls emits unify ops to constrain argument types against the callee signature (but replaces inferrables directly instead of unifying them).
+
+### CheckCalls Pass (`lib/HIR/Transforms/CheckCalls.cpp`)
+
+- Processes functions in callee-before-caller (post-order) traversal of the call graph within function signatures.
+- Detects and reports recursion errors in function signatures.
+- Inserts `hir.coerce_type` ops on body block arguments to connect them to declared parameter types from the signature.
+- Clones the callee's signature region into the caller at each call site.
+- Replaces signature block arguments with actual call arguments.
+- For inferrable placeholders (on call type-of-args and type-of-results): directly replaces them with the corresponding signature type and erases the inferrable op.
+- For concrete (non-inferrable) type operands on calls: emits `hir.unify` between the declared signature types and the actual call type operands.
+- Also unifies body return types with declared result types from the signature.
 
 ### InferTypes Pass (`lib/HIR/Transforms/InferTypes.cpp`)
 
 - Collects all `hir.unify` ops into a worklist and processes them in reverse order.
 - Three cases:
   1. Both operands inferrable: keep the one earlier in dominance, erase the other.
-  2. One operand inferrable, one concrete: replace inferrable with concrete (if concrete dominates).
-  3. Both concrete: if the defining ops are structurally equivalent (`OperationEquivalence` ignoring value identity), keep the earlier op, erase the later, and recursively unify their operands.
+  2. One operand inferrable, one concrete: replace inferrable with concrete (if concrete dominates; otherwise skip silently).
+  3. Both concrete: if the defining ops are structurally equivalent (`OperationEquivalence` ignoring value identity, both memory-effect-free with single result), keep the earlier op, erase the later, and recursively unify their operands by adding new unify ops to the worklist.
 - Uses `DominanceInfo` throughout to ensure replacements are legal.
-
-### CheckCalls Pass (`lib/HIR/Transforms/CheckCalls.cpp`)
-
-- Processes functions in callee-before-caller (post-order) traversal.
-- Clones the callee's signature region into the caller at each call site.
-- Replaces signature block arguments with actual call arguments.
-- Emits `hir.unify` between declared parameter types and actual argument types, and between declared result types and the call's result type placeholders.
-- Replaces `hir.inferrable` placeholders with the unified types directly, avoiding a dominance problem where inlined signature ops would appear after the inferrable.
 
 ### HIR-to-MIR Lowering (`lib/Conversion/HIRToMIR.cpp`)
 
 - The pass operates at module level, converting each `hir.func` to `mir.func` with materialized `FunctionType` and typed block arguments.
-- Block argument types are resolved from `unrealized_conversion_cast` ops (HIR→MIR direction); result types come from `mir.return` operands.
-- `hir.inferrable`, `hir.type_of`, `hir.unify` are all lowered to dummy `mir.constant #mir.type<!hir.any>` — by this point they should have been resolved, so only dead metadata remains.
-- `hir.coerce_type` is erased; the input value passes through directly.
-- Type operands on `hir.add` (and other binary ops), `hir.call`, etc. are consumed to determine the materialized MIR types and then discarded.
-- The lowering requires type operands to be `ConstantLike` ops so they can be folded into MIR attributes.
+- `shouldLower()` gates which functions are lowered: a function is only lowered when all type operands across `coerce_type`, `call`, `return`, `uint_type`, `func_type` ops are resolvable, and no `opaque_unpack` ops remain.
+  Functions with unresolved types are skipped and deferred to a later pipeline iteration.
+- `isResolvableType()` checks type values: simple type constructors (`int_type`, `unit_type`, `type_type`, `anyfunc_type`, `opaque_type`) always resolve; `uint_type` needs a constant integer width; `func_type` needs all arg/result types resolvable; `ConstantLike` ops with a non-`!hir.any` `TypeAttr` resolve.
+- `hir.inferrable` is lowered to a dummy `mir.constant #mir.type<!hir.any>` — by this point they should have been resolved, so only dead metadata remains.
+- `hir.type_of` is similarly lowered to a dummy `mir.constant` — it is consumed by binary ops, return ops, etc. and then discarded.
+- `hir.unify` emits an error if its two operands differ after conversion ("hir.unify survived to HIR-to-MIR lowering with different operands"); if they are the same, the operand is forwarded.
+- `hir.coerce_type` verifies the input type matches the type operand's constant value, then forwards the input directly.
+- Binary ops: arithmetic/bitwise ops discard the type operand and forward lhs/rhs; comparison ops pass the result type explicitly since the result type may differ from the operand type.
 
-### Phased Evaluation Pipeline (design doc, `phase-splits.md` step 1–2)
+### Pass Pipeline (in `tools/silc/silc.cpp`)
+
+- The pipeline order is: Canonicalize + CSE → CheckCalls → Canonicalize (x3) → InferTypes → Canonicalize + CSE → SplitPhases → Canonicalize + CSE → PhaseEvalLoop.
+- InferTypes runs once, before SplitPhases and PhaseEvalLoop.
+- Inference does **not** run inside the PhaseEvalLoop; the loop runs HIRToMIR → Canonicalize + CSE → Interpret → SpecializeFuncs → Canonicalize + CSE.
+
+### Phased Evaluation Pipeline (design doc, `phase-splits.md` step 1-2)
 
 - Step 1 (Canonicalize): propagate and fold constants, including pushing unify ops through trivially equivalent ops and substituting inferrables.
 - Step 2 (Unify): verify all unify ops are resolved; emit errors for incompatible types. This is the main user-facing type error mechanism.
@@ -61,11 +75,12 @@ To be expanded into a proper design document later.
 
 - When the InferTypes pass cannot resolve a unify op (e.g., concrete doesn't dominate inferrable, or the ops aren't structurally equivalent), it silently skips the constraint.
 - The design doc says step 2 of the pipeline ("Unify") should emit user-facing type errors for unresolved unify ops, but this pass does not exist yet.
+- The only error currently emitted is by HIRToMIR when a `hir.unify` survives with differing operands, which is more of a compiler-internal assertion than a user-facing diagnostic.
 - There is no diagnostic trail explaining _why_ two types are incompatible or _where_ the conflicting constraints originated.
 
 ### Dominance workaround in CheckCalls
 
-- SESSION.md note: when CheckCalls inlines signature ops, they appear after inferrable placeholders created by codegen, causing InferTypes dominance checks to fail.
+- When CheckCalls inlines signature ops, they appear after inferrable placeholders created by codegen, causing InferTypes dominance checks to fail.
 - The current fix is for CheckCalls to replace inferrables directly rather than creating a unify with them.
 - This works but couples CheckCalls tightly to the inference algorithm and may not generalize to more complex scenarios (e.g., multiple call sites constraining the same inferrable).
 
@@ -74,7 +89,7 @@ To be expanded into a proper design document later.
 ### No user-facing type error pass
 
 - The design doc specifies a "Unify" step that emits errors for unresolved unify ops.
-  This pass does not exist; there is no way to report type mismatches to the user.
+  This pass does not exist; there is no way to report type mismatches to the user beyond the HIRToMIR assertion.
 - Need to design: what does a good type error message look like? How do we trace back from a failed unify to the source-level types and expressions involved?
 
 ### No type error recovery
@@ -134,15 +149,16 @@ To be expanded into a proper design document later.
 
 ### Where does inference run in the pipeline?
 
-- Currently: codegen → CheckCalls → InferTypes → SplitPhases → PhaseEvalLoop.
+- Currently: Canonicalize + CSE → CheckCalls → Canonicalize → InferTypes → Canonicalize + CSE → SplitPhases → PhaseEvalLoop.
 - The design doc puts inference (Canonicalize + Unify) inside the phased evaluation loop, implying inference is re-run after each phase of execution.
 - Is inference expected to produce new information after specialization? (e.g., a generic function gets specialized with concrete types, then its body needs re-inference.)
 - The current InferTypes pass runs once before splitting; is that sufficient?
 
 ### Interaction between type inference and phase splitting
 
-- Type constructors (`hir.int_type`, etc.) are `ConstantLike` and float to any phase.
-- But what about computed types (e.g., `hir.uint_type %width` where `%width` is a runtime value)? These are pinned to the phase where `%width` is available.
+- Type constructors (`hir.int_type`, etc.) are `Pure` but not `ConstantLike`, so they are not automatically available in all phases.
+  Only `hir.mir_constant` is `ConstantLike`.
+- Computed types (e.g., `hir.uint_type %width` where `%width` is a runtime value) are pinned to the phase where `%width` is available.
 - Need to specify: can type inference introduce cross-phase dependencies? What happens when a type can only be resolved in a later phase?
 
 ### Error provenance and diagnostics
@@ -153,8 +169,8 @@ To be expanded into a proper design document later.
 
 ### `hir.coerce_type` semantics
 
-- Currently a pure annotation erased during lowering.
-- In the design doc, it appears at function entry to associate arguments with their declared types, and at call sites.
+- Currently a pure annotation erased during lowering (input forwarded after type check).
+- CheckCalls inserts it at function entry to associate body arguments with their declared types from the signature.
 - Should it produce a runtime cast when the types are not identical?
 - Should it emit a type error if the types are provably incompatible?
 - Should it create a unify constraint implicitly?
@@ -168,7 +184,7 @@ To be expanded into a proper design document later.
 
 ### Per-op type rules for dedicated binary ops
 
-- `hir.binary` has been replaced with dedicated ops (`hir.add`, `hir.sub`, `hir.eq`, etc.).
+- All binary ops (`hir.add`, `hir.sub`, `hir.eq`, etc.) take three operands: `lhs`, `rhs`, and `resultType`.
 - Each dedicated op could have different type rules (e.g., `hir.add` could widen, `hir.concat` doesn't unify its operand types).
 - The current "unify both operand types" strategy in codegen would need per-op type rules.
 
@@ -178,3 +194,9 @@ To be expanded into a proper design document later.
 - The current structural-equivalence check in InferTypes handles `hir.uint_type %a` vs `hir.uint_type %b` by recursively unifying `%a` with `%b`.
 - But this only works for direct operands, not for derived values (e.g., `uint<a + 1>` vs `uint<b>` where `b = a + 1`).
 - Do we need symbolic reasoning, or is operand-level structural matching sufficient?
+
+### `shouldLower()` as implicit type resolution gate
+
+- HIRToMIR's `shouldLower()` function acts as an implicit gate: functions are only lowered when all type operands are resolvable to concrete MIR types.
+- This creates a multi-iteration pipeline where functions with unresolved types are deferred until specialization resolves them.
+- This is effective but means type errors for unresolvable functions may only surface as "stuck" functions that never get lowered, rather than as explicit diagnostics.
