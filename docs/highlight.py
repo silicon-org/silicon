@@ -112,7 +112,7 @@ def highlight(code: str) -> str:
     # newline from the code to avoid an empty trailing line.
     raw = "".join(parts).rstrip("\n")
     lines = raw.split("\n")
-    wrapped = "\n".join(
+    wrapped = "".join(
         f'<span style="display:flex;"><span>{line}\n</span></span>'
         for line in lines
     )
