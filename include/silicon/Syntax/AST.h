@@ -103,6 +103,10 @@ struct Item {
 /// A function declaration.
 struct FnItem : public Item {
   bool isPublic = false;
+  /// Function-level phase offset applied to all arguments and the return type.
+  /// Negative means `const` (earlier phase), positive means `dyn` (later
+  /// phase). Multiple modifiers stack additively.
+  int functionPhase = 0;
   StringRef name;
   ArrayRef<FnArg *> args;
   Type *returnType; // optional

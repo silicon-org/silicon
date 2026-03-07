@@ -47,3 +47,31 @@ fn private_func() {}
 
 // CHECK: hir.unified_func @public_func() -> (result: 0)
 pub fn public_func() -> int { 42 }
+
+// CHECK-LABEL: hir.unified_func private @const_fn
+// CHECK-SAME: (%a: -1, %b: -1) -> (result: -1)
+const fn const_fn(a: int, b: int) -> int { a }
+
+// CHECK-LABEL: hir.unified_func private @dyn_fn
+// CHECK-SAME: (%a: 1) -> (result: 1)
+dyn fn dyn_fn(a: int) -> int { a }
+
+// CHECK-LABEL: hir.unified_func private @const_const_fn
+// CHECK-SAME: (%x: -2) -> (result: -2)
+const const fn const_const_fn(x: int) -> int { x }
+
+// CHECK-LABEL: hir.unified_func private @const_dyn_cancel_fn
+// CHECK-SAME: (%x: 0) -> (result: 0)
+const dyn fn const_dyn_cancel_fn(x: int) -> int { x }
+
+// CHECK-LABEL: hir.unified_func private @const_fn_with_arg_phases
+// CHECK-SAME: (%a: -2, %b: 0) -> (result: -1)
+const fn const_fn_with_arg_phases(const a: int, dyn b: int) -> int { a }
+
+// CHECK-LABEL: hir.unified_func private @const_fn_dyn_return
+// CHECK-SAME: (%x: -1) -> (result: 0)
+const fn const_fn_dyn_return(x: int) -> dyn int { x }
+
+// CHECK-LABEL: hir.unified_func @pub_const_fn
+// CHECK-SAME: (%x: -1) -> (result: -1)
+pub const fn pub_const_fn(x: int) -> int { x }

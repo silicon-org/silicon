@@ -52,3 +52,18 @@ fn dyn_block() {
   // CHECK:       value: 42
   dyn { 42 }
 }
+
+// CHECK-LABEL: name: "const_fn"
+const fn const_fn() { 0 }
+
+// CHECK-LABEL: name: "dyn_fn"
+dyn fn dyn_fn() { 0 }
+
+// CHECK-LABEL: name: "const_const_fn"
+const const fn const_const_fn() { 0 }
+
+// CHECK-LABEL: name: "const_dyn_fn"
+const dyn fn const_dyn_fn() { 0 }
+
+// CHECK-LABEL: name: "pub_const_fn"
+pub const fn pub_const_fn() { 0 }

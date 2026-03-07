@@ -22,11 +22,12 @@ struct DeclareItems : public ast::Visitor<DeclareItems> {
 
   void preVisitNode(ast::FnItem &item) {
     // Collect phases from AST before creating the func op so that call
-    // codegen can read them from the symbol table.
+    // codegen can read them from the symbol table. The function-level phase
+    // offset shifts all argument and result phases uniformly.
     SmallVector<int32_t> argPhases, resultPhases;
     for (auto *arg : item.args)
-      argPhases.push_back(arg->phase);
-    resultPhases.push_back(item.resultPhase);
+      argPhases.push_back(arg->phase + item.functionPhase);
+    resultPhases.push_back(item.resultPhase + item.functionPhase);
     auto *ctx = cx.module.getContext();
     auto visibility =
         item.isPublic ? StringAttr{} : StringAttr::get(ctx, "private");

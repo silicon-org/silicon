@@ -69,9 +69,24 @@ ast::Item *Parser::parseItem() {
   // Parse optional `pub` visibility modifier.
   auto pub = consumeIf(TokenKind::Kw_pub);
 
+  // Parse optional function-level `const`/`dyn` phase modifiers. Each `const`
+  // shifts all phases one earlier (-1), each `dyn` one later (+1).
+  int functionPhase = 0;
+  while (true) {
+    if (consumeIf(TokenKind::Kw_const)) {
+      --functionPhase;
+      continue;
+    }
+    if (consumeIf(TokenKind::Kw_dyn)) {
+      ++functionPhase;
+      continue;
+    }
+    break;
+  }
+
   // Parse function definitions.
   if (auto kw = consumeIf(TokenKind::Kw_fn))
-    return parseFnItem(kw, pub);
+    return parseFnItem(kw, pub, functionPhase);
 
   // If we get here we didn't find a keyword that starts an item.
   if (!token.isError()) {
@@ -87,7 +102,7 @@ ast::Item *Parser::parseItem() {
 // Functions
 //===----------------------------------------------------------------------===//
 
-ast::FnItem *Parser::parseFnItem(Token kw, Token pub) {
+ast::FnItem *Parser::parseFnItem(Token kw, Token pub, int functionPhase) {
   // Parse the function name.
   auto name = require(TokenKind::Ident, "function name");
   if (!name)
@@ -136,6 +151,7 @@ ast::FnItem *Parser::parseFnItem(Token kw, Token pub) {
 
   return ast.create<ast::FnItem>({{ast::ItemKind::Fn, loc(name)},
                                   static_cast<bool>(pub),
+                                  functionPhase,
                                   name.spelling,
                                   ast.array(args),
                                   returnType,
