@@ -844,16 +844,15 @@ void UnifiedFuncOp::getAsmBlockArgumentNames(Region &region,
 }
 
 LogicalResult UnifiedFuncOp::verifyRegions() {
-  // Make sure there are no signature terminators in the middle of the
-  // signature region. Return terminators may appear in non-last blocks of the
-  // body region due to explicit `return` expressions.
-  for (auto *region : getRegions())
-    for (auto &block : llvm::drop_end(*region))
-      if (isa<UnifiedSignatureOp>(block.getTerminator()))
-        return block.getTerminator()->emitOpError()
-               << "can only appear in the last block";
+  // Make sure there are no signature terminators in the body region.
+  for (auto &block : getBody())
+    if (isa<UnifiedSignatureOp>(block.getTerminator()))
+      return block.getTerminator()->emitOpError()
+             << "cannot appear in the body";
 
-  // Check the signature terminator.
+  // Check the signature terminator. The last block must be a
+  // `unified_signature` terminator, but non-last blocks may also have them
+  // for multi-path type computation (these are consolidated by CheckCalls).
   if (!isa<UnifiedSignatureOp>(getSignature().back().getTerminator()))
     return emitOpError() << "requires `hir.unified_signature` terminator in "
                             "the signature";

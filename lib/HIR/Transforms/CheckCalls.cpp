@@ -131,23 +131,6 @@ void CheckCallsPass::runOnOperation() {
     signalPassFailure();
 }
 
-/// Inline the blocks in `region` into the `into` block at the given position.
-static void inlineRegion(Region &region, Block &into,
-                         Block::iterator before = {}) {
-  // Inline the first block at the location where we would put the expr op.
-  auto &firstBlock = region.front();
-  into.getOperations().splice(before, firstBlock.getOperations());
-  region.getBlocks().pop_front();
-
-  // If there are any remaining blocks, split the `into` block and insert the
-  // blocks in between the split.
-  if (region.empty())
-    return;
-  auto &tailBlock = *into.splitBlock(before);
-  auto &intoRegion = *tailBlock.getParent();
-  intoRegion.getBlocks().splice(tailBlock.getIterator(), region.getBlocks());
-}
-
 /// Ensure there is exactly one `UnifiedSignatureOp` terminator in the cloned
 /// signature region. If multiple terminators exist, they are consolidated into
 /// a single exit block whose block arguments carry the typeOfArgs and
@@ -180,7 +163,8 @@ static void consolidateSignatureTerminators(Region &clonedSig) {
   exitBlock->addArguments(blockArgTypes, blockArgLocs);
 
   // Create the consolidated signature terminator in the exit block.
-  OpBuilder exitBuilder(exitBlock, exitBlock->begin());
+  OpBuilder exitBuilder(firstSigOp->getContext());
+  exitBuilder.setInsertionPointToStart(exitBlock);
   auto exitArgTypes = exitBlock->getArguments().take_front(numArgTypes);
   auto exitResultTypes = exitBlock->getArguments().drop_front(numArgTypes);
   UnifiedSignatureOp::create(exitBuilder, firstSigOp.getLoc(),
@@ -189,7 +173,8 @@ static void consolidateSignatureTerminators(Region &clonedSig) {
 
   // Replace each original terminator with a branch to the exit block.
   for (auto sigOp : sigTerminators) {
-    OpBuilder builder(sigOp);
+    OpBuilder builder(firstSigOp->getContext());
+    builder.setInsertionPoint(sigOp);
     SmallVector<Value> branchArgs;
     branchArgs.append(sigOp.getTypeOfArgs().begin(),
                       sigOp.getTypeOfArgs().end());
@@ -293,15 +278,30 @@ static void cloneSignatureIntoBody(UnifiedFuncOp funcOp) {
     for (unsigned i = 0; i < clonedResultTypes.size(); ++i)
       clonedResultTypes[i] = bodyBlock.getArgument(clonedArgTypes.size() + i);
 
-    // Replace the signature terminator with a branch to the body block.
-    OpBuilder branchBuilder(clonedSigOp);
-    ConstBranchOp::create(branchBuilder, clonedSigOp.getLoc(), branchArgs,
-                          &bodyBlock);
+    // Erase the signature terminator. If the terminator block is now empty
+    // (e.g., a consolidated exit block or a single-terminator exit block with
+    // no other ops), eliminate it by redirecting predecessor branches directly
+    // to the body block instead of creating a pass-through block.
+    Block *terminatorBlock = clonedSigOp->getBlock();
+    auto sigLoc = clonedSigOp.getLoc();
     clonedSigOp.erase();
+    if (terminatorBlock->empty()) {
+      for (auto it = terminatorBlock->pred_begin();
+           it != terminatorBlock->pred_end();) {
+        Block *pred = *it++;
+        auto *term = pred->getTerminator();
+        for (unsigned i = 0; i < term->getNumSuccessors(); ++i)
+          if (term->getSuccessor(i) == terminatorBlock)
+            term->setSuccessor(&bodyBlock, i);
+      }
+      terminatorBlock->erase();
+    } else {
+      OpBuilder branchBuilder(terminatorBlock, terminatorBlock->end());
+      ConstBranchOp::create(branchBuilder, sigLoc, branchArgs, &bodyBlock);
+    }
 
     // Move the cloned blocks before the body block.
     bodyRegion.getBlocks().splice(bodyRegion.begin(), clonedSig.getBlocks());
-    // coerceInsertPt is at bodyBlock.begin(), which is correct for multi-block.
   }
 
   // Insert coerce_type ops right before the original body ops. For single-
@@ -358,49 +358,65 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
                  << funcOp.getSymNameAttr() << "\n";
   });
 
-  // Process calls by inlining callee signatures and unifying types.
-  region.walk([&](UnifiedCallOp callOp) {
+  // Process calls by inlining callee signatures and unifying types. The
+  // callee's signature region is cloned, multiple terminators are consolidated
+  // into a single exit block, and the signature blocks are inlined ahead of
+  // the call. For single-block signatures, the ops are spliced directly before
+  // the call. For multi-block signatures, the call's block is split and the
+  // signature blocks form a preamble, with type values threaded as block
+  // arguments to the continuation block containing the call.
+  //
+  // Collect call ops upfront since multi-block inlining splits blocks, which
+  // invalidates the walk iterator.
+  SmallVector<UnifiedCallOp> callOps;
+  region.walk([&](UnifiedCallOp op) { callOps.push_back(op); });
+  for (auto callOp : callOps) {
     LLVM_DEBUG(llvm::dbgs() << "- " << callOp << "\n");
 
-    // Clone the signature of the called function.
+    // Clone the signature of the called function and consolidate multiple
+    // signature terminators into a single exit block.
     auto *callee = symbolTable.lookup(callOp.getCallee());
     Region signature;
     IRMapping mapper;
     callee->getRegion(0).cloneInto(&signature, mapper);
+    consolidateSignatureTerminators(signature);
 
-    // Replace function arguments in the signature with the concrete values
-    // provided by the call, and insert type unification as necessary.
-    //
-    // The cloned signature region has block arguments (one per function arg)
-    // that stand in for the argument values in dependent-type expressions. We
-    // replace those block arguments with the actual call arguments before
-    // unifying the declared argument types with the call argument types.
-    OpBuilder builder(callOp);
-    auto terminatorOp =
-        cast<UnifiedSignatureOp>(signature.back().getTerminator());
+    // Find the single signature terminator.
+    UnifiedSignatureOp terminatorOp = nullptr;
+    for (auto &block : signature)
+      if (auto op = dyn_cast<UnifiedSignatureOp>(block.getTerminator()))
+        terminatorOp = op;
+    assert(terminatorOp && "expected a single signature terminator");
 
-    // Replace the signature's block arguments with the actual call arguments.
-    auto &sigBlock = signature.front();
+    // Replace the signature's entry block arguments with the actual call
+    // arguments. These stand in for function parameters in dependent-type
+    // expressions.
+    auto &sigEntry = signature.front();
     for (auto [blockArg, callArg] :
-         llvm::zip(sigBlock.getArguments(), callOp.getArguments()))
+         llvm::zip(sigEntry.getArguments(), callOp.getArguments()))
       blockArg.replaceAllUsesWith(callArg);
-    sigBlock.eraseArguments(0, sigBlock.getNumArguments());
+    sigEntry.eraseArguments(0, sigEntry.getNumArguments());
 
     // Unify the declared argument types with the call's type-of-arg operands.
-    // Inferrable placeholders are replaced directly with the signature type.
-    // Concrete type operands are unified with the signature type.
+    // Track inferrable placeholders for later replacement (after inlining,
+    // when the final type values are known).
+    struct InferrableReplacement {
+      InferrableOp op;
+      bool isResult;
+      unsigned index;
+    };
+    SmallVector<InferrableReplacement> inferrables;
+
+    OpBuilder builder(terminatorOp);
     SmallVector<Value> unifiedArgTypes;
-    unifiedArgTypes.reserve(callOp.getArguments().size());
     auto callTypeOfArgs = callOp.getTypeOfArgs();
     for (auto [idx, sigArgType] :
          llvm::enumerate(terminatorOp.getTypeOfArgs())) {
-      builder.setInsertionPoint(terminatorOp);
       Value unified = sigArgType;
       if (idx < callTypeOfArgs.size()) {
         if (auto inferrable =
                 callTypeOfArgs[idx].getDefiningOp<InferrableOp>()) {
-          inferrable.replaceAllUsesWith(unified);
-          inferrable.erase();
+          inferrables.push_back({inferrable, false, (unsigned)idx});
         } else {
           unified = UnifyOp::create(builder, callOp.getLoc(), sigArgType,
                                     callTypeOfArgs[idx]);
@@ -409,21 +425,16 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
       unifiedArgTypes.push_back(unified);
     }
 
-    // Unify the declared result types. If the call already carries
-    // type-of-result operands, we also unify those. Inferrable placeholders
-    // are replaced directly.
+    // Unify the declared result types.
     SmallVector<Value> unifiedResultTypes;
-    unifiedResultTypes.reserve(terminatorOp.getTypeOfResults().size());
     auto callTypeOfResults = callOp.getTypeOfResults();
     for (auto [idx, sigResultType] :
          llvm::enumerate(terminatorOp.getTypeOfResults())) {
-      builder.setInsertionPoint(terminatorOp);
       Value unified = sigResultType;
       if (idx < callTypeOfResults.size()) {
         if (auto inferrable =
                 callTypeOfResults[idx].getDefiningOp<InferrableOp>()) {
-          inferrable.replaceAllUsesWith(unified);
-          inferrable.erase();
+          inferrables.push_back({inferrable, true, (unsigned)idx});
         } else {
           unified = UnifyOp::create(builder, callOp.getLoc(), sigResultType,
                                     callTypeOfResults[idx]);
@@ -432,14 +443,88 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
       unifiedResultTypes.push_back(unified);
     }
 
+    // Erase the signature terminator and inline the signature region.
+    Block *terminatorBlock = terminatorOp->getBlock();
+    terminatorOp.erase();
+
+    if (signature.hasOneBlock()) {
+      // Single block: splice ops directly before the call in the same block.
+      callOp->getBlock()->getOperations().splice(callOp->getIterator(),
+                                                 sigEntry.getOperations());
+    } else {
+      // Multi-block: split the call's block and insert signature blocks as a
+      // preamble. Type values are threaded as block arguments to the
+      // continuation block containing the call.
+      Block *callBlock = callOp->getBlock();
+      Block *continuation = callBlock->splitBlock(callOp);
+
+      // Add block arguments for the type values to the continuation block.
+      SmallVector<Value> typeValues;
+      typeValues.append(unifiedArgTypes.begin(), unifiedArgTypes.end());
+      typeValues.append(unifiedResultTypes.begin(), unifiedResultTypes.end());
+
+      SmallVector<Type> tvTypes;
+      SmallVector<Location> tvLocs;
+      for (auto v : typeValues) {
+        tvTypes.push_back(v.getType());
+        tvLocs.push_back(v.getLoc());
+      }
+      continuation->addArguments(tvTypes, tvLocs);
+
+      // Update unified type vectors to point at continuation block args.
+      for (unsigned i = 0; i < unifiedArgTypes.size(); ++i)
+        unifiedArgTypes[i] = continuation->getArgument(i);
+      for (unsigned i = 0; i < unifiedResultTypes.size(); ++i)
+        unifiedResultTypes[i] =
+            continuation->getArgument(unifiedArgTypes.size() + i);
+
+      // Splice the entry block's ops into the call block (before the split
+      // point), then move remaining signature blocks between callBlock and
+      // continuation. This must happen before the empty-block elimination
+      // below, since that redirects branches to the continuation block which
+      // is in the parent region.
+      callBlock->getOperations().splice(callBlock->end(),
+                                        sigEntry.getOperations());
+      signature.getBlocks().pop_front();
+      if (!signature.empty()) {
+        auto &parentRegion = *continuation->getParent();
+        parentRegion.getBlocks().splice(continuation->getIterator(),
+                                        signature.getBlocks());
+      }
+
+      // If the terminator block is now empty (e.g., a consolidated exit
+      // block), eliminate it by redirecting predecessor branches directly to
+      // the continuation block. Otherwise, add a branch to the continuation.
+      if (terminatorBlock->empty()) {
+        for (auto it = terminatorBlock->pred_begin();
+             it != terminatorBlock->pred_end();) {
+          Block *pred = *it++;
+          auto *term = pred->getTerminator();
+          for (unsigned i = 0; i < term->getNumSuccessors(); ++i)
+            if (term->getSuccessor(i) == terminatorBlock)
+              term->setSuccessor(continuation, i);
+        }
+        terminatorBlock->erase();
+      } else {
+        OpBuilder branchBuilder(callOp->getContext());
+        branchBuilder.setInsertionPointToEnd(terminatorBlock);
+        ConstBranchOp::create(branchBuilder, callOp.getLoc(), typeValues,
+                              continuation);
+      }
+    }
+
+    // Replace inferrable placeholders with the final unified type values.
+    for (auto &r : inferrables) {
+      Value replacement =
+          r.isResult ? unifiedResultTypes[r.index] : unifiedArgTypes[r.index];
+      r.op.replaceAllUsesWith(replacement);
+      r.op.erase();
+    }
+
     // Update the call's type operands in-place.
     callOp.getTypeOfArgsMutable().assign(unifiedArgTypes);
     callOp.getTypeOfResultsMutable().assign(unifiedResultTypes);
-
-    // Erase the signature terminator and inline the signature region.
-    terminatorOp.erase();
-    inlineRegion(signature, *callOp->getBlock(), callOp->getIterator());
-  });
+  }
 
   // Clone the signature blocks into the body region. This replaces the body
   // block's arguments with the signature entry block's arguments, inserts

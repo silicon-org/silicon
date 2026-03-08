@@ -28,20 +28,9 @@ hir.unified_call @foo() : () -> () () -> () [] -> []
 // -----
 
 hir.unified_func @foo() -> () {
-  // expected-error @below {{can only appear in the last block}}
-  hir.unified_signature () -> ()
-^bb1:
   hir.unified_signature () -> ()
 } {
-  hir.return : () -> ()
-}
-
-// -----
-
-// expected-error @below {{requires `hir.return` terminator in the body}}
-hir.unified_func @foo() -> () {
-  hir.unified_signature () -> ()
-} {
+  // expected-error @below {{cannot appear in the body}}
   hir.unified_signature () -> ()
 }
 
