@@ -1,6 +1,3 @@
----
----
-
 # Phase Splits
 
 This document describes how the Silicon language intends to implement metaprogramming, function specialization, and phased compile-time execution.

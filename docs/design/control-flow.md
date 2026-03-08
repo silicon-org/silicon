@@ -1,6 +1,3 @@
----
----
-
 # Control Flow
 
 This document describes the design of control flow in Silicon: how `if`, `for`, `while`, `break`, `continue`, and early `return` work across compile-time phases and in the final hardware phase.

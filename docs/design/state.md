@@ -1,6 +1,3 @@
----
----
-
 # State and Wires
 
 This document describes the design of stateful elements and wires in Silicon.

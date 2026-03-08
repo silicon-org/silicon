@@ -1,6 +1,3 @@
----
----
-
 # Modules
 
 This document describes the design of hardware modules in Silicon.
