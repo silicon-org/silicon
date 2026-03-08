@@ -1,5 +1,37 @@
 // RUN: silicon-opt --split-phases --split-input-file --verify-diagnostics %s
 
+// Return phase mismatch: `dyn` arg forces the return value to phase 1, but the
+// function declares a phase-0 return.
+
+hir.unified_func @ReturnPhaseTooLate(%x: 1, %y: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.unified_signature (%0, %0) -> (%0)
+} {
+  %tx = hir.type_of %x
+  %ty = hir.type_of %y
+  %t = hir.unify %tx, %ty
+  %r = hir.add %x, %y : %t
+  %tr = hir.type_of %r
+  // expected-error @below {{return value is available at phase 1 but function declares phase 0 return}}
+  hir.unified_return %r : %tr
+}
+
+// -----
+
+// Return phase mismatch: `const` return (phase -1) but value is only available
+// at phase 0.
+
+hir.unified_func @ConstReturnPhaseMismatch(%x: 0) -> (result: -1) {
+  %0 = hir.int_type
+  hir.unified_signature (%0) -> (%0)
+} {
+  %tx = hir.type_of %x
+  // expected-error @below {{return value is available at phase 0 but function declares phase -1 return}}
+  hir.unified_return %x : %tx
+}
+
+// -----
+
 // Phase mismatch: passing phase-0 func args as phase -2 and -1 callee args.
 
 hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {

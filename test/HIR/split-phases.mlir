@@ -687,60 +687,6 @@ hir.unified_func private @UIntLiteral(%a: 0) -> (result: 0) attributes {isModule
   hir.unified_return %0 : %1
 }
 
-//===----------------------------------------------------------------------===//
-// Dyn arg with non-dyn return: `fn send(dyn x: int, y: int) -> int { x + y }`.
-// The return value `x + y` depends on the dyn arg `x` (phase 1), so the
-// effective result phase is adjusted from 0 to 1. Phase 0 takes `y` and packs
-// it as context; phase 1 takes `x`, unpacks `y`, and computes the result.
-
-// CHECK-LABEL: hir.func private @DynArgNonDynReturn.0(%y) -> (ctx)
-// CHECK:      hir.coerce_type %y,
-// CHECK:      hir.opaque_pack(
-// CHECK:      hir.return {{.*}} : ({{.*}}) -> ({{.*}})
-
-// CHECK-LABEL: hir.func private @DynArgNonDynReturn.1(%x, %ctx) -> (result)
-// CHECK:      hir.opaque_unpack %ctx
-// CHECK:      hir.coerce_type %x,
-// CHECK:      hir.add
-// CHECK:      hir.return {{.*}} : ({{.*}}) -> ({{.*}})
-
-// CHECK-NOT: hir.unified_func
-// CHECK-LABEL: hir.split_func @DynArgNonDynReturn(%x: 1, %y: 0) -> (result: 1)
-// CHECK:         hir.signature
-// CHECK:       0: @DynArgNonDynReturn.0
-// CHECK:       1: @DynArgNonDynReturn.1
-hir.unified_func @DynArgNonDynReturn(%x: 1, %y: 0) -> (result: 0) {
-  %0 = hir.int_type
-  hir.unified_signature (%0, %0) -> (%0)
-} {
-  %tx = hir.type_of %x
-  %ty = hir.type_of %y
-  %t = hir.unify %tx, %ty
-  %r = hir.add %x, %y : %t
-  hir.unified_return %r : %t
-}
-
-//===----------------------------------------------------------------------===//
-// Const return with phase-0 value: `fn make_const(x: int) -> const int { x }`.
-// The return value `x` is phase 0 but the declared result phase is -1 (const).
-// The effective result phase is adjusted from -1 to 0, so the function
-// collapses into a single phase-0 function.
-
-// CHECK-LABEL: hir.func private @ConstReturn.0(%x) -> (result)
-// CHECK:      hir.coerce_type %x,
-// CHECK:      hir.return {{.*}} : ({{.*}}) -> ({{.*}})
-
-// CHECK-NOT: hir.unified_func
-// CHECK-LABEL: hir.split_func @ConstReturn(%x: 0) -> (result: 0)
-// CHECK:         hir.signature
-// CHECK:       0: @ConstReturn.0
-hir.unified_func @ConstReturn(%x: 0) -> (result: -1) {
-  %0 = hir.int_type
-  hir.unified_signature (%0) -> (%0)
-} {
-  %tx = hir.type_of %x
-  hir.unified_return %x : %tx
-}
 
 //===----------------------------------------------------------------------===//
 // Dyn return with phase-0 value: `fn make_dyn(x: int) -> dyn int { x }`.

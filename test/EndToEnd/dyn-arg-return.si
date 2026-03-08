@@ -1,21 +1,9 @@
 // RUN: silc --ir-hir %s | FileCheck %s --check-prefix=HIR
 // RUN: silc --ir-mir %s | FileCheck %s --check-prefix=MIR
 
-// Test that dyn args with non-dyn returns, const returns, and dyn returns
-// compile through the pipeline. SplitPhases adjusts the effective result
-// phase to where the return value is actually available.
-
-// A dyn arg forces the return value to phase 1, even though the declared
-// return type has no phase annotation (default phase 0).
-// HIR-LABEL: hir.split_func private @send(%x: 1, %y: 0) -> (result: 1)
-// MIR: mir.func private @send.0(%y: !si.int) -> (ctx: !si.opaque)
-fn send(dyn x: int, y: int) -> int { x + y }
-
-// A const return type is adjusted to phase 0 when the value is only
-// available at phase 0. The function collapses to a single phase.
-// HIR-LABEL: hir.split_func private @make_const(%x: 0) -> (result: 0)
-// MIR: mir.func private @make_const.0(%x: !si.int) -> (result: !si.int)
-fn make_const(x: int) -> const int { x }
+// Test that dyn returns compile through the pipeline. The return value is at
+// phase 0 but the declared result phase is 1 (dyn), so the value flows through
+// context.
 
 // A dyn return type with a phase-0 value forwards through context.
 // HIR-LABEL: hir.split_func private @make_dyn(%x: 0) -> (result: 1)

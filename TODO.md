@@ -15,17 +15,6 @@
   Make sure to remove the block args from the body block and replace them with the block args of the cloned signature entry block.
   Then use the signature terminator's operands to feed into the func body's terminator type operands, and for coerce_type ops inserted after the block arguments.
 
-- SplitPhases silently adjusts the effective return phase upward when the body produces a value at a later phase than the declared return type.
-  The declared phases on a function signature should be authoritative: `-> int` is a contract that the function returns a phase 0 value.
-  If the body can only produce a value at a later phase, that is a user error that should be diagnosed.
-  Currently, `std::max(declared, valuePhase)` in `SplitPhases.cpp` silently bumps the phase.
-  Fix: emit an error when `valuePhase > declared`, pointing at the return value and the declared return type.
-  Reproducer:
-  ```
-  fn send(dyn x: int, y: int) -> int { x + y }
-  ```
-  Here `x + y` is phase 1 (due to `dyn x`), but `-> int` declares phase 0.
-
 ## Postponed Long-Term Fixes
 
 - MIRToCIRCT: `!si.int` is temporarily mapped to `i64`; once bitwidth inference exists, this should be an error diagnostic instead

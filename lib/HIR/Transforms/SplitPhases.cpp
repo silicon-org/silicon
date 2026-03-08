@@ -89,7 +89,7 @@ struct PhaseGroup {
 struct PhaseSplitter {
   PhaseSplitter(PhaseAnalysis &analysis, SymbolTable &symbolTable)
       : analysis(analysis), symbolTable(symbolTable), funcOp(analysis.funcOp) {}
-  void run();
+  LogicalResult run();
 
   PhaseAnalysis &analysis;
   SymbolTable &symbolTable;
@@ -97,7 +97,7 @@ struct PhaseSplitter {
 };
 } // namespace
 
-void PhaseSplitter::run() {
+LogicalResult PhaseSplitter::run() {
   LLVM_DEBUG(llvm::dbgs() << "Splitting " << funcOp.getSymNameAttr() << "\n");
 
   // Determine the phase range, skipping INT16_MIN (floating constants).
@@ -115,20 +115,29 @@ void PhaseSplitter::run() {
     maxPhase = std::max(maxPhase, phase);
   }
 
-  // Compute effective result phases. The declared result phase may be earlier
-  // than the phase where the return value is actually available (e.g., a `dyn`
-  // arg forces the return value to a later phase). In such cases, adjust the
-  // result phase to where the value is actually computed.
+  // Compute effective result phases. The declared result phase is
+  // authoritative: if the body produces a value at a later phase than declared,
+  // that is a user error (the function signature promises an earlier phase than
+  // the body can deliver).
   auto returnOp = funcOp.getReturnOp();
   auto declaredResultPhases = funcOp.getResultPhases();
   SmallVector<int16_t> effectiveResultPhases;
+  bool hasReturnPhaseMismatch = false;
   for (auto [idx, value] : llvm::enumerate(returnOp.getValues())) {
     int16_t declared = static_cast<int16_t>(declaredResultPhases[idx]);
     int16_t valuePhase = analysis.getValuePhase(value);
     if (valuePhase == INT16_MIN)
       valuePhase = declared;
+    if (valuePhase > declared) {
+      emitError(returnOp.getLoc())
+          << "return value is available at phase " << valuePhase
+          << " but function declares phase " << declared << " return";
+      hasReturnPhaseMismatch = true;
+    }
     effectiveResultPhases.push_back(std::max(declared, valuePhase));
   }
+  if (hasReturnPhaseMismatch)
+    return failure();
 
   // Extend the phase range based on the function's declared arg/result phases.
   // These may lie outside the range of computed op/value phases (e.g., a `dyn`
@@ -1065,6 +1074,7 @@ void PhaseSplitter::run() {
   // so that callers processed later can look it up.
   symbolTable.erase(funcOp);
   symbolTable.insert(splitFuncOp);
+  return success();
 }
 
 namespace {
@@ -1142,7 +1152,8 @@ void SplitPhasesPass::runOnOperation() {
   for (unsigned idx : topoOrder) {
     auto &[funcOp, analysis] = analyses[idx];
     PhaseSplitter splitter(analysis, symbolTable);
-    splitter.run();
+    if (failed(splitter.run()))
+      return signalPassFailure();
     // Unified func is erased inside run().
   }
 }
