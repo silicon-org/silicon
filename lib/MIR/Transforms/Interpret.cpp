@@ -64,9 +64,8 @@ LogicalResult Interpreter::executeOp(Operation *op,
   if (auto constOp = dyn_cast<mir::ConstantOp>(op)) {
     values[constOp] = constOp.getValue();
   } else if (isa<mir::AddOp, mir::SubOp, mir::MulOp, mir::DivOp, mir::ModOp,
-                 mir::AndOp, mir::OrOp, mir::XorOp, mir::ShlOp, mir::ShrOp,
-                 mir::EqOp, mir::NeqOp, mir::LtOp, mir::GtOp, mir::GeqOp,
-                 mir::LeqOp>(op)) {
+                 mir::AndOp, mir::OrOp, mir::XorOp, mir::ShlOp, mir::ShrOp>(
+                 op)) {
     auto lhs = cast<base::IntAttr>(operands[0]).getValue();
     auto rhs = cast<base::IntAttr>(operands[1]).getValue();
     DynamicAPInt value;
@@ -92,23 +91,33 @@ LogicalResult Interpreter::executeOp(Operation *op,
       value = DynamicAPInt(int64_t(lhs) << int64_t(rhs));
     else if (isa<mir::ShrOp>(op))
       value = DynamicAPInt(int64_t(lhs) >> int64_t(rhs));
-    else if (isa<mir::EqOp>(op))
-      value = DynamicAPInt(lhs == rhs ? 1 : 0);
-    else if (isa<mir::NeqOp>(op))
-      value = DynamicAPInt(lhs != rhs ? 1 : 0);
-    else if (isa<mir::LtOp>(op))
-      value = DynamicAPInt(lhs < rhs ? 1 : 0);
-    else if (isa<mir::GtOp>(op))
-      value = DynamicAPInt(lhs > rhs ? 1 : 0);
-    else if (isa<mir::GeqOp>(op))
-      value = DynamicAPInt(lhs >= rhs ? 1 : 0);
-    else if (isa<mir::LeqOp>(op))
-      value = DynamicAPInt(lhs <= rhs ? 1 : 0);
     values[op->getResult(0)] = base::IntAttr::get(op->getContext(), value);
+  } else if (isa<mir::EqOp, mir::NeqOp, mir::LtOp, mir::GtOp, mir::GeqOp,
+                 mir::LeqOp>(op)) {
+    // Comparison ops produce BoolAttr results.
+    auto lhs = cast<base::IntAttr>(operands[0]).getValue();
+    auto rhs = cast<base::IntAttr>(operands[1]).getValue();
+    bool result = false;
+    if (isa<mir::EqOp>(op))
+      result = lhs == rhs;
+    else if (isa<mir::NeqOp>(op))
+      result = lhs != rhs;
+    else if (isa<mir::LtOp>(op))
+      result = lhs < rhs;
+    else if (isa<mir::GtOp>(op))
+      result = lhs > rhs;
+    else if (isa<mir::GeqOp>(op))
+      result = lhs >= rhs;
+    else if (isa<mir::LeqOp>(op))
+      result = lhs <= rhs;
+    values[op->getResult(0)] = base::BoolAttr::get(op->getContext(), result);
   } else if (auto ifOp = dyn_cast<mir::IfOp>(op)) {
     // Evaluate the condition and execute the chosen region's block.
-    auto condAttr = cast<base::IntAttr>(operands[0]);
-    bool condTrue = condAttr.getValue() != 0;
+    bool condTrue = false;
+    if (auto boolAttr = dyn_cast<base::BoolAttr>(operands[0]))
+      condTrue = boolAttr.getValue();
+    else if (auto intAttr = dyn_cast<base::IntAttr>(operands[0]))
+      condTrue = intAttr.getValue() != 0;
     auto &region = condTrue ? ifOp.getThenRegion() : ifOp.getElseRegion();
 
     for (auto &innerOp : region.front()) {

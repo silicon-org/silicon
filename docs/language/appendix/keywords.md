@@ -12,6 +12,7 @@ This appendix provides a quick reference for all keywords, organized by whether 
 
 The following keywords currently have functionality in the Silicon language.
 
+- **`bool`**: The boolean type, with values `true` and `false`.
 - **`const`**: Mark a function argument or result as computed in an earlier phase and being constant now, wrap an expression in a `const { ... }` block to evaluate before the surrounding code runs, or place before `fn` to shift all phases of a function earlier. Multiple modifiers stack: `const const fn` shifts by -2.
 - **`dyn`**: Mark a function argument or result as computed in a later phase and being unknown now, wrap an expression in a `dyn { ... }` block to evaluate after the surrounding code runs, or place before `fn` to shift all phases of a function later. Modifiers can be mixed: `const dyn fn` cancels out to a net shift of 0.
 - **`else`**: Define a fallback branch in an `if` expression.
@@ -20,8 +21,10 @@ The following keywords currently have functionality in the Silicon language.
 - **`mod`**: Declare a hardware module. Has the same syntax and semantics as `fn`, but signals that the function describes hardware and will eventually be lowered to a hardware module.
 - **`int`**: The generic signed integer type.
 - **`let`**: Bind a variable in the current scope, with an optional type annotation and initializer.
+- **`false`**: Boolean literal for the false value.
 - **`pub`**: Make a function visible outside its module.
 - **`return`**: Return a value from the current function early.
+- **`true`**: Boolean literal for the true value.
 - **`uint`**: An unsigned integer type parameterized by bit width, as in `uint<32>`.
 
 ## Keywords Reserved for Future Use

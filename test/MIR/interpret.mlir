@@ -84,52 +84,82 @@ mir.func @test_shr() -> (result: !si.int) {
   mir.return %2 : !si.int
 }
 
-// CHECK: mir.evaluated_func @test_eq [#si.int<1> : !si.int]
-mir.func @test_eq() -> (result: !si.int) {
+// CHECK: mir.evaluated_func @test_eq [#si.bool<true> : !si.bool]
+mir.func @test_eq() -> (result: !si.bool) {
   %0 = mir.constant #si.int<3> : !si.int
   %1 = mir.constant #si.int<3> : !si.int
-  %2 = mir.eq %0, %1 : !si.int -> !si.int
-  mir.return %2 : !si.int
+  %2 = mir.eq %0, %1 : !si.int -> !si.bool
+  mir.return %2 : !si.bool
 }
 
-// CHECK: mir.evaluated_func @test_neq [#si.int<1> : !si.int]
-mir.func @test_neq() -> (result: !si.int) {
+// CHECK: mir.evaluated_func @test_neq [#si.bool<true> : !si.bool]
+mir.func @test_neq() -> (result: !si.bool) {
   %0 = mir.constant #si.int<3> : !si.int
   %1 = mir.constant #si.int<4> : !si.int
-  %2 = mir.neq %0, %1 : !si.int -> !si.int
-  mir.return %2 : !si.int
+  %2 = mir.neq %0, %1 : !si.int -> !si.bool
+  mir.return %2 : !si.bool
 }
 
-// CHECK: mir.evaluated_func @test_lt [#si.int<1> : !si.int]
-mir.func @test_lt() -> (result: !si.int) {
+// CHECK: mir.evaluated_func @test_lt [#si.bool<true> : !si.bool]
+mir.func @test_lt() -> (result: !si.bool) {
   %0 = mir.constant #si.int<2> : !si.int
   %1 = mir.constant #si.int<5> : !si.int
-  %2 = mir.lt %0, %1 : !si.int -> !si.int
-  mir.return %2 : !si.int
+  %2 = mir.lt %0, %1 : !si.int -> !si.bool
+  mir.return %2 : !si.bool
 }
 
-// CHECK: mir.evaluated_func @test_gt [#si.int<1> : !si.int]
-mir.func @test_gt() -> (result: !si.int) {
+// CHECK: mir.evaluated_func @test_gt [#si.bool<true> : !si.bool]
+mir.func @test_gt() -> (result: !si.bool) {
   %0 = mir.constant #si.int<5> : !si.int
   %1 = mir.constant #si.int<3> : !si.int
-  %2 = mir.gt %0, %1 : !si.int -> !si.int
-  mir.return %2 : !si.int
+  %2 = mir.gt %0, %1 : !si.int -> !si.bool
+  mir.return %2 : !si.bool
 }
 
-// CHECK: mir.evaluated_func @test_geq [#si.int<1> : !si.int]
-mir.func @test_geq() -> (result: !si.int) {
+// CHECK: mir.evaluated_func @test_geq [#si.bool<true> : !si.bool]
+mir.func @test_geq() -> (result: !si.bool) {
   %0 = mir.constant #si.int<3> : !si.int
   %1 = mir.constant #si.int<3> : !si.int
-  %2 = mir.geq %0, %1 : !si.int -> !si.int
-  mir.return %2 : !si.int
+  %2 = mir.geq %0, %1 : !si.int -> !si.bool
+  mir.return %2 : !si.bool
 }
 
-// CHECK: mir.evaluated_func @test_leq [#si.int<1> : !si.int]
-mir.func @test_leq() -> (result: !si.int) {
+// CHECK: mir.evaluated_func @test_leq [#si.bool<true> : !si.bool]
+mir.func @test_leq() -> (result: !si.bool) {
   %0 = mir.constant #si.int<2> : !si.int
   %1 = mir.constant #si.int<5> : !si.int
-  %2 = mir.leq %0, %1 : !si.int -> !si.int
-  mir.return %2 : !si.int
+  %2 = mir.leq %0, %1 : !si.int -> !si.bool
+  mir.return %2 : !si.bool
+}
+
+//===----------------------------------------------------------------------===//
+// Bool conditions: verify that the interpreter handles BoolAttr conditions
+// in if ops.
+
+// CHECK: mir.evaluated_func @test_if_bool_true [#si.int<42> : !si.int]
+mir.func @test_if_bool_true() -> (result: !si.int) {
+  %cond = mir.constant #si.bool<true> : !si.bool
+  %a = mir.constant #si.int<42> : !si.int
+  %b = mir.constant #si.int<7> : !si.int
+  %0 = mir.if %cond : !si.bool, !si.int {
+    mir.yield %a : !si.int
+  } else {
+    mir.yield %b : !si.int
+  }
+  mir.return %0 : !si.int
+}
+
+// CHECK: mir.evaluated_func @test_if_bool_false [#si.int<7> : !si.int]
+mir.func @test_if_bool_false() -> (result: !si.int) {
+  %cond = mir.constant #si.bool<false> : !si.bool
+  %a = mir.constant #si.int<42> : !si.int
+  %b = mir.constant #si.int<7> : !si.int
+  %0 = mir.if %cond : !si.bool, !si.int {
+    mir.yield %a : !si.int
+  } else {
+    mir.yield %b : !si.int
+  }
+  mir.return %0 : !si.int
 }
 
 //===----------------------------------------------------------------------===//

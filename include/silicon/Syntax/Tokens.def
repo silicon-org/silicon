@@ -59,6 +59,10 @@ TOK_SYMBOL2(Geq, ">=")
 TOK_SYMBOL2(Leq, "<=")
 
 // Logical operators
+TOK_SYMBOL2(LogicalAnd, "&&")
+TOK_SYMBOL2(LogicalOr, "||")
+
+// Bitwise operators
 TOK_SYMBOL1(And, "&")
 TOK_SYMBOL1(Or, "|")
 TOK_SYMBOL1(Xor, "^")
@@ -73,9 +77,11 @@ TOK_SYMBOL1(Div, "/")
 TOK_SYMBOL1(Mod, "%")
 
 // Keywords (alphabetical)
+TOK_KEYWORD(bool)
 TOK_KEYWORD(const)
 TOK_KEYWORD(dyn)
 TOK_KEYWORD(else)
+TOK_KEYWORD(false)
 TOK_KEYWORD(fn)
 TOK_KEYWORD(for)
 TOK_KEYWORD(if)
@@ -87,6 +93,7 @@ TOK_KEYWORD(match)
 TOK_KEYWORD(mod)
 TOK_KEYWORD(pub)
 TOK_KEYWORD(return)
+TOK_KEYWORD(true)
 TOK_KEYWORD(while)
 
 #undef TOK_ANY

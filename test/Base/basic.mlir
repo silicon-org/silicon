@@ -4,6 +4,8 @@
 
 // CHECK-LABEL: func.func @types
 func.func @types(
+  // CHECK-SAME: %{{.*}}: !si.bool
+  %z: !si.bool,
   // CHECK-SAME: %{{.*}}: !si.int
   %a: !si.int,
   // CHECK-SAME: %{{.*}}: !si.uint<8>
@@ -22,6 +24,10 @@ func.func @types(
 
 // CHECK-LABEL: func.func @attrs
 func.func @attrs() {
+  // CHECK: mir.constant #si.bool<true>
+  %b0 = mir.constant #si.bool<true>
+  // CHECK: mir.constant #si.bool<false>
+  %b1 = mir.constant #si.bool<false>
   // CHECK: mir.constant #si.int<42>
   %0 = mir.constant #si.int<42>
   // CHECK: mir.constant #si.type<!si.int>

@@ -1,6 +1,7 @@
 // RUN: silicon-opt --verify-roundtrip --verify-diagnostics %s
 
 func.func @TypeConstructors(%value: !hir.any, %type: !hir.any) {
+  hir.bool_type
   hir.unit_type
   hir.int_type
   hir.type_type
@@ -19,6 +20,8 @@ func.func @ValueTyping() {
 }
 
 func.func @Foo(%arg0: !hir.any, %arg1: !hir.any, %arg2: !hir.any, %arg3: i1) {
+  hir.constant_bool <true>
+  hir.constant_bool <false>
   hir.constant_int 42
   hir.constant_unit
   hir.inferrable

@@ -14,6 +14,11 @@
 using namespace silicon;
 using namespace codegen;
 
+/// Handle the bool type.
+static Value convert(ast::BoolType &type, Context &cx) {
+  return hir::BoolTypeOp::create(cx.builder, type.loc);
+}
+
 /// Handle the int type.
 static Value convert(ast::IntType &type, Context &cx) {
   return hir::IntTypeOp::create(cx.builder, type.loc);

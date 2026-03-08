@@ -33,6 +33,8 @@ The following table contains the operators in Silicon, an example of how the ope
 | `!=` | `expr != expr` | Inequality |
 | `^` | `expr ^ expr` | Bitwise XOR |
 | `\|` | `expr \| expr` | Bitwise OR |
+| `&&` | `expr && expr` | Short-circuiting logical AND |
+| `\|\|` | `expr \|\| expr` | Short-circuiting logical OR |
 
 ### Operator Precedence
 
@@ -48,7 +50,9 @@ All binary operators are left-associative.
 | | `==` `!=` |
 | | `&` |
 | | `^` |
-| Lowest | `\|` |
+| | `\|` |
+| | `&&` |
+| Lowest | `\|\|` |
 
 ## Non-Operator Symbols
 

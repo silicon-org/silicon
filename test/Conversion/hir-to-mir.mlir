@@ -2,6 +2,9 @@
 
 // CHECK-LABEL: mir.func @Types
 hir.func @Types() -> () {
+  // CHECK: mir.constant #si.type<!si.bool>
+  %bool_type = hir.bool_type
+
   // CHECK: mir.constant #si.type<!si.int>
   %int_type = hir.int_type
 
@@ -29,6 +32,10 @@ hir.func @Types() -> () {
 
 // CHECK-LABEL: mir.func @Constants
 hir.func @Constants() -> () {
+  // CHECK: mir.constant #si.bool<true>
+  hir.constant_bool <true>
+  // CHECK: mir.constant #si.bool<false>
+  hir.constant_bool <false>
   // CHECK: mir.constant #si.int<42>
   hir.constant_int 42
   // CHECK: mir.constant #si.unit
@@ -96,21 +103,22 @@ hir.func @BinaryBitwise(%a, %b) -> (r0, r1, r2, r3, r4) {
 // CHECK-LABEL: mir.func @BinaryComparison(%a: !si.int, %b: !si.int)
 hir.func @BinaryComparison(%a, %b) -> (r0, r1, r2, r3, r4, r5) {
   %int = hir.int_type
+  %bool = hir.bool_type
   %a_typed = hir.coerce_type %a, %int
   %b_typed = hir.coerce_type %b, %int
-  %r0 = hir.eq %a_typed, %b_typed : %int
-  %r1 = hir.neq %a_typed, %b_typed : %int
-  %r2 = hir.lt %a_typed, %b_typed : %int
-  %r3 = hir.gt %a_typed, %b_typed : %int
-  %r4 = hir.geq %a_typed, %b_typed : %int
-  %r5 = hir.leq %a_typed, %b_typed : %int
-  // CHECK: mir.eq %a, %b : !si.int -> !si.int
-  // CHECK: mir.neq %a, %b : !si.int -> !si.int
-  // CHECK: mir.lt %a, %b : !si.int -> !si.int
-  // CHECK: mir.gt %a, %b : !si.int -> !si.int
-  // CHECK: mir.geq %a, %b : !si.int -> !si.int
-  // CHECK: mir.leq %a, %b : !si.int -> !si.int
-  hir.return %r0, %r1, %r2, %r3, %r4, %r5 : (%int, %int) -> (%int, %int, %int, %int, %int, %int)
+  %r0 = hir.eq %a_typed, %b_typed : %bool
+  %r1 = hir.neq %a_typed, %b_typed : %bool
+  %r2 = hir.lt %a_typed, %b_typed : %bool
+  %r3 = hir.gt %a_typed, %b_typed : %bool
+  %r4 = hir.geq %a_typed, %b_typed : %bool
+  %r5 = hir.leq %a_typed, %b_typed : %bool
+  // CHECK: mir.eq %a, %b : !si.int -> !si.bool
+  // CHECK: mir.neq %a, %b : !si.int -> !si.bool
+  // CHECK: mir.lt %a, %b : !si.int -> !si.bool
+  // CHECK: mir.gt %a, %b : !si.int -> !si.bool
+  // CHECK: mir.geq %a, %b : !si.int -> !si.bool
+  // CHECK: mir.leq %a, %b : !si.int -> !si.bool
+  hir.return %r0, %r1, %r2, %r3, %r4, %r5 : (%int, %int) -> (%bool, %bool, %bool, %bool, %bool, %bool)
 }
 
 // Verify that UnifyOp forwards its operand through opaque_pack, rather than

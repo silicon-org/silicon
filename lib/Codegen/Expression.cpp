@@ -16,6 +16,13 @@
 using namespace silicon;
 using namespace codegen;
 
+/// Handle boolean literal expressions.
+static Value convert(ast::BoolLitExpr &expr, Context &cx) {
+  return hir::ConstantBoolOp::create(
+      cx.builder, expr.loc,
+      base::BoolAttr::get(cx.module.getContext(), expr.value));
+}
+
 /// Handle number literal expressions.
 static Value convert(ast::NumLitExpr &expr, Context &cx) {
   return hir::ConstantIntOp::create(
@@ -118,8 +125,64 @@ static Value convert(ast::UnaryExpr &expr, Context &cx) {
   }
 }
 
+/// Desugar a short-circuiting logical operator into an if/else expression.
+/// `a && b` → `if a { b } else { false }`
+/// `a || b` → `if a { true } else { b }`
+static Value convertLogicalOp(ast::BinaryExpr &expr, Context &cx, bool isAnd) {
+  auto lhs = cx.convertExpr(*expr.lhs);
+  if (!lhs)
+    return {};
+
+  auto anyType = hir::AnyType::get(cx.module.getContext());
+  auto ifOp = hir::IfOp::create(cx.builder, expr.loc, TypeRange{anyType}, lhs);
+
+  // Build the then region.
+  {
+    auto ip = cx.builder.saveInsertionPoint();
+    cx.builder.setInsertionPointToStart(&ifOp.getThenRegion().emplaceBlock());
+    Value thenValue;
+    if (isAnd) {
+      thenValue = cx.convertExpr(*expr.rhs);
+    } else {
+      thenValue = hir::ConstantBoolOp::create(
+          cx.builder, expr.loc,
+          base::BoolAttr::get(cx.module.getContext(), true));
+    }
+    if (!thenValue)
+      return {};
+    hir::YieldOp::create(cx.builder, expr.loc, ValueRange{thenValue});
+    cx.builder.restoreInsertionPoint(ip);
+  }
+
+  // Build the else region.
+  {
+    auto ip = cx.builder.saveInsertionPoint();
+    cx.builder.setInsertionPointToStart(&ifOp.getElseRegion().emplaceBlock());
+    Value elseValue;
+    if (isAnd) {
+      elseValue = hir::ConstantBoolOp::create(
+          cx.builder, expr.loc,
+          base::BoolAttr::get(cx.module.getContext(), false));
+    } else {
+      elseValue = cx.convertExpr(*expr.rhs);
+    }
+    if (!elseValue)
+      return {};
+    hir::YieldOp::create(cx.builder, expr.loc, ValueRange{elseValue});
+    cx.builder.restoreInsertionPoint(ip);
+  }
+
+  return ifOp.getResult(0);
+}
+
 /// Handle binary expressions by dispatching to the appropriate HIR op.
 static Value convert(ast::BinaryExpr &expr, Context &cx) {
+  // Short-circuiting logical operators are desugared into if/else.
+  if (expr.op == ast::BinaryOp::LogicalAnd)
+    return convertLogicalOp(expr, cx, /*isAnd=*/true);
+  if (expr.op == ast::BinaryOp::LogicalOr)
+    return convertLogicalOp(expr, cx, /*isAnd=*/false);
+
   auto lhs = cx.convertExpr(*expr.lhs);
   if (!lhs)
     return {};
@@ -128,43 +191,59 @@ static Value convert(ast::BinaryExpr &expr, Context &cx) {
     return {};
   auto lhsType = hir::getOrCreateTypeOf(cx.builder, expr.loc, lhs);
   auto rhsType = hir::getOrCreateTypeOf(cx.builder, expr.loc, rhs);
-  Value resultType = cx.builder.createOrFold<hir::UnifyOp>(
+  Value operandType = cx.builder.createOrFold<hir::UnifyOp>(
       expr.loc, hir::AnyType::get(cx.module.getContext()), lhsType, rhsType);
 
   auto loc = expr.loc;
   switch (expr.op) {
   case ast::BinaryOp::Add:
-    return hir::AddOp::create(cx.builder, loc, lhs, rhs, resultType);
+    return hir::AddOp::create(cx.builder, loc, lhs, rhs, operandType);
   case ast::BinaryOp::Sub:
-    return hir::SubOp::create(cx.builder, loc, lhs, rhs, resultType);
+    return hir::SubOp::create(cx.builder, loc, lhs, rhs, operandType);
   case ast::BinaryOp::Mul:
-    return hir::MulOp::create(cx.builder, loc, lhs, rhs, resultType);
+    return hir::MulOp::create(cx.builder, loc, lhs, rhs, operandType);
   case ast::BinaryOp::Div:
-    return hir::DivOp::create(cx.builder, loc, lhs, rhs, resultType);
+    return hir::DivOp::create(cx.builder, loc, lhs, rhs, operandType);
   case ast::BinaryOp::Mod:
-    return hir::ModOp::create(cx.builder, loc, lhs, rhs, resultType);
+    return hir::ModOp::create(cx.builder, loc, lhs, rhs, operandType);
   case ast::BinaryOp::And:
-    return hir::AndOp::create(cx.builder, loc, lhs, rhs, resultType);
+    return hir::AndOp::create(cx.builder, loc, lhs, rhs, operandType);
   case ast::BinaryOp::Or:
-    return hir::OrOp::create(cx.builder, loc, lhs, rhs, resultType);
+    return hir::OrOp::create(cx.builder, loc, lhs, rhs, operandType);
   case ast::BinaryOp::Xor:
-    return hir::XorOp::create(cx.builder, loc, lhs, rhs, resultType);
+    return hir::XorOp::create(cx.builder, loc, lhs, rhs, operandType);
   case ast::BinaryOp::Shl:
-    return hir::ShlOp::create(cx.builder, loc, lhs, rhs, resultType);
+    return hir::ShlOp::create(cx.builder, loc, lhs, rhs, operandType);
   case ast::BinaryOp::Shr:
-    return hir::ShrOp::create(cx.builder, loc, lhs, rhs, resultType);
+    return hir::ShrOp::create(cx.builder, loc, lhs, rhs, operandType);
   case ast::BinaryOp::Eq:
-    return hir::EqOp::create(cx.builder, loc, lhs, rhs, resultType);
   case ast::BinaryOp::Neq:
-    return hir::NeqOp::create(cx.builder, loc, lhs, rhs, resultType);
   case ast::BinaryOp::Lt:
-    return hir::LtOp::create(cx.builder, loc, lhs, rhs, resultType);
   case ast::BinaryOp::Gt:
-    return hir::GtOp::create(cx.builder, loc, lhs, rhs, resultType);
   case ast::BinaryOp::Geq:
-    return hir::GeqOp::create(cx.builder, loc, lhs, rhs, resultType);
-  case ast::BinaryOp::Leq:
-    return hir::LeqOp::create(cx.builder, loc, lhs, rhs, resultType);
+  case ast::BinaryOp::Leq: {
+    // Comparisons return bool, not the operand type.
+    Value boolType = hir::BoolTypeOp::create(cx.builder, loc);
+    switch (expr.op) {
+    case ast::BinaryOp::Eq:
+      return hir::EqOp::create(cx.builder, loc, lhs, rhs, boolType);
+    case ast::BinaryOp::Neq:
+      return hir::NeqOp::create(cx.builder, loc, lhs, rhs, boolType);
+    case ast::BinaryOp::Lt:
+      return hir::LtOp::create(cx.builder, loc, lhs, rhs, boolType);
+    case ast::BinaryOp::Gt:
+      return hir::GtOp::create(cx.builder, loc, lhs, rhs, boolType);
+    case ast::BinaryOp::Geq:
+      return hir::GeqOp::create(cx.builder, loc, lhs, rhs, boolType);
+    case ast::BinaryOp::Leq:
+      return hir::LeqOp::create(cx.builder, loc, lhs, rhs, boolType);
+    default:
+      llvm_unreachable("unreachable");
+    }
+  }
+  case ast::BinaryOp::LogicalAnd:
+  case ast::BinaryOp::LogicalOr:
+    llvm_unreachable("handled above");
   }
   llvm_unreachable("unhandled binary op kind");
 }
@@ -187,14 +266,19 @@ static Value convert(ast::BlockExpr &block, Context &cx) {
 
 /// Handle if/else expressions. Create an `hir.if` op with then and else
 /// regions. If the else branch is absent, a unit-yielding else block is
-/// generated.
+/// generated. The condition is unified with `bool` to enforce type safety.
 static Value convert(ast::IfExpr &expr, Context &cx) {
   auto condition = cx.convertExpr(*expr.condition);
   if (!condition)
     return {};
 
-  // Create the hir.if op with a single !hir.any result.
+  // Unify the condition type with bool.
   auto anyType = hir::AnyType::get(cx.module.getContext());
+  auto boolType = hir::BoolTypeOp::create(cx.builder, expr.loc);
+  auto condType = hir::getOrCreateTypeOf(cx.builder, expr.loc, condition);
+  cx.builder.createOrFold<hir::UnifyOp>(expr.loc, anyType, condType, boolType);
+
+  // Create the hir.if op with a single !hir.any result.
   auto ifOp =
       hir::IfOp::create(cx.builder, expr.loc, TypeRange{anyType}, condition);
 

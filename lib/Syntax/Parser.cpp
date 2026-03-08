@@ -204,6 +204,10 @@ ast::FnArg *Parser::parseFnArg() {
 //===----------------------------------------------------------------------===//
 
 ast::Type *Parser::parseType() {
+  // Parse the `bool` type.
+  if (auto kw = consumeIf(TokenKind::Kw_bool))
+    return ast.create<ast::BoolType>({{ast::TypeKind::Bool, loc(kw)}});
+
   // Parse the `int` type.
   if (auto kw = consumeIf(TokenKind::Kw_int))
     return ast.create<ast::IntType>({{ast::TypeKind::Int, loc(kw)}});
@@ -339,6 +343,14 @@ ast::Expr *Parser::parseExpr(ast::Precedence minPrec) {
 }
 
 ast::Expr *Parser::parsePrimaryExpr() {
+  // Parse boolean literals.
+  if (auto kw = consumeIf(TokenKind::Kw_true))
+    return ast.create<ast::BoolLitExpr>(
+        {{ast::ExprKind::BoolLit, loc(kw)}, true});
+  if (auto kw = consumeIf(TokenKind::Kw_false))
+    return ast.create<ast::BoolLitExpr>(
+        {{ast::ExprKind::BoolLit, loc(kw)}, false});
+
   // Parse identifiers.
   if (auto ident = consumeIf(TokenKind::Ident))
     return ast.create<ast::IdentExpr>(

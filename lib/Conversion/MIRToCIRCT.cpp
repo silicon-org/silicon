@@ -56,6 +56,10 @@ static std::optional<Type> convertType(Type type) {
   if (isa<IntegerType>(type))
     return type;
 
+  // `!si.bool` → `i1`.
+  if (isa<base::BoolType>(type))
+    return IntegerType::get(type.getContext(), 1);
+
   // `!si.int` → `i64`.
   if (isa<base::IntType>(type))
     return IntegerType::get(type.getContext(), 64);

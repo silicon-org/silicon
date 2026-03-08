@@ -78,29 +78,31 @@ fn testShl(a: int, b: int) -> int { a << b }
 // CHECK: hir.shr %a, %b
 fn testShr(a: int, b: int) -> int { a >> b }
 
+// Comparison ops produce a bool result type.
 // CHECK-LABEL: hir.unified_func private @testEq
+// CHECK: hir.bool_type
 // CHECK: hir.eq %a, %b
-fn testEq(a: int, b: int) -> int { a == b }
+fn testEq(a: int, b: int) -> bool { a == b }
 
 // CHECK-LABEL: hir.unified_func private @testNeq
 // CHECK: hir.neq %a, %b
-fn testNeq(a: int, b: int) -> int { a != b }
+fn testNeq(a: int, b: int) -> bool { a != b }
 
 // CHECK-LABEL: hir.unified_func private @testLt
 // CHECK: hir.lt %a, %b
-fn testLt(a: int, b: int) -> int { a < b }
+fn testLt(a: int, b: int) -> bool { a < b }
 
 // CHECK-LABEL: hir.unified_func private @testGt
 // CHECK: hir.gt %a, %b
-fn testGt(a: int, b: int) -> int { a > b }
+fn testGt(a: int, b: int) -> bool { a > b }
 
 // CHECK-LABEL: hir.unified_func private @testGeq
 // CHECK: hir.geq %a, %b
-fn testGeq(a: int, b: int) -> int { a >= b }
+fn testGeq(a: int, b: int) -> bool { a >= b }
 
 // CHECK-LABEL: hir.unified_func private @testLeq
 // CHECK: hir.leq %a, %b
-fn testLeq(a: int, b: int) -> int { a <= b }
+fn testLeq(a: int, b: int) -> bool { a <= b }
 
 //===----------------------------------------------------------------------===//
 // Unary operations
@@ -308,3 +310,75 @@ fn earlyReturn() -> int {
   return 1;
   2
 }
+
+//===----------------------------------------------------------------------===//
+// Bool type and literals
+//===----------------------------------------------------------------------===//
+
+// Ensure `true` produces `hir.constant_bool <true>`.
+// CHECK-LABEL: hir.unified_func private @testBoolTrue
+// CHECK: hir.constant_bool <true>
+fn testBoolTrue() -> bool { true }
+
+// Ensure `false` produces `hir.constant_bool <false>`.
+// CHECK-LABEL: hir.unified_func private @testBoolFalse
+// CHECK: hir.constant_bool <false>
+fn testBoolFalse() -> bool { false }
+
+//===----------------------------------------------------------------------===//
+// Logical operators
+//===----------------------------------------------------------------------===//
+
+// Ensure `&&` desugars into short-circuiting if/else:
+// `a && b` → `if a { b } else { false }`
+// CHECK-LABEL: hir.unified_func private @testLogicalAnd
+// CHECK: hir.if %a
+// CHECK:   hir.eq %b, %c
+// CHECK:   hir.yield
+// CHECK: else
+// CHECK:   hir.constant_bool <false>
+// CHECK:   hir.yield
+fn testLogicalAnd(a: bool, b: int, c: int) -> bool { a && b == c }
+
+// Ensure `||` desugars into short-circuiting if/else:
+// `a || b` → `if a { true } else { b }`
+// CHECK-LABEL: hir.unified_func private @testLogicalOr
+// CHECK: hir.if %a
+// CHECK:   hir.constant_bool <true>
+// CHECK:   hir.yield
+// CHECK: else
+// CHECK:   hir.eq %b, %c
+// CHECK:   hir.yield
+fn testLogicalOr(a: bool, b: int, c: int) -> bool { a || b == c }
+
+//===----------------------------------------------------------------------===//
+// If condition unification with bool
+//===----------------------------------------------------------------------===//
+
+// Ensure if conditions are unified with bool.
+// CHECK-LABEL: hir.unified_func private @testIfBoolCondition
+// CHECK: hir.bool_type
+// CHECK: hir.unify
+// CHECK: hir.if
+fn testIfBoolCondition(a: bool) -> int {
+  if a { 1 } else { 2 }
+}
+
+//===----------------------------------------------------------------------===//
+// Operator precedence for logical operators
+//===----------------------------------------------------------------------===//
+
+// Ensure `||` has the lowest precedence among all binary operators,
+// and `&&` is just above it.
+// `a || b && c` is `a || (b && c)`, desugared as:
+// if a { true } else { if b { c } else { false } }
+// CHECK-LABEL: hir.unified_func private @precLogicalAndBeforeOr
+// CHECK: hir.if %a
+// CHECK:   hir.constant_bool <true>
+// CHECK:   hir.yield
+// CHECK: else
+// CHECK:   hir.if %b
+// CHECK:     hir.yield %c
+// CHECK:   else
+// CHECK:     hir.constant_bool <false>
+fn precLogicalAndBeforeOr(a: bool, b: bool, c: bool) -> bool { a || b && c }

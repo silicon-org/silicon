@@ -48,6 +48,14 @@ def BaseUnitAttr : BaseAttrDef<"Unit", [
   let assemblyFormat = "";
 }
 
+def SiBoolAttr : BaseAttrDef<"Bool", [
+  DeclareAttrInterfaceMethods<TypedAttrInterface>
+]> {
+  let mnemonic = "bool";
+  let parameters = (ins "bool":$value);
+  let assemblyFormat = "`<` $value `>`";
+}
+
 def OpaqueAttr : BaseAttrDef<"Opaque", [
   DeclareAttrInterfaceMethods<TypedAttrInterface>
 ]> {

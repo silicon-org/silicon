@@ -39,6 +39,12 @@ Type TypeAttr::getType() const { return TypeType::get(getContext()); }
 Type IntAttr::getType() const { return IntType::get(getContext()); }
 
 //===----------------------------------------------------------------------===//
+// BoolAttr
+//===----------------------------------------------------------------------===//
+
+Type base::BoolAttr::getType() const { return BoolType::get(getContext()); }
+
+//===----------------------------------------------------------------------===//
 // UnitAttr
 //===----------------------------------------------------------------------===//
 

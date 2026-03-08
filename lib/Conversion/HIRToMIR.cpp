@@ -54,6 +54,14 @@ static LogicalResult convert(hir::ConstantIntOp op,
   return success();
 }
 
+static LogicalResult convert(hir::ConstantBoolOp op,
+                             hir::ConstantBoolOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  auto attr = base::BoolAttr::get(op.getContext(), op.getValue().getValue());
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
 static LogicalResult convert(hir::ConstantUnitOp op,
                              hir::ConstantUnitOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
@@ -65,6 +73,15 @@ static LogicalResult convert(hir::ConstantUnitOp op,
 //===----------------------------------------------------------------------===//
 // Type Constructors
 //===----------------------------------------------------------------------===//
+
+static LogicalResult convert(hir::BoolTypeOp op,
+                             hir::BoolTypeOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  auto type = base::BoolType::get(op.getContext());
+  auto attr = base::TypeAttr::get(op.getContext(), type);
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
 
 static LogicalResult convert(hir::IntTypeOp op, hir::IntTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
@@ -256,7 +273,7 @@ static LogicalResult convertBinaryOp(HirOpT op,
 template <typename HirOpT, typename MirOpT>
 static LogicalResult convertCmpOp(HirOpT op, typename HirOpT::Adaptor adaptor,
                                   ConversionPatternRewriter &rewriter) {
-  rewriter.replaceOpWithNewOp<MirOpT>(op, adaptor.getLhs().getType(),
+  rewriter.replaceOpWithNewOp<MirOpT>(op, base::BoolType::get(op.getContext()),
                                       adaptor.getLhs(), adaptor.getRhs());
   return success();
 }
@@ -355,8 +372,8 @@ static bool isResolvableType(Value typeVal) {
     return false; // block arg — unresolved cross-phase value
 
   // Simple type constructors always resolve.
-  if (isa<hir::IntTypeOp, hir::UnitTypeOp, hir::TypeTypeOp, hir::AnyfuncTypeOp,
-          hir::OpaqueTypeOp>(defOp))
+  if (isa<hir::BoolTypeOp, hir::IntTypeOp, hir::UnitTypeOp, hir::TypeTypeOp,
+          hir::AnyfuncTypeOp, hir::OpaqueTypeOp>(defOp))
     return true;
 
   // UIntTypeOp needs its width to be a constant integer.
@@ -446,6 +463,8 @@ static Type resolveHIRType(Value typeVal) {
     return hir::AnyType::get(typeVal.getContext());
 
   auto *ctx = defOp->getContext();
+  if (isa<hir::BoolTypeOp>(defOp))
+    return base::BoolType::get(ctx);
   if (isa<hir::IntTypeOp>(defOp))
     return base::IntType::get(ctx);
   if (isa<hir::UnitTypeOp>(defOp))
@@ -487,6 +506,13 @@ static Type resolveHIRType(Value typeVal) {
   // CoerceTypeOp forwards its input value, so resolve the input's type.
   if (auto coerceOp = dyn_cast<hir::CoerceTypeOp>(defOp))
     return resolveHIRType(coerceOp.getInput());
+
+  // Look through unrealized_conversion_cast ops inserted by the conversion
+  // framework (e.g., when hir.bool_type has already been converted to
+  // mir.constant but consumers still expect !hir.any).
+  if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp))
+    if (castOp.getNumOperands() == 1)
+      return resolveHIRType(castOp.getOperand(0));
 
   // ConstantLike op with a TypeAttr (e.g., mir.constant or hir.mir_constant
   // from specialization).
@@ -682,8 +708,10 @@ void HIRToMIRPass::runOnOperation() {
   ConversionPatternSet patterns(&getContext(), converter);
   patterns.add(std::make_unique<FuncOpConversion>(converter, &getContext(),
                                                   &funcsToLower));
+  patterns.add<hir::ConstantBoolOp>(convert);
   patterns.add<hir::ConstantIntOp>(convert);
   patterns.add<hir::ConstantUnitOp>(convert);
+  patterns.add<hir::BoolTypeOp>(convert);
   patterns.add<hir::IntTypeOp>(convert);
   patterns.add<hir::UnitTypeOp>(convert);
   patterns.add<hir::TypeTypeOp>(convert);

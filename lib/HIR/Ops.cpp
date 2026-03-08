@@ -611,7 +611,24 @@ OpFoldResult TypeOfOp::fold(FoldAdaptor adaptor) {
 LogicalResult TypeOfOp::canonicalize(TypeOfOp op, PatternRewriter &rewriter) {
   // type_of(x) -> x's type operand, if extractable.
   if (auto type = getTypeOf(op.getInput())) {
-    rewriter.replaceOp(op, type);
+    // Verify the type value dominates this op. getTypeOf can look through
+    // IfOp into child regions, returning values that don't dominate us.
+    auto *opBlock = op->getBlock();
+    bool dominates = false;
+    if (auto *defOp = type.getDefiningOp()) {
+      dominates = defOp->getBlock() && opBlock &&
+                  defOp->getBlock()->getParent() == opBlock->getParent();
+    } else if (auto blockArg = dyn_cast<BlockArgument>(type)) {
+      dominates = blockArg.getOwner()->getParent() == opBlock->getParent();
+    }
+    if (dominates) {
+      rewriter.replaceOp(op, type);
+      return success();
+    }
+  }
+  // type_of(constant_bool) -> bool_type
+  if (op.getInput().getDefiningOp<ConstantBoolOp>()) {
+    rewriter.replaceOpWithNewOp<BoolTypeOp>(op);
     return success();
   }
   // type_of(constant_int) -> int_type
@@ -1002,8 +1019,22 @@ Value hir::getTypeOf(Value value) {
 }
 
 Value hir::getOrCreateTypeOf(OpBuilder &builder, Location loc, Value value) {
-  if (auto type = getTypeOf(value))
-    return type;
+  if (auto type = getTypeOf(value)) {
+    // Verify the type value is accessible at the current insertion point.
+    // getTypeOf can look through IfOp into child regions, returning values
+    // that don't dominate the builder's insertion point.
+    auto *insertBlock = builder.getInsertionBlock();
+    if (auto *defOp = type.getDefiningOp()) {
+      if (defOp->getBlock() && insertBlock &&
+          defOp->getBlock()->getParent() == insertBlock->getParent())
+        return type;
+    } else if (auto blockArg = dyn_cast<BlockArgument>(type)) {
+      if (blockArg.getOwner()->getParent() == insertBlock->getParent())
+        return type;
+    }
+  }
+  if (value.getDefiningOp<ConstantBoolOp>())
+    return BoolTypeOp::create(builder, loc).getResult();
   if (value.getDefiningOp<ConstantIntOp>())
     return IntTypeOp::create(builder, loc).getResult();
   if (value.getDefiningOp<ConstantUnitOp>())

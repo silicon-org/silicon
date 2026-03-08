@@ -58,16 +58,18 @@ using Binding = PointerUnion<FnItem *, FnArg *, LetStmt *>;
 /// See https://en.cppreference.com/w/c/language/operator_precedence.
 enum class Precedence {
   Min,
-  Or,     // |
-  Xor,    // ^
-  And,    // &
-  Eq,     // == !=
-  Rel,    // < > <= >=
-  Shift,  // << >>
-  Add,    // + -
-  Mul,    // * / %
-  Prefix, // - ! & * (unary prefix operators)
-  Suffix, // a.b a() a[]
+  LogicalOr,  // ||
+  LogicalAnd, // &&
+  Or,         // |
+  Xor,        // ^
+  And,        // &
+  Eq,         // == !=
+  Rel,        // < > <= >=
+  Shift,      // << >>
+  Add,        // + -
+  Mul,        // * / %
+  Prefix,     // - ! & * (unary prefix operators)
+  Suffix,     // a.b a() a[]
   Max
 };
 
@@ -177,6 +179,12 @@ struct Type {
   AST_VISIT_DECL();
 };
 
+/// A boolean type.
+struct BoolType : public Type {
+  AST_VISIT_DEF(BoolType) {}
+  static bool classof(const Type *type) { return type->kind == TypeKind::Bool; }
+};
+
 /// A generic integer type.
 struct IntType : public Type {
   AST_VISIT_DEF(IntType) {}
@@ -236,6 +244,15 @@ struct IdentExpr : public Expr {
   }
   static bool classof(const Expr *expr) {
     return expr->kind == ExprKind::Ident;
+  }
+};
+
+/// A boolean literal expression (`true` or `false`).
+struct BoolLitExpr : public Expr {
+  bool value;
+  AST_VISIT_DEF(BoolLitExpr) { AST_VISIT(value); }
+  static bool classof(const Expr *expr) {
+    return expr->kind == ExprKind::BoolLit;
   }
 };
 
@@ -536,6 +553,8 @@ struct Visitor {
   inline void visit(UnaryOp, Args &&...) {}
   template <typename... Args>
   inline void visit(BinaryOp, Args &&...) {}
+  template <typename... Args>
+  inline void visit(bool, Args &&...) {}
   template <typename... Args>
   inline void visit(Binding, Args &&...) {}
 

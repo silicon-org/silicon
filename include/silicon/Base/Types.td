@@ -47,6 +47,11 @@ def AnyfuncType : BaseTypeDef<"Anyfunc"> {
   let summary = "any function type";
 }
 
+def BoolType : BaseTypeDef<"Bool"> {
+  let mnemonic = "bool";
+  let summary = "boolean type";
+}
+
 def OpaqueType : BaseTypeDef<"Opaque"> {
   let mnemonic = "opaque";
   let summary = "opaque value bundle passed between phases";

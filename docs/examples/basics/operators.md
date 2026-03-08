@@ -5,7 +5,7 @@ weight: 5
 
 # Operators
 
-Silicon supports the usual arithmetic, bitwise, and comparison operators.
+Silicon supports arithmetic, bitwise, comparison, and logical operators.
 
 ## Arithmetic
 
@@ -30,6 +30,27 @@ fn bitwise(a: int, b: int) -> int {
   let shl = a << b;
   let shr = a >> b;
   and
+}
+```
+
+## Comparison
+
+Comparison operators return `bool`.
+
+```silicon
+fn is_equal(a: int, b: int) -> bool { a == b }
+fn less_than(a: int, b: int) -> bool { a < b }
+```
+
+## Logical
+
+The `&&` and `||` operators are short-circuiting logical operators that work on `bool` values.
+`a && b` only evaluates `b` if `a` is `true`.
+`a || b` only evaluates `b` if `a` is `false`.
+
+```silicon
+fn in_range(x: int, lo: int, hi: int) -> bool {
+  x >= lo && x <= hi
 }
 ```
 

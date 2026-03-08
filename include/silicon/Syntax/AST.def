@@ -26,6 +26,7 @@ AST_ITEM(Fn)
 #define AST_TYPE(NAME)
 #endif
 
+AST_TYPE(Bool)
 AST_TYPE(Int)
 AST_TYPE(UInt)
 
@@ -39,6 +40,7 @@ AST_TYPE(UInt)
 #define AST_EXPR(NAME)
 #endif
 
+AST_EXPR(BoolLit)
 AST_EXPR(Ident)
 AST_EXPR(NumLit)
 AST_EXPR(Call)
@@ -85,6 +87,10 @@ AST_UNARY(Not, Emark)
 AST_UNARY(Deref, Mul)
 AST_UNARY(Ref, And)
 
+// Logical operators (short-circuiting)
+AST_BINARY(LogicalAnd, LogicalAnd, LogicalAnd)
+AST_BINARY(LogicalOr, LogicalOr, LogicalOr)
+
 // Comparison
 AST_BINARY(Eq, Eq, Eq)
 AST_BINARY(Neq, Neq, Eq)
@@ -93,7 +99,7 @@ AST_BINARY(Gt, Gt, Rel)
 AST_BINARY(Geq, Geq, Rel)
 AST_BINARY(Leq, Leq, Rel)
 
-// Logical operators
+// Bitwise operators
 AST_BINARY(And, And, And)
 AST_BINARY(Or, Or, Or)
 AST_BINARY(Xor, Xor, Xor)

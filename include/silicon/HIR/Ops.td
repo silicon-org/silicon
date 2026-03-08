@@ -34,6 +34,12 @@ def ConstantIntOp : HIROp<"constant_int", [Pure]> {
   let assemblyFormat = "custom<IntAttr>($value) attr-dict";
 }
 
+def ConstantBoolOp : HIROp<"constant_bool", [Pure]> {
+  let arguments = (ins SiBoolAttr:$value);
+  let results = (outs AnyHIRType:$result);
+  let assemblyFormat = "$value attr-dict";
+}
+
 def ConstantUnitOp : HIROp<"constant_unit", [Pure]> {
   let results = (outs AnyHIRType:$result);
   let assemblyFormat = "attr-dict";
@@ -44,6 +50,11 @@ def ConstantUnitOp : HIROp<"constant_unit", [Pure]> {
 //===----------------------------------------------------------------------===//
 
 def UnitTypeOp : HIROp<"unit_type", [Pure]> {
+  let results = (outs AnyHIRType:$result);
+  let assemblyFormat = "attr-dict";
+}
+
+def BoolTypeOp : HIROp<"bool_type", [Pure]> {
   let results = (outs AnyHIRType:$result);
   let assemblyFormat = "attr-dict";
 }
