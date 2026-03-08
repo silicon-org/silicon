@@ -13,4 +13,5 @@ add_silicon_dialect_library(SiliconHIR
   MLIRSideEffectInterfaces
 )
 
+add_subdirectory(Analysis)
 add_subdirectory(Transforms)

@@ -26,6 +26,7 @@ void silicon::registerAllPasses() {
 
   // Register the Silicon passes.
   silicon::hir::registerPasses();
+  silicon::hir::registerTestPhaseAnalysisPass();
   silicon::mir::registerPasses();
   silicon::registerConversionPasses();
   silicon::registerTransformsPasses();

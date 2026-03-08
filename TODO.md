@@ -7,12 +7,8 @@
 - Make split func discardable by removing that `canDiscardOnUseEmpty` override
 - Fix formatting of custom-printed func ops when `attributes {isModule}` is present: the printer emits a double space before `attributes` (one trailing space after `)` plus one from the attr-dict printer) and no space between the closing `}` of the attr-dict and the opening `{` of the body region (e.g., `attributes {isModule}{` instead of `attributes {isModule} {`); affects `hir.func`, `hir.unified_func`, and `mir.func`
 - The input `mod hello(a: uint<42>) {}` to silc triggers the error `error: 'hir.uint_type' op using value defined outside the region`
+- Add a phase analysis section to the phase-splits.md design doc which describes the exact algorithm used to infer and assign phases; this should have enough detail that you could reimplement the current code just based on that description
 
 ## Postponed Long-Term Fixes
 
 - MIRToCIRCT: `!si.int` is temporarily mapped to `i64`; once bitwidth inference exists, this should be an error diagnostic instead
-
-- Make the PhaseAnalysis a proper MLIR analysis (through the analysis manager) and move it into a header and implementation file.
-  Add a dedicated `--test-phase-analysis` pass, similar to how MLIR tests its analyses, which performs phase analysis and either annotates phases as attributes, or prints IR ops to stdout with a phase annotation.
-  Consult MLIR's analysis test passes for some inspiration.
-  A factored out phase analysis will allow us to test phase assignments separately and flesh out the precise semantics of how phases propagate and infer.

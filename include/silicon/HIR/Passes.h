@@ -22,5 +22,8 @@ namespace hir {
 #define GEN_PASS_REGISTRATION
 #include "silicon/HIR/Passes.h.inc"
 
+/// Register the --test-phase-analysis pass.
+void registerTestPhaseAnalysisPass();
+
 } // namespace hir
 } // namespace silicon
