@@ -360,8 +360,19 @@ public:
     auto elseYield = cast<mir::YieldOp>(elseBlock.getTerminator());
     Value falseVal = mapping.lookupOrDefault(elseYield.getOperands()[0]);
 
-    rewriter.replaceOpWithNewOp<circt::comb::MuxOp>(op, adaptor.getCondition(),
-                                                    trueVal, falseVal);
+    // Ensure the condition is i1. If the converted condition is wider
+    // (e.g., !si.int mapped to i64), insert a compare-not-equal-zero.
+    Value cond = adaptor.getCondition();
+    auto condType = cast<IntegerType>(cond.getType());
+    if (condType.getWidth() != 1) {
+      auto zero = circt::hw::ConstantOp::create(rewriter, op.getLoc(),
+                                                APInt(condType.getWidth(), 0));
+      cond = circt::comb::ICmpOp::create(
+          rewriter, op.getLoc(), circt::comb::ICmpPredicate::ne, cond, zero);
+    }
+
+    rewriter.replaceOpWithNewOp<circt::comb::MuxOp>(op, cond, trueVal,
+                                                    falseVal);
     return success();
   }
 };
@@ -429,9 +440,46 @@ void MIRToCIRCTPass::runOnOperation() {
   // # Type Converter
   //
   // Silicon types become CIRCT integer types; standard types pass through.
+  // Materializations handle width mismatches between i1 (from comparisons)
+  // and wider integer types: zero-extend i1→iN, and compare-not-equal-zero
+  // iN→i1.
   TypeConverter converter;
   converter.addConversion(
       [](Type type) -> std::optional<Type> { return convertType(type); });
+
+  // Zero-extend i1 to a wider integer type (e.g., comparison result used
+  // as a return value).
+  converter.addTargetMaterialization([](OpBuilder &builder, Type resultType,
+                                        ValueRange inputs,
+                                        Location loc) -> Value {
+    if (inputs.size() != 1)
+      return {};
+    auto inputType = dyn_cast<IntegerType>(inputs[0].getType());
+    auto targetType = dyn_cast<IntegerType>(resultType);
+    if (!inputType || !targetType || inputType.getWidth() != 1 ||
+        targetType.getWidth() <= 1)
+      return {};
+    unsigned padWidth = targetType.getWidth() - 1;
+    auto zero = circt::hw::ConstantOp::create(builder, loc, APInt(padWidth, 0));
+    return circt::comb::ConcatOp::create(builder, loc, zero, inputs[0]);
+  });
+
+  // Narrow a wider integer to i1 (e.g., integer condition used in if).
+  converter.addSourceMaterialization([](OpBuilder &builder, Type resultType,
+                                        ValueRange inputs,
+                                        Location loc) -> Value {
+    if (inputs.size() != 1)
+      return {};
+    auto inputType = dyn_cast<IntegerType>(inputs[0].getType());
+    auto targetType = dyn_cast<IntegerType>(resultType);
+    if (!inputType || !targetType || targetType.getWidth() != 1 ||
+        inputType.getWidth() <= 1)
+      return {};
+    auto zero = circt::hw::ConstantOp::create(builder, loc,
+                                              APInt(inputType.getWidth(), 0));
+    return circt::comb::ICmpOp::create(
+        builder, loc, circt::comb::ICmpPredicate::ne, inputs[0], zero);
+  });
 
   // # Conversion Target
   //

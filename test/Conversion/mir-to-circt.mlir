@@ -106,6 +106,52 @@ mir.func @if_to_mux(%cond: !si.uint<1>, %a: !si.int, %b: !si.int) -> (result: !s
   mir.return %0 : !si.int
 }
 
+// ---- mir.if with comparison condition (i1 from cmp, mux needs i1) ----
+
+// CHECK-LABEL: hw.module @if_cmp_condition
+mir.func @if_cmp_condition(%a: !si.int, %b: !si.int) -> (result: !si.int) {
+  %0 = mir.gt %a, %b : !si.int -> !si.int
+  // The comparison produces i1, gets zero-extended to i64 by the type
+  // materializer, then narrowed back to i1 by the if conversion. Later
+  // canonicalization folds the redundant extend/narrow pair.
+  // CHECK:      comb.icmp sgt %a, %b : i64
+  // CHECK:      comb.icmp ne
+  // CHECK-NEXT: comb.mux
+  %1 = mir.if %0 : !si.int, !si.int {
+    mir.yield %a : !si.int
+  } else {
+    mir.yield %b : !si.int
+  }
+  mir.return %1 : !si.int
+}
+
+// ---- mir.if with wide integer condition (iN narrowed to i1) ----
+
+// CHECK-LABEL: hw.module @if_wide_condition
+mir.func @if_wide_condition(%cond: !si.int, %a: !si.int, %b: !si.int) -> (result: !si.int) {
+  // CHECK: [[ZERO:%.+]] = hw.constant 0 : i64
+  // CHECK: [[NE:%.+]] = comb.icmp ne %cond, [[ZERO]] : i64
+  // CHECK: comb.mux [[NE]], %a, %b : i64
+  %0 = mir.if %cond : !si.int, !si.int {
+    mir.yield %a : !si.int
+  } else {
+    mir.yield %b : !si.int
+  }
+  mir.return %0 : !si.int
+}
+
+// ---- Comparison result zero-extended to return type ----
+
+// CHECK-LABEL: hw.module @cmp_as_return
+mir.func @cmp_as_return(%a: !si.int, %b: !si.int) -> (result: !si.int) {
+  // CHECK-DAG: [[CMP:%.+]] = comb.icmp sgt %a, %b : i64
+  // CHECK-DAG: [[ZERO:%.+]] = hw.constant 0 : i63
+  // CHECK:     [[EXT:%.+]] = comb.concat [[ZERO]], [[CMP]] : i63, i1
+  // CHECK:     hw.output [[EXT]] : i64
+  %0 = mir.gt %a, %b : !si.int -> !si.int
+  mir.return %0 : !si.int
+}
+
 // ---- Remaining Silicon ops are erased ----
 
 // The evaluated_func and split_func ops should be erased by the conversion.
