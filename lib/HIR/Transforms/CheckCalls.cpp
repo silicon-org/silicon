@@ -9,6 +9,7 @@
 #include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Passes.h"
 #include "silicon/Support/MLIR.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Threading.h"
 #include "llvm/Support/Debug.h"
@@ -180,7 +181,7 @@ static void consolidateSignatureTerminators(Region &clonedSig) {
                       sigOp.getTypeOfArgs().end());
     branchArgs.append(sigOp.getTypeOfResults().begin(),
                       sigOp.getTypeOfResults().end());
-    ConstBranchOp::create(builder, sigOp.getLoc(), branchArgs, exitBlock);
+    cf::BranchOp::create(builder, sigOp.getLoc(), exitBlock, branchArgs);
     sigOp.erase();
   }
 }
@@ -297,7 +298,7 @@ static void cloneSignatureIntoBody(UnifiedFuncOp funcOp) {
       terminatorBlock->erase();
     } else {
       OpBuilder branchBuilder(terminatorBlock, terminatorBlock->end());
-      ConstBranchOp::create(branchBuilder, sigLoc, branchArgs, &bodyBlock);
+      cf::BranchOp::create(branchBuilder, sigLoc, &bodyBlock, branchArgs);
     }
 
     // Move the cloned blocks before the body block.
@@ -508,8 +509,8 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
       } else {
         OpBuilder branchBuilder(callOp->getContext());
         branchBuilder.setInsertionPointToEnd(terminatorBlock);
-        ConstBranchOp::create(branchBuilder, callOp.getLoc(), typeValues,
-                              continuation);
+        cf::BranchOp::create(branchBuilder, callOp.getLoc(), continuation,
+                             typeValues);
       }
     }
 

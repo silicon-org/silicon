@@ -154,9 +154,9 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
 // expected-error @below {{requires `hir.signature` terminator in the signature}}
 hir.split_func @bad_term() -> () {
 ^bb0:
-  hir.const_br ^bb1
+  cf.br ^bb1
 ^bb1:
-  hir.const_br ^bb1
+  cf.br ^bb1
 } [
   0: @bad_term.0
 ]

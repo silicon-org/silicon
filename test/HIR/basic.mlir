@@ -26,9 +26,9 @@ func.func @Foo(%arg0: !hir.any, %arg1: !hir.any, %arg2: !hir.any, %arg3: i1) {
   hir.add %arg0, %arg1 : %arg2
   hir.let "x" : %arg0
   hir.store %arg0, %arg1 : %arg2
-  hir.const_br ^bb1(%arg0 : !hir.any)
+  cf.br ^bb1(%arg0 : !hir.any)
 ^bb1(%0: !hir.any):
-  hir.const_cond_br %arg3, ^bb1(%0 : !hir.any), ^bb2
+  cf.cond_br %arg3, ^bb1(%0 : !hir.any), ^bb2
 ^bb2:
   return
 }

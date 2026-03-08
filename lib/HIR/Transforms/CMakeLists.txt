@@ -1,7 +1,6 @@
 add_silicon_dialect_library(SiliconHIRTransforms
   CheckCalls.cpp
   CheckTypes.cpp
-  EvalConsts.cpp
   InferTypes.cpp
   SpecializeFuncs.cpp
   SplitPhases.cpp
@@ -11,6 +10,7 @@ add_silicon_dialect_library(SiliconHIRTransforms
   SiliconHIR
   SiliconHIRAnalysis
   SiliconMIR
+  MLIRControlFlowDialect
   MLIRIR
   MLIRPass
   MLIRTransformUtils

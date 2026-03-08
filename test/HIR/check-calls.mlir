@@ -7,14 +7,14 @@
 // CHECK-LABEL: hir.unified_func private @MultiBlockSig
 hir.unified_func private @MultiBlockSig(%a: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.const_br ^exit(%0, %0 : !hir.any, !hir.any)
+  cf.br ^exit(%0, %0 : !hir.any, !hir.any)
 ^exit(%arg_ty: !hir.any, %ret_ty: !hir.any):
   hir.signature (%arg_ty) -> (%ret_ty)
 } {
   // The body gets the cloned signature blocks as a preamble. The empty exit
   // block is eliminated, so the entry branches directly to the body block.
   // CHECK: [[T:%.+]] = hir.int_type
-  // CHECK: hir.const_br ^bb1([[T]], [[T]] : !hir.any, !hir.any)
+  // CHECK: cf.br ^bb1([[T]], [[T]] : !hir.any, !hir.any)
   // CHECK: ^bb1([[ARG_TY:%.+]]: !hir.any, [[RET_TY:%.+]]: !hir.any):
   // CHECK: [[COERCED:%.+]] = hir.coerce_type %a, [[ARG_TY]]
   // CHECK: [[TYPEOF:%.+]] = hir.type_of [[COERCED]]
@@ -36,7 +36,7 @@ hir.unified_func @CallMultiBlockSig() -> () {
   // is eliminated, so the entry branches directly to the continuation block.
   // CHECK: [[VAL:%.+]] = builtin.unrealized_conversion_cast
   // CHECK: [[T:%.+]] = hir.int_type
-  // CHECK: hir.const_br ^bb1([[T]], [[T]] : !hir.any, !hir.any)
+  // CHECK: cf.br ^bb1([[T]], [[T]] : !hir.any, !hir.any)
   // CHECK: ^bb1([[ARG_TY:%.+]]: !hir.any, [[RET_TY:%.+]]: !hir.any):
   // CHECK: hir.unified_call @MultiBlockSig([[VAL]]) : ([[ARG_TY]]) -> ([[RET_TY]])
   %0 = builtin.unrealized_conversion_cast to !hir.any
@@ -56,7 +56,7 @@ hir.unified_func private @MultiTermSig(%a: 0) -> (result: 0) {
   %cond = builtin.unrealized_conversion_cast to i1
   %t1 = hir.int_type {left}
   %t2 = hir.int_type {right}
-  hir.const_cond_br %cond,
+  cf.cond_br %cond,
     ^left(%t1 : !hir.any),
     ^right(%t2 : !hir.any)
 ^left(%lt: !hir.any):
@@ -67,11 +67,11 @@ hir.unified_func private @MultiTermSig(%a: 0) -> (result: 0) {
   // After consolidation, both terminators are replaced with branches to a
   // consolidated exit block. The empty exit block is then eliminated, so
   // ^left and ^right branch directly to the body block.
-  // CHECK: hir.const_cond_br {{%.+}}, ^bb1({{%.+}} : !hir.any), ^bb2({{%.+}} : !hir.any)
+  // CHECK: cf.cond_br {{%.+}}, ^bb1({{%.+}} : !hir.any), ^bb2({{%.+}} : !hir.any)
   // CHECK: ^bb1([[LT:%.+]]: !hir.any):
-  // CHECK: hir.const_br ^bb3([[LT]], [[LT]] : !hir.any, !hir.any)
+  // CHECK: cf.br ^bb3([[LT]], [[LT]] : !hir.any, !hir.any)
   // CHECK: ^bb2([[RT:%.+]]: !hir.any):
-  // CHECK: hir.const_br ^bb3([[RT]], [[RT]] : !hir.any, !hir.any)
+  // CHECK: cf.br ^bb3([[RT]], [[RT]] : !hir.any, !hir.any)
   // CHECK: ^bb3([[ARG_TY:%.+]]: !hir.any, [[RET_TY:%.+]]: !hir.any):
   // CHECK: [[COERCED:%.+]] = hir.coerce_type %a, [[ARG_TY]]
   // CHECK: [[TYPEOF:%.+]] = hir.type_of [[COERCED]]
@@ -88,11 +88,11 @@ hir.unified_func @CallMultiTermSig() -> () {
   // The 3-block signature with 2 terminators is consolidated and inlined.
   // The consolidated exit block is eliminated.
   // CHECK: [[VAL:%.+]] = builtin.unrealized_conversion_cast
-  // CHECK: hir.const_cond_br {{%.+}}, ^bb1({{%.+}} : !hir.any), ^bb2({{%.+}} : !hir.any)
+  // CHECK: cf.cond_br {{%.+}}, ^bb1({{%.+}} : !hir.any), ^bb2({{%.+}} : !hir.any)
   // CHECK: ^bb1([[LT:%.+]]: !hir.any):
-  // CHECK: hir.const_br ^bb3([[LT]], [[LT]] : !hir.any, !hir.any)
+  // CHECK: cf.br ^bb3([[LT]], [[LT]] : !hir.any, !hir.any)
   // CHECK: ^bb2([[RT:%.+]]: !hir.any):
-  // CHECK: hir.const_br ^bb3([[RT]], [[RT]] : !hir.any, !hir.any)
+  // CHECK: cf.br ^bb3([[RT]], [[RT]] : !hir.any, !hir.any)
   // CHECK: ^bb3([[ARG_TY:%.+]]: !hir.any, [[RET_TY:%.+]]: !hir.any):
   // CHECK: hir.unified_call @MultiTermSig([[VAL]]) : ([[ARG_TY]]) -> ([[RET_TY]])
   %0 = builtin.unrealized_conversion_cast to !hir.any

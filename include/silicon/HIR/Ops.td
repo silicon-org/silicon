@@ -231,41 +231,6 @@ def StoreOp : HIROp<"store", []> {
   let assemblyFormat = "$target `,` $value `:` $valueType attr-dict";
 }
 
-def ConstBranchOp : HIROp<"const_br", [
-  DeclareOpInterfaceMethods<BranchOpInterface>,
-  Pure,
-  Terminator
-]> {
-  let arguments = (ins Variadic<AnyType>:$destOperands);
-  let successors = (successor AnySuccessor:$dest);
-  let assemblyFormat = [{
-    $dest (`(` $destOperands^ `:` type($destOperands) `)`)?
-    attr-dict
-  }];
-}
-
-def ConstCondBranchOp : HIROp<"const_cond_br", [
-  AttrSizedOperandSegments,
-  DeclareOpInterfaceMethods<BranchOpInterface>,
-  Pure,
-  Terminator
-]> {
-  let arguments = (ins
-    I1:$condition,
-    Variadic<AnyType>:$trueOperands,
-    Variadic<AnyType>:$falseOperands
-  );
-  let successors = (successor
-    AnySuccessor:$trueDest,
-    AnySuccessor:$falseDest
-  );
-  let assemblyFormat = [{
-    $condition `,`
-    $trueDest (`(` $trueOperands^ `:` type($trueOperands) `)`)? `,`
-    $falseDest (`(` $falseOperands^ `:` type($falseOperands) `)`)?
-    attr-dict
-  }];
-}
 
 def FuncOp : HIROp<"func", [
   IsolatedFromAbove,
