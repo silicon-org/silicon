@@ -398,6 +398,107 @@ All 5 internal phases are absorbed into a multiphase function, which allows all 
 Note how the unified call to `@foo` has been split up into three separate calls to the splits listed in `hir.split_func @foo`.
 Even if foo has been precompiled as a library and partially evaluated and specialized, the split function still allows the unified bar function to know which phases the call to foo has to be split up into, and which functions correspond to each phase.
 
+## Phase Analysis
+
+Before splitting a unified function into separate phases, the compiler must determine which phase each op and value belongs to.
+The phase analysis operates on the unified IR and assigns an integer phase to every op and value in a unified function.
+The SplitPhases pass then uses these assignments to group ops into per-phase functions.
+
+The analysis runs in three stages: a forward pass that computes earliest available phases, a backward pass that pulls values to earlier phases where required by call constraints, and a forward refresh that propagates the effects of any pulls.
+
+> [!WARNING]
+> This section describes how the analysis is currently implemented.
+> It requires review to determine how we'd _want_ the analysis to work instead.
+
+### Forward Phase Computation
+
+The forward pass walks the function body in pre-order, computing the earliest phase at which each op and its results are available.
+It seeds the function's block arguments with the phases declared in the `hir.unified_func` signature (e.g., `%a: -3` means argument `%a` is available at phase -3).
+The function op itself is seeded at phase 0.
+
+For each op encountered during the walk, the analysis computes its phase as follows:
+
+1. **Determine the floor.**
+   Top-level ops (whose parent is the unified func) have a floor of -∞, meaning they can float to any phase.
+   Nested ops (inside an `hir.expr`, `hir.if`, or similar region-bearing op) are floored at their parent op's phase — they cannot appear in an earlier phase than the region they live in.
+
+2. **`hir.expr` with a phase shift.**
+   If the op is an `hir.expr` with a non-zero `phaseShift` attribute, its phase is the parent's phase plus the shift.
+   This is how `const` (shift -1) and `dyn` (shift +1) blocks introduce phase boundaries.
+
+3. **Pure ops (memory-effect-free, excluding `hir.expr` and `hir.if`).**
+   The phase is the maximum of the floor and all operand phases.
+   This means a pure op floats to the earliest phase where all its inputs are available.
+   In particular, constant-like ops with no operands get phase -∞, since they have no data dependencies and can be trivially copied to whichever phase needs them.
+
+4. **Side-effecting ops, and `hir.expr`/`hir.if` without a phase shift.**
+   These inherit their parent op's phase directly.
+   Side effects anchor an op to its enclosing context.
+
+Each op's results are assigned the same phase as the op.
+
+### Phase Back-Propagation
+
+After the forward pass, some values may be assigned a later phase than what a call site requires.
+For example, a pure op that computes a value at phase 0 might need to be passed as a call argument at phase -2.
+If the op's dependencies allow it, the analysis pulls the value (and its transitive operand tree) to the earlier phase.
+
+The back-propagation walks all `hir.unified_call` ops and checks each argument.
+The required phase for an argument is the call op's own phase plus the argument's declared phase offset.
+If the value is only available at a later phase, the analysis attempts to pull it:
+
+1. **Block arguments cannot be pulled.**
+   Their phases are fixed by the function signature.
+
+2. **Check operand feasibility.**
+   For the defining op and all its operands (recursively), verify that each can be pulled to the target phase.
+   If any operand is a block argument at a later phase, or a non-pullable op, the pull fails.
+
+3. **Check captured values.**
+   For region-bearing ops (`hir.expr`, `hir.if`), check that all values captured from the enclosing scope are available at the target phase, or can themselves be pulled.
+
+4. **Commit the pull.**
+   If all checks pass, update the op and its results to the target phase.
+   Then recompute phases for any nested regions with the new phase as their floor, so that nested ops (including calls) reflect the updated context.
+
+### Forward Refresh
+
+After back-propagation, the analysis re-runs the forward computation to propagate any pull-induced phase changes to downstream users.
+For each op, it takes the minimum of the existing phase (which may have been pulled earlier) and the recomputed phase.
+This preserves the effects of pulling while ensuring that users of pulled values see the updated phases.
+
+### Verification
+
+After all three stages, the analysis can verify that all call arguments are available at their required phases.
+For each `hir.unified_call`, it checks that every argument's actual phase is no later than the call op's phase plus the argument's declared phase offset.
+If any argument is unavailable, the compiler emits an error diagnostic.
+
+### Example
+
+Consider the unified function from the first section.
+The phase analysis proceeds as follows:
+
+**Forward pass.** The analysis walks the body in pre-order.
+Block arguments `%a` and `%b` are seeded at phases -3 and -1 respectively.
+Constant ops `%int_type` and `%type_type` have no operands, so they get phase -∞ (float).
+All `hir.unified_call` ops are side-effecting, so they initially inherit the parent phase 0.
+The `hir.coerce_type` ops are pure: `%a0` gets max(-∞, phase(%a), phase(%a.type)) = max(-∞, -3, 0) = 0, and similarly for `%b0`.
+The `hir.expr -1` ops get parent phase 0 + shift -1 = -1.
+
+After the forward pass, many ops sit at phase 0 — this is too late for some call arguments.
+
+**Back-propagation.** The analysis inspects each call's argument constraints.
+The call `@doV(%a0)` requires `%a0` at phase 0 relative to the call, which is at phase 0, so `%a0` must be at phase 0 — already satisfied.
+But the split structure requires `%a.type` to be available before `%a0` in the caller's type computation chain.
+The call `@doU()` computing `%a.type` is pulled from phase 0 to the phase dictated by `%a.type`'s uses as a type operand.
+Similarly, `@doV` is pulled to phase -3, `@doW` to -2, and `@doX` to -1.
+Each pull recursively checks and pulls the operand tree, and recomputes phases for any nested regions.
+
+**Refresh.** The forward pass runs again, taking the minimum of existing and recomputed phases.
+This propagates the effects of pulls to downstream users — for instance, after pulling `@doV` to phase -3, the `hir.expr -1` that wraps its result now gets phase -2 instead of -1.
+
+The final phase assignments match the comments in the unified IR listing above.
+
 ## Phased Evaluation
 
 The phases ascribed to split and multiphase functions describe an execution schedule in which the compile-time evaluation of code should occur.
