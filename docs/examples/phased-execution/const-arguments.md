@@ -23,7 +23,7 @@ When `main` calls `add(42, 7)`, the compiler can evaluate the entire expression 
 The `dyn` keyword is the opposite of `const`: it shifts an argument to a *later* phase.
 While `const` pulls computation earlier (toward compile time), `dyn` pushes it later (toward runtime).
 
-```
+```silicon
 fn send(dyn x: int, y: int) -> int { x + y }
 ```
 

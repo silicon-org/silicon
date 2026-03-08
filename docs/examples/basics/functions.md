@@ -48,13 +48,13 @@ A `const` argument is evaluated one phase earlier (at compile time), while a `dy
 fn add_const(const a: int, b: int) -> int { a + b }
 ```
 
-```
+```silicon
 fn send(dyn x: int, y: int) -> int { x + y }
 ```
 
 Return types can also carry phase modifiers.
 
-```
+```silicon
 fn make_const(x: int) -> const int { x }
 fn make_dyn(x: int) -> dyn int { x }
 ```

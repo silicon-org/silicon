@@ -115,6 +115,21 @@ void PhaseSplitter::run() {
     maxPhase = std::max(maxPhase, phase);
   }
 
+  // Compute effective result phases. The declared result phase may be earlier
+  // than the phase where the return value is actually available (e.g., a `dyn`
+  // arg forces the return value to a later phase). In such cases, adjust the
+  // result phase to where the value is actually computed.
+  auto returnOp = funcOp.getReturnOp();
+  auto declaredResultPhases = funcOp.getResultPhases();
+  SmallVector<int16_t> effectiveResultPhases;
+  for (auto [idx, value] : llvm::enumerate(returnOp.getValues())) {
+    int16_t declared = static_cast<int16_t>(declaredResultPhases[idx]);
+    int16_t valuePhase = analysis.getValuePhase(value);
+    if (valuePhase == INT16_MIN)
+      valuePhase = declared;
+    effectiveResultPhases.push_back(std::max(declared, valuePhase));
+  }
+
   // Extend the phase range based on the function's declared arg/result phases.
   // These may lie outside the range of computed op/value phases (e.g., a `dyn`
   // return type shifts the result to a later phase).
@@ -122,9 +137,9 @@ void PhaseSplitter::run() {
     minPhase = std::min(minPhase, static_cast<int16_t>(p));
     maxPhase = std::max(maxPhase, static_cast<int16_t>(p));
   }
-  for (auto p : funcOp.getResultPhases()) {
-    minPhase = std::min(minPhase, static_cast<int16_t>(p));
-    maxPhase = std::max(maxPhase, static_cast<int16_t>(p));
+  for (auto p : effectiveResultPhases) {
+    minPhase = std::min(minPhase, p);
+    maxPhase = std::max(maxPhase, p);
   }
 
   // Extend the phase range based on UnifiedCallOps in the body. The call's
@@ -159,8 +174,8 @@ void PhaseSplitter::run() {
   DenseSet<int16_t> externalPhases;
   for (auto phase : funcOp.getArgPhases())
     externalPhases.insert(static_cast<int16_t>(phase));
-  for (auto phase : funcOp.getResultPhases())
-    externalPhases.insert(static_cast<int16_t>(phase));
+  for (auto phase : effectiveResultPhases)
+    externalPhases.insert(phase);
 
   SmallVector<PhaseGroup> groups;
   {
@@ -231,18 +246,18 @@ void PhaseSplitter::run() {
   }
 
   // Handle the return operation. Each return value and its type operand are
-  // placed in the split matching its declared result phase. If a value is
-  // defined in an earlier phase, cross-phase threading will create context
-  // returns and block args to forward it. The return op itself is erased since
-  // each phase will get its own.
-  auto returnOp = funcOp.getReturnOp();
-  auto resultPhases = funcOp.getResultPhases();
+  // placed in the split matching its effective result phase. The effective
+  // phase accounts for cases where the return value is only available at a
+  // later phase than declared (e.g., a dyn arg forces the result later). If a
+  // value is defined in an earlier phase, cross-phase threading will create
+  // context returns and block args to forward it. The return op itself is
+  // erased since each phase will get its own.
   for (auto [idx, value] : llvm::enumerate(returnOp.getValues())) {
-    int16_t resultPhase = static_cast<int16_t>(resultPhases[idx]);
+    int16_t resultPhase = effectiveResultPhases[idx];
     splits[resultPhase - minPhase].returnValues.push_back(value);
   }
   for (auto [idx, type] : llvm::enumerate(returnOp.getTypeOfValues())) {
-    int16_t resultPhase = static_cast<int16_t>(resultPhases[idx]);
+    int16_t resultPhase = effectiveResultPhases[idx];
     splits[resultPhase - minPhase].returnTypeOperands.push_back(type);
   }
   returnOp.erase();
@@ -911,8 +926,8 @@ void PhaseSplitter::run() {
       unsigned ownReturns = numOwnReturns[phase - minPhase];
       // Check if this phase has user-visible results.
       for (auto [name, resultPhase] :
-           llvm::zip(funcOp.getResultNames(), funcOp.getResultPhases())) {
-        if (static_cast<int16_t>(resultPhase) == phase)
+           llvm::zip(funcOp.getResultNames(), effectiveResultPhases)) {
+        if (resultPhase == phase)
           phaseResultNames.push_back(name);
       }
       if (retOp.getValues().size() > ownReturns)
@@ -936,7 +951,8 @@ void PhaseSplitter::run() {
   auto sfArgNames = funcOp.getArgNames();
   auto sfResultNames = funcOp.getResultNames();
   SmallVector<int32_t> sfArgPhases(funcOp.getArgPhases());
-  SmallVector<int32_t> sfResultPhases(funcOp.getResultPhases());
+  SmallVector<int32_t> sfResultPhases(effectiveResultPhases.begin(),
+                                      effectiveResultPhases.end());
 
   // Create builder for structural ops, inserting after the last per-phase func.
   auto *lastPhaseFunc = splits[maxPhase - minPhase].funcOp.getOperation();
