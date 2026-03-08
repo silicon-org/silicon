@@ -125,12 +125,15 @@ int16_t PhaseAnalysis::getValuePhase(Value value) const {
 }
 
 /// Check that unified_call arguments are available at their required phases.
+/// The call's arg phase attributes are callee-relative; the absolute
+/// caller-frame phase is the call op's phase plus the attribute value.
 LogicalResult PhaseAnalysis::checkCallArgPhases() {
   bool anyErrors = false;
   funcOp.getBody().walk([&](UnifiedCallOp callOp) {
+    int16_t callOpPhase = opPhases.at(callOp);
     for (auto [arg, phase] :
          llvm::zip(callOp.getArguments(), callOp.getArgPhases())) {
-      int16_t required = static_cast<int16_t>(phase);
+      int16_t required = callOpPhase + static_cast<int16_t>(phase);
       int16_t available = getValuePhase(arg);
       if (available > required) {
         emitError(callOp.getLoc())
@@ -156,9 +159,10 @@ LogicalResult PhaseAnalysis::checkCallArgPhases() {
 
 void PhaseAnalysis::pullPhases() {
   funcOp.getBody().walk([&](UnifiedCallOp callOp) {
+    int16_t callOpPhase = opPhases.at(callOp);
     for (auto [arg, phase] :
          llvm::zip(callOp.getArguments(), callOp.getArgPhases())) {
-      int16_t required = static_cast<int16_t>(phase);
+      int16_t required = callOpPhase + static_cast<int16_t>(phase);
       int16_t available = getValuePhase(arg);
       if (available > required)
         pullValueToPhase(arg, required);
@@ -220,32 +224,11 @@ bool PhaseAnalysis::pullValueToPhase(Value value, int16_t targetPhase) {
   for (auto result : defOp->getResults())
     valuePhases[result] = targetPhase;
 
-  // Re-compute phases for nested regions with the new floor.
+  // Re-compute phases for nested regions with the new floor. This updates
+  // nested op phases (including unified_calls) to reflect the pull, so
+  // opPhase + attrPhase correctly gives absolute caller-frame phases.
   for (auto &region : defOp->getRegions())
     recomputeRegionPhases(region, targetPhase);
-
-  // Shift arg/result phase attributes on any unified_calls inside the pulled
-  // op's regions. The decomposition code uses these attributes to place
-  // per-phase calls; without shifting, the decomposed calls would be placed at
-  // the original absolute phases, which no longer match the containing op's
-  // phase.
-  int16_t delta = targetPhase - current;
-  if (delta != 0) {
-    for (auto &region : defOp->getRegions()) {
-      region.walk([&](UnifiedCallOp callOp) {
-        auto shiftPhases = [&](ArrayRef<int32_t> phases) {
-          SmallVector<int32_t> shifted;
-          for (auto p : phases)
-            shifted.push_back(p + delta);
-          return shifted;
-        };
-        callOp.setArgPhasesAttr(DenseI32ArrayAttr::get(
-            callOp.getContext(), shiftPhases(callOp.getArgPhases())));
-        callOp.setResultPhasesAttr(DenseI32ArrayAttr::get(
-            callOp.getContext(), shiftPhases(callOp.getResultPhases())));
-      });
-    }
-  }
 
   return true;
 }
@@ -362,16 +345,19 @@ void PhaseSplitter::run() {
   }
 
   // Extend the phase range based on UnifiedCallOps in the body. The call's
-  // arg/result phases are absolute in the caller's frame, so the caller needs
-  // split functions covering those phases.
+  // The call's arg/result phase attributes are callee-relative; the absolute
+  // caller-frame phase is the call op's phase plus the attribute value.
   funcOp.getBody().walk([&](UnifiedCallOp callOp) {
+    int16_t callOpPhase = analysis.opPhases.at(callOp);
     for (auto p : callOp.getArgPhases()) {
-      minPhase = std::min(minPhase, static_cast<int16_t>(p));
-      maxPhase = std::max(maxPhase, static_cast<int16_t>(p));
+      int16_t abs = callOpPhase + static_cast<int16_t>(p);
+      minPhase = std::min(minPhase, abs);
+      maxPhase = std::max(maxPhase, abs);
     }
     for (auto p : callOp.getResultPhases()) {
-      minPhase = std::min(minPhase, static_cast<int16_t>(p));
-      maxPhase = std::max(maxPhase, static_cast<int16_t>(p));
+      int16_t abs = callOpPhase + static_cast<int16_t>(p);
+      minPhase = std::min(minPhase, abs);
+      maxPhase = std::max(maxPhase, abs);
     }
   });
 
@@ -558,15 +544,24 @@ void PhaseSplitter::run() {
       auto argPhases = callOp.getArgPhases();
       auto resultPhases = callOp.getResultPhases();
 
-      // Compute the callee's phase range.
-      int16_t calleeMinPhase = 0, calleeMaxPhase = 0;
+      // The call's arg/result phase attributes are callee-relative; the
+      // absolute caller-frame phase is the call op's phase plus the attribute.
+      int16_t callOpPhase = analysis.opPhases.at(callOp);
+
+      // Compute the caller-frame phase range for this call.
+      int16_t calleeMinPhase = INT16_MAX, calleeMaxPhase = INT16_MIN;
       for (auto p : argPhases) {
-        calleeMinPhase = std::min(calleeMinPhase, static_cast<int16_t>(p));
-        calleeMaxPhase = std::max(calleeMaxPhase, static_cast<int16_t>(p));
+        int16_t abs = callOpPhase + static_cast<int16_t>(p);
+        calleeMinPhase = std::min(calleeMinPhase, abs);
+        calleeMaxPhase = std::max(calleeMaxPhase, abs);
       }
       for (auto p : resultPhases) {
-        calleeMinPhase = std::min(calleeMinPhase, static_cast<int16_t>(p));
-        calleeMaxPhase = std::max(calleeMaxPhase, static_cast<int16_t>(p));
+        int16_t abs = callOpPhase + static_cast<int16_t>(p);
+        calleeMinPhase = std::min(calleeMinPhase, abs);
+        calleeMaxPhase = std::max(calleeMaxPhase, abs);
+      }
+      if (calleeMinPhase == INT16_MAX) {
+        calleeMinPhase = calleeMaxPhase = 0;
       }
 
       // Look up the callee's split_func and build a phase-to-function mapping
@@ -611,7 +606,7 @@ void PhaseSplitter::run() {
       // value is available everywhere it's needed, with value threading
       // handling forwarding to later phases.
       for (auto [type, phase] : llvm::zip(callOp.getTypeOfArgs(), argPhases)) {
-        int16_t p = static_cast<int16_t>(phase);
+        int16_t p = callOpPhase + static_cast<int16_t>(phase);
         if (auto *defOp = type.getDefiningOp()) {
           auto &opPhase = analysis.opPhases[defOp];
           opPhase = std::min(opPhase, p);
@@ -621,7 +616,7 @@ void PhaseSplitter::run() {
       }
       for (auto [type, phase] :
            llvm::zip(callOp.getTypeOfResults(), resultPhases)) {
-        int16_t p = static_cast<int16_t>(phase);
+        int16_t p = callOpPhase + static_cast<int16_t>(phase);
         if (auto *defOp = type.getDefiningOp()) {
           auto &opPhase = analysis.opPhases[defOp];
           opPhase = std::min(opPhase, p);
@@ -630,12 +625,13 @@ void PhaseSplitter::run() {
         }
       }
 
-      // Partition arguments and their type operands by phase.
+      // Partition arguments and their type operands by absolute phase.
       DenseMap<int16_t, SmallVector<Value>> phaseArgs, phaseTypeOfArgs;
       for (auto [arg, type, phase] : llvm::zip(
                callOp.getArguments(), callOp.getTypeOfArgs(), argPhases)) {
-        phaseArgs[static_cast<int16_t>(phase)].push_back(arg);
-        phaseTypeOfArgs[static_cast<int16_t>(phase)].push_back(type);
+        int16_t abs = callOpPhase + static_cast<int16_t>(phase);
+        phaseArgs[abs].push_back(arg);
+        phaseTypeOfArgs[abs].push_back(type);
       }
 
       // Determine the phase that produces the unified_call's actual results.
@@ -643,12 +639,14 @@ void PhaseSplitter::run() {
       // calleeMaxPhase when dyn args extend the callee beyond its results.
       int16_t maxResultPhase = INT16_MIN;
       for (auto p : resultPhases)
-        maxResultPhase = std::max(maxResultPhase, static_cast<int16_t>(p));
+        maxResultPhase = std::max(
+            maxResultPhase,
+            static_cast<int16_t>(callOpPhase + static_cast<int16_t>(p)));
 
       // Collect which result indices belong to which phase.
       DenseSet<int16_t> resultPhaseSet;
       for (auto p : resultPhases)
-        resultPhaseSet.insert(static_cast<int16_t>(p));
+        resultPhaseSet.insert(callOpPhase + static_cast<int16_t>(p));
 
       // Chain calls from earliest phase to latest. Each call gets its own
       // phase's arguments plus all results from the previous phase's call.
@@ -803,9 +801,14 @@ void PhaseSplitter::run() {
       for (auto [result, operand] :
            llvm::zip(exprOp.getResults(), yieldOp.getOperands())) {
         result.replaceAllUsesWith(operand);
-        for (auto &rv : split.returnValues)
-          if (rv == result)
-            rv = operand;
+        // Update returnValues across ALL splits, not just the current one.
+        // An ExprOp result may have been stashed in a different split's
+        // returnValues (e.g., when the function's result phase differs from
+        // the ExprOp's phase due to a phaseShift).
+        for (auto &s : splits)
+          for (auto &rv : s.returnValues)
+            if (rv == result)
+              rv = operand;
       }
       yieldOp.erase();
       auto *parentBlock = exprOp->getBlock();

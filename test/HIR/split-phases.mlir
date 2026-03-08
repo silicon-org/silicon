@@ -610,3 +610,51 @@ hir.unified_func @NestedExprValue() -> () {
   }
   hir.unified_return
 }
+
+//===----------------------------------------------------------------------===//
+// Const block with a call: `const { noargs() }` shifts the call's phases by
+// the ExprOp's phaseShift. The callee's phase-0 function should be called in
+// the phase -1 split of the caller, and the result forwarded to phase 0.
+
+// CHECK-LABEL: hir.func private @ConstBlockCallee.0() -> (result)
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @ConstBlockCall.0a() -> (ctx)
+// CHECK:         hir.call @ConstBlockCallee.0()
+// CHECK:         hir.opaque_pack
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @ConstBlockCall.0b(%ctx) -> (result)
+// CHECK:         hir.opaque_unpack
+// CHECK:         hir.return
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @ConstBlockCall() -> (result: 0)
+// CHECK:       0: @ConstBlockCall.0
+// CHECK-LABEL: hir.multiphase_func @ConstBlockCall.0() -> (result)
+// CHECK:       @ConstBlockCall.0a
+// CHECK:       @ConstBlockCall.0b
+
+hir.unified_func @ConstBlockCallee() -> (result: 0) {
+  %0 = hir.int_type
+  hir.unified_signature () -> (%0)
+} {
+  %0 = hir.constant_int 42
+  %1 = hir.int_type
+  hir.unified_return %0 : %1
+}
+
+hir.unified_func @ConstBlockCall() -> (result: 0) {
+  %0 = hir.int_type
+  hir.unified_signature () -> (%0)
+} {
+  %0 = hir.expr -1 : !hir.any {
+    %4 = hir.int_type
+    %5 = hir.unified_call @ConstBlockCallee() : () -> (%4) () -> !hir.any [] -> [0]
+    hir.yield %5 : !hir.any
+  }
+  %1 = hir.type_of %0
+  %2 = hir.int_type
+  %3 = hir.unify %1, %2
+  hir.unified_return %0 : %3
+}

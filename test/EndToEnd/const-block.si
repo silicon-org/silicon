@@ -1,16 +1,10 @@
 // RUN: silc --ir-mir %s | FileCheck %s
-// XFAIL: *
 
 // Test that `const { ... }` blocks inside a function body correctly shift the
 // phase of the enclosed expression. The `noargs` function returns a constant,
 // and `main` wraps the call in a `const { ... }` block to force compile-time
 // evaluation.
-//
-// XFAIL reason: SplitPhases does not yet handle ExprOp regions that contain
-// calls, because the call and its type ops span different phases and the
-// region isolation check fails. The codegen correctly emits a phaseShift of -1
-// on the ExprOp, but the downstream pass needs further work.
 
-// CHECK: mir.evaluated_func {{.*}}@main
+// CHECK: mir.evaluated_func {{.*}}@main{{.*}}[#si.int<42> : !si.int]
 fn noargs() -> int { 42 }
 fn main() -> int { const { noargs() } }
