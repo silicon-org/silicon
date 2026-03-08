@@ -1124,22 +1124,40 @@ void SplitPhasesPass::runOnOperation() {
     });
   }
 
-  // Post-order DFS for topological sort. Callees appear before callers.
+  // Post-order DFS for topological sort. Callees appear before callers. If a
+  // cycle is detected, we report an error with the full call cycle listed,
+  // since recursive functions cannot be synthesized to hardware.
   SmallVector<unsigned> topoOrder;
   SmallVector<uint8_t> visited(analyses.size(), 0);
+  SmallVector<unsigned> dfsStack;
   bool hasCycle = false;
   std::function<void(unsigned)> visit = [&](unsigned idx) {
     if (visited[idx] == 2)
       return;
     if (visited[idx] == 1) {
-      emitError(analyses[idx].first.getLoc())
-          << "recursive call cycle detected";
+      // Find the cycle in the DFS stack and list the involved functions.
+      auto cycleStart = llvm::find(dfsStack, idx);
+      assert(cycleStart != dfsStack.end());
+      SmallVector<unsigned> cycle(cycleStart, dfsStack.end());
+      cycle.push_back(idx);
+      auto diag = emitError(analyses[idx].first.getLoc())
+                  << "recursive call cycle detected; recursive functions "
+                     "cannot be synthesized to hardware because they require "
+                     "unbounded inlining";
+      for (unsigned i = 0; i + 1 < cycle.size(); ++i)
+        diag.attachNote(analyses[cycle[i]].first.getLoc())
+            << "'" << analyses[cycle[i]].first.getSymName() << "' calls '"
+            << analyses[cycle[i + 1]].first.getSymName() << "'";
+      diag.attachNote() << "consider restructuring your code to avoid "
+                           "recursion, e.g., by using loops or unrolled logic";
       hasCycle = true;
       return;
     }
     visited[idx] = 1;
+    dfsStack.push_back(idx);
     for (unsigned dep : deps[idx])
       visit(dep);
+    dfsStack.pop_back();
     visited[idx] = 2;
     topoOrder.push_back(idx);
   };

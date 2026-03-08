@@ -100,3 +100,51 @@ hir.unified_func @PullFails(%x: 0, %y: 0) -> (result: 0) {
   %rrt = hir.type_of %r
   hir.return %r : () -> (%rrt)
 }
+
+// -----
+
+// Self-recursion: a function that calls itself.
+
+// expected-error @below {{recursive call cycle detected; recursive functions cannot be synthesized to hardware because they require unbounded inlining}}
+// expected-note @below {{'fib' calls 'fib'}}
+// expected-note @below {{consider restructuring your code to avoid recursion, e.g., by using loops or unrolled logic}}
+hir.unified_func @fib(%n: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.unified_signature (%0) -> (%0)
+} {
+  %t0 = hir.type_of %n
+  %t1 = hir.inferrable
+  %r = hir.unified_call @fib(%n) : (%t0) -> (%t1) (!hir.any) -> !hir.any [0] -> [0]
+  %tr = hir.type_of %r
+  hir.return %r : () -> (%tr)
+}
+
+// -----
+
+// Mutual recursion: two functions that call each other.
+
+// expected-error @below {{recursive call cycle detected; recursive functions cannot be synthesized to hardware because they require unbounded inlining}}
+// expected-note @below {{'ping' calls 'pong'}}
+// expected-note @below {{consider restructuring your code to avoid recursion, e.g., by using loops or unrolled logic}}
+hir.unified_func @ping(%n: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.unified_signature (%0) -> (%0)
+} {
+  %t0 = hir.type_of %n
+  %t1 = hir.inferrable
+  %r = hir.unified_call @pong(%n) : (%t0) -> (%t1) (!hir.any) -> !hir.any [0] -> [0]
+  %tr = hir.type_of %r
+  hir.return %r : () -> (%tr)
+}
+
+// expected-note @below {{'pong' calls 'ping'}}
+hir.unified_func @pong(%n: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.unified_signature (%0) -> (%0)
+} {
+  %t0 = hir.type_of %n
+  %t1 = hir.inferrable
+  %r = hir.unified_call @ping(%n) : (%t0) -> (%t1) (!hir.any) -> !hir.any [0] -> [0]
+  %tr = hir.type_of %r
+  hir.return %r : () -> (%tr)
+}

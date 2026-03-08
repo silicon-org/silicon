@@ -8,6 +8,9 @@
 - Add a `bool` type to the language and use it for comparison results.
   If conditions should have their type unified with bool, to nudge type inference.
   We'll need `true` and `false` constants in the language, too, alongside logic `&&` and `||` operators.
+- Add a type operand to `hir.constant_int`, such that we can infer the type to be `int` or `uint<N>`.
+  When we infer the concrete type of such a constant, also check that the integer fits into the chosen type.
+  We may want to do this as part of type inference, since this is a user-facing error.
 
 - **`if` with comparison condition fails in hardware output.**
   Input: `pub fn max(a: int, b: int) -> int { if a > b { a } else { b } }` — error: `failed to legalize unresolved materialization from ('i1') to ('i64')`.
@@ -51,11 +54,6 @@
   Input: `const const fn very_early(a: int) -> int { a }; fn main() -> int { very_early(5) }` — error: `callee @very_early.1a is not a mir.func (may not have been lowered yet)`.
   The double const shift moves the function to phase -2, but the pipeline only runs enough iterations to handle phase -1.
   Low priority since this is an unusual construct; may just need more PhaseEvalLoop iterations or a check.
-
-- **Recursion gives a terse error.**
-  Input: `fn factorial(n: int) -> int { if n == 0 { 1 } else { n * factorial(n - 1) } }` — error: `recursive call cycle detected`.
-  This is correct (hardware can't have unbounded recursion), but the error doesn't explain _why_ recursion is rejected.
-  A note like "recursive functions cannot be synthesized to hardware" would help new users.
 
 - **Implicit type widening (`uint<8>` to `uint<16>`) not supported.**
   Input: `pub fn widen(a: uint<8>) -> uint<16> { a }` — error: `hir.unify survived to HIR-to-MIR lowering`.
