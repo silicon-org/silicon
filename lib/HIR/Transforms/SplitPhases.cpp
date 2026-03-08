@@ -129,9 +129,17 @@ LogicalResult PhaseSplitter::run() {
     if (valuePhase == INT16_MIN)
       valuePhase = declared;
     if (valuePhase > declared) {
-      emitError(returnOp.getLoc())
-          << "return value is available at phase " << valuePhase
-          << " but function declares phase " << declared << " return";
+      auto diag = emitError(returnOp.getLoc())
+                  << "return value is available at phase " << valuePhase
+                  << " but function declares phase " << declared << " return";
+      if (valuePhase > 0)
+        diag.attachNote(funcOp.getLoc())
+            << "consider adding `dyn` to the return type to shift it to a "
+               "later phase";
+      else
+        diag.attachNote(funcOp.getLoc())
+            << "consider adding `const` to the arguments or removing `const` "
+               "from the return type";
       hasReturnPhaseMismatch = true;
     }
     effectiveResultPhases.push_back(std::max(declared, valuePhase));

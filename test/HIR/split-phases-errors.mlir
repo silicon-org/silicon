@@ -3,6 +3,7 @@
 // Return phase mismatch: `dyn` arg forces the return value to phase 1, but the
 // function declares a phase-0 return.
 
+// expected-note @below {{consider adding `dyn` to the return type to shift it to a later phase}}
 hir.unified_func @ReturnPhaseTooLate(%x: 1, %y: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.unified_signature (%0, %0) -> (%0)
@@ -21,6 +22,7 @@ hir.unified_func @ReturnPhaseTooLate(%x: 1, %y: 0) -> (result: 0) {
 // Return phase mismatch: `const` return (phase -1) but value is only available
 // at phase 0.
 
+// expected-note @below {{consider adding `const` to the arguments or removing `const` from the return type}}
 hir.unified_func @ConstReturnPhaseMismatch(%x: 0) -> (result: -1) {
   %0 = hir.int_type
   hir.unified_signature (%0) -> (%0)

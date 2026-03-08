@@ -39,12 +39,6 @@
   Comparisons produce `i1` but the return type is `i64`.
   Related to the `if`-with-comparison bug; needs implicit zero-extension or a bool type.
 
-- **`dyn` on function arguments gives phase mismatch error.**
-  Input: `fn send(dyn x: int, y: int) -> int { x + y }` — error: `return value is available at phase 1 but function declares phase 0 return`.
-  The `dyn` argument shifts `x` to a later phase, but the return type stays at phase 0.
-  This is arguably correct behavior (the user should write `-> dyn int`), but the error message is not helpful for a new user.
-  At minimum, improve the diagnostic to suggest adding `dyn` to the return type.
-
 - **`dyn` return type causes compiler bug.**
   Input: `fn make_dyn(x: int) -> dyn int { x }; fn main() -> int { make_dyn(42) }` — error: `compiler bug: op uses value from later phase`.
   The `dyn` return shifts the result to a later phase, and the caller at phase 0 can't use it.
