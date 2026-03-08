@@ -1,0 +1,6 @@
+// RUN: not silc --test-lexer %s 2>&1 | FileCheck %s
+
+// An unterminated nested block comment should produce an error.
+
+// CHECK: error: unclosed comment; missing `*/`
+/* outer /* inner */

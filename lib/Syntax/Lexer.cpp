@@ -106,13 +106,24 @@ Token Lexer::next() {
       continue;
     }
 
-    // Skip multi-line comments.
+    // Skip multi-line comments. These can be nested, so we track nesting
+    // depth and only end when the outermost comment is closed.
     if (text.starts_with("/*")) {
       auto commentStart = text.substr(0, 2);
       text = text.drop_front(2);
-      while (!text.empty() && !text.starts_with("*/"))
-        text = text.drop_front();
-      if (!text.consume_front("*/")) {
+      unsigned depth = 1;
+      while (!text.empty() && depth > 0) {
+        if (text.starts_with("/*")) {
+          text = text.drop_front(2);
+          ++depth;
+        } else if (text.starts_with("*/")) {
+          text = text.drop_front(2);
+          --depth;
+        } else {
+          text = text.drop_front();
+        }
+      }
+      if (depth > 0) {
         mlir::emitError(getLoc(commentStart), "unclosed comment; missing `*/`");
         return {text, TokenKind::Error};
       }

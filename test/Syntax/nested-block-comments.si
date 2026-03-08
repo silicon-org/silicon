@@ -1,0 +1,20 @@
+// RUN: silc --test-lexer %s | FileCheck %s
+
+// Nested block comments should be supported. The lexer tracks nesting depth
+// and only closes the comment when the outermost `*/` is reached.
+
+/* simple block comment */
+// CHECK: identifier `a`
+a
+
+/* outer /* inner */ still outer */
+// CHECK: identifier `b`
+b
+
+/* one /* two /* three */ two */ one */
+// CHECK: identifier `c`
+c
+
+/* trailing text after inner close /* inner */ */
+// CHECK: identifier `d`
+d

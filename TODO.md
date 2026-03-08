@@ -62,12 +62,6 @@
   The double const shift moves the function to phase -2, but the pipeline only runs enough iterations to handle phase -1.
   Low priority since this is an unusual construct; may just need more PhaseEvalLoop iterations or a check.
 
-- **Nested block comments don't work.**
-  Input: `/* outer /* inner */ still outer */` — error: `expected item, found identifier 'still'`.
-  The docs say block comments are "nestable" but the lexer doesn't track nesting depth.
-  Follow what Rust does: if it supports nested block comments, let's support them too.
-  Otherwise, let's fix the docs and indicate that these cannot nest.
-
 - **Recursion gives a terse error.**
   Input: `fn factorial(n: int) -> int { if n == 0 { 1 } else { n * factorial(n - 1) } }` — error: `recursive call cycle detected`.
   This is correct (hardware can't have unbounded recursion), but the error doesn't explain _why_ recursion is rejected.
