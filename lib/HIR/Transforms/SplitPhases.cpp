@@ -29,6 +29,46 @@ namespace hir {
 } // namespace hir
 } // namespace silicon
 
+/// Resolve a value from one region into another by recursively cloning its
+/// defining op and all transitive operands. Values already in the mapping are
+/// returned directly (e.g., block arguments that have been pre-mapped).
+static Value resolveTypeIntoRegion(OpBuilder &builder, Value val,
+                                   IRMapping &mapping) {
+  if (auto mapped = mapping.lookupOrNull(val))
+    return mapped;
+  auto *defOp = val.getDefiningOp();
+  for (Value operand : defOp->getOperands())
+    resolveTypeIntoRegion(builder, operand, mapping);
+  auto *cloned = builder.clone(*defOp, mapping);
+  return cloned->getResult(cast<OpResult>(val).getResultNumber());
+}
+
+/// Check whether an op and all its transitive operands are pure (side-effect
+/// free). This is used to decide whether an op can be cloned into a split
+/// phase function instead of being threaded through as a block argument.
+static bool isPurelyLocal(Operation *op) {
+  if (!mlir::isMemoryEffectFree(op))
+    return false;
+  for (Value operand : op->getOperands()) {
+    auto *defOp = operand.getDefiningOp();
+    if (!defOp || !isPurelyLocal(defOp))
+      return false;
+  }
+  return true;
+}
+
+/// Clone a pure op and its transitive operand tree into the target location.
+/// The mapping is populated with the original-to-clone correspondence.
+static void clonePureOp(Operation *op, OpBuilder &builder, IRMapping &mapping) {
+  if (mapping.contains(op->getResult(0)))
+    return;
+  for (Value operand : op->getOperands()) {
+    auto *defOp = operand.getDefiningOp();
+    clonePureOp(defOp, builder, mapping);
+  }
+  builder.clone(*op, mapping);
+}
+
 namespace {
 struct PhaseSplit {
   FuncOp funcOp;
@@ -616,16 +656,10 @@ void PhaseSplitter::run() {
         Value ownArg = block.getArgument(localIdx);
         Value sigTypeVal = typeOfArgs[unifiedIdx];
 
-        // Resolve the signature type value to a body/split value.
-        Value resolvedType;
-        if (auto mapped = sigToBody.lookupOrNull(sigTypeVal)) {
-          resolvedType = mapped;
-        } else {
-          auto *defOp = sigTypeVal.getDefiningOp();
-          auto *cloned = insertBuilder.clone(*defOp, sigToBody);
-          resolvedType =
-              cloned->getResult(cast<OpResult>(sigTypeVal).getResultNumber());
-        }
+        // Resolve the signature type value to a body/split value. This
+        // recursively clones the defining op and its transitive operands.
+        Value resolvedType =
+            resolveTypeIntoRegion(insertBuilder, sigTypeVal, sigToBody);
 
         auto coerceOp = CoerceTypeOp::create(insertBuilder, ownArg.getLoc(),
                                              ownArg, resolvedType);
@@ -702,22 +736,24 @@ void PhaseSplitter::run() {
               return;
             }
 
-            // Pure ops with no operands (constants, type constructors) can be
-            // cloned into the current split instead of threading through block
-            // args. This keeps type constants like `hir.int_type` local to
-            // each phase, which is needed by the HIR-to-MIR lowering.
+            // Pure ops (constants, type constructors, etc.) can be cloned
+            // into the current split instead of threading through block args.
+            // This keeps type constants like `hir.int_type` and
+            // `hir.uint_type` local to each phase, which is needed by the
+            // HIR-to-MIR lowering. The clone is recursive to handle ops like
+            // `uint_type(constant_int 42)` where the type op depends on
+            // other pure ops.
             auto *defOp = operand.get().getDefiningOp();
-            if (defOp && mlir::isMemoryEffectFree(defOp) &&
-                defOp->getNumOperands() == 0) {
+            if (defOp && isPurelyLocal(defOp)) {
               LLVM_DEBUG({
                 llvm::dbgs() << "- Cloning into phase " << phase << ": "
                              << defOp->getName() << "\n";
               });
               auto &block = split.funcOp.getBody().front();
               OpBuilder cloneBuilder(&block, block.begin());
-              auto *cloned = cloneBuilder.clone(*defOp);
-              value = cloned->getResult(
-                  cast<OpResult>(operand.get()).getResultNumber());
+              IRMapping cloneMapping;
+              clonePureOp(defOp, cloneBuilder, cloneMapping);
+              value = cloneMapping.lookup(operand.get());
             } else {
               // Add an argument to the current split function.
               LLVM_DEBUG({

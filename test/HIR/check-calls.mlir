@@ -104,3 +104,23 @@ hir.unified_func @NestedBar(%a: 0) -> (result: 0) {
   %t0 = hir.type_of %a
   hir.unified_return %a : %t0
 }
+
+//===----------------------------------------------------------------------===//
+// Parameterized type in signature: `uint_type` depends on `constant_int`.
+// The body should get its own cloned copies of both ops transitively.
+
+// CHECK-LABEL: hir.unified_func private @UIntBody
+hir.unified_func private @UIntBody(%a: 0) -> (result: 0) {
+  %0 = hir.constant_int 42
+  %1 = hir.uint_type %0
+  %2 = hir.unit_type
+  hir.unified_signature (%1) -> (%2)
+} {
+  // CHECK:       {
+  // CHECK-DAG:     [[W:%.+]] = hir.constant_int 42
+  // CHECK-DAG:     [[T:%.+]] = hir.uint_type [[W]]
+  // CHECK:         hir.coerce_type %a, [[T]]
+  %0 = hir.constant_unit
+  %1 = hir.unit_type
+  hir.unified_return %0 : %1
+}

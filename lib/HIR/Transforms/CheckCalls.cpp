@@ -152,12 +152,16 @@ static void inlineRegion(Region &region, Block &into,
 /// Resolve a type value from the signature region into the body context.
 ///
 /// If the value is a signature block argument, it is looked up in the mapping.
-/// Otherwise, the defining op is cloned into the body.
+/// Otherwise, the defining op and its transitive operands are cloned into the
+/// body. This handles cases like `uint_type(constant_int 42)` where the type
+/// op depends on other ops in the signature region.
 static Value resolveTypeIntoBody(OpBuilder &builder, Value sigTypeVal,
                                  IRMapping &sigToBody) {
   if (auto mapped = sigToBody.lookupOrNull(sigTypeVal))
     return mapped;
   auto *defOp = sigTypeVal.getDefiningOp();
+  for (Value operand : defOp->getOperands())
+    resolveTypeIntoBody(builder, operand, sigToBody);
   auto *cloned = builder.clone(*defOp, sigToBody);
   return cloned->getResult(cast<OpResult>(sigTypeVal).getResultNumber());
 }

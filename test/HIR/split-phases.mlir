@@ -661,3 +661,28 @@ hir.unified_func @ConstBlockCall() -> (result: 0) {
   %3 = hir.unify %1, %2
   hir.unified_return %0 : %3
 }
+
+//===----------------------------------------------------------------------===//
+// Parameterized type in signature: `uint_type` depends on a `constant_int`
+// operand. Both must be cloned transitively into the split function.
+
+// CHECK-LABEL: hir.func private @UIntLiteral.0(%a) -> (result)
+// CHECK:         hir.constant_int 42
+// CHECK-NEXT:    hir.uint_type
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.split_func private @UIntLiteral(%a: 0) -> (result: 0)
+// CHECK:         hir.constant_int 42
+// CHECK-NEXT:    hir.uint_type
+// CHECK:         hir.signature
+
+hir.unified_func private @UIntLiteral(%a: 0) -> (result: 0) attributes {isModule} {
+  %0 = hir.constant_int 42
+  %1 = hir.uint_type %0
+  %2 = hir.unit_type
+  hir.unified_signature (%1) -> (%2)
+} {
+  %0 = hir.constant_unit
+  %1 = hir.unit_type
+  hir.unified_return %0 : %1
+}
