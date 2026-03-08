@@ -23,11 +23,6 @@
   Comparisons produce `i1` but the return type is `i64`.
   Related to the `if`-with-comparison bug; needs implicit zero-extension or a bool type.
 
-- **`dyn` return type causes compiler bug.**
-  Input: `fn make_dyn(x: int) -> dyn int { x }; fn main() -> int { make_dyn(42) }` — error: `compiler bug: op uses value from later phase`.
-  The `dyn` return shifts the result to a later phase, and the caller at phase 0 can't use it.
-  May be a legitimate phase violation, but should be a user-facing error, not a compiler bug.
-
 - **`const const fn` (double phase shift) fails.**
   Input: `const const fn very_early(a: int) -> int { a }; fn main() -> int { very_early(5) }` — error: `callee @very_early.1a is not a mir.func (may not have been lowered yet)`.
   The double const shift moves the function to phase -2, but the pipeline only runs enough iterations to handle phase -1.
