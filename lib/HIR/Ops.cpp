@@ -149,7 +149,7 @@ void FuncOp::print(OpAsmPrinter &p) {
       p << ", ";
     p << cast<StringAttr>(resultNames[i]).getValue();
   }
-  p << ") ";
+  p << ")";
 
   // Print optional attributes, excluding properties we've already printed.
   p.printOptionalAttrDictWithKeyword(
@@ -157,6 +157,7 @@ void FuncOp::print(OpAsmPrinter &p) {
                             getArgNamesAttrName(), getResultNamesAttrName()});
 
   // Print body region without entry block arguments.
+  p << ' ';
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
 }
 
@@ -741,7 +742,7 @@ void UnifiedFuncOp::print(OpAsmPrinter &p) {
       p << ", ";
     p << cast<StringAttr>(resultNames[i]).getValue() << ": " << resultPhases[i];
   }
-  p << ") ";
+  p << ")";
 
   // Print optional attributes, excluding properties we've already printed.
   p.printOptionalAttrDictWithKeyword(
@@ -751,6 +752,7 @@ void UnifiedFuncOp::print(OpAsmPrinter &p) {
        getResultPhasesAttrName()});
 
   // Print signature and body regions without entry block arguments.
+  p << ' ';
   p.printRegion(getSignature(), /*printEntryBlockArgs=*/false);
   p << ' ';
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false);

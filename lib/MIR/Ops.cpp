@@ -184,7 +184,7 @@ void FuncOp::print(OpAsmPrinter &p) {
     p << cast<StringAttr>(resultNames[i]).getValue() << ": ";
     p.printType(resultTypes[i]);
   }
-  p << ") ";
+  p << ")";
 
   // Print optional attributes, excluding properties we've already printed.
   p.printOptionalAttrDictWithKeyword(
@@ -193,6 +193,7 @@ void FuncOp::print(OpAsmPrinter &p) {
                             getResultNamesAttrName()});
 
   // Print body region without entry block arguments.
+  p << ' ';
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
 }
 
