@@ -66,13 +66,13 @@ See the [Phased Execution]({{< relref "/examples/phased-execution" >}}) section 
 Placing `const` or `dyn` before the `fn` keyword shifts *all* phases of the function by the modifier amount.
 This is a shorthand that affects every argument and the return type uniformly.
 
-```
+```silicon
 const fn early(a: int) -> int { a + 1 }
 dyn fn late(a: int) -> int { a + 1 }
 ```
 
 Multiple modifiers stack: `const const fn` shifts by -2, and `const dyn fn` cancels out to a shift of 0.
 
-```
+```silicon
 const const fn very_early(a: int) -> int { a }
 ```

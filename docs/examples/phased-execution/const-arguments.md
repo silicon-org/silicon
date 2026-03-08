@@ -33,7 +33,7 @@ Here `x` is deferred to a later phase than the rest of the function.
 
 Instead of annotating individual arguments, you can place `const` or `dyn` before the `fn` keyword to shift *all* phases of a function uniformly.
 
-```
+```silicon
 const fn early(a: int, b: int) -> int { a + b }
 dyn fn late(a: int, b: int) -> int { a + b }
 ```
