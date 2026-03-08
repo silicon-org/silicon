@@ -1,5 +1,34 @@
 // RUN: silicon-opt --check-calls %s | FileCheck %s
 
+//===----------------------------------------------------------------------===//
+// Multi-block signature: the entry block computes the type in a separate block
+// and branches to the exit block where the unified_signature terminator lives.
+
+// CHECK-LABEL: hir.unified_func private @MultiBlockSig
+hir.unified_func private @MultiBlockSig(%a: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.const_br ^exit(%0, %0 : !hir.any, !hir.any)
+^exit(%arg_ty: !hir.any, %ret_ty: !hir.any):
+  hir.unified_signature (%arg_ty) -> (%ret_ty)
+} {
+  // The body gets the cloned signature blocks as a preamble. The entry block
+  // computes the type and branches to an intermediate block, which forwards
+  // the type values as block arguments to the body block.
+  // CHECK: [[T:%.+]] = hir.int_type
+  // CHECK: hir.const_br ^bb1([[T]], [[T]] : !hir.any, !hir.any)
+  // CHECK: ^bb1({{%.+}}: !hir.any, {{%.+}}: !hir.any):
+  // CHECK: hir.const_br ^bb2({{%.+}}, {{%.+}} : !hir.any, !hir.any)
+  // CHECK: ^bb2([[ARG_TY:%.+]]: !hir.any, [[RET_TY:%.+]]: !hir.any):
+  // CHECK: [[COERCED:%.+]] = hir.coerce_type %a, [[ARG_TY]]
+  // CHECK: [[TYPEOF:%.+]] = hir.type_of [[COERCED]]
+  // CHECK: [[UNI:%.+]] = hir.unify [[TYPEOF]], [[RET_TY]]
+  // CHECK: hir.unified_return [[COERCED]] : ([[ARG_TY]]) -> ([[UNI]])
+  %t0 = hir.type_of %a
+  hir.unified_return %a : () -> (%t0)
+}
+
+//===----------------------------------------------------------------------===//
+
 // CHECK-LABEL: hir.unified_func @Empty
 hir.unified_func @Empty() -> () {
   // CHECK: hir.unified_signature () -> ()
@@ -31,9 +60,9 @@ hir.unified_func @SimpleBar(%a: 0) -> (result: 0) {
   hir.unified_signature (%0) -> (%1)
 } {
   // CHECK: [[ARG_TY:%.+]] = hir.int_type {a}
+  // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
   // CHECK: [[COERCED:%.+]] = hir.coerce_type %a, [[ARG_TY]]
   // CHECK: [[TYPEOF:%.+]] = hir.type_of [[COERCED]]
-  // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
   // CHECK: [[UNI:%.+]] = hir.unify [[TYPEOF]], [[RET_TY]]
   // CHECK: hir.unified_return [[COERCED]] : ([[ARG_TY]]) -> ([[UNI]])
   %t0 = hir.type_of %a
@@ -96,9 +125,9 @@ hir.unified_func @NestedBar(%a: 0) -> (result: 0) {
   hir.unified_signature (%0) -> (%1)
 } {
   // CHECK: [[ARG_TY:%.+]] = hir.int_type {a}
+  // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
   // CHECK: [[COERCED:%.+]] = hir.coerce_type %a, [[ARG_TY]]
   // CHECK: [[TYPEOF:%.+]] = hir.type_of [[COERCED]]
-  // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
   // CHECK: [[UNI:%.+]] = hir.unify [[TYPEOF]], [[RET_TY]]
   // CHECK: hir.unified_return [[COERCED]] : ([[ARG_TY]]) -> ([[UNI]])
   %t0 = hir.type_of %a

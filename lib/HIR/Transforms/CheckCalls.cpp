@@ -9,7 +9,6 @@
 #include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Passes.h"
 #include "silicon/Support/MLIR.h"
-#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Threading.h"
 #include "llvm/Support/Debug.h"
@@ -149,21 +148,205 @@ static void inlineRegion(Region &region, Block &into,
   intoRegion.getBlocks().splice(tailBlock.getIterator(), region.getBlocks());
 }
 
-/// Resolve a type value from the signature region into the body context.
+/// Ensure there is exactly one `UnifiedSignatureOp` terminator in the cloned
+/// signature region. If multiple terminators exist, they are consolidated into
+/// a single exit block whose block arguments carry the typeOfArgs and
+/// typeOfResults values.
+static void consolidateSignatureTerminators(Region &clonedSig) {
+  SmallVector<UnifiedSignatureOp> sigTerminators;
+  for (auto &block : clonedSig)
+    if (auto sigOp = dyn_cast<UnifiedSignatureOp>(block.getTerminator()))
+      sigTerminators.push_back(sigOp);
+  if (sigTerminators.size() <= 1)
+    return;
+
+  auto firstSigOp = sigTerminators.front();
+  unsigned numArgTypes = firstSigOp.getTypeOfArgs().size();
+  unsigned numResultTypes = firstSigOp.getTypeOfResults().size();
+
+  // Create the exit block with one block arg per typeOfArgs + typeOfResults.
+  auto *exitBlock = new Block();
+  clonedSig.push_back(exitBlock);
+  SmallVector<Type> blockArgTypes;
+  SmallVector<Location> blockArgLocs;
+  for (unsigned i = 0; i < numArgTypes; ++i) {
+    blockArgTypes.push_back(firstSigOp.getTypeOfArgs()[i].getType());
+    blockArgLocs.push_back(firstSigOp.getTypeOfArgs()[i].getLoc());
+  }
+  for (unsigned i = 0; i < numResultTypes; ++i) {
+    blockArgTypes.push_back(firstSigOp.getTypeOfResults()[i].getType());
+    blockArgLocs.push_back(firstSigOp.getTypeOfResults()[i].getLoc());
+  }
+  exitBlock->addArguments(blockArgTypes, blockArgLocs);
+
+  // Create the consolidated signature terminator in the exit block.
+  OpBuilder exitBuilder(exitBlock, exitBlock->begin());
+  auto exitArgTypes = exitBlock->getArguments().take_front(numArgTypes);
+  auto exitResultTypes = exitBlock->getArguments().drop_front(numArgTypes);
+  UnifiedSignatureOp::create(exitBuilder, firstSigOp.getLoc(),
+                             SmallVector<Value>(exitArgTypes),
+                             SmallVector<Value>(exitResultTypes));
+
+  // Replace each original terminator with a branch to the exit block.
+  for (auto sigOp : sigTerminators) {
+    OpBuilder builder(sigOp);
+    SmallVector<Value> branchArgs;
+    branchArgs.append(sigOp.getTypeOfArgs().begin(),
+                      sigOp.getTypeOfArgs().end());
+    branchArgs.append(sigOp.getTypeOfResults().begin(),
+                      sigOp.getTypeOfResults().end());
+    ConstBranchOp::create(builder, sigOp.getLoc(), branchArgs, exitBlock);
+    sigOp.erase();
+  }
+}
+
+/// Clone the signature region's blocks into the body region and wire up
+/// coerce_type and return type operands.
 ///
-/// If the value is a signature block argument, it is looked up in the mapping.
-/// Otherwise, the defining op and its transitive operands are cloned into the
-/// body. This handles cases like `uint_type(constant_int 42)` where the type
-/// op depends on other ops in the signature region.
-static Value resolveTypeIntoBody(OpBuilder &builder, Value sigTypeVal,
-                                 IRMapping &sigToBody) {
-  if (auto mapped = sigToBody.lookupOrNull(sigTypeVal))
-    return mapped;
-  auto *defOp = sigTypeVal.getDefiningOp();
-  for (Value operand : defOp->getOperands())
-    resolveTypeIntoBody(builder, operand, sigToBody);
-  auto *cloned = builder.clone(*defOp, sigToBody);
-  return cloned->getResult(cast<OpResult>(sigTypeVal).getResultNumber());
+/// Instead of selectively cloning individual ops from the signature, this
+/// clones all signature blocks into the body region. If there are multiple
+/// `UnifiedSignatureOp` terminators (from multi-block signatures), they are
+/// first consolidated into a single exit block. The cloned blocks are placed
+/// before the body's entry block, making the cloned signature entry block the
+/// new entry of the body region. The signature terminator's operands feed into
+/// coerce_type ops on the block arguments and into the body return's type
+/// operands.
+static void cloneSignatureIntoBody(UnifiedFuncOp funcOp) {
+  auto &sigRegion = funcOp.getSignature();
+  auto &bodyRegion = funcOp.getBody();
+  auto &bodyBlock = bodyRegion.front();
+
+  // Clone the signature region into a temporary region and consolidate
+  // multiple signature terminators if needed.
+  Region clonedSig;
+  IRMapping sigToBody;
+  sigRegion.cloneInto(&clonedSig, sigToBody);
+  consolidateSignatureTerminators(clonedSig);
+
+  // Find the single signature terminator and extract its operands.
+  auto &clonedEntry = clonedSig.front();
+  UnifiedSignatureOp clonedSigOp = nullptr;
+  for (auto &block : clonedSig)
+    if (auto op = dyn_cast<UnifiedSignatureOp>(block.getTerminator()))
+      clonedSigOp = op;
+  assert(clonedSigOp && "expected a single signature terminator");
+  SmallVector<Value> clonedArgTypes(clonedSigOp.getTypeOfArgs());
+  SmallVector<Value> clonedResultTypes(clonedSigOp.getTypeOfResults());
+
+  // Move all cloned blocks before the body block, making the cloned entry
+  // block the new entry of the body region. For single-block signatures, we
+  // merge the blocks to keep the body as a single block (which downstream
+  // passes like SplitPhases expect). For multi-block signatures, the cloned
+  // blocks form a preamble that branches into the body block, passing the type
+  // values as block arguments.
+  // Track the insertion point for coerce_type ops, which must go after the
+  // inlined sig ops but before the original body ops.
+  Block::iterator coerceInsertPt = bodyBlock.begin();
+
+  if (clonedSig.hasOneBlock()) {
+    // Single block: replace cloned entry args with body block args, update the
+    // type vectors to point at body block args, erase the terminator, and
+    // splice ops directly into the body block at the beginning.
+    for (auto [sigArg, bodyArg] :
+         llvm::zip(clonedEntry.getArguments(), bodyBlock.getArguments())) {
+      // Update clonedArgTypes/clonedResultTypes if they reference this arg.
+      for (auto &v : clonedArgTypes)
+        if (v == sigArg)
+          v = bodyArg;
+      for (auto &v : clonedResultTypes)
+        if (v == sigArg)
+          v = bodyArg;
+      sigArg.replaceAllUsesWith(bodyArg);
+    }
+    clonedEntry.eraseArguments(0, clonedEntry.getNumArguments());
+    clonedSigOp.erase();
+    bodyBlock.getOperations().splice(coerceInsertPt,
+                                     clonedEntry.getOperations());
+    // coerceInsertPt still points to the first original body op.
+  } else {
+    // Multi-block: the cloned entry block keeps its args (the function args).
+    // Replace body block arg uses with cloned entry block args, then erase
+    // the body block args.
+    for (auto [bodyArg, sigArg] :
+         llvm::zip(bodyBlock.getArguments(), clonedEntry.getArguments()))
+      bodyArg.replaceAllUsesWith(sigArg);
+    bodyBlock.eraseArguments(0, bodyBlock.getNumArguments());
+
+    // Pass the type values through the branch as block arguments so they
+    // dominate their uses in the body block.
+    SmallVector<Value> branchArgs;
+    branchArgs.append(clonedArgTypes.begin(), clonedArgTypes.end());
+    branchArgs.append(clonedResultTypes.begin(), clonedResultTypes.end());
+
+    SmallVector<Type> branchArgTypes;
+    SmallVector<Location> branchArgLocs;
+    for (auto v : branchArgs) {
+      branchArgTypes.push_back(v.getType());
+      branchArgLocs.push_back(v.getLoc());
+    }
+    bodyBlock.addArguments(branchArgTypes, branchArgLocs);
+
+    // Update clonedArgTypes/clonedResultTypes to point at the new body block
+    // arguments instead of the values in the cloned region.
+    for (unsigned i = 0; i < clonedArgTypes.size(); ++i)
+      clonedArgTypes[i] = bodyBlock.getArgument(i);
+    for (unsigned i = 0; i < clonedResultTypes.size(); ++i)
+      clonedResultTypes[i] = bodyBlock.getArgument(clonedArgTypes.size() + i);
+
+    // Replace the signature terminator with a branch to the body block.
+    OpBuilder branchBuilder(clonedSigOp);
+    ConstBranchOp::create(branchBuilder, clonedSigOp.getLoc(), branchArgs,
+                          &bodyBlock);
+    clonedSigOp.erase();
+
+    // Move the cloned blocks before the body block.
+    bodyRegion.getBlocks().splice(bodyRegion.begin(), clonedSig.getBlocks());
+    // coerceInsertPt is at bodyBlock.begin(), which is correct for multi-block.
+  }
+
+  // Insert coerce_type ops right before the original body ops. For single-
+  // block signatures, this is after the inlined sig ops. For multi-block,
+  // this is at the top of the body block (types come through block args).
+  auto &entryBlock = bodyRegion.front();
+  OpBuilder insertBuilder(&bodyBlock, coerceInsertPt);
+  for (auto [idx, entryArg] : llvm::enumerate(entryBlock.getArguments())) {
+    if (idx >= clonedArgTypes.size())
+      break;
+    auto coerceOp = CoerceTypeOp::create(insertBuilder, entryArg.getLoc(),
+                                         entryArg, clonedArgTypes[idx]);
+    entryArg.replaceUsesWithIf(coerceOp.getResult(), [&](OpOperand &use) {
+      return use.getOwner() != coerceOp;
+    });
+  }
+
+  // Unify body return types with the declared return types from the signature.
+  // Also populate typeOfArgs from the declared argument types. Since the
+  // signature ops are now part of the body region, we can use them directly.
+  bodyRegion.walk([&](UnifiedReturnOp returnOp) {
+    OpBuilder builder(returnOp);
+
+    // Unify return value types with the declared return types.
+    if (!returnOp.getTypeOfValues().empty() && !clonedResultTypes.empty()) {
+      SmallVector<Value> newTypeOfValues;
+      for (auto [idx, retTypeVal] :
+           llvm::enumerate(returnOp.getTypeOfValues())) {
+        if (idx >= clonedResultTypes.size()) {
+          newTypeOfValues.push_back(retTypeVal);
+          continue;
+        }
+        Value unified = UnifyOp::create(builder, returnOp.getLoc(), retTypeVal,
+                                        clonedResultTypes[idx]);
+        newTypeOfValues.push_back(unified);
+      }
+      returnOp.getTypeOfValuesMutable().assign(newTypeOfValues);
+    }
+
+    // Populate typeOfArgs from the declared argument types.
+    SmallVector<Value> newTypeOfArgs;
+    for (Value argType : clonedArgTypes)
+      newTypeOfArgs.push_back(argType);
+    returnOp.getTypeOfArgsMutable().assign(newTypeOfArgs);
+  });
 }
 
 LogicalResult CheckCallsPass::checkRegion(Region &region,
@@ -174,35 +357,6 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
     llvm::dbgs() << "Checking " << (isBody ? "body" : "signature") << " of "
                  << funcOp.getSymNameAttr() << "\n";
   });
-
-  // Insert coerce_type annotations on body block args to connect them with
-  // the declared types from the signature. This allows type_of(coerce_type(x,
-  // T)) to fold to T during canonicalization, resolving type_of chains early.
-  IRMapping sigToBody;
-  if (isBody) {
-    auto sigOp = funcOp.getSignatureOp();
-    auto &sigBlock = funcOp.getSignature().front();
-    auto &bodyBlock = funcOp.getBody().front();
-
-    for (auto [sigArg, bodyArg] :
-         llvm::zip(sigBlock.getArguments(), bodyBlock.getArguments()))
-      sigToBody.map(sigArg, bodyArg);
-
-    OpBuilder insertBuilder(&bodyBlock, bodyBlock.begin());
-    for (auto [idx, bodyArg] : llvm::enumerate(bodyBlock.getArguments())) {
-      if (idx >= sigOp.getTypeOfArgs().size())
-        break;
-      Value sigTypeVal = sigOp.getTypeOfArgs()[idx];
-      Value resolvedType =
-          resolveTypeIntoBody(insertBuilder, sigTypeVal, sigToBody);
-
-      auto coerceOp = CoerceTypeOp::create(insertBuilder, bodyArg.getLoc(),
-                                           bodyArg, resolvedType);
-      bodyArg.replaceUsesWithIf(coerceOp.getResult(), [&](OpOperand &use) {
-        return use.getOwner() != coerceOp;
-      });
-    }
-  }
 
   // Process calls by inlining callee signatures and unifying types.
   region.walk([&](UnifiedCallOp callOp) {
@@ -287,48 +441,11 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
     inlineRegion(signature, *callOp->getBlock(), callOp->getIterator());
   });
 
-  // Unify body return types with the declared return types from the signature.
-  // This connects the body's inferred return type to the declared type,
-  // enabling InferTypes to resolve them. Also unify the return's typeOfArgs
-  // with the declared argument types from the signature.
-  if (isBody) {
-    auto sigOp = funcOp.getSignatureOp();
-    auto sigRetTypes = sigOp.getTypeOfResults();
-    auto sigArgTypes = sigOp.getTypeOfArgs();
-
-    funcOp.getBody().walk([&](UnifiedReturnOp returnOp) {
-      OpBuilder builder(returnOp);
-
-      // Unify return value types with the declared return types.
-      if (!returnOp.getTypeOfValues().empty() && !sigRetTypes.empty()) {
-        SmallVector<Value> newTypeOfValues;
-        for (auto [idx, retTypeVal] :
-             llvm::enumerate(returnOp.getTypeOfValues())) {
-          if (idx >= sigRetTypes.size()) {
-            newTypeOfValues.push_back(retTypeVal);
-            continue;
-          }
-          Value resolvedSigRetType =
-              resolveTypeIntoBody(builder, sigRetTypes[idx], sigToBody);
-          Value unified = UnifyOp::create(builder, returnOp.getLoc(),
-                                          retTypeVal, resolvedSigRetType);
-          newTypeOfValues.push_back(unified);
-        }
-        returnOp.getTypeOfValuesMutable().assign(newTypeOfValues);
-      }
-
-      // Populate typeOfArgs from the declared argument types in the signature.
-      // This threads the argument type information through to the return op so
-      // it survives into hir.return after SplitPhases.
-      SmallVector<Value> newTypeOfArgs;
-      for (auto [idx, sigArgType] : llvm::enumerate(sigArgTypes)) {
-        Value resolvedSigArgType =
-            resolveTypeIntoBody(builder, sigArgType, sigToBody);
-        newTypeOfArgs.push_back(resolvedSigArgType);
-      }
-      returnOp.getTypeOfArgsMutable().assign(newTypeOfArgs);
-    });
-  }
+  // Clone the signature blocks into the body region. This replaces the body
+  // block's arguments with the signature entry block's arguments, inserts
+  // coerce_type ops, and wires up the return type operands.
+  if (isBody)
+    cloneSignatureIntoBody(funcOp);
 
   return success();
 }
