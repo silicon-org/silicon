@@ -9,6 +9,7 @@
 #include "silicon/Codegen/Codegen.h"
 #include "silicon/Codegen/Context.h"
 #include "silicon/HIR/Dialect.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Verifier.h"
 
@@ -17,7 +18,8 @@ using namespace codegen;
 
 OwningOpRef<ModuleOp> silicon::convertToIR(MLIRContext *context, AST &ast) {
   // Make sure the dialects we need are loaded.
-  context->loadDialect<hir::HIRDialect, mlir::func::FuncDialect>();
+  context->loadDialect<hir::HIRDialect, mlir::cf::ControlFlowDialect,
+                       mlir::func::FuncDialect>();
 
   // Create a new MLIR module to hold the converted AST.
   auto module = ModuleOp::create(UnknownLoc::get(context));

@@ -8,6 +8,8 @@ add_silicon_library(SiliconConversion
   LINK_LIBS PUBLIC
   CIRCTComb
   CIRCTHW
+  MLIRArithDialect
+  MLIRControlFlowDialect
   MLIRTransformUtils
   SiliconHIR
   SiliconMIR

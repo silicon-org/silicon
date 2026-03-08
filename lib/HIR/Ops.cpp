@@ -10,6 +10,7 @@
 #include "silicon/HIR/Ops.h"
 #include "silicon/Support/AsmParser.h"
 #include "silicon/Support/MLIR.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
@@ -1006,23 +1007,14 @@ Value hir::getTypeOf(Value value) {
       .Case<UnifiedCallOp>([&](UnifiedCallOp op) {
         return op.getTypeOfResults()[result.getResultNumber()];
       })
-      .Case<IfOp>([&](IfOp op) -> Value {
-        // The type of an if result is the type of the corresponding yield
-        // value in the then branch. Both branches must agree.
-        auto &thenBlock = op.getThenRegion().front();
-        if (auto yieldOp = dyn_cast<YieldOp>(thenBlock.getTerminator()))
-          if (result.getResultNumber() < yieldOp.getOperands().size())
-            return getTypeOf(yieldOp.getOperands()[result.getResultNumber()]);
-        return {};
-      })
+      .Case<arith::SelectOp>(
+          [](arith::SelectOp op) { return getTypeOf(op.getTrueValue()); })
       .Default([](Operation *) { return Value(); });
 }
 
 Value hir::getOrCreateTypeOf(OpBuilder &builder, Location loc, Value value) {
   if (auto type = getTypeOf(value)) {
     // Verify the type value is accessible at the current insertion point.
-    // getTypeOf can look through IfOp into child regions, returning values
-    // that don't dominate the builder's insertion point.
     auto *insertBlock = builder.getInsertionBlock();
     if (auto *defOp = type.getDefiningOp()) {
       if (defOp->getBlock() && insertBlock &&

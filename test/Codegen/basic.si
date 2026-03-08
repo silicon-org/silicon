@@ -329,37 +329,36 @@ fn testBoolFalse() -> bool { false }
 // Logical operators
 //===----------------------------------------------------------------------===//
 
-// Ensure `&&` desugars into short-circuiting if/else:
+// Ensure `&&` desugars into short-circuiting CFG branches:
 // `a && b` → `if a { b } else { false }`
 // CHECK-LABEL: hir.unified_func private @testLogicalAnd
-// CHECK: hir.if %a
-// CHECK:   hir.eq %b, %c
-// CHECK:   hir.yield
-// CHECK: else
-// CHECK:   hir.constant_bool <false>
-// CHECK:   hir.yield
+// CHECK: hir.coerce_to_i1 %a
+// CHECK: cf.cond_br
+// CHECK: hir.eq %b, %c
+// CHECK: cf.br
+// CHECK: hir.constant_bool <false>
+// CHECK: cf.br
 fn testLogicalAnd(a: bool, b: int, c: int) -> bool { a && b == c }
 
-// Ensure `||` desugars into short-circuiting if/else:
+// Ensure `||` desugars into short-circuiting CFG branches:
 // `a || b` → `if a { true } else { b }`
 // CHECK-LABEL: hir.unified_func private @testLogicalOr
-// CHECK: hir.if %a
-// CHECK:   hir.constant_bool <true>
-// CHECK:   hir.yield
-// CHECK: else
-// CHECK:   hir.eq %b, %c
-// CHECK:   hir.yield
+// CHECK: hir.coerce_to_i1 %a
+// CHECK: cf.cond_br
+// CHECK: hir.constant_bool <true>
+// CHECK: cf.br
+// CHECK: hir.eq %b, %c
+// CHECK: cf.br
 fn testLogicalOr(a: bool, b: int, c: int) -> bool { a || b == c }
 
 //===----------------------------------------------------------------------===//
 // If condition unification with bool
 //===----------------------------------------------------------------------===//
 
-// Ensure if conditions are unified with bool.
+// Ensure if conditions are lowered to CFG via coerce_to_i1.
 // CHECK-LABEL: hir.unified_func private @testIfBoolCondition
-// CHECK: hir.bool_type
-// CHECK: hir.unify
-// CHECK: hir.if
+// CHECK: hir.coerce_to_i1
+// CHECK: cf.cond_br
 fn testIfBoolCondition(a: bool) -> int {
   if a { 1 } else { 2 }
 }
@@ -370,15 +369,15 @@ fn testIfBoolCondition(a: bool) -> int {
 
 // Ensure `||` has the lowest precedence among all binary operators,
 // and `&&` is just above it.
-// `a || b && c` is `a || (b && c)`, desugared as:
+// `a || b && c` is `a || (b && c)`, desugared as CFG branches:
 // if a { true } else { if b { c } else { false } }
 // CHECK-LABEL: hir.unified_func private @precLogicalAndBeforeOr
-// CHECK: hir.if %a
-// CHECK:   hir.constant_bool <true>
-// CHECK:   hir.yield
-// CHECK: else
-// CHECK:   hir.if %b
-// CHECK:     hir.yield %c
-// CHECK:   else
-// CHECK:     hir.constant_bool <false>
+// CHECK: hir.coerce_to_i1 %a
+// CHECK: cf.cond_br
+// CHECK: hir.constant_bool <true>
+// CHECK: cf.br
+// CHECK: hir.coerce_to_i1 %b
+// CHECK: cf.cond_br
+// CHECK: cf.br
+// CHECK: hir.constant_bool <false>
 fn precLogicalAndBeforeOr(a: bool, b: bool, c: bool) -> bool { a || b && c }

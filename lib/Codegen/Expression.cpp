@@ -12,6 +12,7 @@
 #include "silicon/HIR/Types.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/Syntax/AST.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
 using namespace silicon;
 using namespace codegen;
@@ -125,7 +126,7 @@ static Value convert(ast::UnaryExpr &expr, Context &cx) {
   }
 }
 
-/// Desugar a short-circuiting logical operator into an if/else expression.
+/// Desugar a short-circuiting logical operator into CFG branches.
 /// `a && b` → `if a { b } else { false }`
 /// `a || b` → `if a { true } else { b }`
 static Value convertLogicalOp(ast::BinaryExpr &expr, Context &cx, bool isAnd) {
@@ -134,45 +135,60 @@ static Value convertLogicalOp(ast::BinaryExpr &expr, Context &cx, bool isAnd) {
     return {};
 
   auto anyType = hir::AnyType::get(cx.module.getContext());
-  auto ifOp = hir::IfOp::create(cx.builder, expr.loc, TypeRange{anyType}, lhs);
 
-  // Build the then region.
-  {
-    auto ip = cx.builder.saveInsertionPoint();
-    cx.builder.setInsertionPointToStart(&ifOp.getThenRegion().emplaceBlock());
-    Value thenValue;
-    if (isAnd) {
-      thenValue = cx.convertExpr(*expr.rhs);
-    } else {
-      thenValue = hir::ConstantBoolOp::create(
-          cx.builder, expr.loc,
-          base::BoolAttr::get(cx.module.getContext(), true));
-    }
-    if (!thenValue)
-      return {};
-    hir::YieldOp::create(cx.builder, expr.loc, ValueRange{thenValue});
-    cx.builder.restoreInsertionPoint(ip);
+  // Convert condition to i1.
+  auto i1Cond = hir::CoerceToI1Op::create(cx.builder, expr.loc, lhs);
+
+  // Create the then, else, and merge blocks. The merge block is added to the
+  // region last, after building the sub-expressions, to ensure it remains the
+  // final block even when nested logical ops add their own blocks.
+  auto *currentBlock = cx.builder.getInsertionBlock();
+  auto *region = currentBlock->getParent();
+  auto *thenBlock = new Block();
+  auto *elseBlock = new Block();
+  auto *mergeBlock = new Block();
+  mergeBlock->addArgument(anyType, expr.loc);
+  region->push_back(thenBlock);
+  region->push_back(elseBlock);
+
+  // Terminate the current block with a conditional branch.
+  mlir::cf::CondBranchOp::create(cx.builder, expr.loc, i1Cond, thenBlock,
+                                 elseBlock);
+
+  // Build the then block.
+  cx.builder.setInsertionPointToStart(thenBlock);
+  Value thenValue;
+  if (isAnd) {
+    thenValue = cx.convertExpr(*expr.rhs);
+  } else {
+    thenValue = hir::ConstantBoolOp::create(
+        cx.builder, expr.loc,
+        base::BoolAttr::get(cx.module.getContext(), true));
   }
+  if (!thenValue)
+    return {};
+  mlir::cf::BranchOp::create(cx.builder, expr.loc, mergeBlock,
+                             ValueRange{thenValue});
 
-  // Build the else region.
-  {
-    auto ip = cx.builder.saveInsertionPoint();
-    cx.builder.setInsertionPointToStart(&ifOp.getElseRegion().emplaceBlock());
-    Value elseValue;
-    if (isAnd) {
-      elseValue = hir::ConstantBoolOp::create(
-          cx.builder, expr.loc,
-          base::BoolAttr::get(cx.module.getContext(), false));
-    } else {
-      elseValue = cx.convertExpr(*expr.rhs);
-    }
-    if (!elseValue)
-      return {};
-    hir::YieldOp::create(cx.builder, expr.loc, ValueRange{elseValue});
-    cx.builder.restoreInsertionPoint(ip);
+  // Build the else block.
+  cx.builder.setInsertionPointToStart(elseBlock);
+  Value elseValue;
+  if (isAnd) {
+    elseValue = hir::ConstantBoolOp::create(
+        cx.builder, expr.loc,
+        base::BoolAttr::get(cx.module.getContext(), false));
+  } else {
+    elseValue = cx.convertExpr(*expr.rhs);
   }
+  if (!elseValue)
+    return {};
+  mlir::cf::BranchOp::create(cx.builder, expr.loc, mergeBlock,
+                             ValueRange{elseValue});
 
-  return ifOp.getResult(0);
+  // Add the merge block last and continue there.
+  region->push_back(mergeBlock);
+  cx.builder.setInsertionPointToStart(mergeBlock);
+  return mergeBlock->getArgument(0);
 }
 
 /// Handle binary expressions by dispatching to the appropriate HIR op.
@@ -264,52 +280,62 @@ static Value convert(ast::BlockExpr &block, Context &cx) {
   return hir::ConstantUnitOp::create(cx.builder, block.loc);
 }
 
-/// Handle if/else expressions. Create an `hir.if` op with then and else
-/// regions. If the else branch is absent, a unit-yielding else block is
-/// generated. The condition is unified with `bool` to enforce type safety.
+/// Handle if/else expressions by emitting CFG blocks with `cf.cond_br` and
+/// `cf.br`. The condition is unified with `bool` and cast to `i1` via
+/// `hir.coerce_to_i1`. A merge block with a block argument carries the
+/// result value to subsequent code.
 static Value convert(ast::IfExpr &expr, Context &cx) {
   auto condition = cx.convertExpr(*expr.condition);
   if (!condition)
     return {};
 
-  // Unify the condition type with bool.
   auto anyType = hir::AnyType::get(cx.module.getContext());
-  auto boolType = hir::BoolTypeOp::create(cx.builder, expr.loc);
-  auto condType = hir::getOrCreateTypeOf(cx.builder, expr.loc, condition);
-  cx.builder.createOrFold<hir::UnifyOp>(expr.loc, anyType, condType, boolType);
 
-  // Create the hir.if op with a single !hir.any result.
-  auto ifOp =
-      hir::IfOp::create(cx.builder, expr.loc, TypeRange{anyType}, condition);
+  // Convert condition to i1 for the branch. The coerce_to_i1 op handles both
+  // bool and int conditions (any non-zero value is truthy).
+  auto i1Cond = hir::CoerceToI1Op::create(cx.builder, expr.loc, condition);
 
-  // Build the then region.
-  {
-    auto ip = cx.builder.saveInsertionPoint();
-    cx.builder.setInsertionPointToStart(&ifOp.getThenRegion().emplaceBlock());
-    auto thenValue = cx.convertExpr(*expr.thenExpr);
-    if (!thenValue)
+  // Create the then, else, and merge blocks. The merge block is added to the
+  // region last, after building the sub-expressions, to ensure it remains the
+  // final block even when nested if/logical ops add their own blocks.
+  auto *currentBlock = cx.builder.getInsertionBlock();
+  auto *region = currentBlock->getParent();
+  auto *thenBlock = new Block();
+  auto *elseBlock = new Block();
+  auto *mergeBlock = new Block();
+  mergeBlock->addArgument(anyType, expr.loc);
+  region->push_back(thenBlock);
+  region->push_back(elseBlock);
+
+  // Terminate the current block with a conditional branch.
+  mlir::cf::CondBranchOp::create(cx.builder, expr.loc, i1Cond, thenBlock,
+                                 elseBlock);
+
+  // Build the then block.
+  cx.builder.setInsertionPointToStart(thenBlock);
+  auto thenValue = cx.convertExpr(*expr.thenExpr);
+  if (!thenValue)
+    return {};
+  mlir::cf::BranchOp::create(cx.builder, expr.loc, mergeBlock,
+                             ValueRange{thenValue});
+
+  // Build the else block.
+  cx.builder.setInsertionPointToStart(elseBlock);
+  Value elseValue;
+  if (expr.elseExpr) {
+    elseValue = cx.convertExpr(*expr.elseExpr);
+    if (!elseValue)
       return {};
-    hir::YieldOp::create(cx.builder, expr.loc, ValueRange{thenValue});
-    cx.builder.restoreInsertionPoint(ip);
+  } else {
+    elseValue = hir::ConstantUnitOp::create(cx.builder, expr.loc);
   }
+  mlir::cf::BranchOp::create(cx.builder, expr.loc, mergeBlock,
+                             ValueRange{elseValue});
 
-  // Build the else region.
-  {
-    auto ip = cx.builder.saveInsertionPoint();
-    cx.builder.setInsertionPointToStart(&ifOp.getElseRegion().emplaceBlock());
-    if (expr.elseExpr) {
-      auto elseValue = cx.convertExpr(*expr.elseExpr);
-      if (!elseValue)
-        return {};
-      hir::YieldOp::create(cx.builder, expr.loc, ValueRange{elseValue});
-    } else {
-      auto unitValue = hir::ConstantUnitOp::create(cx.builder, expr.loc);
-      hir::YieldOp::create(cx.builder, expr.loc, ValueRange{unitValue});
-    }
-    cx.builder.restoreInsertionPoint(ip);
-  }
-
-  return ifOp.getResult(0);
+  // Add the merge block last and continue there.
+  region->push_back(mergeBlock);
+  cx.builder.setInsertionPointToStart(mergeBlock);
+  return mergeBlock->getArgument(0);
 }
 
 /// Handle const expressions. The phase shift of -1 indicates that the

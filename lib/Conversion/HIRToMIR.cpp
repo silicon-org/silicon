@@ -17,6 +17,8 @@
 #include "silicon/MIR/Ops.h"
 #include "silicon/Support/MLIR.h"
 #include "circt/Support/ConversionPatternSet.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -291,10 +293,24 @@ static LogicalResult convert(hir::ReturnOp op, hir::ReturnOp::Adaptor adaptor,
   return success();
 }
 
-/// Lower hir.yield to mir.yield, forwarding operands.
-static LogicalResult convert(hir::YieldOp op, hir::YieldOp::Adaptor adaptor,
+/// Lower hir.coerce_to_i1 to mir.bool_to_i1.
+static LogicalResult convert(hir::CoerceToI1Op op,
+                             hir::CoerceToI1Op::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  rewriter.replaceOpWithNewOp<mir::YieldOp>(op, adaptor.getOperands());
+  rewriter.replaceOpWithNewOp<mir::BoolToI1Op>(op, adaptor.getInput());
+  return success();
+}
+
+/// Convert arith.select with HIR types to arith.select with MIR types. MLIR's
+/// canonicalizer may collapse simple CFG patterns (cf.cond_br with trivial
+/// then/else blocks) into arith.select, so we need to handle the type
+/// conversion here.
+static LogicalResult convert(arith::SelectOp op,
+                             arith::SelectOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<arith::SelectOp>(op, adaptor.getCondition(),
+                                               adaptor.getTrueValue(),
+                                               adaptor.getFalseValue());
   return success();
 }
 
@@ -533,44 +549,6 @@ static Type resolveHIRType(Value typeVal) {
 // casts that body op patterns resolve through their adaptors.
 //===----------------------------------------------------------------------===//
 
-/// Lower hir.if to mir.if, converting both regions in place. Result types are
-/// resolved from the HIR type information available on the yield values
-/// (via getTypeOf), falling back to !hir.any for unknown types.
-namespace {
-class IfOpConversion : public OpConversionPattern<hir::IfOp> {
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(hir::IfOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // Determine result types from the type information on yield values.
-    SmallVector<Type> resultTypes;
-    for (auto result : op.getResults()) {
-      auto typeVal = hir::getTypeOf(result);
-      if (typeVal)
-        resultTypes.push_back(resolveHIRType(typeVal));
-      else
-        resultTypes.push_back(adaptor.getCondition().getType());
-    }
-
-    auto mirIf = mir::IfOp::create(rewriter, op.getLoc(), resultTypes,
-                                   adaptor.getCondition());
-
-    // Move then region.
-    rewriter.inlineRegionBefore(op.getThenRegion(), mirIf.getThenRegion(),
-                                mirIf.getThenRegion().end());
-
-    // Move else region.
-    rewriter.inlineRegionBefore(op.getElseRegion(), mirIf.getElseRegion(),
-                                mirIf.getElseRegion().end());
-
-    rewriter.replaceOp(op, mirIf.getResults());
-    return success();
-  }
-};
-} // namespace
-
 namespace {
 class FuncOpConversion : public OpConversionPattern<hir::FuncOp> {
 public:
@@ -660,7 +638,7 @@ void HIRToMIRPass::runOnOperation() {
   TypeConverter converter;
   converter.addConversion([](Type type) -> std::optional<Type> {
     if (isa<base::BaseDialect, mir::MIRDialect>(type.getDialect()) ||
-        isa<FunctionType>(type))
+        isa<FunctionType>(type) || isa<IntegerType, IndexType, FloatType>(type))
       return type;
     return std::nullopt;
   });
@@ -694,7 +672,11 @@ void HIRToMIRPass::runOnOperation() {
   // the FuncOp pattern. Functions not in the set are recursively legal,
   // so the framework skips them and their body ops entirely.
   ConversionTarget target(getContext());
-  target.addLegalDialect<base::BaseDialect, mir::MIRDialect>();
+  target.addLegalDialect<base::BaseDialect, mir::MIRDialect,
+                         cf::ControlFlowDialect>();
+  target.addDynamicallyLegalOp<arith::SelectOp>([](arith::SelectOp op) {
+    return !isa<hir::AnyType>(op.getResult().getType());
+  });
   target.addIllegalDialect<hir::HIRDialect>();
   target.addLegalOp<ModuleOp>();
   target.addDynamicallyLegalOp<hir::FuncOp>(
@@ -741,8 +723,8 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::LeqOp>(convertCmpOp<hir::LeqOp, mir::LeqOp>);
   patterns.add<hir::MIRConstantOp>(convert);
   patterns.add<hir::ReturnOp>(convert);
-  patterns.add<hir::YieldOp>(convert);
-  patterns.add(std::make_unique<IfOpConversion>(converter, &getContext()));
+  patterns.add<hir::CoerceToI1Op>(convert);
+  patterns.add<arith::SelectOp>(convert);
   patterns.add<hir::CallOp>(convert);
   patterns.add<hir::OpaquePackOp>(convert);
   patterns.add<hir::OpaqueUnpackOp>(convert);

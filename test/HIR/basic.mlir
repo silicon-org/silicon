@@ -96,23 +96,21 @@ hir.expr -1 {
   hir.yield %0 : !hir.any
 }
 
-// if/else expression
-func.func @IfElse(%cond: !hir.any, %x: !hir.any, %y: !hir.any) {
-  %0 = hir.if %cond : !hir.any {
-    hir.yield %x : !hir.any
-  } else {
-    hir.yield %y : !hir.any
-  }
+// coerce_to_i1
+func.func @CoerceToI1(%cond: !hir.any) {
+  %0 = hir.coerce_to_i1 %cond
   return
 }
 
-// if without results
-func.func @IfNoResults(%cond: !hir.any) {
-  hir.if %cond {
-    hir.yield
-  } else {
-    hir.yield
-  }
+// Multi-block CFG-based if/else (replaces hir.if)
+func.func @CfgIfElse(%cond: !hir.any, %x: !hir.any, %y: !hir.any) {
+  %i1 = hir.coerce_to_i1 %cond
+  cf.cond_br %i1, ^then, ^else
+^then:
+  cf.br ^merge(%x : !hir.any)
+^else:
+  cf.br ^merge(%y : !hir.any)
+^merge(%result: !hir.any):
   return
 }
 

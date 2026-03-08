@@ -7,6 +7,7 @@ add_silicon_library(SiliconCodegen
   Type.cpp
 
   LINK_LIBS PUBLIC
+  MLIRControlFlowDialect
   MLIRIR
   SiliconHIR
   SiliconSyntax

@@ -10,6 +10,7 @@
 #include "silicon/MIR/Ops.h"
 #include "silicon/MIR/Passes.h"
 #include "silicon/Support/MLIR.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
@@ -150,8 +151,20 @@ LogicalResult Interpreter::executeOp(Operation *op,
          llvm::zip(unpackOp.getResults(), opaqueAttr.getElements()))
       values[result] = elem;
   } else if (isa<mir::BoolToI1Op>(op)) {
-    // Forward the BoolAttr unchanged; this is purely a type bridge.
+    // Forward the attribute unchanged; this is purely a type bridge. Handles
+    // both BoolAttr and IntAttr inputs (any non-zero value is truthy).
     values[op->getResult(0)] = operands[0];
+  } else if (isa<arith::SelectOp>(op)) {
+    // MLIR's canonicalizer may collapse simple CFG patterns into
+    // arith.select. Evaluate by picking the true or false value.
+    bool cond = false;
+    if (auto boolAttr = dyn_cast<base::BoolAttr>(operands[0]))
+      cond = boolAttr.getValue();
+    else if (auto intAttr = dyn_cast<base::IntAttr>(operands[0]))
+      cond = intAttr.getValue() != 0;
+    else if (auto intAttr = dyn_cast<IntegerAttr>(operands[0]))
+      cond = intAttr.getValue() != 0;
+    values[op->getResult(0)] = cond ? operands[1] : operands[2];
   } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
     for (auto [result, attr] : llvm::zip(castOp.getResults(), operands))
       values[result] = attr;
@@ -226,10 +239,11 @@ FailureOr<SmallVector<Attribute>> Interpreter::run() {
       bool condTrue = false;
       if (auto boolAttr = dyn_cast<base::BoolAttr>(condAttr))
         condTrue = boolAttr.getValue();
+      else if (auto intAttr = dyn_cast<base::IntAttr>(condAttr))
+        condTrue = intAttr.getValue() != 0;
       else if (auto intAttr = dyn_cast<IntegerAttr>(condAttr))
         condTrue = intAttr.getValue() != 0;
-      auto *dest =
-          condTrue ? condBrOp.getTrueDest() : condBrOp.getFalseDest();
+      auto *dest = condTrue ? condBrOp.getTrueDest() : condBrOp.getFalseDest();
       auto destOperands = condTrue ? condBrOp.getTrueDestOperands()
                                    : condBrOp.getFalseDestOperands();
       for (auto [blockArg, brOperand] :

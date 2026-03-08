@@ -188,9 +188,9 @@ hir.multiphase_func @empty_phases() -> (out) []
 
 // -----
 
-// YieldOp must be inside an ExprOp or IfOp
+// YieldOp must be inside an ExprOp
 func.func @yield_outside() {
-  // expected-error @below {{'hir.yield' op expects parent op to be one of 'hir.expr, hir.if'}}
+  // expected-error @below {{'hir.yield' op expects parent op 'hir.expr'}}
   hir.yield
 }
 

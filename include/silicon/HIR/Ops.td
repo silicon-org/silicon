@@ -124,34 +124,12 @@ def ExprOp : HIROp<"expr", [
   }];
 }
 
-def IfOp : HIROp<"if", [
-  RecursiveMemoryEffects,
-]> {
-  let summary = "conditional expression with then/else regions";
-  let description = [{
-    Evaluates one of two regions based on a condition value. Both the then
-    and else regions must be present and must yield the same number of
-    results via `hir.yield`. The condition is an `!hir.any` value that is
-    expected to resolve to a boolean-like integer during interpretation.
-  }];
-  let arguments = (ins AnyHIRType:$condition);
-  let results = (outs Variadic<AnyHIRType>:$results);
-  let regions = (region
-    MinSizedRegion<1>:$thenRegion,
-    MinSizedRegion<1>:$elseRegion
-  );
-  let assemblyFormat = [{
-    $condition (`:` type($results)^)? attr-dict-with-keyword $thenRegion
-    `else` $elseRegion
-  }];
-}
-
 def YieldOp : HIROp<"yield", [
-  HasParent<"ExprOp, IfOp">,
+  HasParent<"ExprOp">,
   Pure,
   Terminator,
 ]> {
-  let summary = "Yield result values from an expression or if op";
+  let summary = "Yield result values from an expression";
   let arguments = (ins Variadic<AnyType>:$operands);
   let assemblyFormat = [{
     ($operands^ `:` type($operands))? attr-dict
@@ -171,6 +149,18 @@ def TypeOfOp : HIROp<"type_of", [Pure]> {
   }];
   let hasFolder = 1;
   let hasCanonicalizeMethod = 1;
+}
+
+def CoerceToI1Op : HIROp<"coerce_to_i1", [Pure]> {
+  let summary = "cast bool to i1 for branch conditions";
+  let description = [{
+    Converts an `!hir.any` value (expected to be a bool after type inference)
+    to `i1` for use with `cf.cond_br`. Lowered to `mir.bool_to_i1` by
+    HIR-to-MIR conversion.
+  }];
+  let arguments = (ins AnyHIRType:$input);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$input attr-dict";
 }
 
 def CoerceTypeOp : HIROp<"coerce_type", [Pure]> {

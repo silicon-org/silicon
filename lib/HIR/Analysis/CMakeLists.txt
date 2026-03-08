@@ -3,6 +3,7 @@ add_silicon_library(SiliconHIRAnalysis
 
   LINK_LIBS PUBLIC
   SiliconHIR
+  MLIRControlFlowDialect
   MLIRIR
   MLIRSideEffectInterfaces
 )

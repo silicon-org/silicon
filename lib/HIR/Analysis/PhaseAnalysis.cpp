@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/HIR/Analysis/PhaseAnalysis.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/Support/Debug.h"
 
@@ -46,7 +47,7 @@ void PhaseAnalysis::analyze() {
     int16_t phase;
     if (auto exprOp = dyn_cast<ExprOp>(op); exprOp && exprOp.getPhaseShift()) {
       phase = parentPhase + exprOp.getPhaseShift();
-    } else if (!isa<ExprOp, IfOp>(op) && mlir::isMemoryEffectFree(op)) {
+    } else if (!isa<ExprOp>(op) && mlir::isMemoryEffectFree(op)) {
       // Pure ops: phase is max of floor and all operand phases.
       phase = floor;
       for (auto operand : op->getOperands())
@@ -65,6 +66,27 @@ void PhaseAnalysis::analyze() {
     opPhases.insert({op, phase});
     for (auto result : op->getResults())
       valuePhases[result] = phase;
+
+    // Propagate phases to destination block arguments for branch ops.
+    auto propagateBlockArgPhases = [&](Block *dest, OperandRange operands) {
+      for (auto [blockArg, operand] :
+           llvm::zip(dest->getArguments(), operands)) {
+        int16_t operandPhase = getValuePhase(operand);
+        auto it = valuePhases.find(blockArg);
+        if (it == valuePhases.end())
+          valuePhases[blockArg] = operandPhase;
+        else
+          it->second = std::max(it->second, operandPhase);
+      }
+    };
+    if (auto brOp = dyn_cast<mlir::cf::BranchOp>(op)) {
+      propagateBlockArgPhases(brOp.getDest(), brOp.getDestOperands());
+    } else if (auto condBrOp = dyn_cast<mlir::cf::CondBranchOp>(op)) {
+      propagateBlockArgPhases(condBrOp.getTrueDest(),
+                              condBrOp.getTrueDestOperands());
+      propagateBlockArgPhases(condBrOp.getFalseDest(),
+                              condBrOp.getFalseDestOperands());
+    }
   });
 }
 
@@ -136,7 +158,7 @@ bool PhaseAnalysis::pullValueToPhase(Value value, int16_t targetPhase) {
       return false;
   }
 
-  // For region-bearing ops (ExprOp, IfOp), check that all values captured
+  // For region-bearing ops (ExprOp), check that all values captured
   // from the enclosing scope are available at the target phase.
   for (auto &region : defOp->getRegions()) {
     for (auto &block : region) {
@@ -190,7 +212,7 @@ void PhaseAnalysis::refreshPhases() {
     int16_t phase;
     if (auto exprOp = dyn_cast<ExprOp>(op); exprOp && exprOp.getPhaseShift()) {
       phase = parentPhase + exprOp.getPhaseShift();
-    } else if (!isa<ExprOp, IfOp>(op) && mlir::isMemoryEffectFree(op)) {
+    } else if (!isa<ExprOp>(op) && mlir::isMemoryEffectFree(op)) {
       phase = floor;
       for (auto operand : op->getOperands())
         phase = std::max(phase, getValuePhase(operand));
@@ -215,7 +237,7 @@ void PhaseAnalysis::recomputeRegionPhases(Region &region, int16_t floor) {
     int16_t phase;
     if (auto exprOp = dyn_cast<ExprOp>(op); exprOp && exprOp.getPhaseShift()) {
       phase = parentPhase + exprOp.getPhaseShift();
-    } else if (!isa<ExprOp, IfOp>(op) && mlir::isMemoryEffectFree(op)) {
+    } else if (!isa<ExprOp>(op) && mlir::isMemoryEffectFree(op)) {
       phase = floor;
       for (auto operand : op->getOperands())
         phase = std::max(phase, getValuePhase(operand));
