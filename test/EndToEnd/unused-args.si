@@ -1,9 +1,8 @@
 // RUN: silc --ir-mir %s | FileCheck %s
-// XFAIL: *
 
 // Test that functions with unused arguments compile successfully. The
-// coerce_type on unused block args must survive canonicalization/DCE so
-// that HIR-to-MIR can determine argument types.
+// return op's typeOfArgs carries argument type information that survives
+// DCE even when coerce_type on unused block args is removed.
 
 // CHECK: mir.func private @use_first.0(%a: !si.int, %b: !si.int) -> (result: !si.int)
 fn use_first(a: int, b: int) -> int { a }

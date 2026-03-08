@@ -55,7 +55,7 @@ hir.func @FuncWithIsModule() -> () attributes {isModule} {}
 hir.func @ReturnWithOperands() -> (result) {
   %t = hir.int_type
   %0 = hir.constant_int 42
-  hir.return %0 : %t
+  hir.return %0 : () -> (%t)
 }
 
 // Test isModule on unified_func

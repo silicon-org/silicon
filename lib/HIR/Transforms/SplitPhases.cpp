@@ -35,6 +35,7 @@ struct PhaseSplit {
   int16_t phase;
   SmallVector<Value> returnValues;
   SmallVector<Value> returnTypeOperands;
+  SmallVector<Value> argTypeOperands;
 };
 
 /// A group of consecutive phases. A group ends when an externally visible
@@ -628,6 +629,7 @@ void PhaseSplitter::run() {
 
         auto coerceOp = CoerceTypeOp::create(insertBuilder, ownArg.getLoc(),
                                              ownArg, resolvedType);
+        split.argTypeOperands.push_back(resolvedType);
 
         // Replace uses of the own arg within this function with the coerced
         // value. Exclude the coerce_type itself and scope to this function
@@ -672,7 +674,8 @@ void PhaseSplitter::run() {
       else
         returnTypes.push_back(getOrCreateTypeOf(builder, funcOp.getLoc(), val));
     }
-    ReturnOp::create(builder, funcOp.getLoc(), split.returnValues, returnTypes);
+    ReturnOp::create(builder, funcOp.getLoc(), split.returnValues, returnTypes,
+                     split.argTypeOperands);
 
     // Replace all uses of values from earlier phases with additional block
     // arguments. This will be replaced with constants through function
@@ -771,6 +774,14 @@ void PhaseSplitter::run() {
       block.getArgument(ownArgs + i).replaceAllUsesWith(unpackOp.getResult(i));
     block.eraseArguments(ownArgs, contextArgs);
 
+    // Update the return op's typeOfArgs: replace any entries for the old
+    // context args with a single opaque type for the bundled context arg.
+    auto retOp = cast<ReturnOp>(block.getTerminator());
+    SmallVector<Value> newArgTypes(retOp.getTypeOfArgs().take_front(ownArgs));
+    newArgTypes.push_back(
+        OpaqueTypeOp::create(unpackBuilder, funcOp.getLoc()).getResult());
+    retOp.getTypeOfArgsMutable().assign(newArgTypes);
+
     // In the previous phase: replace trailing context return values with a
     // single opaque_pack.
     auto &prevSplit = splits[phase - 1 - minPhase];
@@ -795,8 +806,9 @@ void PhaseSplitter::run() {
         prevReturnOp.getTypeOfValues().take_front(prevOwnReturns));
     newReturnTypes.push_back(
         OpaqueTypeOp::create(packBuilder, funcOp.getLoc()).getResult());
+    SmallVector<Value> argTypes(prevReturnOp.getTypeOfArgs());
     ReturnOp::create(packBuilder, funcOp.getLoc(), newReturnValues,
-                     newReturnTypes);
+                     newReturnTypes, argTypes);
     prevReturnOp.erase();
   }
 

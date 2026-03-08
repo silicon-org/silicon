@@ -1,10 +1,10 @@
 // RUN: silicon-opt --lower-hir-to-mir --verify-diagnostics --split-input-file %s
 
-// expected-error @below {{block argument type could not be determined during HIR-to-MIR lowering; add hir.coerce_type}}
+// expected-error @below {{return op typeOfArgs count (0) does not match block argument count (1)}}
 // expected-note @below {{}}
 // expected-error @below {{failed to legalize operation 'hir.func'}}
 hir.func @UntypedArg(%a) -> () {
-  hir.return
+  hir.return : () -> ()
 }
 
 // -----
@@ -20,5 +20,5 @@ hir.func @UnifyTypeMismatch() -> (result) {
   // expected-error @below {{failed to legalize operation 'hir.unify'}}
   %ty = hir.unify %int, %unit
   %c0 = hir.constant_int 0
-  hir.return %c0 : %ty
+  hir.return %c0 : () -> (%ty)
 }

@@ -296,12 +296,25 @@ def ReturnOp : HIROp<"return", [
   Terminator,
   HasParent<"FuncOp">,
 ]> {
+  let summary = "return from an HIR function";
+  let description = [{
+    Terminates an `hir.func` body.  Carries the return values alongside
+    their types (`typeOfValues`) *and* the types of the enclosing
+    function's block arguments (`typeOfArgs`).
+
+    The `typeOfArgs` operands survive canonicalization/DCE even when the
+    corresponding block arguments are unused, providing a reliable source
+    of argument-type information for the HIR-to-MIR lowering.
+  }];
   let arguments = (ins
     Variadic<AnyHIRType>:$values,
-    Variadic<AnyHIRType>:$typeOfValues
+    Variadic<AnyHIRType>:$typeOfValues,
+    Variadic<AnyHIRType>:$typeOfArgs
   );
   let assemblyFormat = [{
-    ($values^ `:` $typeOfValues)? attr-dict
+    ($values^)?
+    `:` `(` $typeOfArgs `)` `->` `(` $typeOfValues `)`
+    attr-dict
   }];
 }
 

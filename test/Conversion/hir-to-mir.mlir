@@ -24,7 +24,7 @@ hir.func @Types() -> () {
   // CHECK: mir.constant #si.type<(!si.int) -> !si.uint<42>>
   hir.func_type (%int_type) -> (%uint42_type)
 
-  hir.return
+  hir.return : () -> ()
 }
 
 // CHECK-LABEL: mir.func @Constants
@@ -33,7 +33,7 @@ hir.func @Constants() -> () {
   hir.constant_int 42
   // CHECK: mir.constant #si.unit
   hir.constant_unit
-  hir.return
+  hir.return : () -> ()
 }
 
 // CHECK-LABEL: mir.func @Calls
@@ -50,7 +50,7 @@ hir.func @Calls() -> () {
   // CHECK: mir.call @foo([[C42]]) : (!si.int) -> !si.uint<42>
   hir.call @foo(%c42) : (%int_type) -> (%uint42_type)
 
-  hir.return
+  hir.return : () -> ()
 }
 
 //===----------------------------------------------------------------------===//
@@ -72,7 +72,7 @@ hir.func @BinaryArithmetic(%a, %b) -> (r0, r1, r2, r3, r4) {
   // CHECK: mir.mul %a, %b : !si.int
   // CHECK: mir.div %a, %b : !si.int
   // CHECK: mir.mod %a, %b : !si.int
-  hir.return %r0, %r1, %r2, %r3, %r4 : %int, %int, %int, %int, %int
+  hir.return %r0, %r1, %r2, %r3, %r4 : (%int, %int) -> (%int, %int, %int, %int, %int)
 }
 
 // CHECK-LABEL: mir.func @BinaryBitwise(%a: !si.int, %b: !si.int)
@@ -90,7 +90,7 @@ hir.func @BinaryBitwise(%a, %b) -> (r0, r1, r2, r3, r4) {
   // CHECK: mir.xor %a, %b : !si.int
   // CHECK: mir.shl %a, %b : !si.int
   // CHECK: mir.shr %a, %b : !si.int
-  hir.return %r0, %r1, %r2, %r3, %r4 : %int, %int, %int, %int, %int
+  hir.return %r0, %r1, %r2, %r3, %r4 : (%int, %int) -> (%int, %int, %int, %int, %int)
 }
 
 // CHECK-LABEL: mir.func @BinaryComparison(%a: !si.int, %b: !si.int)
@@ -110,7 +110,7 @@ hir.func @BinaryComparison(%a, %b) -> (r0, r1, r2, r3, r4, r5) {
   // CHECK: mir.gt %a, %b : !si.int -> !si.int
   // CHECK: mir.geq %a, %b : !si.int -> !si.int
   // CHECK: mir.leq %a, %b : !si.int -> !si.int
-  hir.return %r0, %r1, %r2, %r3, %r4, %r5 : %int, %int, %int, %int, %int, %int
+  hir.return %r0, %r1, %r2, %r3, %r4, %r5 : (%int, %int) -> (%int, %int, %int, %int, %int, %int)
 }
 
 // Verify that UnifyOp forwards its operand through opaque_pack, rather than
@@ -124,14 +124,14 @@ hir.func @UnifyInOpaquePack(%T) -> (ctx) {
   // CHECK: mir.opaque_pack(%T) : (!si.type) -> !si.opaque
   %packed = hir.opaque_pack(%unified)
   %opaque = hir.opaque_type
-  hir.return %packed : %opaque
+  hir.return %packed : (%type_type) -> (%opaque)
 }
 
 // CHECK-LABEL: mir.func @OpaqueTypes
 hir.func @OpaqueTypes() -> () {
   // CHECK: mir.constant #si.type<!si.opaque>
   %opaque_type = hir.opaque_type
-  hir.return
+  hir.return : () -> ()
 }
 
 // CHECK-LABEL: mir.func @OpaqueArg(%a: !si.opaque)
@@ -139,7 +139,7 @@ hir.func @OpaqueArg(%a) -> (result) {
   %opaque = hir.opaque_type
   %a0 = hir.coerce_type %a, %opaque
   // CHECK: mir.return %a
-  hir.return %a0 : %opaque
+  hir.return %a0 : (%opaque) -> (%opaque)
 }
 
 // Verify that hir.unify in return type position is handled correctly when both
@@ -152,7 +152,7 @@ hir.func @UnifyInReturnType() -> (result) {
   %int2 = hir.int_type
   %ty = hir.unify %int, %int2
   %c0 = hir.constant_int 0
-  hir.return %c0 : %ty
+  hir.return %c0 : () -> (%ty)
 }
 
 // Verify that a hir.func with unresolved typeOfArgs in a call is not lowered.
@@ -164,7 +164,7 @@ hir.func @UnifyInReturnType() -> (result) {
 hir.func @UnresolvedCallArgType(%T) -> () {
   %x = hir.constant_int 0
   hir.call @identity(%x) : (%T) -> ()
-  hir.return
+  hir.return : () -> ()
 }
 
 // CHECK-LABEL: mir.func @Casts
@@ -175,5 +175,5 @@ hir.func @Casts() -> (a) {
 
   %ta = hir.int_type
   // CHECK: mir.return [[TMP1]]
-  hir.return %a1 : %ta
+  hir.return %a1 : () -> (%ta)
 }

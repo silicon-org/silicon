@@ -107,6 +107,15 @@ void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
   // Erase the context block arg.
   block.eraseArgument(block.getNumArguments() - 1);
 
+  // Drop the last typeOfArgs entry on the return op to match.
+  if (auto returnOp = dyn_cast<hir::ReturnOp>(block.getTerminator())) {
+    auto args = returnOp.getTypeOfArgs();
+    if (!args.empty()) {
+      SmallVector<Value> newArgTypes(args.drop_back());
+      returnOp.getTypeOfArgsMutable().assign(newArgTypes);
+    }
+  }
+
   // Update argNames to match.
   SmallVector<Attribute> newArgNames(func.getArgNames().begin(),
                                      func.getArgNames().end());

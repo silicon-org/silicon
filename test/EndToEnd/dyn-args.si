@@ -1,10 +1,8 @@
 // RUN: silc --ir-mir %s | FileCheck %s
-// XFAIL: *
 
 // Test that `dyn` arguments compile through the full pipeline. A `dyn`
 // argument shifts its phase forward, causing SplitPhases to place it in a
-// later phase function. The HIR-to-MIR lowering must handle unused dyn
-// args whose coerce_type was removed by DCE.
+// later phase function.
 
 // A dyn argument with a matching dyn return type compiles into a single
 // phase-1 function.

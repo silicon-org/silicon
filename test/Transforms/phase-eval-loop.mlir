@@ -39,14 +39,15 @@ hir.func private @add42.0a() -> (ctx) {
   %1 = hir.constant_int 42
   %2 = hir.opaque_pack(%0, %1)
   %3 = hir.opaque_type
-  hir.return %2 : %3
+  hir.return %2 : () -> (%3)
 }
 
 hir.func private @add42.0b(%x, %ctx) -> (result) {
   %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %2 = hir.coerce_type %x, %0
   %3 = hir.add %2, %1 : %0
-  hir.return %3 : %0
+  %4 = hir.opaque_type
+  hir.return %3 : (%0, %4) -> (%0)
 }
 
 hir.split_func @add42(%x: 0) -> (result: 0) {
@@ -71,7 +72,7 @@ hir.multiphase_func @add42.0(last x) -> (result) [
 // CHECK:         0: @standalone.0
 
 hir.func private @standalone.0() -> () {
-  hir.return
+  hir.return : () -> ()
 }
 
 hir.split_func @standalone() -> () {
@@ -110,14 +111,15 @@ hir.func private @inner.0(%a) -> (ctx) {
   %1 = hir.coerce_type %a, %0
   %2 = hir.opaque_pack(%0, %1)
   %3 = hir.opaque_type
-  hir.return %2 : %3
+  hir.return %2 : (%0) -> (%3)
 }
 
 hir.func private @inner.1(%b, %ctx) -> (result) {
   %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %2 = hir.coerce_type %b, %0
   %3 = hir.add %1, %2 : %0
-  hir.return %3 : %0
+  %4 = hir.opaque_type
+  hir.return %3 : (%0, %4) -> (%0)
 }
 
 hir.split_func @inner(%a: -1, %b: 0) -> (result: 0) {
@@ -135,7 +137,7 @@ hir.func private @outer.0a() -> (ctx) {
   %3 = hir.call @inner.0(%1) : (%0) -> (%2)
   %4 = hir.opaque_pack(%3)
   %5 = hir.opaque_type
-  hir.return %4 : %5
+  hir.return %4 : () -> (%5)
 }
 
 hir.func private @outer.0b(%x, %ctx) -> (result) {
@@ -144,7 +146,7 @@ hir.func private @outer.0b(%x, %ctx) -> (result) {
   %2 = hir.coerce_type %x, %1
   %3 = hir.opaque_type
   %4 = hir.call @inner.1(%2, %0) : (%1, %3) -> (%1)
-  hir.return %4 : %1
+  hir.return %4 : (%1, %3) -> (%1)
 }
 
 hir.split_func @outer(%x: 0) -> (result: 0) {

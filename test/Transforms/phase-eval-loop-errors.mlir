@@ -11,7 +11,7 @@
 // expected-note @below {{PhaseEvalLoopPass::runOnOperation()}}
 module {
   hir.func private @good.0() -> () {
-    hir.return
+    hir.return : () -> ()
   }
 
   hir.split_func @good() -> () {
@@ -24,7 +24,7 @@ module {
   hir.func private @stuck.0(%T) -> (result) {
     %0 = hir.constant_int 0
     %1 = hir.coerce_type %0, %T
-    hir.return %1 : %T
+    hir.return %1 : () -> (%T)
   }
 
   hir.split_func @stuck(%T: 0) -> (result: 0) {

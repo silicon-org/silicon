@@ -561,27 +561,22 @@ public:
 
     auto &entryBlock = func.getBody().front();
 
-    // Determine argument types from coerce_type ops on block args.
-    // CoerceTypeOp is not Pure, so it survives DCE even for unused args.
+    // Determine argument types from the return op's typeOfArgs operands.
+    auto returnOp = dyn_cast<hir::ReturnOp>(entryBlock.getTerminator());
     SmallVector<Type> argTypes;
-    for (auto arg : entryBlock.getArguments()) {
-      Type argType;
-      for (auto *user : arg.getUsers()) {
-        if (auto coerce = dyn_cast<hir::CoerceTypeOp>(user)) {
-          argType = resolveHIRType(coerce.getTypeOperand());
-          break;
-        }
-      }
-      if (!argType)
-        return emitBug(func.getLoc())
-               << "block argument type could not be determined during "
-                  "HIR-to-MIR lowering; add hir.coerce_type";
-      argTypes.push_back(argType);
+    if (returnOp) {
+      for (auto typeVal : returnOp.getTypeOfArgs())
+        argTypes.push_back(resolveHIRType(typeVal));
     }
+    if (argTypes.size() != entryBlock.getNumArguments())
+      return emitBug(func.getLoc())
+             << "return op typeOfArgs count (" << argTypes.size()
+             << ") does not match block argument count ("
+             << entryBlock.getNumArguments() << ")";
 
     // Determine result types from hir.return typeOfValues.
     SmallVector<Type> resultTypes;
-    if (auto returnOp = dyn_cast<hir::ReturnOp>(entryBlock.getTerminator())) {
+    if (returnOp) {
       for (auto typeVal : returnOp.getTypeOfValues())
         resultTypes.push_back(resolveHIRType(typeVal));
     }
