@@ -12,8 +12,8 @@ hir.unified_func @SinglePhase() -> () {
 } {
   // CHECK: func.call @dummyA() {phase = 0 : si16}
   func.call @dummyA() : () -> ()
-  // CHECK: hir.unified_return {phase = "float"}
-  hir.unified_return
+  // CHECK: hir.unified_return : () -> () {phase = "float"}
+  hir.unified_return : () -> ()
 }
 
 //===----------------------------------------------------------------------===//
@@ -37,8 +37,8 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
   %0 = hir.add %a, %b : %t
   // CHECK: hir.type_of {{.*}} {phase = 0 : si16}
   %t0 = hir.type_of %0
-  // CHECK: hir.unified_return {{.*}} {phase = 0 : si16}
-  hir.unified_return %0 : %t0
+  // CHECK: hir.unified_return {{.*}} : () -> ({{.*}}) {phase = 0 : si16}
+  hir.unified_return %0 : () -> (%t0)
 }
 
 //===----------------------------------------------------------------------===//
@@ -58,8 +58,8 @@ hir.unified_func @ExprPhaseShift() -> () {
     // CHECK: hir.yield {phase = -1 : si16}
     hir.yield
   }
-  // CHECK: hir.unified_return {phase = "float"}
-  hir.unified_return
+  // CHECK: hir.unified_return : () -> () {phase = "float"}
+  hir.unified_return : () -> ()
 }
 
 //===----------------------------------------------------------------------===//
@@ -82,8 +82,8 @@ hir.unified_func @PureFloating() -> () {
   %t = hir.unify %t0, %t1
   // CHECK: hir.add {{.*}} {phase = "float"}
   %2 = hir.add %0, %1 : %t
-  // CHECK: hir.unified_return {phase = "float"}
-  hir.unified_return
+  // CHECK: hir.unified_return : () -> () {phase = "float"}
+  hir.unified_return : () -> ()
 }
 
 //===----------------------------------------------------------------------===//
@@ -98,7 +98,7 @@ hir.unified_func @Adder(%a: 0, %b: 0) -> (result: 0) {
   %tb = hir.type_of %b
   %t = hir.unify %ta, %tb
   %r = hir.add %a, %b : %t
-  hir.unified_return %r : %t
+  hir.unified_return %r : () -> (%t)
 }
 
 hir.unified_func @CallerConstArg(%a: -1, %b: 0) -> (result: 0) {
@@ -110,7 +110,7 @@ hir.unified_func @CallerConstArg(%a: -1, %b: 0) -> (result: 0) {
   %t = hir.unify %ta, %tb
   %0 = hir.add %a, %b : %t
   %t0 = hir.type_of %0
-  hir.unified_return %0 : %t0
+  hir.unified_return %0 : () -> (%t0)
 }
 
 // The ExprOp wrapping the call to @Adder should be pulled from phase 0 to -1
@@ -140,7 +140,7 @@ hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
   // CHECK: hir.unified_call @CallerConstArg({{.*}}{phase = 0 : si16}
   %r = hir.unified_call @CallerConstArg(%key, %y) : (%kt, %yt) -> (%rt) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
   %rrt = hir.type_of %r
-  hir.unified_return %r : %rrt
+  hir.unified_return %r : () -> (%rrt)
 }
 
 //===----------------------------------------------------------------------===//
@@ -160,7 +160,7 @@ hir.unified_func @NestedSideEffects() -> () {
   }
   // CHECK: func.call @dummyB() {phase = 0 : si16}
   func.call @dummyB() : () -> ()
-  hir.unified_return
+  hir.unified_return : () -> ()
 }
 
 //===----------------------------------------------------------------------===//
@@ -189,7 +189,7 @@ hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
   // CHECK: hir.add {{.*}}, %c : {{.*}} {phase = 0 : si16}
   %1 = hir.add %0, %c : %t1
   %t1b = hir.type_of %1
-  hir.unified_return %1 : %t1b
+  hir.unified_return %1 : () -> (%t1b)
 }
 
 //===----------------------------------------------------------------------===//
@@ -212,5 +212,5 @@ hir.unified_func @NestedExpr() -> () {
     func.call @dummyB() : () -> ()
     hir.yield
   }
-  hir.unified_return
+  hir.unified_return : () -> ()
 }

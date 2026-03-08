@@ -64,7 +64,7 @@ hir.unified_func @UnifiedModule(%a: 0) -> (result: 0) attributes {isModule} {
   hir.unified_signature (%0) -> (%0)
 } {
   %0 = hir.type_of %a
-  hir.unified_return %a : %0
+  hir.unified_return %a : () -> (%0)
 }
 
 hir.unified_func @UnifiedSimple(%a: 0, %b: -1) -> (result: 0) {
@@ -72,7 +72,7 @@ hir.unified_func @UnifiedSimple(%a: 0, %b: -1) -> (result: 0) {
   hir.unified_signature (%0, %0) -> (%0)
 } {
   %0 = hir.type_of %a
-  hir.unified_return %a : %0
+  hir.unified_return %a : () -> (%0)
 }
 hir.unified_call @UnifiedSimple(%c42_int, %c42_int) : (%int_type, %int_type) -> (%int_type) (!hir.any, !hir.any) -> !hir.any [0, -1] -> [0]
 hir.unified_call @UnifiedSimple(%c42_int, %c42_int) : (%int_type, %int_type) -> (%int_type) (!hir.any, !hir.any) -> !hir.any [0, -1] -> [0]

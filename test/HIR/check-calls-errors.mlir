@@ -7,7 +7,7 @@ hir.unified_func @foo() -> () {
   hir.unified_call @foo() : () -> () () -> () [] -> []
   hir.unified_signature () -> ()
 } {
-  hir.unified_return
+  hir.unified_return : () -> ()
 }
 
 // -----
@@ -19,19 +19,19 @@ hir.unified_func @foo() -> () {
   hir.unified_call @bar() : () -> () () -> () [] -> []
   hir.unified_signature () -> ()
 } {
-  hir.unified_return
+  hir.unified_return : () -> ()
 }
 hir.unified_func @bar() -> () {
   // expected-remark @below {{called through `gux`}}
   hir.unified_call @gux() : () -> () () -> () [] -> []
   hir.unified_signature () -> ()
 } {
-  hir.unified_return
+  hir.unified_return : () -> ()
 }
 hir.unified_func @gux() -> () {
   // expected-remark @below {{calling `foo` itself here}}
   hir.unified_call @foo() : () -> () () -> () [] -> []
   hir.unified_signature () -> ()
 } {
-  hir.unified_return
+  hir.unified_return : () -> ()
 }

@@ -289,30 +289,44 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
 
   // Unify body return types with the declared return types from the signature.
   // This connects the body's inferred return type to the declared type,
-  // enabling InferTypes to resolve them.
+  // enabling InferTypes to resolve them. Also unify the return's typeOfArgs
+  // with the declared argument types from the signature.
   if (isBody) {
     auto sigOp = funcOp.getSignatureOp();
     auto sigRetTypes = sigOp.getTypeOfResults();
+    auto sigArgTypes = sigOp.getTypeOfArgs();
 
     funcOp.getBody().walk([&](UnifiedReturnOp returnOp) {
-      if (returnOp.getTypeOfValues().empty() || sigRetTypes.empty())
-        return;
-
       OpBuilder builder(returnOp);
-      SmallVector<Value> newTypeOfValues;
-      for (auto [idx, retTypeVal] :
-           llvm::enumerate(returnOp.getTypeOfValues())) {
-        if (idx >= sigRetTypes.size()) {
-          newTypeOfValues.push_back(retTypeVal);
-          continue;
+
+      // Unify return value types with the declared return types.
+      if (!returnOp.getTypeOfValues().empty() && !sigRetTypes.empty()) {
+        SmallVector<Value> newTypeOfValues;
+        for (auto [idx, retTypeVal] :
+             llvm::enumerate(returnOp.getTypeOfValues())) {
+          if (idx >= sigRetTypes.size()) {
+            newTypeOfValues.push_back(retTypeVal);
+            continue;
+          }
+          Value resolvedSigRetType =
+              resolveTypeIntoBody(builder, sigRetTypes[idx], sigToBody);
+          Value unified = UnifyOp::create(builder, returnOp.getLoc(),
+                                          retTypeVal, resolvedSigRetType);
+          newTypeOfValues.push_back(unified);
         }
-        Value resolvedSigRetType =
-            resolveTypeIntoBody(builder, sigRetTypes[idx], sigToBody);
-        Value unified = UnifyOp::create(builder, returnOp.getLoc(), retTypeVal,
-                                        resolvedSigRetType);
-        newTypeOfValues.push_back(unified);
+        returnOp.getTypeOfValuesMutable().assign(newTypeOfValues);
       }
-      returnOp.getTypeOfValuesMutable().assign(newTypeOfValues);
+
+      // Populate typeOfArgs from the declared argument types in the signature.
+      // This threads the argument type information through to the return op so
+      // it survives into hir.return after SplitPhases.
+      SmallVector<Value> newTypeOfArgs;
+      for (auto [idx, sigArgType] : llvm::enumerate(sigArgTypes)) {
+        Value resolvedSigArgType =
+            resolveTypeIntoBody(builder, sigArgType, sigToBody);
+        newTypeOfArgs.push_back(resolvedSigArgType);
+      }
+      returnOp.getTypeOfArgsMutable().assign(newTypeOfArgs);
     });
   }
 

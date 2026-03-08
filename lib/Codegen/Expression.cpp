@@ -229,7 +229,7 @@ static Value convert(ast::ReturnExpr &expr, Context &cx) {
   // Emit the return op as a terminator for the current block.
   auto valueType = hir::getOrCreateTypeOf(cx.builder, expr.loc, value);
   hir::UnifiedReturnOp::create(cx.builder, expr.loc, ValueRange{value},
-                               ValueRange{valueType});
+                               ValueRange{valueType}, ValueRange{});
 
   // Create a new unreachable block to catch any code after the return. The
   // block argument acts as a placeholder value for the enclosing expression.

@@ -406,12 +406,25 @@ def UnifiedReturnOp : HIROp<"unified_return", [
   Terminator,
 ]> {
   let summary = "Terminator for the body region of a unified function";
+  let description = [{
+    Terminates a `hir.unified_func` body.  Carries the return values
+    alongside their types (`typeOfValues`) *and* the types of the
+    enclosing function's block arguments (`typeOfArgs`).
+
+    The `typeOfArgs` operands mirror those on `hir.return` and are
+    populated by codegen with inferrable placeholders.  CheckCalls then
+    unifies them with the declared signature types, ensuring argument
+    type information survives into `hir.return` after SplitPhases.
+  }];
   let arguments = (ins
     Variadic<AnyHIRType>:$values,
-    Variadic<AnyHIRType>:$typeOfValues
+    Variadic<AnyHIRType>:$typeOfValues,
+    Variadic<AnyHIRType>:$typeOfArgs
   );
   let assemblyFormat = [{
-    ($values^ `:` $typeOfValues)? attr-dict
+    ($values^)?
+    `:` `(` $typeOfArgs `)` `->` `(` $typeOfValues `)`
+    attr-dict
   }];
 }
 

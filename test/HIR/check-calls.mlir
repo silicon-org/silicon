@@ -5,8 +5,8 @@ hir.unified_func @Empty() -> () {
   // CHECK: hir.unified_signature () -> ()
   hir.unified_signature () -> ()
 } {
-  // CHECK: hir.unified_return{{$}}
-  hir.unified_return
+  // CHECK: hir.unified_return : () -> (){{$}}
+  hir.unified_return : () -> ()
 }
 
 // CHECK-LABEL: hir.unified_func @SimpleFoo
@@ -21,7 +21,7 @@ hir.unified_func @SimpleFoo() -> () {
   %infer0 = hir.inferrable
   %infer1 = hir.inferrable
   %1 = hir.unified_call @SimpleBar(%0) : (%infer0) -> (%infer1) (!hir.any) -> !hir.any [0] -> [0]
-  hir.unified_return
+  hir.unified_return : () -> ()
 }
 
 // CHECK-LABEL: hir.unified_func @SimpleBar
@@ -35,9 +35,9 @@ hir.unified_func @SimpleBar(%a: 0) -> (result: 0) {
   // CHECK: [[TYPEOF:%.+]] = hir.type_of [[COERCED]]
   // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
   // CHECK: [[UNI:%.+]] = hir.unify [[TYPEOF]], [[RET_TY]]
-  // CHECK: hir.unified_return [[COERCED]] : [[UNI]]
+  // CHECK: hir.unified_return [[COERCED]] : ([[ARG_TY]]) -> ([[UNI]])
   %t0 = hir.type_of %a
-  hir.unified_return %a : %t0
+  hir.unified_return %a : () -> (%t0)
 }
 
 //===----------------------------------------------------------------------===//
@@ -56,7 +56,7 @@ hir.unified_func @DepTypeCaller() -> () {
   %infer1 = hir.inferrable
   %infer2 = hir.inferrable
   %r = hir.unified_call @Identity(%int_type, %val) : (%infer0, %infer1) -> (%infer2) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
-  hir.unified_return
+  hir.unified_return : () -> ()
 }
 
 // CHECK-LABEL: hir.unified_func @Identity
@@ -68,8 +68,8 @@ hir.unified_func @Identity(%T: -1, %x: 0) -> (result: 0) {
   // CHECK: [[CT:%.+]] = hir.coerce_type %T, [[TT]]
   // CHECK: [[CX:%.+]] = hir.coerce_type %x, %T
   // CHECK: [[UNI:%.+]] = hir.unify [[CT]], %T
-  // CHECK: hir.unified_return [[CX]] : [[UNI]]
-  hir.unified_return %x : %T
+  // CHECK: hir.unified_return [[CX]] : ([[TT]], %T) -> ([[UNI]])
+  hir.unified_return %x : () -> (%T)
 }
 
 //===----------------------------------------------------------------------===//
@@ -86,7 +86,7 @@ hir.unified_func @NestedFoo() -> () {
   %1 = hir.unified_call @NestedBar(%0) : (%infer2) -> (%infer3) (!hir.any) -> !hir.any [0] -> [0]
   hir.unified_signature () -> ()
 } {
-  hir.unified_return
+  hir.unified_return : () -> ()
 }
 
 // CHECK-LABEL: hir.unified_func @NestedBar
@@ -100,9 +100,9 @@ hir.unified_func @NestedBar(%a: 0) -> (result: 0) {
   // CHECK: [[TYPEOF:%.+]] = hir.type_of [[COERCED]]
   // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
   // CHECK: [[UNI:%.+]] = hir.unify [[TYPEOF]], [[RET_TY]]
-  // CHECK: hir.unified_return [[COERCED]] : [[UNI]]
+  // CHECK: hir.unified_return [[COERCED]] : ([[ARG_TY]]) -> ([[UNI]])
   %t0 = hir.type_of %a
-  hir.unified_return %a : %t0
+  hir.unified_return %a : () -> (%t0)
 }
 
 //===----------------------------------------------------------------------===//
@@ -122,5 +122,5 @@ hir.unified_func private @UIntBody(%a: 0) -> (result: 0) {
   // CHECK:         hir.coerce_type %a, [[T]]
   %0 = hir.constant_unit
   %1 = hir.unit_type
-  hir.unified_return %0 : %1
+  hir.unified_return %0 : () -> (%1)
 }
