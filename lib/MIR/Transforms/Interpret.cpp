@@ -10,6 +10,7 @@
 #include "silicon/MIR/Ops.h"
 #include "silicon/MIR/Passes.h"
 #include "silicon/Support/MLIR.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 
@@ -148,6 +149,9 @@ LogicalResult Interpreter::executeOp(Operation *op,
     for (auto [result, elem] :
          llvm::zip(unpackOp.getResults(), opaqueAttr.getElements()))
       values[result] = elem;
+  } else if (isa<mir::BoolToI1Op>(op)) {
+    // Forward the BoolAttr unchanged; this is purely a type bridge.
+    values[op->getResult(0)] = operands[0];
   } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
     for (auto [result, attr] : llvm::zip(castOp.getResults(), operands))
       values[result] = attr;
@@ -201,6 +205,37 @@ FailureOr<SmallVector<Attribute>> Interpreter::run() {
         callerFrame.values[result] = attr;
       callerFrame.currentOp = callerFrame.currentOp->getNextNode();
       callStack.pop_back();
+      continue;
+    }
+
+    // Handle cf.br: jump to the destination block, mapping block args.
+    if (auto brOp = dyn_cast<cf::BranchOp>(op)) {
+      auto *dest = brOp.getDest();
+      for (auto [blockArg, brOperand] :
+           llvm::zip(dest->getArguments(), brOp.getDestOperands()))
+        frame.values[blockArg] = frame.values.lookup(brOperand);
+      frame.currentOp = &dest->front();
+      continue;
+    }
+
+    // Handle cf.cond_br: evaluate condition, pick true/false dest.
+    if (auto condBrOp = dyn_cast<cf::CondBranchOp>(op)) {
+      auto condAttr = frame.values.lookup(condBrOp.getCondition());
+      if (!condAttr)
+        return op->emitError() << "missing value for cond_br condition";
+      bool condTrue = false;
+      if (auto boolAttr = dyn_cast<base::BoolAttr>(condAttr))
+        condTrue = boolAttr.getValue();
+      else if (auto intAttr = dyn_cast<IntegerAttr>(condAttr))
+        condTrue = intAttr.getValue() != 0;
+      auto *dest =
+          condTrue ? condBrOp.getTrueDest() : condBrOp.getFalseDest();
+      auto destOperands = condTrue ? condBrOp.getTrueDestOperands()
+                                   : condBrOp.getFalseDestOperands();
+      for (auto [blockArg, brOperand] :
+           llvm::zip(dest->getArguments(), destOperands))
+        frame.values[blockArg] = frame.values.lookup(brOperand);
+      frame.currentOp = &dest->front();
       continue;
     }
 
@@ -268,8 +303,12 @@ void InterpretPass::runOnOperation() {
   for (auto func : getOperation().getOps<mir::FuncOp>()) {
     if (func.getBody().getNumArguments() > 0)
       continue;
-    if (!func.getBody().front().getTerminator() ||
-        !isa<mir::ReturnOp>(func.getBody().front().getTerminator()))
+    // Only interpret functions that contain at least one mir.return. The
+    // entry block may terminate with a branch instead of a return in
+    // multi-block functions.
+    bool hasReturn = false;
+    func.walk([&](mir::ReturnOp) { hasReturn = true; });
+    if (!hasReturn)
       continue;
     // Module functions represent hardware and must not be interpreted away.
     // Functions that transitively call modules also cannot be interpreted,

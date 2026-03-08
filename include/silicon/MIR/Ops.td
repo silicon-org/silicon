@@ -126,6 +126,17 @@ def YieldOp : MIROp<"yield", [
   }];
 }
 
+def BoolToI1Op : MIROp<"bool_to_i1", [Pure]> {
+  let summary = "cast bool to i1 for branch conditions";
+  let description = [{
+    Converts an `!si.bool` value to an `i1` value for use with `cf.cond_br`.
+    During interpretation, this simply forwards the `BoolAttr` unchanged.
+  }];
+  let arguments = (ins AnyType:$input);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input)";
+}
+
 def ReturnOp : MIROp<"return", [Pure, ReturnLike, Terminator]> {
   let arguments = (ins Variadic<AnyType>:$operands);
   let assemblyFormat = [{

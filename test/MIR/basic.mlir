@@ -82,6 +82,14 @@ mir.evaluated_func @eval_multi [#si.int<1> : !si.int, #si.type<!si.int> : !si.ty
 // CHECK: mir.evaluated_func private {{.*}}@eval_private [#si.unit : !si.unit]
 mir.evaluated_func private @eval_private [#si.unit : !si.unit]
 
+// bool_to_i1
+// CHECK-LABEL: mir.func @BoolToI1
+mir.func @BoolToI1(%cond: !si.bool) -> () {
+  // CHECK: mir.bool_to_i1 %cond : !si.bool
+  %0 = mir.bool_to_i1 %cond : !si.bool
+  mir.return
+}
+
 // if/else expression
 // CHECK-LABEL: mir.func @IfElse
 mir.func @IfElse(%cond: !si.int, %x: !si.int, %y: !si.int) -> (result: !si.int) {

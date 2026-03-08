@@ -285,3 +285,54 @@ mir.func @test_if_compute() -> (result: !si.int) {
   }
   mir.return %0 : !si.int
 }
+
+//===----------------------------------------------------------------------===//
+// Multi-block control flow: verify that the interpreter follows cf.br and
+// cf.cond_br between blocks, using mir.bool_to_i1 to convert conditions.
+
+// CHECK: mir.evaluated_func @test_cf_true [#si.int<42> : !si.int]
+mir.func @test_cf_true() -> (result: !si.int) {
+  %cond = mir.constant #si.bool<true> : !si.bool
+  %a = mir.constant #si.int<42> : !si.int
+  %b = mir.constant #si.int<7> : !si.int
+  %i1 = mir.bool_to_i1 %cond : !si.bool
+  cf.cond_br %i1, ^then, ^else
+^then:
+  cf.br ^merge(%a : !si.int)
+^else:
+  cf.br ^merge(%b : !si.int)
+^merge(%result: !si.int):
+  mir.return %result : !si.int
+}
+
+// CHECK: mir.evaluated_func @test_cf_false [#si.int<7> : !si.int]
+mir.func @test_cf_false() -> (result: !si.int) {
+  %cond = mir.constant #si.bool<false> : !si.bool
+  %a = mir.constant #si.int<42> : !si.int
+  %b = mir.constant #si.int<7> : !si.int
+  %i1 = mir.bool_to_i1 %cond : !si.bool
+  cf.cond_br %i1, ^then, ^else
+^then:
+  cf.br ^merge(%a : !si.int)
+^else:
+  cf.br ^merge(%b : !si.int)
+^merge(%result: !si.int):
+  mir.return %result : !si.int
+}
+
+// CHECK: mir.evaluated_func @test_cf_compute [#si.int<15> : !si.int]
+mir.func @test_cf_compute() -> (result: !si.int) {
+  %cond = mir.constant #si.bool<true> : !si.bool
+  %a = mir.constant #si.int<10> : !si.int
+  %b = mir.constant #si.int<5> : !si.int
+  %i1 = mir.bool_to_i1 %cond : !si.bool
+  cf.cond_br %i1, ^then, ^else
+^then:
+  %sum = mir.add %a, %b : !si.int
+  cf.br ^merge(%sum : !si.int)
+^else:
+  %diff = mir.sub %a, %b : !si.int
+  cf.br ^merge(%diff : !si.int)
+^merge(%result: !si.int):
+  mir.return %result : !si.int
+}
