@@ -8,4 +8,4 @@
 // CHECK: mir.evaluated_func {{.*}}@main.0b [#si.int<22> : !si.int]
 fn double(const x: int, y: int) -> int { x + x + y }
 fn quad(const x: int, y: int) -> int { double(x, y) + double(x, y) }
-fn main() -> int { quad(5, 1) }
+pub fn main() -> int { quad(5, 1) }

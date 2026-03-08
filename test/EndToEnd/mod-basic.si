@@ -34,4 +34,4 @@
 // HW:   hw.instance
 // HW:   hw.output
 mod identity(const a: int) -> int { a }
-fn main() -> int { identity(42) }
+pub fn main() -> int { identity(42) }

@@ -9,4 +9,4 @@
 fn pick(const cond: int, const a: int, const b: int) -> int {
   if cond { a } else { b }
 }
-fn main() -> int { pick(1, 42, 7) }
+pub fn main() -> int { pick(1, 42, 7) }

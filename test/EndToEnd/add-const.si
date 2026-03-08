@@ -9,6 +9,6 @@
 // CHECK: mir.evaluated_func {{.*}}@main.0b [#si.int<49> : !si.int]
 
 // ROUNDTRIP: hir.unified_func private @add
-// ROUNDTRIP: hir.unified_func private @main
+// ROUNDTRIP: hir.unified_func @main
 fn add(const a: int, b: int) -> int { a + b }
-fn main() -> int { add(42, 7) }
+pub fn main() -> int { add(42, 7) }

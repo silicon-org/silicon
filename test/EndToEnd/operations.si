@@ -5,16 +5,16 @@
 
 // CHECK: mir.evaluated_func {{.*}}@main_sub.0b [#si.int<7> : !si.int]
 fn sub_const(const a: int, b: int) -> int { a - b }
-fn main_sub() -> int { sub_const(10, 3) }
+pub fn main_sub() -> int { sub_const(10, 3) }
 
 // CHECK: mir.evaluated_func {{.*}}@main_mul.0b [#si.int<20> : !si.int]
 fn mul_const(const a: int, b: int) -> int { a * b }
-fn main_mul() -> int { mul_const(4, 5) }
+pub fn main_mul() -> int { mul_const(4, 5) }
 
 // CHECK: mir.evaluated_func {{.*}}@main_div.0b [#si.int<3> : !si.int]
 fn div_const(const a: int, b: int) -> int { a / b }
-fn main_div() -> int { div_const(10, 3) }
+pub fn main_div() -> int { div_const(10, 3) }
 
 // CHECK: mir.evaluated_func {{.*}}@main_mod.0b [#si.int<1> : !si.int]
 fn mod_const(const a: int, b: int) -> int { a % b }
-fn main_mod() -> int { mod_const(10, 3) }
+pub fn main_mod() -> int { mod_const(10, 3) }

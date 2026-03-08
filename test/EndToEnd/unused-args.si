@@ -5,13 +5,13 @@
 // DCE even when coerce_type on unused block args is removed.
 
 // CHECK: mir.func private @use_first.0(%a: !si.int, %b: !si.int) -> (result: !si.int)
-fn use_first(a: int, b: int) -> int { a }
+pub fn use_first(a: int, b: int) -> int { a }
 
 // CHECK: mir.func private @use_second.0(%a: !si.int, %b: !si.int) -> (result: !si.int)
-fn use_second(a: int, b: int) -> int { b }
+pub fn use_second(a: int, b: int) -> int { b }
 
 // CHECK: mir.func private @use_none.0(%a: !si.int, %b: !si.int) -> (result: !si.int)
-fn use_none(a: int, b: int) -> int { 42 }
+pub fn use_none(a: int, b: int) -> int { 42 }
 
 // CHECK: mir.evaluated_func {{.*}}@main.0
-fn main() -> int { use_first(1, 2) }
+pub fn main() -> int { use_first(1, 2) }

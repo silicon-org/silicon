@@ -6,6 +6,6 @@
 // context.
 
 // A dyn return type with a phase-0 value forwards through context.
-// HIR-LABEL: hir.split_func private @make_dyn(%x: 0) -> (result: 1)
+// HIR-LABEL: hir.split_func @make_dyn(%x: 0) -> (result: 1)
 // MIR: mir.func private @make_dyn.0(%x: !si.int) -> (ctx: !si.opaque)
-fn make_dyn(x: int) -> dyn int { x }
+pub fn make_dyn(x: int) -> dyn int { x }

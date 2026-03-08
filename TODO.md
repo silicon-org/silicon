@@ -1,7 +1,5 @@
 # TODO
 
-- Re-enable SymbolDCE in `silc` pipeline and `PhaseEvalLoop` once proper entry-point / public visibility semantics are in place; currently all user functions are private, so SymbolDCE removes everything.
-  The fix here likely is to make the functions public in the tests. It's expected that private functions get removed if they are never called from a public function.
 - Currently hir.func encode their argument types through the hir.return function, which is exactly what we want.
   However, it is the CheckCalls pass on unified funcs that copies the signature into the body.
   This is where we get the type information for block arguments.

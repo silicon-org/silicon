@@ -7,14 +7,14 @@
 // A dyn argument with a matching dyn return type compiles into a single
 // phase-1 function.
 // CHECK: mir.func private @dyn_identity.0b(%x: !si.int) -> (result: !si.int)
-fn dyn_identity(dyn x: int) -> dyn int { x }
+pub fn dyn_identity(dyn x: int) -> dyn int { x }
 
 // A function with mixed const and dyn args. The dyn arg goes to a later
 // phase function; the const arg is evaluated at compile time.
-// CHECK: mir.func private @mixed.0(%a: !si.int) -> (ctx: !si.opaque)
+// CHECK-NOT: mir.func{{.*}}@mixed.0
 // CHECK: mir.func private @mixed.2(%b: !si.int) -> ()
 fn mixed(const a: int, dyn b: int) -> int { a }
 
 // Calling a function with dyn args from main.
 // CHECK: mir.evaluated_func {{.*}}@main.0b
-fn main() -> int { mixed(42, 7) }
+pub fn main() -> int { mixed(42, 7) }

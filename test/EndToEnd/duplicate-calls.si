@@ -6,7 +6,7 @@
 // recognized as resolvable types during HIR-to-MIR lowering.
 
 // CHECK: mir.evaluated_func {{.*}}@main.0 [#si.int<0> : !si.int]
-fn main() -> int {
+pub fn main() -> int {
   let x = foo(1, 2);
   let y = foo(1, 2);
   x ^ y

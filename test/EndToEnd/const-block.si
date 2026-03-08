@@ -7,4 +7,4 @@
 
 // CHECK: mir.evaluated_func {{.*}}@main{{.*}}[#si.int<42> : !si.int]
 fn noargs() -> int { 42 }
-fn main() -> int { const { noargs() } }
+pub fn main() -> int { const { noargs() } }
