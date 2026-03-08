@@ -11,11 +11,7 @@
 - Add a type operand to `hir.constant_int`, such that we can infer the type to be `int` or `uint<N>`.
   When we infer the concrete type of such a constant, also check that the integer fits into the chosen type.
   We may want to do this as part of type inference, since this is a user-facing error.
-
-- **`const const fn` (double phase shift) fails.**
-  Input: `const const fn very_early(a: int) -> int { a }; fn main() -> int { very_early(5) }` — error: `callee @very_early.1a is not a mir.func (may not have been lowered yet)`.
-  The double const shift moves the function to phase -2, but the pipeline only runs enough iterations to handle phase -1.
-  Low priority since this is an unusual construct; may just need more PhaseEvalLoop iterations or a check.
+- Investigate why the `eraseVoidCalls` is needed in function specialization; is this a hack?
 
 - **Implicit type widening (`uint<8>` to `uint<16>`) not supported.**
   Input: `pub fn widen(a: uint<8>) -> uint<16> { a }` — error: `hir.unify survived to HIR-to-MIR lowering`.

@@ -65,6 +65,24 @@ struct SpecializeFuncsPass
 };
 } // namespace
 
+/// Erase all void calls to a given symbol throughout the module. This is used
+/// when an evaluated function returned no results: any calls to it are no-ops
+/// and must be removed before the evaluated func itself can be erased.
+static void eraseVoidCalls(ModuleOp module, StringRef calleeName) {
+  SmallVector<Operation *> toErase;
+  module.walk([&](Operation *op) {
+    if (auto callOp = dyn_cast<hir::CallOp>(op)) {
+      if (callOp.getCallee() == calleeName && callOp.getNumResults() == 0)
+        toErase.push_back(callOp);
+    } else if (auto callOp = dyn_cast<mir::CallOp>(op)) {
+      if (callOp.getCallee() == calleeName && callOp.getNumResults() == 0)
+        toErase.push_back(callOp);
+    }
+  });
+  for (auto *op : toErase)
+    op->erase();
+}
+
 /// Replace the last block arg (the opaque context) with individual
 /// hir.mir_constant ops for each element of the opaque attribute. Erases the
 /// opaque_unpack consuming the context arg.
@@ -241,6 +259,7 @@ void SpecializeFuncsPass::runOnOperation() {
       // If only one sub-function remains after removing the evaluated one,
       // or there's no next function, dissolve.
       if (phaseFuncs.size() < 2) {
+        eraseVoidCalls(getOperation(), evalFunc.getSymName());
         symbolTable.erase(evalFunc);
         mpFunc.erase();
         changed = true;
@@ -252,6 +271,7 @@ void SpecializeFuncsPass::runOnOperation() {
       if (resultAttrs.empty()) {
         LLVM_DEBUG(llvm::dbgs()
                    << "  No results to chain, removing evaluated func\n");
+        eraseVoidCalls(getOperation(), evalFunc.getSymName());
         symbolTable.erase(evalFunc);
         SmallVector<Attribute> newPhaseFuncs(phaseFuncs.begin() + 1,
                                              phaseFuncs.end());
@@ -332,6 +352,7 @@ void SpecializeFuncsPass::runOnOperation() {
       transitiveSpecialize(nextFunc, symbolTable);
 
       // Remove the evaluated first sub-function and update the multiphase_func.
+      eraseVoidCalls(getOperation(), evalFunc.getSymName());
       symbolTable.erase(evalFunc);
 
       SmallVector<Attribute> newPhaseFuncs(phaseFuncs.begin() + 1,
@@ -381,6 +402,17 @@ void SpecializeFuncsPass::runOnOperation() {
 
       changed = true;
     }
+  }
+
+  // Clean up void calls to evaluated funcs with empty results. These are
+  // no-op calls to phase sub-functions that have already been fully evaluated
+  // and returned nothing. This happens with multi-phase functions like
+  // `const const fn` where inner phases produce no results but other functions
+  // still reference them.
+  for (auto evalFunc : getOperation().getOps<mir::EvaluatedFuncOp>()) {
+    if (!evalFunc.getResults().empty())
+      continue;
+    eraseVoidCalls(getOperation(), evalFunc.getSymName());
   }
 
   // Clean up multiphase_func ops that are no longer referenced by any
