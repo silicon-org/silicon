@@ -1,5 +1,4 @@
 ---
-weight: 40
 ---
 
 # State and Wires

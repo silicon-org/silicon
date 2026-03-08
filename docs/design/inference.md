@@ -1,5 +1,4 @@
 ---
-weight: 10
 ---
 
 # Inference
