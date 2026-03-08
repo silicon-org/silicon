@@ -118,7 +118,10 @@ LogicalResult PhaseSplitter::run() {
   // Compute effective result phases. The declared result phase is
   // authoritative: if the body produces a value at a later phase than declared,
   // that is a user error (the function signature promises an earlier phase than
-  // the body can deliver).
+  // the body can deliver). For return values that come from a unified_call, we
+  // use the call's result phase attribute to determine the actual phase, since
+  // the phase analysis assigns all unified_call results to the call op's own
+  // phase without considering callee-relative result shifts (e.g., `dyn fn`).
   auto returnOp = funcOp.getReturnOp();
   auto declaredResultPhases = funcOp.getResultPhases();
   SmallVector<int16_t> effectiveResultPhases;
@@ -128,6 +131,16 @@ LogicalResult PhaseSplitter::run() {
     int16_t valuePhase = analysis.getValuePhase(value);
     if (valuePhase == INT16_MIN)
       valuePhase = declared;
+
+    // If this return value comes from a unified_call, compute the actual
+    // result phase from the call's result phase attributes.
+    if (auto callOp = value.getDefiningOp<UnifiedCallOp>()) {
+      auto resultIdx = cast<OpResult>(value).getResultNumber();
+      int16_t callOpPhase = analysis.opPhases.at(callOp.getOperation());
+      int16_t relResultPhase =
+          static_cast<int16_t>(callOp.getResultPhases()[resultIdx]);
+      valuePhase = callOpPhase + relResultPhase;
+    }
     if (valuePhase > declared) {
       auto diag = emitError(returnOp.getLoc())
                   << "return value is available at phase " << valuePhase
@@ -363,22 +376,6 @@ LogicalResult PhaseSplitter::run() {
       // absolute caller-frame phase is the call op's phase plus the attribute.
       int16_t callOpPhase = analysis.opPhases.at(callOp);
 
-      // Compute the caller-frame phase range for this call.
-      int16_t calleeMinPhase = INT16_MAX, calleeMaxPhase = INT16_MIN;
-      for (auto p : argPhases) {
-        int16_t abs = callOpPhase + static_cast<int16_t>(p);
-        calleeMinPhase = std::min(calleeMinPhase, abs);
-        calleeMaxPhase = std::max(calleeMaxPhase, abs);
-      }
-      for (auto p : resultPhases) {
-        int16_t abs = callOpPhase + static_cast<int16_t>(p);
-        calleeMinPhase = std::min(calleeMinPhase, abs);
-        calleeMaxPhase = std::max(calleeMaxPhase, abs);
-      }
-      if (calleeMinPhase == INT16_MAX) {
-        calleeMinPhase = calleeMaxPhase = 0;
-      }
-
       // Look up the callee's split_func and build a phase-to-function mapping
       // by walking its entries. MultiphaseFuncOps expand to their
       // sub-functions.
@@ -392,24 +389,38 @@ LogicalResult PhaseSplitter::run() {
         auto phaseFuncRefs = calleeSplitFunc.getPhaseFuncs();
 
         // Reconstruct the callee's full phase range from its split_func
-        // entries. Each entry is either a standalone FuncOp (1 phase) or a
-        // MultiphaseFuncOp (multiple phases). We walk them in order.
-        int16_t phase = calleeMinPhase;
+        // entries. Each entry records the last phase of a group. A
+        // MultiphaseFuncOp group with N sub-functions spans phases
+        // [entryPhase - N + 1, entryPhase]; a standalone FuncOp is just
+        // [entryPhase]. The caller-frame phase is callOpPhase + calleePhase.
         for (auto [entryPhase, funcRef] : llvm::zip(phaseNums, phaseFuncRefs)) {
           auto name = cast<FlatSymbolRefAttr>(funcRef).getValue();
           if (auto mpFunc = symbolTable.lookup<MultiphaseFuncOp>(name)) {
+            unsigned numSubs = mpFunc.getPhaseFuncs().size();
+            int16_t subPhase =
+                callOpPhase + entryPhase - static_cast<int16_t>(numSubs) + 1;
             for (auto subRef : mpFunc.getPhaseFuncs()) {
               auto subName = cast<FlatSymbolRefAttr>(subRef).getValue();
               splitFuncs.push_back(
-                  {phase++, symbolTable.lookup<FuncOp>(subName)});
+                  {subPhase++, symbolTable.lookup<FuncOp>(subName)});
             }
           } else {
-            splitFuncs.push_back({phase++, symbolTable.lookup<FuncOp>(name)});
+            splitFuncs.push_back(
+                {callOpPhase + entryPhase, symbolTable.lookup<FuncOp>(name)});
           }
         }
       }
       if (splitFuncs.empty())
         continue;
+
+      // Determine the caller-frame phase range from the actual split
+      // functions. This is more accurate than deriving it from arg/result
+      // phases alone, since the callee may have internal phases that extend
+      // beyond the visible arg/result phases (e.g., a `dyn fn` has internal
+      // body ops at phase 0 even though its args/results are at phase 1).
+      int16_t calleeMaxPhase = INT16_MIN;
+      for (auto &[phase, _] : splitFuncs)
+        calleeMaxPhase = std::max(calleeMaxPhase, phase);
 
       OpBuilder callBuilder(callOp);
       auto loc = callOp.getLoc();

@@ -1,0 +1,24 @@
+// RUN: silc --ir-mir --split-input-file --verify-diagnostics %s | FileCheck %s
+
+// Test that calling a `dyn fn` from another `dyn fn` compiles through the
+// full pipeline. The callee's internal phase-0 body and phase-1 args/results
+// must be correctly mapped to the caller's frame, and the caller's return
+// value (at the shifted phase) must land in the correct split.
+
+// CHECK: mir.func private @late.0b(%a: !si.int) -> (result: !si.int)
+pub dyn fn late(a: int) -> int { a + 1 }
+
+// CHECK: mir.func private @caller.0b(%x: !si.int) -> (result: !si.int)
+pub dyn fn caller(x: int) -> int { late(x) }
+
+// -----
+
+// Calling a `dyn fn` from a plain `fn` produces a phase mismatch diagnostic
+// instead of crashing. The callee's result is at phase 1 but the caller
+// declares phase 0.
+
+dyn fn deferred(a: int) -> int { a }
+
+// expected-note @below {{consider adding `dyn` to the return type to shift it to a later phase}}
+// expected-error @below {{return value is available at phase 1 but function declares phase 0 return}}
+fn bad_caller() -> int { deferred(5) }

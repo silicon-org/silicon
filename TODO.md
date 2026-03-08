@@ -18,12 +18,6 @@
   The comparison produces `i1` but `comb.mux` gets wired with `i64`; and non-boolean conditions aren't narrowed to `i1`.
   MIRToCIRCT needs to insert a width cast (trunc or icmp-ne-zero) between the condition and the mux.
 
-- **`dyn fn` crashes the compiler with an assertion failure.**
-  Input: `dyn fn late(a: int) -> int { a + 1 }; fn main() -> int { late(5) }` — `SmallVector operator[] out of bounds` in PhaseSplit.
-  The compiler should never crash on user input.
-  SplitPhases likely doesn't handle the case where all phases are shifted later (no phase-0 split exists).
-
-
 - **Comparison result can't be used as a return value.**
   Input: `pub fn gt(a: int, b: int) -> int { a > b }` — error: `failed to legalize unresolved materialization from ('i1') to ('i64')`.
   Comparisons produce `i1` but the return type is `i64`.
