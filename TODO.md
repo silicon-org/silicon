@@ -4,9 +4,10 @@
   - `fn send(dyn x: int, y: int) -> int { x + y }` — dyn arg with non-dyn return
   - `fn make_const(x: int) -> const int { x }` — const return type
   - `fn make_dyn(x: int) -> dyn int { x }` — dyn return type
-- It looks like symbol DCE does not run: even with a simple example, the output still contains private split funcs, even if there are no more calls to them
-- Make split func discardable by removing that `canDiscardOnUseEmpty` override
 - The input `mod hello(a: uint<42>) {}` to silc triggers the error `error: 'hir.uint_type' op using value defined outside the region`
+- Double check that the `hir.return` op's verifier ensures that it has the same number of arg/result type operands as the parent function has args/results
+
+- Re-enable SymbolDCE in `silc` pipeline and `PhaseEvalLoop` once proper entry-point / public visibility semantics are in place; currently all user functions are private, so SymbolDCE removes everything
 
 ## Postponed Long-Term Fixes
 

@@ -399,8 +399,6 @@ LogicalResult SplitFuncOp::verifyRegions() {
   return success();
 }
 
-bool SplitFuncOp::canDiscardOnUseEmpty() { return false; }
-
 SignatureOp SplitFuncOp::getSignatureOp() {
   return cast<SignatureOp>(getSignature().back().getTerminator());
 }

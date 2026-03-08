@@ -126,7 +126,6 @@ static void populatePasses(PassManager &pm) {
   // are evaluated.
   pm.addPass(createPhaseEvalLoopPass());
   addCleanup(pm);
-  pm.addPass(mlir::createSymbolDCEPass());
 
   if (opt.loweringMode == LoweringMode::MIR)
     return;

@@ -459,7 +459,7 @@ def SignatureOp : HIROp<"signature", [
 
 def SplitFuncOp : HIROp<"split_func", [
   IsolatedFromAbove,
-  DeclareOpInterfaceMethods<Symbol, ["canDiscardOnUseEmpty"]>,
+  Symbol,
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
 ]> {
   let summary = "Records how a unified function was split into per-phase functions";
@@ -469,9 +469,8 @@ def SplitFuncOp : HIROp<"split_func", [
     signature (for library callers) and maps phase numbers to the generated
     per-phase `hir.func` ops.
 
-    Split funcs are never discardable by SymbolDCE, even when private.
-    They serve as top-level entry points into the phased evaluation pipeline
-    and are not referenced by other ops via symbol uses.
+    Once phased evaluation is complete, unused private split funcs can be
+    removed by SymbolDCE.
   }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,

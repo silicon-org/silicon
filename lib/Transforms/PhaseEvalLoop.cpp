@@ -103,8 +103,6 @@ void PhaseEvalLoopPass::runOnOperation() {
     auto &anyPM2 = subPipeline.nestAny();
     anyPM2.addPass(mlir::createCanonicalizerPass());
     anyPM2.addPass(mlir::createCSEPass());
-    subPipeline.addPass(mlir::createSymbolDCEPass());
-
     if (failed(runPipeline(subPipeline, getOperation())))
       return signalPassFailure();
 
