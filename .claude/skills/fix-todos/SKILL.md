@@ -7,11 +7,12 @@ Fix the current set of todos:
 
 1. Create a subagent for each item in @TODO.md, and let it analyze and triage what it would take to implement a fix.
 2. If there are any open questions about the items or the corresponding fixes, ask the user for clarification.
-3. Put the items in a sensible order, such that simple items and items that others depend on get addressed first.
-4. Print a table with the sorted list of todos to be addressed.
-5. Work through the list of items.
+3. For each item, pick a Claude model to tackle it.
+4. Put the items in a sensible order, such that simple items and items that others depend on get addressed first.
+5. Print a table with the sorted list of todos to be addressed.
+6. Work through the list of items.
 
-For each todo item, spin up a subagent so you don't pollute your context.
+For each todo item, spin up a subagent with the picked model so you don't pollute your context.
 Don't run subagents in parallel, since they will get into each others way when modifying, building, and committing files.
 The subagent should:
 
