@@ -15,16 +15,6 @@
   The comparison produces `i1` but `comb.mux` gets wired with `i64`; and non-boolean conditions aren't narrowed to `i1`.
   MIRToCIRCT needs to insert a width cast (trunc or icmp-ne-zero) between the condition and the mux.
 
-- **Negative number literals don't work.**
-  Input: `fn main() -> int { -1 }` — error: `compiler bug: unsupported expression kind UnaryExpr`.
-  Parsed as unary negation of `1`, which hits the unimplemented unary expr path.
-  Fix by implementing `UnaryExpr` in codegen (see next item), or by folding `-<literal>` into a negative literal in the parser.
-
-- **Unary operators (`-x`, `!x`) not implemented in codegen.**
-  Input: `fn main() -> int { let x = 5; -x }` — error: `compiler bug: unsupported expression kind UnaryExpr`.
-  The parser accepts these but codegen has no case for `UnaryExpr`.
-  Negation can lower to `0 - x` (or `hir.sub`), bitwise NOT to `hir.xor x, -1` or a dedicated op.
-
 - **`dyn fn` crashes the compiler with an assertion failure.**
   Input: `dyn fn late(a: int) -> int { a + 1 }; fn main() -> int { late(5) }` — `SmallVector operator[] out of bounds` in PhaseSplit.
   The compiler should never crash on user input.

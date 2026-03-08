@@ -103,6 +103,29 @@ fn testGeq(a: int, b: int) -> int { a >= b }
 fn testLeq(a: int, b: int) -> int { a <= b }
 
 //===----------------------------------------------------------------------===//
+// Unary operations
+//===----------------------------------------------------------------------===//
+
+// Ensure unary negation lowers to `0 - x`.
+// CHECK-LABEL: hir.unified_func private @testNeg
+// CHECK: hir.constant_int 0
+// CHECK: hir.sub %{{.+}}, %a
+fn testNeg(a: int) -> int { -a }
+
+// Ensure negation of a literal also works.
+// CHECK-LABEL: hir.unified_func private @testNegLiteral
+// CHECK: hir.constant_int 5
+// CHECK: hir.constant_int 0
+// CHECK: hir.sub
+fn testNegLiteral() -> int { -5 }
+
+// Ensure bitwise NOT lowers to `x ^ -1`.
+// CHECK-LABEL: hir.unified_func private @testNot
+// CHECK: hir.constant_int -1
+// CHECK: hir.xor %a, %{{.+}}
+fn testNot(a: int) -> int { !a }
+
+//===----------------------------------------------------------------------===//
 // Operator precedence
 //===----------------------------------------------------------------------===//
 

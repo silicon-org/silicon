@@ -88,6 +88,36 @@ static Value convert(ast::CallExpr &expr, Context &cx) {
       .getResult(0);
 }
 
+/// Handle unary expressions by lowering to equivalent binary ops.
+static Value convert(ast::UnaryExpr &expr, Context &cx) {
+  auto arg = cx.convertExpr(*expr.arg);
+  if (!arg)
+    return {};
+  auto argType = hir::getOrCreateTypeOf(cx.builder, expr.loc, arg);
+  auto loc = expr.loc;
+
+  switch (expr.op) {
+  case ast::UnaryOp::Neg: {
+    // Lower `-x` to `0 - x`.
+    auto zero = hir::ConstantIntOp::create(
+        cx.builder, loc,
+        base::IntAttr::get(cx.module.getContext(), DynamicAPInt(0)));
+    return hir::SubOp::create(cx.builder, loc, zero, arg, argType);
+  }
+  case ast::UnaryOp::Not: {
+    // Lower `!x` to `x ^ -1` (bitwise NOT).
+    auto allOnes = hir::ConstantIntOp::create(
+        cx.builder, loc,
+        base::IntAttr::get(cx.module.getContext(), DynamicAPInt(-1)));
+    return hir::XorOp::create(cx.builder, loc, arg, allOnes, argType);
+  }
+  default:
+    emitBug(expr.loc) << "codegen for unary operator `" << toString(expr.op)
+                      << "` not implemented";
+    return {};
+  }
+}
+
 /// Handle binary expressions by dispatching to the appropriate HIR op.
 static Value convert(ast::BinaryExpr &expr, Context &cx) {
   auto lhs = cx.convertExpr(*expr.lhs);
