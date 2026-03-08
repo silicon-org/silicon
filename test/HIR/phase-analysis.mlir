@@ -8,7 +8,7 @@ func.func private @dummyB()
 
 // CHECK-LABEL: hir.unified_func @SinglePhase
 hir.unified_func @SinglePhase() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   // CHECK: func.call @dummyA() {phase = 0 : si16}
   func.call @dummyA() : () -> ()
@@ -25,7 +25,7 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
   %2 = hir.int_type
-  hir.unified_signature (%0, %1) -> (%2)
+  hir.signature (%0, %1) -> (%2)
 } {
   // CHECK: hir.type_of %a {phase = -1 : si16}
   %ta = hir.type_of %a
@@ -47,7 +47,7 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
 
 // CHECK-LABEL: hir.unified_func @ExprPhaseShift
 hir.unified_func @ExprPhaseShift() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   // CHECK: func.call @dummyA() {phase = 0 : si16}
   func.call @dummyA() : () -> ()
@@ -68,7 +68,7 @@ hir.unified_func @ExprPhaseShift() -> () {
 
 // CHECK-LABEL: hir.unified_func @PureFloating
 hir.unified_func @PureFloating() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   // CHECK: hir.constant_int 42 {phase = "float"}
   %0 = hir.constant_int 42
@@ -92,7 +92,7 @@ hir.unified_func @PureFloating() -> () {
 
 hir.unified_func @Adder(%a: 0, %b: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0, %0) -> (%0)
+  hir.signature (%0, %0) -> (%0)
 } {
   %ta = hir.type_of %a
   %tb = hir.type_of %b
@@ -103,7 +103,7 @@ hir.unified_func @Adder(%a: 0, %b: 0) -> (result: 0) {
 
 hir.unified_func @CallerConstArg(%a: -1, %b: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0, %0) -> (%0)
+  hir.signature (%0, %0) -> (%0)
 } {
   %ta = hir.type_of %a
   %tb = hir.type_of %b
@@ -119,7 +119,7 @@ hir.unified_func @CallerConstArg(%a: -1, %b: 0) -> (result: 0) {
 // CHECK-LABEL: hir.unified_func @PullExpr
 hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0) -> (%0)
+  hir.signature (%0) -> (%0)
 } {
   // CHECK: hir.constant_int 19 {phase = "float"}
   %c19 = hir.constant_int 19
@@ -149,7 +149,7 @@ hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
 
 // CHECK-LABEL: hir.unified_func @NestedSideEffects
 hir.unified_func @NestedSideEffects() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   // CHECK: hir.expr -1 attributes {phase = -1 : si16}
   hir.expr -1 {
@@ -170,7 +170,7 @@ hir.unified_func @NestedSideEffects() -> () {
 // CHECK-LABEL: hir.unified_func @ThreePhase
 hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0, %0, %0) -> (%0)
+  hir.signature (%0, %0, %0) -> (%0)
 } {
   // CHECK: hir.type_of %a {phase = -2 : si16}
   %ta = hir.type_of %a
@@ -198,7 +198,7 @@ hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
 
 // CHECK-LABEL: hir.unified_func @NestedExpr
 hir.unified_func @NestedExpr() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   // CHECK: hir.expr 0 attributes {phase = 0 : si16}
   hir.expr 0 {

@@ -1,6 +1,5 @@
 # TODO
 
-- If there is no difference between hir.signature and hir.unified_signature except for the parent op they accept, combine them into a single hir.signature op.
 - Analyze the usage of ConstBrOp and ConstCondBrOp
   I'm pretty sure these are leftovers from an earlier prototype pass and are not needed for the current implementation.
   Try removing them and replacing any potential leftover uses with BrOp and CondBrOp from CF.

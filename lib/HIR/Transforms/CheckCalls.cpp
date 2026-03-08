@@ -131,14 +131,14 @@ void CheckCallsPass::runOnOperation() {
     signalPassFailure();
 }
 
-/// Ensure there is exactly one `UnifiedSignatureOp` terminator in the cloned
+/// Ensure there is exactly one `SignatureOp` terminator in the cloned
 /// signature region. If multiple terminators exist, they are consolidated into
 /// a single exit block whose block arguments carry the typeOfArgs and
 /// typeOfResults values.
 static void consolidateSignatureTerminators(Region &clonedSig) {
-  SmallVector<UnifiedSignatureOp> sigTerminators;
+  SmallVector<SignatureOp> sigTerminators;
   for (auto &block : clonedSig)
-    if (auto sigOp = dyn_cast<UnifiedSignatureOp>(block.getTerminator()))
+    if (auto sigOp = dyn_cast<SignatureOp>(block.getTerminator()))
       sigTerminators.push_back(sigOp);
   if (sigTerminators.size() <= 1)
     return;
@@ -167,9 +167,9 @@ static void consolidateSignatureTerminators(Region &clonedSig) {
   exitBuilder.setInsertionPointToStart(exitBlock);
   auto exitArgTypes = exitBlock->getArguments().take_front(numArgTypes);
   auto exitResultTypes = exitBlock->getArguments().drop_front(numArgTypes);
-  UnifiedSignatureOp::create(exitBuilder, firstSigOp.getLoc(),
-                             SmallVector<Value>(exitArgTypes),
-                             SmallVector<Value>(exitResultTypes));
+  SignatureOp::create(exitBuilder, firstSigOp.getLoc(),
+                      SmallVector<Value>(exitArgTypes),
+                      SmallVector<Value>(exitResultTypes));
 
   // Replace each original terminator with a branch to the exit block.
   for (auto sigOp : sigTerminators) {
@@ -190,7 +190,7 @@ static void consolidateSignatureTerminators(Region &clonedSig) {
 ///
 /// Instead of selectively cloning individual ops from the signature, this
 /// clones all signature blocks into the body region. If there are multiple
-/// `UnifiedSignatureOp` terminators (from multi-block signatures), they are
+/// `SignatureOp` terminators (from multi-block signatures), they are
 /// first consolidated into a single exit block. The cloned blocks are placed
 /// before the body's entry block, making the cloned signature entry block the
 /// new entry of the body region. The signature terminator's operands feed into
@@ -210,9 +210,9 @@ static void cloneSignatureIntoBody(UnifiedFuncOp funcOp) {
 
   // Find the single signature terminator and extract its operands.
   auto &clonedEntry = clonedSig.front();
-  UnifiedSignatureOp clonedSigOp = nullptr;
+  SignatureOp clonedSigOp = nullptr;
   for (auto &block : clonedSig)
-    if (auto op = dyn_cast<UnifiedSignatureOp>(block.getTerminator()))
+    if (auto op = dyn_cast<SignatureOp>(block.getTerminator()))
       clonedSigOp = op;
   assert(clonedSigOp && "expected a single signature terminator");
   SmallVector<Value> clonedArgTypes(clonedSigOp.getTypeOfArgs());
@@ -382,9 +382,9 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
     consolidateSignatureTerminators(signature);
 
     // Find the single signature terminator.
-    UnifiedSignatureOp terminatorOp = nullptr;
+    SignatureOp terminatorOp = nullptr;
     for (auto &block : signature)
-      if (auto op = dyn_cast<UnifiedSignatureOp>(block.getTerminator()))
+      if (auto op = dyn_cast<SignatureOp>(block.getTerminator()))
         terminatorOp = op;
     assert(terminatorOp && "expected a single signature terminator");
 

@@ -61,7 +61,7 @@ hir.func @ReturnWithOperands() -> (result) {
 // Test isModule on unified_func
 hir.unified_func @UnifiedModule(%a: 0) -> (result: 0) attributes {isModule} {
   %0 = hir.int_type
-  hir.unified_signature (%0) -> (%0)
+  hir.signature (%0) -> (%0)
 } {
   %0 = hir.type_of %a
   hir.return %a : () -> (%0)
@@ -69,7 +69,7 @@ hir.unified_func @UnifiedModule(%a: 0) -> (result: 0) attributes {isModule} {
 
 hir.unified_func @UnifiedSimple(%a: 0, %b: -1) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0, %0) -> (%0)
+  hir.signature (%0, %0) -> (%0)
 } {
   %0 = hir.type_of %a
   hir.return %a : () -> (%0)

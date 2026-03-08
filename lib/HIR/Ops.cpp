@@ -816,8 +816,7 @@ LogicalResult UnifiedFuncOp::verify() {
 
   // Check the signature terminator's operand counts against the function's
   // declared arg/result counts.
-  auto sigOp =
-      dyn_cast<UnifiedSignatureOp>(getSignature().back().getTerminator());
+  auto sigOp = dyn_cast<SignatureOp>(getSignature().back().getTerminator());
   if (!sigOp)
     return success();
 
@@ -846,15 +845,15 @@ void UnifiedFuncOp::getAsmBlockArgumentNames(Region &region,
 LogicalResult UnifiedFuncOp::verifyRegions() {
   // Make sure there are no signature terminators in the body region.
   for (auto &block : getBody())
-    if (isa<UnifiedSignatureOp>(block.getTerminator()))
+    if (isa<SignatureOp>(block.getTerminator()))
       return block.getTerminator()->emitOpError()
              << "cannot appear in the body";
 
   // Check the signature terminator. The last block must be a
-  // `unified_signature` terminator, but non-last blocks may also have them
+  // `signature` terminator, but non-last blocks may also have them
   // for multi-path type computation (these are consolidated by CheckCalls).
-  if (!isa<UnifiedSignatureOp>(getSignature().back().getTerminator()))
-    return emitOpError() << "requires `hir.unified_signature` terminator in "
+  if (!isa<SignatureOp>(getSignature().back().getTerminator()))
+    return emitOpError() << "requires `hir.signature` terminator in "
                             "the signature";
 
   // Check the body terminator.
@@ -864,8 +863,8 @@ LogicalResult UnifiedFuncOp::verifyRegions() {
   return success();
 }
 
-UnifiedSignatureOp UnifiedFuncOp::getSignatureOp() {
-  return cast<UnifiedSignatureOp>(getSignature().back().getTerminator());
+SignatureOp UnifiedFuncOp::getSignatureOp() {
+  return cast<SignatureOp>(getSignature().back().getTerminator());
 }
 
 ReturnOp UnifiedFuncOp::getReturnOp() {

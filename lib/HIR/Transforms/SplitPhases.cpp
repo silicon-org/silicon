@@ -1065,18 +1065,8 @@ LogicalResult PhaseSplitter::run() {
       sfBuilder.getDenseI32ArrayAttr(phaseNumbers),
       sfBuilder.getArrayAttr(phaseFuncAttrs));
 
-  // Move the unified func's signature region into the split_func and replace
-  // the unified_signature terminator with a signature terminator.
+  // Move the unified func's signature region into the split_func.
   splitFuncOp.getSignature().takeBody(funcOp.getSignature());
-  {
-    auto &sigBlock = splitFuncOp.getSignature().back();
-    auto unifiedSigOp = cast<UnifiedSignatureOp>(sigBlock.getTerminator());
-    OpBuilder sigBuilder(unifiedSigOp);
-    SignatureOp::create(sigBuilder, unifiedSigOp.getLoc(),
-                        unifiedSigOp.getTypeOfArgs(),
-                        unifiedSigOp.getTypeOfResults());
-    unifiedSigOp.erase();
-  }
 
   // Emit multiphase_funcs for multi-phase groups.
   for (auto &mp : multiphaseInfos) {

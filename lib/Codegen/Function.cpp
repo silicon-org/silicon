@@ -70,8 +70,7 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
     }
 
     // Emit the signature terminator with computed argument and result types.
-    hir::UnifiedSignatureOp::create(builder, item.loc, typeSSAValues,
-                                    resultTypes);
+    hir::SignatureOp::create(builder, item.loc, typeSSAValues, resultTypes);
   }
 
   // Record argument and result names on the func op.

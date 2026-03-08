@@ -7,7 +7,7 @@
 // Ensure a function without explicit return type gets a unit return.
 // CHECK-LABEL: hir.unified_func private @unitResult1() -> (result: 0)
 // CHECK: [[UNIT:%.+]] = hir.unit_type
-// CHECK-NEXT: hir.unified_signature () -> ([[UNIT]])
+// CHECK-NEXT: hir.signature () -> ([[UNIT]])
 // CHECK: hir.constant_unit
 // CHECK: hir.return
 fn unitResult1() {}

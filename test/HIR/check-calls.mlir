@@ -2,14 +2,14 @@
 
 //===----------------------------------------------------------------------===//
 // Multi-block signature: the entry block computes the type in a separate block
-// and branches to the exit block where the unified_signature terminator lives.
+// and branches to the exit block where the signature terminator lives.
 
 // CHECK-LABEL: hir.unified_func private @MultiBlockSig
 hir.unified_func private @MultiBlockSig(%a: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.const_br ^exit(%0, %0 : !hir.any, !hir.any)
 ^exit(%arg_ty: !hir.any, %ret_ty: !hir.any):
-  hir.unified_signature (%arg_ty) -> (%ret_ty)
+  hir.signature (%arg_ty) -> (%ret_ty)
 } {
   // The body gets the cloned signature blocks as a preamble. The empty exit
   // block is eliminated, so the entry branches directly to the body block.
@@ -30,7 +30,7 @@ hir.unified_func private @MultiBlockSig(%a: 0) -> (result: 0) {
 
 // CHECK-LABEL: hir.unified_func @CallMultiBlockSig
 hir.unified_func @CallMultiBlockSig() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   // The 2-block signature is inlined ahead of the call. The empty exit block
   // is eliminated, so the entry branches directly to the continuation block.
@@ -60,9 +60,9 @@ hir.unified_func private @MultiTermSig(%a: 0) -> (result: 0) {
     ^left(%t1 : !hir.any),
     ^right(%t2 : !hir.any)
 ^left(%lt: !hir.any):
-  hir.unified_signature (%lt) -> (%lt)
+  hir.signature (%lt) -> (%lt)
 ^right(%rt: !hir.any):
-  hir.unified_signature (%rt) -> (%rt)
+  hir.signature (%rt) -> (%rt)
 } {
   // After consolidation, both terminators are replaced with branches to a
   // consolidated exit block. The empty exit block is then eliminated, so
@@ -83,7 +83,7 @@ hir.unified_func private @MultiTermSig(%a: 0) -> (result: 0) {
 
 // CHECK-LABEL: hir.unified_func @CallMultiTermSig
 hir.unified_func @CallMultiTermSig() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   // The 3-block signature with 2 terminators is consolidated and inlined.
   // The consolidated exit block is eliminated.
@@ -106,8 +106,8 @@ hir.unified_func @CallMultiTermSig() -> () {
 
 // CHECK-LABEL: hir.unified_func @Empty
 hir.unified_func @Empty() -> () {
-  // CHECK: hir.unified_signature () -> ()
-  hir.unified_signature () -> ()
+  // CHECK: hir.signature () -> ()
+  hir.signature () -> ()
 } {
   // CHECK: hir.return : () -> (){{$}}
   hir.return : () -> ()
@@ -115,7 +115,7 @@ hir.unified_func @Empty() -> () {
 
 // CHECK-LABEL: hir.unified_func @SimpleFoo
 hir.unified_func @SimpleFoo() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   // CHECK: [[TMP:%.+]] = builtin.unrealized_conversion_cast
   // CHECK: [[ARG_TY:%.+]] = hir.int_type {a}
@@ -132,7 +132,7 @@ hir.unified_func @SimpleFoo() -> () {
 hir.unified_func @SimpleBar(%a: 0) -> (result: 0) {
   %0 = hir.int_type {a}
   %1 = hir.int_type {b}
-  hir.unified_signature (%0) -> (%1)
+  hir.signature (%0) -> (%1)
 } {
   // CHECK: [[ARG_TY:%.+]] = hir.int_type {a}
   // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
@@ -149,7 +149,7 @@ hir.unified_func @SimpleBar(%a: 0) -> (result: 0) {
 
 // CHECK-LABEL: hir.unified_func @DepTypeCaller
 hir.unified_func @DepTypeCaller() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   %int_type = hir.int_type
   %val = builtin.unrealized_conversion_cast to !hir.any
@@ -166,7 +166,7 @@ hir.unified_func @DepTypeCaller() -> () {
 // CHECK-LABEL: hir.unified_func @Identity
 hir.unified_func @Identity(%T: -1, %x: 0) -> (result: 0) {
   %type_type = hir.type_type
-  hir.unified_signature (%type_type, %T) -> (%T)
+  hir.signature (%type_type, %T) -> (%T)
 } {
   // CHECK: [[TT:%.+]] = hir.type_type
   // CHECK: [[CT:%.+]] = hir.coerce_type %T, [[TT]]
@@ -188,7 +188,7 @@ hir.unified_func @NestedFoo() -> () {
   %infer2 = hir.inferrable
   %infer3 = hir.inferrable
   %1 = hir.unified_call @NestedBar(%0) : (%infer2) -> (%infer3) (!hir.any) -> !hir.any [0] -> [0]
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   hir.return : () -> ()
 }
@@ -197,7 +197,7 @@ hir.unified_func @NestedFoo() -> () {
 hir.unified_func @NestedBar(%a: 0) -> (result: 0) {
   %0 = hir.int_type {a}
   %1 = hir.int_type {b}
-  hir.unified_signature (%0) -> (%1)
+  hir.signature (%0) -> (%1)
 } {
   // CHECK: [[ARG_TY:%.+]] = hir.int_type {a}
   // CHECK: [[RET_TY:%.+]] = hir.int_type {b}
@@ -218,7 +218,7 @@ hir.unified_func private @UIntBody(%a: 0) -> (result: 0) {
   %0 = hir.constant_int 42
   %1 = hir.uint_type %0
   %2 = hir.unit_type
-  hir.unified_signature (%1) -> (%2)
+  hir.signature (%1) -> (%2)
 } {
   // CHECK:       {
   // CHECK-DAG:     [[W:%.+]] = hir.constant_int 42

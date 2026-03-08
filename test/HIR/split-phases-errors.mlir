@@ -6,7 +6,7 @@
 // expected-note @below {{consider adding `dyn` to the return type to shift it to a later phase}}
 hir.unified_func @ReturnPhaseTooLate(%x: 1, %y: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0, %0) -> (%0)
+  hir.signature (%0, %0) -> (%0)
 } {
   %tx = hir.type_of %x
   %ty = hir.type_of %y
@@ -25,7 +25,7 @@ hir.unified_func @ReturnPhaseTooLate(%x: 1, %y: 0) -> (result: 0) {
 // expected-note @below {{consider adding `const` to the arguments or removing `const` from the return type}}
 hir.unified_func @ConstReturnPhaseMismatch(%x: 0) -> (result: -1) {
   %0 = hir.int_type
-  hir.unified_signature (%0) -> (%0)
+  hir.signature (%0) -> (%0)
 } {
   %tx = hir.type_of %x
   // expected-error @below {{return value is available at phase 0 but function declares phase -1 return}}
@@ -38,7 +38,7 @@ hir.unified_func @ConstReturnPhaseMismatch(%x: 0) -> (result: -1) {
 
 hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0, %0, %0) -> (%0)
+  hir.signature (%0, %0, %0) -> (%0)
 } {
   %ta = hir.type_of %a
   %tb = hir.type_of %b
@@ -54,7 +54,7 @@ hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
 
 hir.unified_func @BadCaller(%x: 0, %y: 0, %z: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0, %0, %0) -> (%0)
+  hir.signature (%0, %0, %0) -> (%0)
 } {
   %t0 = hir.inferrable
   %t1 = hir.inferrable
@@ -74,7 +74,7 @@ hir.unified_func @BadCaller(%x: 0, %y: 0, %z: 0) -> (result: 0) {
 
 hir.unified_func @ConstArgCallee(%key: -1, %a: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0, %0) -> (%0)
+  hir.signature (%0, %0) -> (%0)
 } {
   %t = hir.type_of %key
   %t2 = hir.type_of %a
@@ -85,7 +85,7 @@ hir.unified_func @ConstArgCallee(%key: -1, %a: 0) -> (result: 0) {
 
 hir.unified_func @PullFails(%x: 0, %y: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0, %0) -> (%0)
+  hir.signature (%0, %0) -> (%0)
 } {
   %val = hir.expr 0 : !hir.any {
     %t0 = hir.type_of %x
@@ -112,7 +112,7 @@ hir.unified_func @PullFails(%x: 0, %y: 0) -> (result: 0) {
 // expected-note @below {{consider restructuring your code to avoid recursion, e.g., by using loops or unrolled logic}}
 hir.unified_func @fib(%n: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0) -> (%0)
+  hir.signature (%0) -> (%0)
 } {
   %t0 = hir.type_of %n
   %t1 = hir.inferrable
@@ -130,7 +130,7 @@ hir.unified_func @fib(%n: 0) -> (result: 0) {
 // expected-note @below {{consider restructuring your code to avoid recursion, e.g., by using loops or unrolled logic}}
 hir.unified_func @ping(%n: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0) -> (%0)
+  hir.signature (%0) -> (%0)
 } {
   %t0 = hir.type_of %n
   %t1 = hir.inferrable
@@ -142,7 +142,7 @@ hir.unified_func @ping(%n: 0) -> (result: 0) {
 // expected-note @below {{'pong' calls 'ping'}}
 hir.unified_func @pong(%n: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0) -> (%0)
+  hir.signature (%0) -> (%0)
 } {
   %t0 = hir.type_of %n
   %t1 = hir.inferrable

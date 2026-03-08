@@ -9,7 +9,7 @@
 
 hir.unified_func @identity(%T: -1, %x: 0) -> (result: 0) {
   %type_type = hir.type_type
-  hir.unified_signature (%type_type, %T) -> (%T)
+  hir.signature (%type_type, %T) -> (%T)
 } {
   hir.return %x : () -> (%T)
 }
@@ -17,7 +17,7 @@ hir.unified_func @identity(%T: -1, %x: 0) -> (result: 0) {
 hir.unified_func @main() -> (r0: 0, r1: 0) {
   %0 = hir.int_type
   %1 = hir.unit_type
-  hir.unified_signature () -> (%0, %1)
+  hir.signature () -> (%0, %1)
 } {
   %type_type = hir.type_type
 

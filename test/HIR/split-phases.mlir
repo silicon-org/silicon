@@ -28,7 +28,7 @@ func.func private @dummyB()
 // CHECK:       0: @Identity.1
 hir.unified_func @Identity(%T: -1, %x: 0) -> (result: 0) {
   %type_type = hir.type_type
-  hir.unified_signature (%type_type, %T) -> (%T)
+  hir.signature (%type_type, %T) -> (%T)
 } {
   hir.return %x : () -> (%T)
 }
@@ -44,7 +44,7 @@ hir.unified_func @Identity(%T: -1, %x: 0) -> (result: 0) {
 // CHECK:         hir.signature () -> ()
 // CHECK:       0: @SinglePhase.0
 hir.unified_func @SinglePhase() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   func.call @dummyA() : () -> ()
   hir.return : () -> ()
@@ -70,7 +70,7 @@ hir.unified_func @SinglePhase() -> () {
 // CHECK:       @TwoUnrelatedPhases.0a
 // CHECK:       @TwoUnrelatedPhases.0b
 hir.unified_func @TwoUnrelatedPhases() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   func.call @dummyB() : () -> ()
   hir.expr -1 {
@@ -101,7 +101,7 @@ hir.unified_func @TwoUnrelatedPhases() -> () {
 // CHECK:       @ValueUseAcrossPhases.0a
 // CHECK:       @ValueUseAcrossPhases.0b
 hir.unified_func @ValueUseAcrossPhases() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   %0 = hir.constant_int 42
   %1 = hir.expr -1 : !hir.any {
@@ -143,7 +143,7 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
   %2 = hir.int_type
-  hir.unified_signature (%0, %1) -> (%2)
+  hir.signature (%0, %1) -> (%2)
 } {
   %ta = hir.type_of %a
   %tb = hir.type_of %b
@@ -178,7 +178,7 @@ hir.unified_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
   %2 = hir.int_type
-  hir.unified_signature (%0, %1) -> (%2)
+  hir.signature (%0, %1) -> (%2)
 } {
   %ta = hir.type_of %a
   %tb = hir.type_of %b
@@ -226,7 +226,7 @@ hir.unified_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0) {
 // CHECK-NOT: hir.multiphase_func @ThreePhase
 hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0, %0, %0) -> (%0)
+  hir.signature (%0, %0, %0) -> (%0)
 } {
   %ta = hir.type_of %a
   %tb = hir.type_of %b
@@ -272,7 +272,7 @@ hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
 // CHECK:       @ThreePhaseCaller.0c
 hir.unified_func @ThreePhaseCaller(%z: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0) -> (%0)
+  hir.signature (%0) -> (%0)
 } {
   %a = hir.constant_int 10
   %b = hir.constant_int 20
@@ -308,7 +308,7 @@ hir.unified_func @ThreePhaseCaller(%z: 0) -> (result: 0) {
 // CHECK:       @InternalPhase.0b
 hir.unified_func @InternalPhase(%y: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0) -> (%0)
+  hir.signature (%0) -> (%0)
 } {
   %a = hir.constant_int 42
   %t0 = hir.inferrable
@@ -349,7 +349,7 @@ hir.unified_func @InternalPhase(%y: 0) -> (result: 0) {
 // CHECK:       @LeadingExternal.1b
 hir.unified_func @LeadingExternal(%a: -2, %c: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0, %0) -> (%0)
+  hir.signature (%0, %0) -> (%0)
 } {
   %ta = hir.type_of %a
   %tc = hir.type_of %c
@@ -409,7 +409,7 @@ hir.split_func @PreSplit(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:       @PublicVis.0a
 // CHECK:       @PublicVis.0b
 hir.unified_func public @PublicVis() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   func.call @dummyB() : () -> ()
   hir.expr -1 {
@@ -446,7 +446,7 @@ hir.unified_func public @PublicVis() -> () {
 hir.unified_func @DynReturn(%x: 0) -> (result: 1) {
   %0 = hir.int_type
   %1 = hir.int_type
-  hir.unified_signature (%0) -> (%1)
+  hir.signature (%0) -> (%1)
 } {
   %tx = hir.type_of %x
   hir.return %x : () -> (%tx)
@@ -470,7 +470,7 @@ hir.unified_func @DynReturn(%x: 0) -> (result: 1) {
 // CHECK:       @CallsPreSplit.0b
 hir.unified_func @CallsPreSplit(%y: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0) -> (%0)
+  hir.signature (%0) -> (%0)
 } {
   %a = hir.constant_int 99
   %t0 = hir.inferrable
@@ -494,7 +494,7 @@ hir.unified_func @CallsPreSplit(%y: 0) -> (result: 0) {
 // CHECK-LABEL: hir.split_func @Adder(%a: 0, %b: 0) -> (result: 0)
 hir.unified_func @Adder(%a: 0, %b: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0, %0) -> (%0)
+  hir.signature (%0, %0) -> (%0)
 } {
   %ta = hir.type_of %a
   %tb = hir.type_of %b
@@ -521,7 +521,7 @@ hir.unified_func @Adder(%a: 0, %b: 0) -> (result: 0) {
 // CHECK:       @PullExpr.0b
 hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature (%0) -> (%0)
+  hir.signature (%0) -> (%0)
 } {
   %c19 = hir.constant_int 19
   %c23 = hir.constant_int 23
@@ -564,7 +564,7 @@ hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
 // CHECK:       @NestedExpr.0a
 // CHECK:       @NestedExpr.0b
 hir.unified_func @NestedExpr() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   hir.expr 0 {
     hir.expr -1 {
@@ -600,7 +600,7 @@ hir.unified_func @NestedExpr() -> () {
 // CHECK:       @NestedExprValue.0a
 // CHECK:       @NestedExprValue.0b
 hir.unified_func @NestedExprValue() -> () {
-  hir.unified_signature () -> ()
+  hir.signature () -> ()
 } {
   hir.expr 0 {
     %0 = hir.expr -1 : !hir.any {
@@ -640,7 +640,7 @@ hir.unified_func @NestedExprValue() -> () {
 
 hir.unified_func @ConstBlockCallee() -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature () -> (%0)
+  hir.signature () -> (%0)
 } {
   %0 = hir.constant_int 42
   %1 = hir.int_type
@@ -649,7 +649,7 @@ hir.unified_func @ConstBlockCallee() -> (result: 0) {
 
 hir.unified_func @ConstBlockCall() -> (result: 0) {
   %0 = hir.int_type
-  hir.unified_signature () -> (%0)
+  hir.signature () -> (%0)
 } {
   %0 = hir.expr -1 : !hir.any {
     %4 = hir.int_type
@@ -680,7 +680,7 @@ hir.unified_func private @UIntLiteral(%a: 0) -> (result: 0) attributes {isModule
   %0 = hir.constant_int 42
   %1 = hir.uint_type %0
   %2 = hir.unit_type
-  hir.unified_signature (%1) -> (%2)
+  hir.signature (%1) -> (%2)
 } {
   %0 = hir.constant_unit
   %1 = hir.unit_type
@@ -710,7 +710,7 @@ hir.unified_func private @UIntLiteral(%a: 0) -> (result: 0) attributes {isModule
 // CHECK:       1: @DynReturnPhase0Val.1
 hir.unified_func @DynReturnPhase0Val(%x: 0) -> (result: 1) {
   %0 = hir.int_type
-  hir.unified_signature (%0) -> (%0)
+  hir.signature (%0) -> (%0)
 } {
   %tx = hir.type_of %x
   hir.return %x : () -> (%tx)

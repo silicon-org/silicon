@@ -375,24 +375,8 @@ def UnifiedFuncOp : HIROp<"unified_func", [
   let hasVerifier = 1;
   let hasRegionVerifier = 1;
   let extraClassDeclaration = [{
-    UnifiedSignatureOp getSignatureOp();
+    SignatureOp getSignatureOp();
     ReturnOp getReturnOp();
-  }];
-}
-
-def UnifiedSignatureOp : HIROp<"unified_signature", [
-  AttrSizedOperandSegments,
-  HasParent<"UnifiedFuncOp">,
-  Pure,
-  Terminator,
-]> {
-  let summary = "Terminator for the signature region of a unified function";
-  let arguments = (ins
-    Variadic<AnyHIRType>:$typeOfArgs,
-    Variadic<AnyHIRType>:$typeOfResults
-  );
-  let assemblyFormat = [{
-    ` ` `(` $typeOfArgs `)` `->` `(` $typeOfResults `)` attr-dict
   }];
 }
 
@@ -425,11 +409,11 @@ def UnifiedCallOp : HIROp<"unified_call", [
 
 def SignatureOp : HIROp<"signature", [
   AttrSizedOperandSegments,
-  HasParent<"SplitFuncOp">,
+  ParentOneOf<["UnifiedFuncOp", "SplitFuncOp"]>,
   Pure,
   Terminator,
 ]> {
-  let summary = "Terminator for the signature region of a split function";
+  let summary = "Terminator for the signature region of a function";
   let arguments = (ins
     Variadic<AnyHIRType>:$typeOfArgs,
     Variadic<AnyHIRType>:$typeOfResults

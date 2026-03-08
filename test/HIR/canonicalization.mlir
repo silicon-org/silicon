@@ -30,7 +30,7 @@ func.func @TypeOfConstantInt() -> !hir.any {
 hir.unified_func @dummy() -> (x: 0, y: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
-  hir.unified_signature () -> (%0, %1)
+  hir.signature () -> (%0, %1)
 } {
   hir.return : () -> ()
 }
