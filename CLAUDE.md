@@ -46,10 +46,13 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - Don't refer to line numbers in commit messages
 - Prefer referring to struct, class, and function names instead of C++ file names in commit messages
 - Address any compiler warnings you encounter, unless they are caused by external code such as CIRCT, MLIR, LLVM
-- When a subagent makes changes to code, your LSP diagnostics may be stale; run check-silicon to refresh
+- When a subagent finished, run check-silicon yourself since the LSP will report stale diagnostics otherwise
 - Do not feed inputs into tools via `cat`, stdin, or by `echo`ing them to a file; `Write` the file yourself and then call the tool
 - This is a compiler; it should be very eager to error out with compiler bugs or error diagnostics instead of silently passing through unclear input, or resorting to fallbacks -- the thing should break loudly and often, such that we can nail down unclear behavior
 - In lit tests, prefer placing CHECK lines right next to the IR op they are checking, if possible
+- Errors reported in op verifiers and rewrite/conversion patterns are internal compiler errors, not user-facing errors
+- User-facing errors should be emitted in well-known locations, ideally in dedicated passes
+- Optimizations and dead code removal must not hide user errors; they should be reported before the compiler removes ops
 
 ## Todos
 
