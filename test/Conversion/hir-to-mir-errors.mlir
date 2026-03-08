@@ -1,9 +1,7 @@
 // RUN: silicon-opt --lower-hir-to-mir --verify-diagnostics --split-input-file %s
 
-// expected-error @below {{return op typeOfArgs count (0) does not match block argument count (1)}}
-// expected-note @below {{}}
-// expected-error @below {{failed to legalize operation 'hir.func'}}
 hir.func @UntypedArg(%a) -> () {
+  // expected-error @below {{has 0 typeOfArgs operands but parent function has 1 arguments}}
   hir.return : () -> ()
 }
 

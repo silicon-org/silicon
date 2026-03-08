@@ -1,6 +1,5 @@
 # TODO
 
-- Double check that the `hir.return` op's verifier ensures that it has the same number of arg/result type operands as the parent function has args/results
 - Re-enable SymbolDCE in `silc` pipeline and `PhaseEvalLoop` once proper entry-point / public visibility semantics are in place; currently all user functions are private, so SymbolDCE removes everything.
   The fix here likely is to make the functions public in the tests. It's expected that private functions get removed if they are never called from a public function.
 - Currently hir.func encode their argument types through the hir.return function, which is exactly what we want.

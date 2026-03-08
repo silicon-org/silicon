@@ -163,8 +163,9 @@ hir.func @UnifyInReturnType() -> (result) {
 // CHECK-NOT: mir.func @UnresolvedCallArgType
 hir.func @UnresolvedCallArgType(%T) -> () {
   %x = hir.constant_int 0
+  %T_type = hir.type_of %T
   hir.call @identity(%x) : (%T) -> ()
-  hir.return : () -> ()
+  hir.return : (%T_type) -> ()
 }
 
 // CHECK-LABEL: mir.func @Casts

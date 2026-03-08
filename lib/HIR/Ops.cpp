@@ -194,6 +194,28 @@ ReturnOp FuncOp::getReturnOp() {
   return dyn_cast<ReturnOp>(getBody().back().getTerminator());
 }
 
+//===----------------------------------------------------------------------===//
+// ReturnOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult ReturnOp::verify() {
+  auto funcOp = cast<FuncOp>((*this)->getParentOp());
+  auto numArgs = funcOp.getArgNames().size();
+  auto numResults = funcOp.getResultNames().size();
+
+  if (getTypeOfArgs().size() != numArgs)
+    return emitOpError() << "has " << getTypeOfArgs().size()
+                         << " typeOfArgs operands but parent function has "
+                         << numArgs << " arguments";
+
+  if (getTypeOfValues().size() != numResults)
+    return emitOpError() << "has " << getTypeOfValues().size()
+                         << " typeOfValues operands but parent function has "
+                         << numResults << " results";
+
+  return success();
+}
+
 void FuncOp::getAsmBlockArgumentNames(Region &region,
                                       OpAsmSetValueNameFn setNameFn) {
   if (&region != &getBody() || region.empty())

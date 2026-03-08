@@ -212,3 +212,21 @@ func.func @yield_outside() {
 ^bb0(%arg0: !si.int):
   "mir.return"() : () -> ()
 }) {sym_name = "bad_block_arg_type", argNames = ["arg0"], resultNames = []} : () -> ()
+
+// -----
+
+// hir.return with wrong number of typeOfArgs
+hir.func @bad_return_args(%a) -> () {
+  %t = hir.int_type
+  // expected-error @below {{has 0 typeOfArgs operands but parent function has 1 arguments}}
+  hir.return : () -> ()
+}
+
+// -----
+
+// hir.return with excess typeOfArgs
+hir.func @excess_return_args() -> () {
+  %t = hir.int_type
+  // expected-error @below {{has 1 typeOfArgs operands but parent function has 0 arguments}}
+  hir.return : (%t) -> ()
+}

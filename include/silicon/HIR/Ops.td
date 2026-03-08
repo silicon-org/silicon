@@ -316,6 +316,7 @@ def ReturnOp : HIROp<"return", [
     `:` `(` $typeOfArgs `)` `->` `(` $typeOfValues `)`
     attr-dict
   }];
+  let hasVerifier = 1;
 }
 
 def NextPhaseOp : HIROp<"next_phase", [
