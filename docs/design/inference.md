@@ -1,3 +1,7 @@
+---
+weight: 10
+---
+
 # Inference
 
 Bullet-point outline of the current state, inconsistencies, missing features, and open design questions around type and value inference in Silicon.
