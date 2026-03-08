@@ -1136,7 +1136,7 @@ void SplitPhasesPass::runOnOperation() {
       return;
     if (visited[idx] == 1) {
       // Find the cycle in the DFS stack and list the involved functions.
-      auto cycleStart = llvm::find(dfsStack, idx);
+      auto *cycleStart = llvm::find(dfsStack, idx);
       assert(cycleStart != dfsStack.end());
       SmallVector<unsigned> cycle(cycleStart, dfsStack.end());
       cycle.push_back(idx);
