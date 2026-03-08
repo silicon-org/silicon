@@ -115,6 +115,9 @@ static void populatePasses(PassManager &pm) {
   pm.addPass(hir::createInferTypesPass());
   addCleanup(pm);
 
+  // Check for unresolved type mismatches after inference.
+  pm.addPass(hir::createCheckTypesPass());
+
   // Split functions into phases based on constness.
   pm.addPass(hir::createSplitPhasesPass());
   addCleanup(pm);

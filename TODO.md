@@ -23,16 +23,6 @@
   The compiler should never crash on user input.
   SplitPhases likely doesn't handle the case where all phases are shifted later (no phase-0 split exists).
 
-- **Trailing semicolon on return expression gives internal error instead of user-facing diagnostic.**
-  Input: `fn main() -> int { let x = 1; x; }` — error: `compiler bug: hir.unify survived to HIR-to-MIR lowering`.
-  The trailing `;` makes the block return unit, which conflicts with the declared `int` return type.
-  InferTypes can't unify unit with int, and the mismatch leaks as an internal error.
-  Should produce a user-facing error like "expected return type `int`, found unit" before lowering.
-
-- **Omitting return type on a function that returns a value gives internal error.**
-  Input: `fn main() { 42 }` — error: `compiler bug: hir.unify survived to HIR-to-MIR lowering`.
-  Same underlying issue as the trailing-semicolon bug: the declared return type (implicit unit) doesn't match the expression type (int).
-  A type-checking pass should catch this and emit a proper diagnostic.
 
 - **Comparison result can't be used as a return value.**
   Input: `pub fn gt(a: int, b: int) -> int { a > b }` — error: `failed to legalize unresolved materialization from ('i1') to ('i64')`.

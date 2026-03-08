@@ -1,0 +1,17 @@
+// RUN: silc --split-input-file --verify-diagnostics %s
+
+// A trailing semicolon makes the body return `()` instead of `int`.
+// expected-error @below {{type mismatch}}
+fn main() -> int { 42; }
+
+// -----
+
+// An empty body also returns `()` instead of `int`.
+// expected-error @below {{type mismatch}}
+fn main() -> int { }
+
+// -----
+
+// Omitting the return type on a function that returns a value.
+// expected-error @below {{type mismatch}}
+fn main() { 42 }

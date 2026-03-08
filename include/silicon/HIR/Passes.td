@@ -19,6 +19,17 @@ def CheckCallsPass : Pass<"check-calls", "mlir::ModuleOp"> {
   let summary = "Move function signature constraints to call sites";
 }
 
+def CheckTypesPass : Pass<"check-types"> {
+  let summary = "Check for unresolved type mismatches after inference";
+  let description = [{
+    Runs after type inference and checks for remaining `hir.unify` ops
+    whose operands are both concrete but different types. These indicate
+    type mismatches in the source program (e.g., a function body
+    returning `()` when the declared return type is `int`). Emits
+    user-facing error diagnostics for each such mismatch.
+  }];
+}
+
 def SplitPhasesPass : Pass<"split-phases", "mlir::ModuleOp"> {
   let summary = "Split functions into multiple phases based on constness";
 }
