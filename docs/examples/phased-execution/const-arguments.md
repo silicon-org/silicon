@@ -24,7 +24,7 @@ The `dyn` keyword is the opposite of `const`: it shifts an argument to a *later*
 While `const` pulls computation earlier (toward compile time), `dyn` pushes it later (toward runtime).
 
 ```silicon
-fn send(dyn x: int, y: int) -> int { x + y }
+fn send(dyn x: int, y: int) -> dyn int { x + y }
 ```
 
 Here `x` is deferred to a later phase than the rest of the function.

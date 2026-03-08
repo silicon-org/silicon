@@ -49,14 +49,14 @@ fn add_const(const a: int, b: int) -> int { a + b }
 ```
 
 ```silicon
-fn send(dyn x: int, y: int) -> int { x + y }
+fn send(dyn x: int, y: int) -> dyn int { x + y }
 ```
 
 Return types can also carry phase modifiers.
+If an argument is shifted to a different phase, the return type must match.
 
 ```silicon
-fn make_const(x: int) -> const int { x }
-fn make_dyn(x: int) -> dyn int { x }
+fn make_const(const x: int) -> const int { x }
 ```
 
 See the [Phased Execution]({{< relref "/examples/phased-execution" >}}) section for a deeper explanation of how phases work.

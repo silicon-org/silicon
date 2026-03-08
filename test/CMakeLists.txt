@@ -8,6 +8,7 @@ configure_lit_site_cfg(
 set(deps
   FileCheck count not
   silicon-opt silc
+  silicon-docs
 )
 
 add_lit_testsuite(
