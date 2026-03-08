@@ -90,24 +90,3 @@ mir.func @BoolToI1(%cond: !si.bool) -> () {
   mir.return
 }
 
-// if/else expression
-// CHECK-LABEL: mir.func @IfElse
-mir.func @IfElse(%cond: !si.int, %x: !si.int, %y: !si.int) -> (result: !si.int) {
-  %0 = mir.if %cond : !si.int, !si.int {
-    mir.yield %x : !si.int
-  } else {
-    mir.yield %y : !si.int
-  }
-  mir.return %0 : !si.int
-}
-
-// if without results
-// CHECK-LABEL: mir.func @IfNoResults
-mir.func @IfNoResults(%cond: !si.int) -> () {
-  mir.if %cond : !si.int {
-    mir.yield
-  } else {
-    mir.yield
-  }
-  mir.return
-}

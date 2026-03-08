@@ -132,35 +132,6 @@ mir.func @test_leq() -> (result: !si.bool) {
   mir.return %2 : !si.bool
 }
 
-//===----------------------------------------------------------------------===//
-// Bool conditions: verify that the interpreter handles BoolAttr conditions
-// in if ops.
-
-// CHECK: mir.evaluated_func @test_if_bool_true [#si.int<42> : !si.int]
-mir.func @test_if_bool_true() -> (result: !si.int) {
-  %cond = mir.constant #si.bool<true> : !si.bool
-  %a = mir.constant #si.int<42> : !si.int
-  %b = mir.constant #si.int<7> : !si.int
-  %0 = mir.if %cond : !si.bool, !si.int {
-    mir.yield %a : !si.int
-  } else {
-    mir.yield %b : !si.int
-  }
-  mir.return %0 : !si.int
-}
-
-// CHECK: mir.evaluated_func @test_if_bool_false [#si.int<7> : !si.int]
-mir.func @test_if_bool_false() -> (result: !si.int) {
-  %cond = mir.constant #si.bool<false> : !si.bool
-  %a = mir.constant #si.int<42> : !si.int
-  %b = mir.constant #si.int<7> : !si.int
-  %0 = mir.if %cond : !si.bool, !si.int {
-    mir.yield %a : !si.int
-  } else {
-    mir.yield %b : !si.int
-  }
-  mir.return %0 : !si.int
-}
 
 //===----------------------------------------------------------------------===//
 // Argument-passing calls: verify that the interpreter correctly maps call
@@ -239,51 +210,6 @@ mir.func @test_opaque_single() -> (result: !si.int) {
   %1 = mir.opaque_pack (%0) : (!si.int) -> !si.opaque
   %2 = mir.opaque_unpack %1 : !si.opaque -> !si.int
   mir.return %2 : !si.int
-}
-
-//===----------------------------------------------------------------------===//
-// If/else: verify that the interpreter evaluates conditions and takes the
-// correct branch.
-
-// CHECK: mir.evaluated_func @test_if_true [#si.int<42> : !si.int]
-mir.func @test_if_true() -> (result: !si.int) {
-  %cond = mir.constant #si.int<1> : !si.int
-  %a = mir.constant #si.int<42> : !si.int
-  %b = mir.constant #si.int<7> : !si.int
-  %0 = mir.if %cond : !si.int, !si.int {
-    mir.yield %a : !si.int
-  } else {
-    mir.yield %b : !si.int
-  }
-  mir.return %0 : !si.int
-}
-
-// CHECK: mir.evaluated_func @test_if_false [#si.int<7> : !si.int]
-mir.func @test_if_false() -> (result: !si.int) {
-  %cond = mir.constant #si.int<0> : !si.int
-  %a = mir.constant #si.int<42> : !si.int
-  %b = mir.constant #si.int<7> : !si.int
-  %0 = mir.if %cond : !si.int, !si.int {
-    mir.yield %a : !si.int
-  } else {
-    mir.yield %b : !si.int
-  }
-  mir.return %0 : !si.int
-}
-
-// CHECK: mir.evaluated_func @test_if_compute [#si.int<15> : !si.int]
-mir.func @test_if_compute() -> (result: !si.int) {
-  %cond = mir.constant #si.int<1> : !si.int
-  %a = mir.constant #si.int<10> : !si.int
-  %b = mir.constant #si.int<5> : !si.int
-  %0 = mir.if %cond : !si.int, !si.int {
-    %sum = mir.add %a, %b : !si.int
-    mir.yield %sum : !si.int
-  } else {
-    %diff = mir.sub %a, %b : !si.int
-    mir.yield %diff : !si.int
-  }
-  mir.return %0 : !si.int
 }
 
 //===----------------------------------------------------------------------===//

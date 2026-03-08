@@ -113,36 +113,6 @@ LogicalResult Interpreter::executeOp(Operation *op,
     else if (isa<mir::LeqOp>(op))
       result = lhs <= rhs;
     values[op->getResult(0)] = base::BoolAttr::get(op->getContext(), result);
-  } else if (auto ifOp = dyn_cast<mir::IfOp>(op)) {
-    // Evaluate the condition and execute the chosen region's block.
-    bool condTrue = false;
-    if (auto boolAttr = dyn_cast<base::BoolAttr>(operands[0]))
-      condTrue = boolAttr.getValue();
-    else if (auto intAttr = dyn_cast<base::IntAttr>(operands[0]))
-      condTrue = intAttr.getValue() != 0;
-    auto &region = condTrue ? ifOp.getThenRegion() : ifOp.getElseRegion();
-
-    for (auto &innerOp : region.front()) {
-      if (auto yieldOp = dyn_cast<mir::YieldOp>(&innerOp)) {
-        for (auto [result, yieldOperand] :
-             llvm::zip(ifOp.getResults(), yieldOp.getOperands()))
-          values[result] = values.lookup(yieldOperand);
-        break;
-      }
-
-      // Gather operands for the inner op.
-      SmallVector<Attribute> innerOperands(innerOp.getNumOperands());
-      for (auto [attr, operand] :
-           llvm::zip(innerOperands, innerOp.getOpOperands())) {
-        attr = values.lookup(operand.get());
-        if (!attr)
-          return innerOp.emitError()
-                 << "missing value for operand #" << operand.getOperandNumber();
-      }
-
-      if (failed(executeOp(&innerOp, innerOperands, values)))
-        return failure();
-    }
   } else if (auto packOp = dyn_cast<mir::MIROpaquePackOp>(op)) {
     values[packOp] = base::OpaqueAttr::get(op->getContext(), operands);
   } else if (auto unpackOp = dyn_cast<mir::MIROpaqueUnpackOp>(op)) {

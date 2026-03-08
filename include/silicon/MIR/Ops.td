@@ -93,39 +93,6 @@ def FuncOp : MIROp<"func", [
   }];
 }
 
-def IfOp : MIROp<"if", [
-  RecursiveMemoryEffects,
-]> {
-  let summary = "conditional expression with then/else regions";
-  let description = [{
-    Evaluates one of two regions based on a condition. The condition must be
-    a boolean-like integer value. Both regions must yield the same number of
-    results via `mir.yield`.
-  }];
-  let arguments = (ins AnyType:$condition);
-  let results = (outs Variadic<AnyType>:$results);
-  let regions = (region
-    MinSizedRegion<1>:$thenRegion,
-    MinSizedRegion<1>:$elseRegion
-  );
-  let assemblyFormat = [{
-    $condition `:` type($condition) (`,` type($results)^)? attr-dict-with-keyword
-    $thenRegion `else` $elseRegion
-  }];
-}
-
-def YieldOp : MIROp<"yield", [
-  HasParent<"IfOp">,
-  Pure,
-  Terminator,
-]> {
-  let summary = "Yield result values from an if op";
-  let arguments = (ins Variadic<AnyType>:$operands);
-  let assemblyFormat = [{
-    ($operands^ `:` type($operands))? attr-dict
-  }];
-}
-
 def BoolToI1Op : MIROp<"bool_to_i1", [Pure]> {
   let summary = "cast bool to i1 for branch conditions";
   let description = [{

@@ -17,7 +17,6 @@
 #include "silicon/Support/MLIR.h"
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
-#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/DenseSet.h"
@@ -330,57 +329,6 @@ public:
   }
 };
 
-/// Convert mir.if/mir.yield → comb.mux for single-result cases.
-class IfOpConversion : public OpConversionPattern<mir::IfOp> {
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(mir::IfOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // Only support single-result if expressions.
-    if (op.getNumResults() != 1)
-      return op.emitError("mir.if with multiple results cannot be lowered to "
-                          "comb.mux; only single-result is supported");
-
-    // Inline the bodies before the mux. Clone ops from both regions
-    // (excluding yield terminators) into the parent block, then create
-    // the mux from the yielded values.
-    IRMapping mapping;
-
-    // Clone then region ops (excluding yield).
-    auto &thenBlock = op.getThenRegion().front();
-    for (auto &bodyOp :
-         llvm::make_range(thenBlock.begin(), std::prev(thenBlock.end())))
-      rewriter.clone(bodyOp, mapping);
-    auto thenYield = cast<mir::YieldOp>(thenBlock.getTerminator());
-    Value trueVal = mapping.lookupOrDefault(thenYield.getOperands()[0]);
-
-    // Clone else region ops (excluding yield).
-    auto &elseBlock = op.getElseRegion().front();
-    for (auto &bodyOp :
-         llvm::make_range(elseBlock.begin(), std::prev(elseBlock.end())))
-      rewriter.clone(bodyOp, mapping);
-    auto elseYield = cast<mir::YieldOp>(elseBlock.getTerminator());
-    Value falseVal = mapping.lookupOrDefault(elseYield.getOperands()[0]);
-
-    // Ensure the condition is i1. If the converted condition is wider
-    // (e.g., !si.int mapped to i64), insert a compare-not-equal-zero.
-    Value cond = adaptor.getCondition();
-    auto condType = cast<IntegerType>(cond.getType());
-    if (condType.getWidth() != 1) {
-      auto zero = circt::hw::ConstantOp::create(rewriter, op.getLoc(),
-                                                APInt(condType.getWidth(), 0));
-      cond = circt::comb::ICmpOp::create(
-          rewriter, op.getLoc(), circt::comb::ICmpPredicate::ne, cond, zero);
-    }
-
-    rewriter.replaceOpWithNewOp<circt::comb::MuxOp>(op, cond, trueVal,
-                                                    falseVal);
-    return success();
-  }
-};
-
 /// Erase any remaining Silicon dialect op that has no uses.
 class EraseUnusedSiliconOp : public ConversionPattern {
 public:
@@ -536,7 +484,6 @@ void MIRToCIRCTPass::runOnOperation() {
       converter, &getContext());
   patterns.add<CmpOpConversion<mir::GeqOp, circt::comb::ICmpPredicate::sge>>(
       converter, &getContext());
-  patterns.add<IfOpConversion>(converter, &getContext());
   patterns.add<EraseUnusedSiliconOp>(&getContext());
 
   if (failed(applyFullConversion(moduleOp, target, std::move(patterns))))
