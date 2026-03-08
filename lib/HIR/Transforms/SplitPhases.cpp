@@ -522,7 +522,7 @@ LogicalResult PhaseSplitter::run() {
       }
 
       // Update any return values that reference the old unified call's results.
-      // These are not IR uses (the unified_return was already erased), so
+      // These are not IR uses (the return op was already erased), so
       // replaceAllUsesWith won't touch them. Return values may be in any split
       // (depending on result phases), so check all of them.
       for (auto &split : splits)

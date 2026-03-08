@@ -294,13 +294,13 @@ def ReturnOp : HIROp<"return", [
   Pure,
   ReturnLike,
   Terminator,
-  HasParent<"FuncOp">,
+  HasParent<"FuncOp, UnifiedFuncOp">,
 ]> {
   let summary = "return from an HIR function";
   let description = [{
-    Terminates an `hir.func` body.  Carries the return values alongside
-    their types (`typeOfValues`) *and* the types of the enclosing
-    function's block arguments (`typeOfArgs`).
+    Terminates an `hir.func` or `hir.unified_func` body.  Carries the
+    return values alongside their types (`typeOfValues`) *and* the types
+    of the enclosing function's block arguments (`typeOfArgs`).
 
     The `typeOfArgs` operands survive canonicalization/DCE even when the
     corresponding block arguments are unused, providing a reliable source
@@ -376,7 +376,7 @@ def UnifiedFuncOp : HIROp<"unified_func", [
   let hasRegionVerifier = 1;
   let extraClassDeclaration = [{
     UnifiedSignatureOp getSignatureOp();
-    UnifiedReturnOp getReturnOp();
+    ReturnOp getReturnOp();
   }];
 }
 
@@ -393,38 +393,6 @@ def UnifiedSignatureOp : HIROp<"unified_signature", [
   );
   let assemblyFormat = [{
     ` ` `(` $typeOfArgs `)` `->` `(` $typeOfResults `)` attr-dict
-  }];
-}
-
-def UnifiedReturnOp : HIROp<"unified_return", [
-  AttrSizedOperandSegments,
-  PredOpTrait<"values and typeOfValues must have the same size",
-    CPred<"$values.size() == $typeOfValues.size()">>,
-  HasParent<"UnifiedFuncOp">,
-  Pure,
-  ReturnLike,
-  Terminator,
-]> {
-  let summary = "Terminator for the body region of a unified function";
-  let description = [{
-    Terminates a `hir.unified_func` body.  Carries the return values
-    alongside their types (`typeOfValues`) *and* the types of the
-    enclosing function's block arguments (`typeOfArgs`).
-
-    The `typeOfArgs` operands mirror those on `hir.return` and are
-    populated by codegen with inferrable placeholders.  CheckCalls then
-    unifies them with the declared signature types, ensuring argument
-    type information survives into `hir.return` after SplitPhases.
-  }];
-  let arguments = (ins
-    Variadic<AnyHIRType>:$values,
-    Variadic<AnyHIRType>:$typeOfValues,
-    Variadic<AnyHIRType>:$typeOfArgs
-  );
-  let assemblyFormat = [{
-    ($values^)?
-    `:` `(` $typeOfArgs `)` `->` `(` $typeOfValues `)`
-    attr-dict
   }];
 }
 

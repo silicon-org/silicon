@@ -13,7 +13,7 @@ hir.unified_func @ReturnPhaseTooLate(%x: 1, %y: 0) -> (result: 0) {
   %r = hir.add %x, %y : %t
   %tr = hir.type_of %r
   // expected-error @below {{return value is available at phase 1 but function declares phase 0 return}}
-  hir.unified_return %r : () -> (%tr)
+  hir.return %r : () -> (%tr)
 }
 
 // -----
@@ -27,7 +27,7 @@ hir.unified_func @ConstReturnPhaseMismatch(%x: 0) -> (result: -1) {
 } {
   %tx = hir.type_of %x
   // expected-error @below {{return value is available at phase 0 but function declares phase -1 return}}
-  hir.unified_return %x : () -> (%tx)
+  hir.return %x : () -> (%tx)
 }
 
 // -----
@@ -47,7 +47,7 @@ hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
   %t1 = hir.unify %t0b, %tc
   %1 = hir.add %0, %c : %t1
   %t1b = hir.type_of %1
-  hir.unified_return %1 : () -> (%t1b)
+  hir.return %1 : () -> (%t1b)
 }
 
 hir.unified_func @BadCaller(%x: 0, %y: 0, %z: 0) -> (result: 0) {
@@ -62,7 +62,7 @@ hir.unified_func @BadCaller(%x: 0, %y: 0, %z: 0) -> (result: 0) {
   // expected-error @below {{call argument requires phase -1 but value is only available at phase 0}}
   %r = hir.unified_call @ThreePhase(%x, %y, %z) : (%t0, %t1, %t2) -> (%t3) (!hir.any, !hir.any, !hir.any) -> !hir.any [-2, -1, 0] -> [0]
   %tr = hir.type_of %r
-  hir.unified_return %r : () -> (%tr)
+  hir.return %r : () -> (%tr)
 }
 
 // -----
@@ -78,7 +78,7 @@ hir.unified_func @ConstArgCallee(%key: -1, %a: 0) -> (result: 0) {
   %t2 = hir.type_of %a
   %t3 = hir.unify %t, %t2
   %r = hir.add %key, %a : %t3
-  hir.unified_return %r : () -> (%t3)
+  hir.return %r : () -> (%t3)
 }
 
 hir.unified_func @PullFails(%x: 0, %y: 0) -> (result: 0) {
@@ -98,5 +98,5 @@ hir.unified_func @PullFails(%x: 0, %y: 0) -> (result: 0) {
   // expected-error @below {{call argument requires phase -1 but value is only available at phase 0}}
   %r = hir.unified_call @ConstArgCallee(%val, %y) : (%vt, %yt) -> (%rt) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
   %rrt = hir.type_of %r
-  hir.unified_return %r : () -> (%rrt)
+  hir.return %r : () -> (%rrt)
 }

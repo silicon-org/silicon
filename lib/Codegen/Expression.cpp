@@ -212,9 +212,9 @@ static Value convert(ast::DynExpr &expr, Context &cx) {
                        /*phaseShift=*/+1);
 }
 
-/// Handle return expressions. Emits a `hir.unified_return` terminator for the
-/// current block and creates a new unreachable block to absorb any subsequent
-/// code. The new block's argument serves as a placeholder value.
+/// Handle return expressions. Emits a `hir.return` terminator for the current
+/// block and creates a new unreachable block to absorb any subsequent code.
+/// The new block's argument serves as a placeholder value.
 static Value convert(ast::ReturnExpr &expr, Context &cx) {
   // Convert the return value, or create a unit value if absent.
   Value value;
@@ -228,8 +228,8 @@ static Value convert(ast::ReturnExpr &expr, Context &cx) {
 
   // Emit the return op as a terminator for the current block.
   auto valueType = hir::getOrCreateTypeOf(cx.builder, expr.loc, value);
-  hir::UnifiedReturnOp::create(cx.builder, expr.loc, ValueRange{value},
-                               ValueRange{valueType}, ValueRange{});
+  hir::ReturnOp::create(cx.builder, expr.loc, ValueRange{value},
+                        ValueRange{valueType}, ValueRange{});
 
   // Create a new unreachable block to catch any code after the return. The
   // block argument acts as a placeholder value for the enclosing expression.

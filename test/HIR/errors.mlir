@@ -9,7 +9,7 @@ hir.unified_func @foo(%a: 0) -> () {
   %0 = hir.int_type
   hir.unified_signature (%0) -> ()
 } {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 }
 // expected-error @below {{has 0 arguments, but @foo expects 1}}
 hir.unified_call @foo() : () -> () () -> () [] -> []
@@ -20,7 +20,7 @@ hir.unified_func @foo() -> (result: 0) {
   %0 = hir.int_type
   hir.unified_signature () -> (%0)
 } {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 }
 // expected-error @below {{has 0 results, but @foo expects 1}}
 hir.unified_call @foo() : () -> () () -> () [] -> []
@@ -33,12 +33,12 @@ hir.unified_func @foo() -> () {
 ^bb1:
   hir.unified_signature () -> ()
 } {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 }
 
 // -----
 
-// expected-error @below {{requires `hir.unified_return` terminator in the body}}
+// expected-error @below {{requires `hir.return` terminator in the body}}
 hir.unified_func @foo() -> () {
   hir.unified_signature () -> ()
 } {
@@ -49,9 +49,9 @@ hir.unified_func @foo() -> () {
 
 // expected-error @below {{requires `hir.unified_signature` terminator in the signature}}
 hir.unified_func @foo() -> () {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 } {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 }
 
 // -----
@@ -62,7 +62,7 @@ hir.unified_func @foo(%a: 0, %b: -1) -> (result: 0) {
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
 } {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 }
 
 // -----
@@ -73,7 +73,7 @@ hir.unified_func @foo(%a: 0) -> (x: 0, y: -1) {
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
 } {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 }
 
 // -----
@@ -83,7 +83,7 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
 } {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 }
 %arg = hir.constant_int 42
 %int_type = hir.int_type
@@ -97,7 +97,7 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
 } {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 }
 %arg = hir.constant_int 42
 %int_type = hir.int_type
@@ -111,7 +111,7 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
 } {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 }
 %arg = hir.constant_int 42
 %int_type = hir.int_type
@@ -125,7 +125,7 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
 } {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 }
 %arg = hir.constant_int 42
 %int_type = hir.int_type
@@ -139,7 +139,7 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
 } {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 }
 %arg = hir.constant_int 42
 %int_type = hir.int_type
@@ -153,7 +153,7 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
   %1 = hir.int_type
   hir.unified_signature (%0) -> (%1)
 } {
-  hir.unified_return : () -> ()
+  hir.return : () -> ()
 }
 %arg = hir.constant_int 42
 %int_type = hir.int_type

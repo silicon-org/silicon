@@ -9,7 +9,7 @@
 // CHECK: [[UNIT:%.+]] = hir.unit_type
 // CHECK-NEXT: hir.unified_signature () -> ([[UNIT]])
 // CHECK: hir.constant_unit
-// CHECK: hir.unified_return
+// CHECK: hir.return
 fn unitResult1() {}
 
 // Ensure calling a unit-returning function produces a `hir.unified_call`.
@@ -176,7 +176,7 @@ fn callWithArgs(x: int, y: int) -> int { testAdd(x, y) }
 // CHECK: [[V:%.+]] = hir.constant_int 42
 // CHECK: [[VT:%.+]] = hir.int_type
 // CHECK: hir.unify [[T]], [[VT]]
-// CHECK: hir.unified_return [[V]]
+// CHECK: hir.return [[V]]
 fn letBinding() -> int {
   let x: int = 42;
   x
@@ -186,7 +186,7 @@ fn letBinding() -> int {
 // CHECK-LABEL: hir.unified_func private @letBindingNoType
 // CHECK: [[V:%.+]] = hir.constant_int 7
 // CHECK-NOT: hir.unify
-// CHECK: hir.unified_return [[V]]
+// CHECK: hir.return [[V]]
 fn letBindingNoType() -> int {
   let x = 7;
   x
@@ -234,16 +234,16 @@ fn dynExprInlined() -> int { dyn { 7 } }
 // Return expressions
 //===----------------------------------------------------------------------===//
 
-// Ensure `return <value>` produces a `hir.unified_return` with the value.
+// Ensure `return <value>` produces a `hir.return` with the value.
 // CHECK-LABEL: hir.unified_func private @returnWithValue
 // CHECK: [[V:%.+]] = hir.constant_int 42
-// CHECK: hir.unified_return [[V]]
+// CHECK: hir.return [[V]]
 fn returnWithValue() -> int { return 42 }
 
-// Ensure `return` without a value produces a `hir.unified_return` with a unit.
+// Ensure `return` without a value produces a `hir.return` with a unit.
 // CHECK-LABEL: hir.unified_func private @returnWithoutValue
 // CHECK: [[U:%.+]] = hir.constant_unit
-// CHECK: hir.unified_return [[U]]
+// CHECK: hir.return [[U]]
 fn returnWithoutValue() { return }
 
 //===----------------------------------------------------------------------===//
@@ -278,9 +278,9 @@ const mod testConstMod(const a: int) -> int { a }
 // subsequent code ends up in an unreachable block.
 // CHECK-LABEL: hir.unified_func private @earlyReturn
 // CHECK: [[V:%.+]] = hir.constant_int 1
-// CHECK: hir.unified_return [[V]]
+// CHECK: hir.return [[V]]
 // CHECK: hir.constant_int 2
-// CHECK: hir.unified_return
+// CHECK: hir.return
 fn earlyReturn() -> int {
   return 1;
   2

@@ -199,7 +199,14 @@ ReturnOp FuncOp::getReturnOp() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ReturnOp::verify() {
-  auto funcOp = cast<FuncOp>((*this)->getParentOp());
+  // Only enforce operand count constraints when the parent is a FuncOp.
+  // UnifiedFuncOp parents have their return operands populated incrementally
+  // by CheckCalls, so counts may not match until that pass completes.
+  auto *parentOp = (*this)->getParentOp();
+  auto funcOp = dyn_cast<FuncOp>(parentOp);
+  if (!funcOp)
+    return success();
+
   auto numArgs = funcOp.getArgNames().size();
   auto numResults = funcOp.getResultNames().size();
 
@@ -852,9 +859,8 @@ LogicalResult UnifiedFuncOp::verifyRegions() {
                             "the signature";
 
   // Check the body terminator.
-  if (!isa<UnifiedReturnOp>(getBody().back().getTerminator()))
-    return emitOpError() << "requires `hir.unified_return` terminator in "
-                            "the body";
+  if (!isa<ReturnOp>(getBody().back().getTerminator()))
+    return emitOpError() << "requires `hir.return` terminator in the body";
 
   return success();
 }
@@ -863,8 +869,8 @@ UnifiedSignatureOp UnifiedFuncOp::getSignatureOp() {
   return cast<UnifiedSignatureOp>(getSignature().back().getTerminator());
 }
 
-UnifiedReturnOp UnifiedFuncOp::getReturnOp() {
-  return cast<UnifiedReturnOp>(getBody().back().getTerminator());
+ReturnOp UnifiedFuncOp::getReturnOp() {
+  return cast<ReturnOp>(getBody().back().getTerminator());
 }
 
 //===----------------------------------------------------------------------===//
