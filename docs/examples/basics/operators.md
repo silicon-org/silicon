@@ -45,4 +45,12 @@ fn precedence(a: int, b: int, c: int) -> int {
 ```
 
 This is parsed as `a + (b * c)`, not `(a + b) * c`.
+Parentheses can be used to override the default precedence:
+
+```silicon
+fn override_precedence(a: int, b: int, c: int) -> int {
+  (a + b) * c
+}
+```
+
 See {{< page-link "/language/appendix/operators" >}} for the full precedence table.

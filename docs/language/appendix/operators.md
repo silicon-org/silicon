@@ -71,7 +71,7 @@ The following table contains symbols that are used as matching pairs of delimite
 
 | Symbol | Explanation |
 |--------|-------------|
-| `(` `)` | Function call arguments, function parameter list |
+| `(` `)` | Grouping (override precedence), function call arguments, function parameter list |
 | `{` `}` | Block expressions, function bodies |
 | `[` `]` | Index expression (`a[i]`), slice expression (`a[i, len]`) |
 | `<` `>` | Type parameters, as in `uint<32>` |

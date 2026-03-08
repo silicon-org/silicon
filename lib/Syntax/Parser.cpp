@@ -402,6 +402,16 @@ ast::Expr *Parser::parsePrimaryExpr() {
     return ast.create<ast::DynExpr>({{ast::ExprKind::Dyn, loc(kw)}, value});
   }
 
+  // Parse parenthesized expressions.
+  if (consumeIf(TokenKind::LParen)) {
+    auto *inner = parseExpr(ast::Precedence::Min);
+    if (!inner)
+      return {};
+    if (!require(TokenKind::RParen))
+      return {};
+    return inner;
+  }
+
   // Parse unary operators.
   if (auto op = getUnaryOp(token.kind)) {
     auto opToken = consume();

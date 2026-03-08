@@ -35,6 +35,32 @@ fn precedence() {
   1 * 2 + 3 / 4;
 }
 
+// CHECK-LABEL: name: "paren_grouping"
+fn paren_grouping() {
+  // CHECK: expr: BinaryExpr
+  // CHECK:   op: Mul
+  // CHECK:   lhs: BinaryExpr
+  // CHECK:     op: Add
+  // CHECK:     lhs: NumLitExpr
+  // CHECK:       value: 2
+  // CHECK:     rhs: NumLitExpr
+  // CHECK:       value: 3
+  // CHECK:   rhs: NumLitExpr
+  // CHECK:     value: 4
+  (2 + 3) * 4;
+}
+
+// CHECK-LABEL: name: "nested_parens"
+fn nested_parens() {
+  // CHECK: expr: BinaryExpr
+  // CHECK:   op: Add
+  // CHECK:   lhs: NumLitExpr
+  // CHECK:     value: 1
+  // CHECK:   rhs: NumLitExpr
+  // CHECK:     value: 2
+  ((1 + 2));
+}
+
 // CHECK-LABEL: name: "const_block"
 fn const_block() {
   // CHECK: result: ConstExpr

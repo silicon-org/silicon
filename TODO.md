@@ -9,11 +9,6 @@
   If conditions should have their type unified with bool, to nudge type inference.
   We'll need `true` and `false` constants in the language, too, alongside logic `&&` and `||` operators.
 
-- **Parenthesized expressions not parseable.**
-  Input: `fn main() -> int { (2 + 3) * 4 }` — error: `expected expression, found (`.
-  This is extremely basic syntax that every user will try.
-  The parser likely doesn't have a case for `(` as the start of a primary expression; needs a grouping/paren rule.
-
 - **`if` with comparison condition fails in hardware output.**
   Input: `pub fn max(a: int, b: int) -> int { if a > b { a } else { b } }` — error: `failed to legalize unresolved materialization from ('i1') to ('i64')`.
   Also: `pub fn select(cond: int, a: int, b: int) -> int { if cond { a } else { b } }` — error: `comb.mux operand #0 must be 1-bit signless integer, but got 'i64'`.
