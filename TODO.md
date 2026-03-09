@@ -15,10 +15,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 
 ## Dialect Review: Crash Risks
 
-- **SpecializeFuncs: unbounded recursion in `transitiveSpecialize`.**
-  A cycle in the call graph could recurse unboundedly.
-  Add a visited set to break recursion and print an error.
-
 - **HIRToMIR: `isResolvableType`/`resolveHIRType` can infinite-loop on cyclic IR.**
   Both are recursive without cycle detection.
   Add a `SmallPtrSet<Operation*>` visited set.

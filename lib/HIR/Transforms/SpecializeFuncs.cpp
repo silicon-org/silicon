@@ -53,8 +53,10 @@ struct SpecializeFuncsPass
   void expandOpaqueContext(hir::FuncOp func, base::OpaqueAttr opaqueAttr);
 
   /// Transitively specialize callees that receive hir.mir_constant opaque
-  /// arguments.
-  void transitiveSpecialize(hir::FuncOp func, SymbolTable &symbolTable);
+  /// arguments. The visited set tracks function names currently on the
+  /// recursion stack to detect cycles in the call graph.
+  LogicalResult transitiveSpecialize(hir::FuncOp func, SymbolTable &symbolTable,
+                                     DenseSet<StringAttr> &visited);
 
   unsigned specCounter = 0;
 
@@ -126,9 +128,10 @@ void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
 
 /// Walk the function body for hir.call ops that pass hir.mir_constant opaque
 /// values as the last argument (the context arg of the callee). Clone the
-/// callee, expand the opaque context, and update the call.
-void SpecializeFuncsPass::transitiveSpecialize(hir::FuncOp func,
-                                               SymbolTable &symbolTable) {
+/// callee, expand the opaque context, and update the call. Returns failure if
+/// a cycle is detected in the call graph.
+LogicalResult SpecializeFuncsPass::transitiveSpecialize(
+    hir::FuncOp func, SymbolTable &symbolTable, DenseSet<StringAttr> &visited) {
   SmallVector<hir::CallOp> callsToSpecialize;
   func.walk([&](hir::CallOp callOp) {
     if (callOp.getArguments().empty())
@@ -267,6 +270,15 @@ void SpecializeFuncsPass::transitiveSpecialize(hir::FuncOp func,
     LLVM_DEBUG(llvm::dbgs() << "Transitive specializing @"
                             << calleeFunc.getSymName() << "\n");
 
+    // Detect cycles: if we are already in the process of specializing this
+    // callee further up the recursion stack, we have a cyclic call graph.
+    if (visited.contains(calleeFunc.getSymNameAttr())) {
+      emitBug(calleeFunc.getLoc())
+          << "cycle detected during transitive specialization of @"
+          << calleeFunc.getSymName();
+      return failure();
+    }
+
     if (!llvm::is_contained(templateFuncs, calleeFunc))
       templateFuncs.push_back(calleeFunc);
 
@@ -315,8 +327,12 @@ void SpecializeFuncsPass::transitiveSpecialize(hir::FuncOp func,
     callOp.replaceAllUsesWith(newCallOp.getResults());
     callOp.erase();
 
-    // Recursively specialize the clone.
-    transitiveSpecialize(cloned, symbolTable);
+    // Recursively specialize the clone. Track the original callee name in the
+    // visited set to detect cycles through this callee.
+    visited.insert(calleeFunc.getSymNameAttr());
+    if (failed(transitiveSpecialize(cloned, symbolTable, visited)))
+      return failure();
+    visited.erase(calleeFunc.getSymNameAttr());
   }
 
   // Erase template functions that have no remaining symbol uses.
@@ -324,6 +340,8 @@ void SpecializeFuncsPass::transitiveSpecialize(hir::FuncOp func,
     if (templateFunc.symbolKnownUseEmpty(func->getParentOfType<ModuleOp>()))
       symbolTable.erase(templateFunc);
   }
+
+  return success();
 }
 
 void SpecializeFuncsPass::runOnOperation() {
@@ -389,7 +407,9 @@ void SpecializeFuncsPass::runOnOperation() {
       expandOpaqueContext(nextFunc, opaqueAttr);
 
       // Transitively specialize callees that now receive constant opaques.
-      transitiveSpecialize(nextFunc, symbolTable);
+      DenseSet<StringAttr> visited;
+      if (failed(transitiveSpecialize(nextFunc, symbolTable, visited)))
+        return signalPassFailure();
 
       // Remove the evaluated first sub-function and update the multiphase_func.
       symbolTable.erase(evalFunc);
@@ -468,7 +488,9 @@ void SpecializeFuncsPass::runOnOperation() {
                  << " in split_func @" << splitFunc.getSymName() << "\n");
 
       expandOpaqueContext(nextFunc, opaqueAttr);
-      transitiveSpecialize(nextFunc, symbolTable);
+      DenseSet<StringAttr> visited;
+      if (failed(transitiveSpecialize(nextFunc, symbolTable, visited)))
+        return signalPassFailure();
     }
   }
 
