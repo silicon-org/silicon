@@ -58,6 +58,16 @@ static bool getAttrAbbrev(llvm::raw_ostream &os, Attribute attr) {
 
 OpFoldResult ConstantOp::fold(FoldAdaptor adaptor) { return getValue(); }
 
+//===----------------------------------------------------------------------===//
+// BoolToI1Op
+//===----------------------------------------------------------------------===//
+
+OpFoldResult BoolToI1Op::fold(FoldAdaptor adaptor) {
+  if (auto boolAttr = dyn_cast_or_null<base::BoolAttr>(adaptor.getInput()))
+    return mlir::BoolAttr::get(getContext(), boolAttr.getValue());
+  return {};
+}
+
 void ConstantOp::getAsmResultNames(
     llvm::function_ref<void(Value, StringRef)> setNameFn) {
   SmallString<32> buffer;

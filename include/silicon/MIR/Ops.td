@@ -104,6 +104,7 @@ def BoolToI1Op : MIROp<"bool_to_i1", [Pure]> {
   let arguments = (ins BoolType:$input);
   let results = (outs I1:$result);
   let assemblyFormat = "$input attr-dict";
+  let hasFolder = 1;
 }
 
 def ReturnOp : MIROp<"return", [Pure, ReturnLike, Terminator]> {

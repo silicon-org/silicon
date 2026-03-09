@@ -108,7 +108,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 ## Dialect Review: Missing Canonicalizers/Folders
 
 - **MIR binary ops**: no constant folding (`mir.add #si.int<1>, #si.int<2>` → `#si.int<3>`)
-- **MIR `BoolToI1Op`**: no fold for constant bool input
 - **MIR `OpaquePackOp`/`OpaqueUnpackOp`**: no round-trip canonicalization
 - **HIR `OpaquePackOp`**: no fold for pack-of-unpack
 
