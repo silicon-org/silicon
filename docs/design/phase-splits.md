@@ -420,18 +420,18 @@ For each op encountered during the walk, the analysis computes its phase as foll
 
 1. **Determine the floor.**
    Top-level ops (whose parent is the unified func) have a floor of -∞, meaning they can float to any phase.
-   Nested ops (inside an `hir.expr`, `hir.if`, or similar region-bearing op) are floored at their parent op's phase — they cannot appear in an earlier phase than the region they live in.
+   Nested ops (inside an `hir.expr` or similar region-bearing op) are floored at their parent op's phase — they cannot appear in an earlier phase than the region they live in.
 
 2. **`hir.expr` with a phase shift.**
    If the op is an `hir.expr` with a non-zero `phaseShift` attribute, its phase is the parent's phase plus the shift.
    This is how `const` (shift -1) and `dyn` (shift +1) blocks introduce phase boundaries.
 
-3. **Pure ops (memory-effect-free, excluding `hir.expr` and `hir.if`).**
+3. **Pure ops (memory-effect-free, excluding `hir.expr`).**
    The phase is the maximum of the floor and all operand phases.
    This means a pure op floats to the earliest phase where all its inputs are available.
    In particular, constant-like ops with no operands get phase -∞, since they have no data dependencies and can be trivially copied to whichever phase needs them.
 
-4. **Side-effecting ops, and `hir.expr`/`hir.if` without a phase shift.**
+4. **Side-effecting ops, and `hir.expr` without a phase shift.**
    These inherit their parent op's phase directly.
    Side effects anchor an op to its enclosing context.
 
@@ -455,7 +455,7 @@ If the value is only available at a later phase, the analysis attempts to pull i
    If any operand is a block argument at a later phase, or a non-pullable op, the pull fails.
 
 3. **Check captured values.**
-   For region-bearing ops (`hir.expr`, `hir.if`), check that all values captured from the enclosing scope are available at the target phase, or can themselves be pulled.
+   For region-bearing ops (`hir.expr`), check that all values captured from the enclosing scope are available at the target phase, or can themselves be pulled.
 
 4. **Commit the pull.**
    If all checks pass, update the op and its results to the target phase.
