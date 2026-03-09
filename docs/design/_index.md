@@ -33,6 +33,11 @@ See {{< page-link "/design/state" >}}.
 See {{< page-link "/design/control-flow" >}} for the work-in-progress design document.
 The open questions at the end of that document need further discussion and resolution.
 
+### Inference
+
+See {{< page-link "/design/inference" >}} for the design document on type and value inference.
+The open questions at the end of that document cover subtyping, coercion semantics, per-op type rules, generics, bitwidth inference, and the interaction between inference and phased execution.
+
 ### Clock and Reset
 
 See {{< page-link "/design/state" >}}.
