@@ -57,6 +57,18 @@ void PhaseEvalLoopPass::runOnOperation() {
     NameSet multiphase;
     NameSet hirFuncs;
   };
+
+  // Errors found during symbol resolution inside collectActionableOps. We
+  // collect them here and emit diagnostics outside the lambda so that
+  // emitBug captures the correct function name.
+  struct DanglingSymbol {
+    Location loc;
+    StringAttr mpName;
+    StringRef symName;
+    StringRef resolvedOpName; // empty if the symbol doesn't resolve at all
+  };
+  SmallVector<DanglingSymbol> danglingSymbols;
+
   auto collectActionableOps = [&]() -> ActionableOps {
     SymbolTable symTable(getOperation());
     ActionableOps result;
@@ -77,6 +89,11 @@ void PhaseEvalLoopPass::runOnOperation() {
           } else if (auto mirFunc = symTable.lookup<mir::FuncOp>(name)) {
             if (mirFunc.getBody().front().getNumArguments() == 0)
               result.multiphase.insert(mpFunc.getSymNameAttr());
+          } else {
+            auto *resolved = symTable.lookup(name);
+            danglingSymbols.push_back(
+                {mpFunc.getLoc(), mpFunc.getSymNameAttr(), name,
+                 resolved ? resolved->getName().getStringRef() : ""});
           }
         }
       } else if (auto func = dyn_cast<hir::FuncOp>(op)) {
@@ -104,9 +121,32 @@ void PhaseEvalLoopPass::runOnOperation() {
     return result;
   };
 
+  // Emit diagnostics for any dangling or unexpected symbol references found
+  // during collectActionableOps.
+  auto emitDanglingSymbolErrors = [&]() -> bool {
+    if (danglingSymbols.empty())
+      return false;
+    for (auto &ds : danglingSymbols) {
+      if (ds.resolvedOpName.empty()) {
+        emitBug(ds.loc) << "multiphase_func @" << ds.mpName.getValue()
+                        << " first phase symbol @" << ds.symName
+                        << " does not resolve to any op";
+      } else {
+        emitBug(ds.loc) << "multiphase_func @" << ds.mpName.getValue()
+                        << " first phase symbol @" << ds.symName
+                        << " resolved to unexpected op '" << ds.resolvedOpName
+                        << "'";
+      }
+    }
+    return true;
+  };
+
   bool converged = false;
   for (unsigned i = 0; i < maxIterations; ++i) {
+    danglingSymbols.clear();
     auto before = collectActionableOps();
+    if (emitDanglingSymbolErrors())
+      return signalPassFailure();
 
     if (before.multiphase.empty() && before.hirFuncs.empty()) {
       converged = true;
@@ -134,7 +174,10 @@ void PhaseEvalLoopPass::runOnOperation() {
       return signalPassFailure();
 
     // Progress check: verify that the set of actionable ops changed.
+    danglingSymbols.clear();
     auto after = collectActionableOps();
+    if (emitDanglingSymbolErrors())
+      return signalPassFailure();
 
     if (after.multiphase == before.multiphase &&
         after.hirFuncs == before.hirFuncs && i > 0) {

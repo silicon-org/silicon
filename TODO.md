@@ -1,10 +1,5 @@
 # TODO
 
-- Implement CFG-to-dataflow conversion (phi→mux) in MIRToCIRCT.
-- **Implicit type widening (`uint<8>` to `uint<16>`) not supported.**
-  Input: `pub fn widen(a: uint<8>) -> uint<16> { a }` — error: `hir.unify survived to HIR-to-MIR lowering`.
-  There's no implicit widening conversion.
-  Low priority; explicit cast syntax would be the right fix, but that syntax doesn't exist yet either.
 - Add a test to phase splitting to verify that the pass works if a `hir.unified_call` targets a `hir.split_func`; this is relevant for the library compilation model, where a library already contains split funcs and user code must be able to properly phase-split unified calls to a func that is already split in the IR.
 
 ## End-to-End Test Cleanup
@@ -30,7 +25,7 @@ Tests to convert to focused lit tests (then remove the e2e test):
 
 - **SpecializeFuncs: unbounded recursion in `transitiveSpecialize`.**
   A cycle in the call graph could recurse unboundedly.
-  Add a visited set or depth limit.
+  Add a visited set to break recursion and print an error.
 
 - **HIRToMIR: `isResolvableType`/`resolveHIRType` can infinite-loop on cyclic IR.**
   Both are recursive without cycle detection.
@@ -38,27 +33,18 @@ Tests to convert to focused lit tests (then remove the e2e test):
 
 - **HIRToMIR: `FuncOpConversion` only examines entry block.**
   Multi-block functions (from if/else) have the return op in successor blocks.
-  Walk all blocks to find `hir.return`.
+  Walk all blocks to find all `hir.return`s.
 
 ## Dialect Review: Missing Error Handling
 
 - **SplitPhases: silent skip when `calleeSplitFunc` is null.**
   Line 383: if a `UnifiedCallOp` references a callee with no `SplitFuncOp`, it is silently skipped.
 
-- **HIRToMIR: no conversion patterns for `RefTypeOp`, `ExprOp`, `YieldOp`, `LetOp`, `StoreOp`, `NextPhaseOp`.**
-  Produce opaque "failed to legalize" errors if they survive to HIRToMIR.
-
-- **PhaseEvalLoop: dangling symbol references silently ignored.**
-  If a `multiphase_func`'s first phase symbol doesn't resolve, it's silently not counted.
-
 - **MIRToCIRCT: `isModule` behavior mismatch.**
   Docs say "only `isModule` funcs and transitive callees" but implementation lowers ALL convertible `mir.func` ops.
 
 - **MIRToCIRCT: signed comparison predicates for unsigned types.**
   All comparison ops use signed predicates even for `!si.uint<N>`.
-
-- **MIRToCIRCT: constant value truncation.**
-  `static_cast<int64_t>` silently truncates values larger than 64 bits.
 
 - **MIRToCIRCT: missing `mir.bool_to_i1` conversion pattern.**
 
@@ -107,7 +93,7 @@ Tests to convert to focused lit tests (then remove the e2e test):
 
 ### Other focused test gaps
 
-- Add `hir.if` → `mir.if` test case to `test/Conversion/hir-to-mir.mlir`
+- Add `hir.if` → `mir.if` test case to `test/Conversion/hir-to-mir.mlir` -- unless we've already removed the op
 - Add unused block args test case to `test/Conversion/hir-to-mir.mlir`
 - Add per-argument `dyn` and mixed const+dyn arg cases to `test/HIR/split-phases.mlir`
 - Add positive `test/HIR/check-types.mlir` (only error tests exist today)
@@ -156,3 +142,4 @@ Prerequisite changes needed:
 - MIRToCIRCT: `!si.int` is temporarily mapped to `i64`; once bitwidth inference exists, this should be an error diagnostic instead
 - Consider implementing `FunctionOpInterface` on `mir.func` and `CallOpInterface` on `mir.call`/`hir.call`
 - Consider consistent naming for Base attributes (currently mixed `Base`/`Si`/no prefix)
+- Implement CFG-to-dataflow conversion (phi→mux) in MIRToCIRCT.

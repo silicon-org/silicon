@@ -36,3 +36,23 @@ module {
     0: @stuck.0
   ]
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Dangling symbol: multiphase_func references a split_func as its first phase
+// symbol, which is not one of the expected op types (evaluated_func, hir.func,
+// mir.func). The pass should emit a compiler bug diagnostic.
+
+module {
+  hir.split_func @not_a_phase_func() -> () {
+    hir.signature () -> ()
+  } [
+  ]
+
+  // expected-error @below {{compiler bug: multiphase_func @mp first phase symbol @not_a_phase_func resolved to unexpected op 'hir.split_func'}}
+  // expected-note @below {{on line}}
+  hir.multiphase_func @mp() -> () [
+    @not_a_phase_func
+  ]
+}
