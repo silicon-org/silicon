@@ -10,11 +10,6 @@
 
 ## Dialect Review: Missing Documentation
 
-- **InferTypes**: no `summary` or `description` in `Passes.td`
-- **CheckCalls**: no `description` in `Passes.td`
-- **SplitPhases**: no `description` in `Passes.td` (most complex pass, 1180 lines)
-- **PhaseEvalLoop**: no `description` in `Passes.td`
-- **HIRToMIR**: no `summary` or `description` in `Passes.td`
 - **Base types**: no `description` on any type in `Types.td`
 - **Base attrs**: no `summary`/`description` on `BaseTypeAttr`, `IntAttr`, `BaseUnitAttr`, `SiBoolAttr`
 - **HIR ops**: ~20 ops missing `summary`, most ops missing `description`
