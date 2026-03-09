@@ -71,9 +71,6 @@ Tests to remove (redundant with existing coverage):
 - **SplitPhases: silent skip when `calleeSplitFunc` is null.**
   Line 383: if a `UnifiedCallOp` references a callee with no `SplitFuncOp`, it is silently skipped.
 
-- **SpecializeFuncs: `nextFunc` null silently skipped.**
-  Line 327-330: missing sub-function produces a debug message but should be `emitBug` + `signalPassFailure()`.
-
 - **HIRToMIR: `CoerceTypeOp` silently passes non-constant type operands.**
   Falls through and drops the type annotation without diagnostic.
 

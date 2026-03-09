@@ -380,9 +380,9 @@ void SpecializeFuncsPass::runOnOperation() {
       auto nextSym = cast<FlatSymbolRefAttr>(phaseFuncs[1]);
       auto nextFunc = symbolTable.lookup<hir::FuncOp>(nextSym.getValue());
       if (!nextFunc) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  Next sub-function " << nextSym << " not found\n");
-        continue;
+        emitBug(evalFunc.getLoc())
+            << "next sub-function " << nextSym << " not found";
+        return signalPassFailure();
       }
 
       // Expand the opaque context in the next function.
