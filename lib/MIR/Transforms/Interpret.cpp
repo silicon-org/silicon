@@ -146,6 +146,9 @@ LogicalResult Interpreter::executeOp(Operation *op,
       cond = intAttr.getValue() != 0;
     else if (auto intAttr = dyn_cast<IntegerAttr>(operands[0]))
       cond = intAttr.getValue() != 0;
+    else
+      return emitBug(op->getLoc())
+             << "unsupported condition type " << operands[0];
     values[op->getResult(0)] = cond ? operands[1] : operands[2];
   } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
     for (auto [result, attr] : llvm::zip(castOp.getResults(), operands))
@@ -225,6 +228,10 @@ FailureOr<SmallVector<Attribute>> Interpreter::run() {
         condTrue = intAttr.getValue() != 0;
       else if (auto intAttr = dyn_cast<IntegerAttr>(condAttr))
         condTrue = intAttr.getValue() != 0;
+      else {
+        emitBug(op->getLoc()) << "unsupported condition type " << condAttr;
+        return failure();
+      }
       auto *dest = condTrue ? condBrOp.getTrueDest() : condBrOp.getFalseDest();
       auto destOperands = condTrue ? condBrOp.getTrueDestOperands()
                                    : condBrOp.getFalseDestOperands();

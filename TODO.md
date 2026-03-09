@@ -42,9 +42,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 
 ## Dialect Review: Missing Error Handling
 
-- **Interpret: silent fallthrough on unknown condition type.**
-  `cf.cond_br` and `arith.select` check `BoolAttr`, `IntAttr`, `IntegerAttr` but fall through silently for others.
-
 - **SplitPhases: silent skip when `calleeSplitFunc` is null.**
   Line 383: if a `UnifiedCallOp` references a callee with no `SplitFuncOp`, it is silently skipped.
 

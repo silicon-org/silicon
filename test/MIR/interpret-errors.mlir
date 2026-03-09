@@ -81,3 +81,24 @@ mir.func @ShrNegative() -> (result: !si.int) {
   %2 = mir.shr %0, %1 : !si.int
   mir.return %2 : !si.int
 }
+
+// -----
+
+// Unknown condition type in cf.cond_br: the interpreter only handles BoolAttr,
+// IntAttr, and IntegerAttr conditions. An OpaqueAttr triggers a compiler bug.
+
+mir.func @CondBrUnknownCondType() -> (result: !si.int) {
+  %a = mir.constant #si.int<1> : !si.int
+  %b = mir.constant #si.int<2> : !si.int
+  %opaque = mir.opaque_pack (%a) : (!si.int) -> !si.opaque
+  %cond = "builtin.unrealized_conversion_cast"(%opaque) : (!si.opaque) -> i1
+  // expected-error @below {{compiler bug: unsupported condition type}}
+  // expected-note @below {{Interpreter::run()}}
+  cf.cond_br %cond, ^then, ^else
+^then:
+  cf.br ^merge(%a : !si.int)
+^else:
+  cf.br ^merge(%b : !si.int)
+^merge(%result: !si.int):
+  mir.return %result : !si.int
+}
