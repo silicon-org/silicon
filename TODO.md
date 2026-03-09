@@ -64,8 +64,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 
 - **MIR `errors.mlir` is empty**: `FuncOp::verify()` has 4+ error paths, none tested
 - **HIR**: missing tests for `SplitFuncOp` array-size mismatches, `MultiphaseFuncOp` `argIsFirst` size mismatch, `ReturnOp` `values`/`typeOfValues` size mismatch, `SignatureOp` outside valid parent, `NextPhaseOp` outside `hir.func`
-- **HIR**: `ExprOp`/`YieldOp` lack a verifier for operand count/type matching
-
 ### Pass error tests
 
 - **HIRToMIR**: 13 error paths untested (non-constant/negative/excessive uint width, non-constant func_type args/results, coerce_type type mismatch, call non-constant result type, etc.)
@@ -94,7 +92,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 ## Dialect Review: Missing Constraints and Traits
 
 - **MIR binary/cmp ops use `AnyType`**: should constrain to numeric types; cmp results should be `BoolType`
-- **HIR `ExprOp`/`YieldOp`**: no verifier for operand count/type matching
 
 ## Dialect Review: Missing Canonicalizers/Folders
 

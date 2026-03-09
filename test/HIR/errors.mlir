@@ -196,6 +196,23 @@ func.func @yield_outside() {
 
 // -----
 
+// YieldOp operand count must match ExprOp result count (too few)
+hir.expr 0 : !hir.any, !hir.any {
+  // expected-error @below {{'hir.yield' op has 0 operands but parent expr has 2 results}}
+  hir.yield
+}
+
+// -----
+
+// YieldOp operand count must match ExprOp result count (too many)
+hir.expr 0 {
+  %0 = hir.int_type
+  // expected-error @below {{'hir.yield' op has 1 operands but parent expr has 0 results}}
+  hir.yield %0 : !hir.any
+}
+
+// -----
+
 // expected-error @below {{block argument must have type !hir.any, got '!si.int'}}
 "hir.func"() ({
 ^bb0(%arg0: !si.int):

@@ -138,6 +138,7 @@ def YieldOp : HIROp<"yield", [
   let assemblyFormat = [{
     ($operands^ `:` type($operands))? attr-dict
   }];
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//

@@ -186,6 +186,19 @@ ReturnOp FuncOp::getReturnOp() {
 }
 
 //===----------------------------------------------------------------------===//
+// YieldOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult YieldOp::verify() {
+  auto exprOp = cast<ExprOp>((*this)->getParentOp());
+  if (getOperands().size() != exprOp.getResults().size())
+    return emitOpError() << "has " << getOperands().size()
+                         << " operands but parent expr has "
+                         << exprOp.getResults().size() << " results";
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // ReturnOp
 //===----------------------------------------------------------------------===//
 
