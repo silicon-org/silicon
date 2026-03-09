@@ -74,6 +74,7 @@ def LeqOp : MIRCmpOp<"leq">;
 
 def FuncOp : MIROp<"func", [
   IsolatedFromAbove,
+  RecursiveMemoryEffects,
   Symbol,
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
 ]> {
