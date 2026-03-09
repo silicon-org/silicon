@@ -15,10 +15,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 
 ## Dialect Review: Crash Risks
 
-- **HIRToMIR: `isResolvableType`/`resolveHIRType` can infinite-loop on cyclic IR.**
-  Both are recursive without cycle detection.
-  Add a `SmallPtrSet<Operation*>` visited set.
-
 - **HIRToMIR: `FuncOpConversion` only examines entry block.**
   Multi-block functions (from if/else) have the return op in successor blocks.
   Walk all blocks to find all `hir.return`s.

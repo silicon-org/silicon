@@ -24,6 +24,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/DenseSet.h" // IWYU pragma: keep
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 
@@ -382,11 +383,17 @@ static LogicalResult convert(UnrealizedConversionCastOp op,
 
 /// Check whether a type value will resolve to a concrete MIR type after
 /// conversion. Requires the defining op to be a known HIR type constructor
-/// or an already-lowered mir.constant with a TypeAttr.
-static bool isResolvableType(Value typeVal) {
+/// or an already-lowered mir.constant with a TypeAttr. The visited set
+/// prevents infinite loops on cyclic type references.
+static bool isResolvableType(Value typeVal,
+                             SmallPtrSetImpl<Operation *> &visited) {
   auto *defOp = typeVal.getDefiningOp();
   if (!defOp)
     return false; // block arg — unresolved cross-phase value
+
+  // Guard against cycles in the type graph.
+  if (!visited.insert(defOp).second)
+    return false;
 
   // Simple type constructors always resolve.
   if (isa<hir::BoolTypeOp, hir::IntTypeOp, hir::UnitTypeOp, hir::TypeTypeOp,
@@ -399,18 +406,21 @@ static bool isResolvableType(Value typeVal) {
 
   // FuncTypeOp needs all of its type operands to be resolvable.
   if (auto funcTypeOp = dyn_cast<hir::FuncTypeOp>(defOp)) {
-    return llvm::all_of(funcTypeOp.getTypeOfArgs(), isResolvableType) &&
-           llvm::all_of(funcTypeOp.getTypeOfResults(), isResolvableType);
+    return llvm::all_of(
+               funcTypeOp.getTypeOfArgs(),
+               [&](Value v) { return isResolvableType(v, visited); }) &&
+           llvm::all_of(funcTypeOp.getTypeOfResults(),
+                        [&](Value v) { return isResolvableType(v, visited); });
   }
 
   // UnifyOp is resolvable if both operands are resolvable.
   if (auto unifyOp = dyn_cast<hir::UnifyOp>(defOp))
-    return isResolvableType(unifyOp.getLhs()) &&
-           isResolvableType(unifyOp.getRhs());
+    return isResolvableType(unifyOp.getLhs(), visited) &&
+           isResolvableType(unifyOp.getRhs(), visited);
 
   // CoerceTypeOp forwards its input; resolvable if the input is.
   if (auto coerceOp = dyn_cast<hir::CoerceTypeOp>(defOp))
-    return isResolvableType(coerceOp.getInput());
+    return isResolvableType(coerceOp.getInput(), visited);
 
   // ConstantLike op with a TypeAttr (e.g., mir.constant or hir.mir_constant
   // from specialization).
@@ -419,6 +429,12 @@ static bool isResolvableType(Value typeVal) {
     return !isa<hir::AnyType>(typeAttr.getValue());
 
   return false;
+}
+
+/// Entry point for `isResolvableType` that creates a fresh visited set.
+static bool isResolvableType(Value typeVal) {
+  SmallPtrSet<Operation *, 16> visited;
+  return isResolvableType(typeVal, visited);
 }
 
 /// Check whether a function is ready for HIR-to-MIR lowering. A function is
@@ -487,10 +503,16 @@ static bool shouldLower(hir::FuncOp func) {
 
 /// Resolve the concrete MIR type from an unconverted HIR type value. Used
 /// by the FuncOp pattern to determine block argument types from coerce_type
-/// ops and result types from hir.return's typeOfValues.
-static Type resolveHIRType(Value typeVal) {
+/// ops and result types from hir.return's typeOfValues. The visited set
+/// prevents infinite loops on cyclic type references.
+static Type resolveHIRType(Value typeVal,
+                           SmallPtrSetImpl<Operation *> &visited) {
   auto *defOp = typeVal.getDefiningOp();
   if (!defOp)
+    return hir::AnyType::get(typeVal.getContext());
+
+  // Guard against cycles in the type graph.
+  if (!visited.insert(defOp).second)
     return hir::AnyType::get(typeVal.getContext());
 
   auto *ctx = defOp->getContext();
@@ -515,13 +537,13 @@ static Type resolveHIRType(Value typeVal) {
   if (auto funcTypeOp = dyn_cast<hir::FuncTypeOp>(defOp)) {
     SmallVector<Type> argTypes, resultTypes;
     for (auto arg : funcTypeOp.getTypeOfArgs()) {
-      auto t = resolveHIRType(arg);
+      auto t = resolveHIRType(arg, visited);
       if (isa<hir::AnyType>(t))
         return hir::AnyType::get(ctx);
       argTypes.push_back(t);
     }
     for (auto res : funcTypeOp.getTypeOfResults()) {
-      auto t = resolveHIRType(res);
+      auto t = resolveHIRType(res, visited);
       if (isa<hir::AnyType>(t))
         return hir::AnyType::get(ctx);
       resultTypes.push_back(t);
@@ -532,18 +554,18 @@ static Type resolveHIRType(Value typeVal) {
   // UnifyOp resolves to the lhs type (both sides should be the same after
   // type inference; the convert pattern for UnifyOp will catch mismatches).
   if (auto unifyOp = dyn_cast<hir::UnifyOp>(defOp))
-    return resolveHIRType(unifyOp.getLhs());
+    return resolveHIRType(unifyOp.getLhs(), visited);
 
   // CoerceTypeOp forwards its input value, so resolve the input's type.
   if (auto coerceOp = dyn_cast<hir::CoerceTypeOp>(defOp))
-    return resolveHIRType(coerceOp.getInput());
+    return resolveHIRType(coerceOp.getInput(), visited);
 
   // Look through unrealized_conversion_cast ops inserted by the conversion
   // framework (e.g., when hir.bool_type has already been converted to
   // mir.constant but consumers still expect !hir.any).
   if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp))
     if (castOp.getNumOperands() == 1)
-      return resolveHIRType(castOp.getOperand(0));
+      return resolveHIRType(castOp.getOperand(0), visited);
 
   // ConstantLike op with a TypeAttr (e.g., mir.constant or hir.mir_constant
   // from specialization).
@@ -552,6 +574,12 @@ static Type resolveHIRType(Value typeVal) {
     return typeAttr.getValue();
 
   return hir::AnyType::get(typeVal.getContext());
+}
+
+/// Entry point for `resolveHIRType` that creates a fresh visited set.
+static Type resolveHIRType(Value typeVal) {
+  SmallPtrSet<Operation *, 16> visited;
+  return resolveHIRType(typeVal, visited);
 }
 
 //===----------------------------------------------------------------------===//
