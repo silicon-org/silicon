@@ -18,13 +18,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 - **`test/EndToEnd/dyn-args.si`**: tests dyn-arg and mixed const+dyn arg splitting.
   Add dyn-arg and mixed const+dyn test cases to `test/HIR/split-phases.mlir`, then remove.
 
-Tests to remove (redundant with existing coverage):
-
-- **`test/EndToEnd/deduplication.si`**: covered by `specialize-funcs.mlir::TwoCalls`; CHECK lines are weak.
-- **`test/EndToEnd/operations.si`**: same pattern as `add-const.si` for `-`, `*`, `/`, `%`; each op already tested in `Codegen/basic.si` and `MIR/interpret.mlir`.
-- **`test/EndToEnd/double-const.si`**: `const const fn` already tested in `fn-phase-modifiers.si::const_const_fn` with richer assertions.
-- **`test/EndToEnd/dyn-arg-return.si`**: CHECK lines map 1:1 to single-pass outputs; dyn return covered in `split-phases.mlir::DynReturn` and `Codegen/signature.si`.
-
 ## Dialect Review: Crash Risks
 
 - **Interpret: division by zero crash.**
