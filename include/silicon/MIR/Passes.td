@@ -25,7 +25,8 @@ def InterpretPass : Pass<"interpret", "mlir::ModuleOp"> {
     The interpreter enforces a configurable step limit to prevent
     non-terminating programs from hanging the compiler. Each executed
     operation counts as one step. When the limit is exceeded, the pass
-    emits an error diagnostic and fails.
+    emits an error diagnostic and fails. A separate call depth limit
+    prevents unbounded recursion from exhausting the call stack.
   }];
   let dependentDialects = [
     "mir::MIRDialect",
@@ -33,6 +34,8 @@ def InterpretPass : Pass<"interpret", "mlir::ModuleOp"> {
   let options = [
     Option<"maxSteps", "max-steps", "unsigned", "1000000",
            "Maximum number of interpreter steps before aborting">,
+    Option<"maxCallDepth", "max-call-depth", "unsigned", "1000",
+           "Maximum call stack depth before aborting">,
   ];
 }
 

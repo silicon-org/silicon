@@ -15,10 +15,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 
 ## Dialect Review: Crash Risks
 
-- **Interpret: unbounded call stack.**
-  Recursive functions grow the call stack until OOM.
-  Add a `maxCallDepth` check.
-
 - **SpecializeFuncs: unbounded recursion in `transitiveSpecialize`.**
   A cycle in the call graph could recurse unboundedly.
   Add a visited set to break recursion and print an error.

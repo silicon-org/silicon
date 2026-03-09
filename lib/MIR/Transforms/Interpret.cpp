@@ -38,10 +38,13 @@ struct Interpreter {
   SymbolTable &symbolTable;
   SmallVector<CallFrame> callStack;
   unsigned maxSteps;
+  unsigned maxCallDepth;
   unsigned stepCount = 0;
 
-  Interpreter(SymbolTable &symbolTable, unsigned maxSteps)
-      : symbolTable(symbolTable), maxSteps(maxSteps) {}
+  Interpreter(SymbolTable &symbolTable, unsigned maxSteps,
+              unsigned maxCallDepth)
+      : symbolTable(symbolTable), maxSteps(maxSteps),
+        maxCallDepth(maxCallDepth) {}
   FailureOr<SmallVector<Attribute>> run();
 
   /// Execute a single non-control-flow op within the given value map. Returns
@@ -187,6 +190,10 @@ FailureOr<SmallVector<Attribute>> Interpreter::run() {
         return op->emitError()
                << "callee @" << callOp.getCallee()
                << " is not a mir.func (may not have been lowered yet)";
+      if (callStack.size() >= maxCallDepth)
+        return op->emitError()
+               << "interpreter exceeded call depth of " << maxCallDepth
+               << "; possible unbounded recursion";
       auto &newFrame = callStack.emplace_back();
       newFrame.currentOp = &calleeOp.getBody().front().front();
       for (auto [arg, attr] :
@@ -327,7 +334,7 @@ void InterpretPass::runOnOperation() {
       continue;
 
     LLVM_DEBUG(llvm::dbgs() << "Interpreting @" << func.getSymName() << "\n");
-    Interpreter interpreter(symbolTable, maxSteps);
+    Interpreter interpreter(symbolTable, maxSteps, maxCallDepth);
     interpreter.callStack.emplace_back();
     interpreter.callStack.back().currentOp = &func.getBody().front().front();
     auto result = interpreter.run();
