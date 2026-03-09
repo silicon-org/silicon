@@ -566,7 +566,10 @@ public:
     auto &entryBlock = func.getBody().front();
 
     // Determine argument types from the return op's typeOfArgs operands.
-    auto returnOp = dyn_cast<hir::ReturnOp>(entryBlock.getTerminator());
+    // The return op is in the last block, which may differ from the entry
+    // block when the function body contains CFG branches (e.g., from if/else
+    // or short-circuiting logical operators).
+    auto returnOp = func.getReturnOp();
     SmallVector<Type> argTypes;
     if (returnOp) {
       for (auto typeVal : returnOp.getTypeOfArgs())
@@ -638,7 +641,8 @@ void HIRToMIRPass::runOnOperation() {
   TypeConverter converter;
   converter.addConversion([](Type type) -> std::optional<Type> {
     if (isa<base::BaseDialect, mir::MIRDialect>(type.getDialect()) ||
-        isa<FunctionType>(type) || isa<IntegerType, IndexType, FloatType>(type))
+        isa<hir::HIRDialect>(type.getDialect()) || isa<FunctionType>(type) ||
+        isa<IntegerType, IndexType, FloatType>(type))
       return type;
     return std::nullopt;
   });

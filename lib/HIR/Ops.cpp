@@ -11,6 +11,7 @@
 #include "silicon/Support/AsmParser.h"
 #include "silicon/Support/MLIR.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
@@ -991,6 +992,44 @@ LogicalResult OpaqueUnpackOp::canonicalize(OpaqueUnpackOp op,
 //===----------------------------------------------------------------------===//
 
 Value hir::getTypeOf(Value value) {
+  // Handle block arguments by looking at predecessor branch operands. We
+  // recursively resolve the type of the branch operand, but only accept the
+  // result if it dominates the merge block. Types defined inside predecessor
+  // branches don't dominate the merge block and must be skipped.
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    auto *block = blockArg.getOwner();
+    unsigned argIdx = blockArg.getArgNumber();
+    for (auto *pred : block->getPredecessors()) {
+      auto *term = pred->getTerminator();
+      Value operand;
+      if (auto brOp = dyn_cast<mlir::cf::BranchOp>(term))
+        operand = brOp.getDestOperands()[argIdx];
+      else if (auto condBrOp = dyn_cast<mlir::cf::CondBranchOp>(term)) {
+        if (condBrOp.getTrueDest() == block)
+          operand = condBrOp.getTrueDestOperands()[argIdx];
+        else
+          operand = condBrOp.getFalseDestOperands()[argIdx];
+      }
+      if (!operand)
+        continue;
+      auto type = getTypeOf(operand);
+      if (!type)
+        continue;
+      // Only accept if the type is not defined inside a predecessor block,
+      // since values from predecessor branches don't dominate the merge
+      // block.
+      if (auto *defOp = type.getDefiningOp()) {
+        bool inPred = llvm::any_of(block->getPredecessors(), [&](Block *p) {
+          return defOp->getBlock() == p;
+        });
+        if (inPred)
+          continue;
+      }
+      return type;
+    }
+    return {};
+  }
+
   auto result = dyn_cast<OpResult>(value);
   if (!result)
     return {};

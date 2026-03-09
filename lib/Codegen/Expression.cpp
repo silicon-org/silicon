@@ -136,6 +136,15 @@ static Value convertLogicalOp(ast::BinaryExpr &expr, Context &cx, bool isAnd) {
 
   auto anyType = hir::AnyType::get(cx.module.getContext());
 
+  // Unify the lhs condition's type with bool. The unify result is used as the
+  // type operand of the coerce_type, ensuring it survives canonicalization
+  // and that CheckTypes catches type mismatches.
+  auto lhsType = hir::getOrCreateTypeOf(cx.builder, expr.loc, lhs);
+  auto lhsBoolType = hir::BoolTypeOp::create(cx.builder, expr.loc).getResult();
+  Value lhsUnifiedType = cx.builder.createOrFold<hir::UnifyOp>(
+      expr.loc, anyType, lhsType, lhsBoolType);
+  lhs = hir::CoerceTypeOp::create(cx.builder, expr.loc, lhs, lhsUnifiedType);
+
   // Convert condition to i1.
   auto i1Cond = hir::CoerceToI1Op::create(cx.builder, expr.loc, lhs);
 
@@ -291,8 +300,17 @@ static Value convert(ast::IfExpr &expr, Context &cx) {
 
   auto anyType = hir::AnyType::get(cx.module.getContext());
 
-  // Convert condition to i1 for the branch. The coerce_to_i1 op handles both
-  // bool and int conditions (any non-zero value is truthy).
+  // Unify the condition's type with bool. The unify result is used as the
+  // type operand of the coerce_type, ensuring it survives canonicalization
+  // and that CheckTypes catches type mismatches.
+  auto condType = hir::getOrCreateTypeOf(cx.builder, expr.loc, condition);
+  auto boolType = hir::BoolTypeOp::create(cx.builder, expr.loc).getResult();
+  Value unifiedType = cx.builder.createOrFold<hir::UnifyOp>(expr.loc, anyType,
+                                                            condType, boolType);
+  condition =
+      hir::CoerceTypeOp::create(cx.builder, expr.loc, condition, unifiedType);
+
+  // Convert condition to i1 for the branch.
   auto i1Cond = hir::CoerceToI1Op::create(cx.builder, expr.loc, condition);
 
   // Create the then, else, and merge blocks. The merge block is added to the

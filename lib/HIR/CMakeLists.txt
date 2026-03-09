@@ -7,6 +7,7 @@ add_silicon_dialect_library(SiliconHIR
   SiliconBase
   SiliconSupport
   MLIRArithDialect
+  MLIRControlFlowDialect
   MLIRFuncDialect
   MLIRIR
   MLIRControlFlowInterfaces

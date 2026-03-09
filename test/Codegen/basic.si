@@ -331,8 +331,12 @@ fn testBoolFalse() -> bool { false }
 
 // Ensure `&&` desugars into short-circuiting CFG branches:
 // `a && b` → `if a { b } else { false }`
+// The condition is unified with bool and coerced before branching.
 // CHECK-LABEL: hir.unified_func private @testLogicalAnd
-// CHECK: hir.coerce_to_i1 %a
+// CHECK: hir.bool_type
+// CHECK: hir.unify
+// CHECK: hir.coerce_type %a
+// CHECK: hir.coerce_to_i1
 // CHECK: cf.cond_br
 // CHECK: hir.eq %b, %c
 // CHECK: cf.br
@@ -342,8 +346,12 @@ fn testLogicalAnd(a: bool, b: int, c: int) -> bool { a && b == c }
 
 // Ensure `||` desugars into short-circuiting CFG branches:
 // `a || b` → `if a { true } else { b }`
+// The condition is unified with bool and coerced before branching.
 // CHECK-LABEL: hir.unified_func private @testLogicalOr
-// CHECK: hir.coerce_to_i1 %a
+// CHECK: hir.bool_type
+// CHECK: hir.unify
+// CHECK: hir.coerce_type %a
+// CHECK: hir.coerce_to_i1
 // CHECK: cf.cond_br
 // CHECK: hir.constant_bool <true>
 // CHECK: cf.br
@@ -355,8 +363,13 @@ fn testLogicalOr(a: bool, b: int, c: int) -> bool { a || b == c }
 // If condition unification with bool
 //===----------------------------------------------------------------------===//
 
-// Ensure if conditions are lowered to CFG via coerce_to_i1.
+// Ensure if conditions are unified with bool and coerced via coerce_type,
+// then lowered to i1 for the branch.
 // CHECK-LABEL: hir.unified_func private @testIfBoolCondition
+// CHECK: hir.type_of %a
+// CHECK: hir.bool_type
+// CHECK: hir.unify
+// CHECK: hir.coerce_type %a
 // CHECK: hir.coerce_to_i1
 // CHECK: cf.cond_br
 fn testIfBoolCondition(a: bool) -> int {
@@ -372,11 +385,15 @@ fn testIfBoolCondition(a: bool) -> int {
 // `a || b && c` is `a || (b && c)`, desugared as CFG branches:
 // if a { true } else { if b { c } else { false } }
 // CHECK-LABEL: hir.unified_func private @precLogicalAndBeforeOr
-// CHECK: hir.coerce_to_i1 %a
+// CHECK: hir.unify
+// CHECK: hir.coerce_type %a
+// CHECK: hir.coerce_to_i1
 // CHECK: cf.cond_br
 // CHECK: hir.constant_bool <true>
 // CHECK: cf.br
-// CHECK: hir.coerce_to_i1 %b
+// CHECK: hir.unify
+// CHECK: hir.coerce_type %b
+// CHECK: hir.coerce_to_i1
 // CHECK: cf.cond_br
 // CHECK: cf.br
 // CHECK: hir.constant_bool <false>

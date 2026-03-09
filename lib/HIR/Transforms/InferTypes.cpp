@@ -69,17 +69,41 @@ void InferTypesPass::runOnOperation() {
     if (inferrableLhs || inferrableRhs) {
       auto inferrable = inferrableLhs ? inferrableLhs : inferrableRhs;
       auto concrete = inferrableLhs ? unifyOp.getRhs() : unifyOp.getLhs();
-      if (!domInfo.properlyDominates(concrete, inferrable)) {
-        LLVM_DEBUG(llvm::dbgs() << "Skipping " << inferrable
-                                << " (appears before " << concrete << ")\n");
+      if (domInfo.properlyDominates(concrete, inferrable)) {
+        LLVM_DEBUG(llvm::dbgs() << "Replacing " << inferrable << " with "
+                                << concrete << "\n");
+        inferrable.replaceAllUsesWith(concrete);
+        inferrable.erase();
+        unifyOp.replaceAllUsesWith(concrete);
+        unifyOp.erase();
         continue;
       }
-      LLVM_DEBUG(llvm::dbgs()
-                 << "Replacing " << inferrable << " with " << concrete << "\n");
-      inferrable.replaceAllUsesWith(concrete);
-      inferrable.erase();
-      unifyOp.replaceAllUsesWith(concrete);
-      unifyOp.erase();
+
+      // If the concrete doesn't dominate the inferrable but can be cloned
+      // to the inferrable's location, do so. This handles the pattern where
+      // type constructors inside branches constrain an inferrable in the
+      // dominator block.
+      if (auto *concreteOp = concrete.getDefiningOp()) {
+        if (isMemoryEffectFree(concreteOp) &&
+            concreteOp->getNumResults() == 1 &&
+            concreteOp->getNumRegions() == 0 &&
+            llvm::all_of(concreteOp->getOperands(), [&](Value v) {
+              return domInfo.properlyDominates(v, inferrable.getOperation());
+            })) {
+          OpBuilder builder(inferrable);
+          auto *cloned = builder.clone(*concreteOp);
+          LLVM_DEBUG(llvm::dbgs() << "Cloned " << *concreteOp << " to resolve "
+                                  << inferrable << "\n");
+          inferrable.replaceAllUsesWith(cloned->getResult(0));
+          inferrable.erase();
+          unifyOp.replaceAllUsesWith(cloned->getResult(0));
+          unifyOp.erase();
+          continue;
+        }
+      }
+
+      LLVM_DEBUG(llvm::dbgs() << "Skipping " << inferrable
+                              << " (appears before " << concrete << ")\n");
       continue;
     }
 

@@ -6,7 +6,7 @@
 
 // CHECK: mir.evaluated_func {{.*}}@main.0{{.*}} [#si.int<42> : !si.int]
 
-fn pick(const cond: int, const a: int, const b: int) -> int {
+fn pick(const cond: bool, const a: int, const b: int) -> int {
   if cond { a } else { b }
 }
-pub fn main() -> int { pick(1, 42, 7) }
+pub fn main() -> int { pick(1 == 1, 42, 7) }

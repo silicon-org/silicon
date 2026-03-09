@@ -36,8 +36,8 @@ static bool isConcreteTypeConstructor(Value typeValue) {
   auto *defOp = typeValue.getDefiningOp();
   if (!defOp)
     return false;
-  return isa<UnitTypeOp, IntTypeOp, TypeTypeOp, UIntTypeOp, AnyfuncTypeOp,
-             RefTypeOp, FuncTypeOp, OpaqueTypeOp>(defOp);
+  return isa<BoolTypeOp, UnitTypeOp, IntTypeOp, TypeTypeOp, UIntTypeOp,
+             AnyfuncTypeOp, RefTypeOp, FuncTypeOp, OpaqueTypeOp>(defOp);
 }
 
 /// Return a user-friendly name for a type value based on its defining op. For
@@ -47,6 +47,8 @@ static std::string describeTypeValue(Value typeValue) {
   if (!defOp)
     return "(unknown)";
 
+  if (isa<BoolTypeOp>(defOp))
+    return "`bool`";
   if (isa<UnitTypeOp>(defOp))
     return "`()`";
   if (isa<IntTypeOp>(defOp))

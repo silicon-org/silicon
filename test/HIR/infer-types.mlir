@@ -51,9 +51,10 @@ func.func @InferrableAndConcrete1() {
 
 // CHECK-LABEL: func @InferrableAndConcrete2
 func.func @InferrableAndConcrete2() {
-  // Cannot infer concrete type if it appears after the inferrable type.
-  // CHECK: hir.inferrable
-  // CHECK: hir.int_type
+  // When the concrete appears after the inferrable but is a pure op with no
+  // operands, it can be cloned to the inferrable's location.
+  // CHECK: [[T:%.+]] = hir.int_type
+  // CHECK: call @use_type([[T]])
   %0 = hir.inferrable
   %1 = hir.int_type
   %2 = hir.unify %0, %1
@@ -149,5 +150,24 @@ func.func @InferConstantInt() {
   call @use_value(%0) : (!hir.any) -> ()
   call @use_value(%1) : (!hir.any) -> ()
   call @use_value(%2) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @CloneCrossBlock
+func.func @CloneCrossBlock(%arg0: i1) {
+  // When a concrete op is in a branch but the inferrable is in the dominator,
+  // the concrete op is cloned to the inferrable's location.
+  // CHECK: [[T:%.+]] = hir.bool_type
+  // CHECK-NEXT: cf.cond_br
+  %0 = hir.inferrable
+  cf.cond_br %arg0, ^bb1, ^bb2
+^bb1:
+  %1 = hir.bool_type
+  %2 = hir.unify %0, %1
+  cf.br ^bb3
+^bb2:
+  cf.br ^bb3
+^bb3:
+  call @use_type(%0) : (!hir.any) -> ()
   return
 }
