@@ -174,6 +174,7 @@ def CoerceTypeOp : HIROp<"coerce_type", [Pure]> {
   let assemblyFormat = [{
     $input `,` $typeOperand attr-dict
   }];
+  let hasCanonicalizeMethod = 1;
 }
 
 //===----------------------------------------------------------------------===//

@@ -37,6 +37,26 @@ func.func @TypeOfConstantInt() -> !hir.any {
   return %1 : !hir.any
 }
 
+// CHECK-LABEL: @CoerceTypeIdentity
+func.func @CoerceTypeIdentity() -> !hir.any {
+  %t = hir.int_type
+  // CHECK: [[V:%.+]] = hir.constant_int 42
+  %0 = hir.constant_int 42 : %t
+  %1 = hir.coerce_type %0, %t
+  // CHECK: return [[V]]
+  return %1 : !hir.any
+}
+
+// CHECK-LABEL: @CoerceTypeNonIdentity
+func.func @CoerceTypeNonIdentity() -> !hir.any {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %0 = hir.constant_int 42 : %t0
+  // CHECK: hir.coerce_type
+  %1 = hir.coerce_type %0, %t1
+  return %1 : !hir.any
+}
+
 hir.unified_func @dummy() -> (x: 0, y: 0) {
   %0 = hir.int_type
   %1 = hir.int_type

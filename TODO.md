@@ -110,7 +110,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 - **MIR binary ops**: no constant folding (`mir.add #si.int<1>, #si.int<2>` → `#si.int<3>`)
 - **MIR `BoolToI1Op`**: no fold for constant bool input
 - **MIR `OpaquePackOp`/`OpaqueUnpackOp`**: no round-trip canonicalization
-- **HIR `CoerceTypeOp`**: no fold for identity coercions
 - **HIR `OpaquePackOp`**: no fold for pack-of-unpack
 
 ## Remove single-return/single-signature assumption

@@ -734,6 +734,21 @@ LogicalResult TypeOfOp::canonicalize(TypeOfOp op, PatternRewriter &rewriter) {
 }
 
 //===----------------------------------------------------------------------===//
+// CoerceTypeOp
+//===----------------------------------------------------------------------===//
+
+/// Fold away identity coercions where the input already has the target type.
+LogicalResult CoerceTypeOp::canonicalize(CoerceTypeOp op,
+                                         PatternRewriter &rewriter) {
+  Value inputType = getTypeOf(op.getInput());
+  if (inputType && inputType == op.getTypeOperand()) {
+    rewriter.replaceOp(op, op.getInput());
+    return success();
+  }
+  return failure();
+}
+
+//===----------------------------------------------------------------------===//
 // UnifyOp
 //===----------------------------------------------------------------------===//
 
