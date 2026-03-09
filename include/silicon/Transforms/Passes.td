@@ -18,6 +18,10 @@ def PhaseEvalLoopPass : Pass<"phase-eval-loop", "mlir::ModuleOp"> {
     "hir::HIRDialect",
     "mir::MIRDialect",
   ];
+  let options = [
+    Option<"maxIterations", "max-iterations", "unsigned", "100",
+           "Maximum number of iterations before reporting failure">
+  ];
 }
 
 #endif // SILICON_TRANSFORMS_PASSES_TD

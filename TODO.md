@@ -46,11 +46,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
   Multi-block functions (from if/else) have the return op in successor blocks.
   Walk all blocks to find `hir.return`.
 
-- **PhaseEvalLoop: silent success when `maxIterations` exhausted.**
-  If the loop runs all 100 iterations without converging, it silently succeeds.
-  Add an error diagnostic.
-  Make `maxIterations` a pass option so tests can exercise this path.
-
 ## Dialect Review: Missing Error Handling
 
 - **Interpret: silent fallthrough on unknown condition type.**
@@ -113,7 +108,7 @@ Tests to convert to focused lit tests (then remove the e2e test):
 
 - **HIRToMIR**: 13 error paths untested (non-constant/negative/excessive uint width, non-constant func_type args/results, coerce_type type mismatch, call non-constant result type, etc.)
 - **MIRToCIRCT**: empty error file, 8 `emitBug` paths untested
-- **PhaseEvalLoop**: no test for `maxIterations` exhaustion, "still pending" multiphase_func note, sub-pipeline failure propagation
+- **PhaseEvalLoop**: no test for "still pending" multiphase_func note, sub-pipeline failure propagation
 - **CheckTypes**: only 1 type mismatch combination tested (unit vs int); add int vs uint, ref vs int, etc.
 - **SpecializeFuncs**: no test for void-result evaluated func chaining
 - **SplitPhases**: no test for "op uses value from later phase" error

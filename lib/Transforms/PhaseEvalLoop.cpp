@@ -39,12 +39,12 @@ namespace silicon {
 namespace {
 struct PhaseEvalLoopPass
     : public silicon::impl::PhaseEvalLoopPassBase<PhaseEvalLoopPass> {
+  using PhaseEvalLoopPassBase::PhaseEvalLoopPassBase;
   void runOnOperation() override;
 };
 } // namespace
 
 void PhaseEvalLoopPass::runOnOperation() {
-  constexpr unsigned maxIterations = 100;
 
   // Collect actionable ops: multiphase_func ops whose first sub-function has
   // been evaluated (ready for chaining), and HIR funcs that don't contain
@@ -104,11 +104,14 @@ void PhaseEvalLoopPass::runOnOperation() {
     return result;
   };
 
+  bool converged = false;
   for (unsigned i = 0; i < maxIterations; ++i) {
     auto before = collectActionableOps();
 
-    if (before.multiphase.empty() && before.hirFuncs.empty())
+    if (before.multiphase.empty() && before.hirFuncs.empty()) {
+      converged = true;
       break;
+    }
 
     LLVM_DEBUG(llvm::dbgs()
                << "Phase eval loop iteration " << i
@@ -169,5 +172,24 @@ void PhaseEvalLoopPass::runOnOperation() {
 
       return signalPassFailure();
     }
+  }
+
+  // Report an error if the loop exhausted all iterations without converging.
+  if (!converged) {
+    auto diag = getOperation()->emitError()
+                << "phase evaluation did not converge after "
+                << (unsigned)maxIterations << " iterations";
+
+    getOperation()->walk([&](hir::MultiphaseFuncOp mpFunc) {
+      diag.attachNote(mpFunc.getLoc())
+          << "hir.multiphase_func @" << mpFunc.getSymName() << " still pending";
+    });
+
+    getOperation()->walk([&](hir::FuncOp func) {
+      diag.attachNote(func.getLoc())
+          << "hir.func @" << func.getSymName() << " still present";
+    });
+
+    signalPassFailure();
   }
 }

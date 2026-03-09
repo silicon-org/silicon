@@ -1,4 +1,4 @@
-// RUN: silicon-opt --phase-eval-loop --verify-diagnostics %s
+// RUN: silicon-opt --phase-eval-loop --verify-diagnostics --split-input-file %s
 
 //===----------------------------------------------------------------------===//
 // No-progress error: the loop enters because there are actionable ops, but
