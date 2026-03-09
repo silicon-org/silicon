@@ -20,11 +20,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 
 ## Dialect Review: Crash Risks
 
-- **Interpret: division by zero crash.**
-  `mir.div` and `mir.mod` with a zero RHS will crash.
-  Add a zero check and emit a diagnostic.
-  Also add shift-amount validation for `mir.shl`/`mir.shr` (negative or >=64 is UB).
-
 - **Interpret: infinite loop on non-terminating programs.**
   The interpreter loop has no iteration limit; a back-edge that never returns will hang.
   Add a configurable `maxSteps` limit with a diagnostic on exhaustion.

@@ -33,3 +33,51 @@ mir.func @UnsupportedOp() -> (result: !si.int) {
   %1 = "test.unknown_op"(%0) : (!si.int) -> !si.int
   mir.return %1 : !si.int
 }
+
+// -----
+
+// Division by zero.
+
+mir.func @DivByZero() -> (result: !si.int) {
+  %0 = mir.constant #si.int<10> : !si.int
+  %1 = mir.constant #si.int<0> : !si.int
+  // expected-error @below {{division by zero}}
+  %2 = mir.div %0, %1 : !si.int
+  mir.return %2 : !si.int
+}
+
+// -----
+
+// Modulo by zero.
+
+mir.func @ModByZero() -> (result: !si.int) {
+  %0 = mir.constant #si.int<10> : !si.int
+  %1 = mir.constant #si.int<0> : !si.int
+  // expected-error @below {{modulo by zero}}
+  %2 = mir.mod %0, %1 : !si.int
+  mir.return %2 : !si.int
+}
+
+// -----
+
+// Shift left amount out of range (>= 64).
+
+mir.func @ShlOutOfRange() -> (result: !si.int) {
+  %0 = mir.constant #si.int<1> : !si.int
+  %1 = mir.constant #si.int<64> : !si.int
+  // expected-error @below {{shift amount 64 is out of range [0, 64)}}
+  %2 = mir.shl %0, %1 : !si.int
+  mir.return %2 : !si.int
+}
+
+// -----
+
+// Shift right with negative amount.
+
+mir.func @ShrNegative() -> (result: !si.int) {
+  %0 = mir.constant #si.int<16> : !si.int
+  %1 = mir.constant #si.int<-1> : !si.int
+  // expected-error @below {{shift amount -1 is out of range [0, 64)}}
+  %2 = mir.shr %0, %1 : !si.int
+  mir.return %2 : !si.int
+}

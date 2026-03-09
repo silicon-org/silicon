@@ -77,10 +77,15 @@ LogicalResult Interpreter::executeOp(Operation *op,
       value = lhs - rhs;
     else if (isa<mir::MulOp>(op))
       value = lhs * rhs;
-    else if (isa<mir::DivOp>(op))
+    else if (isa<mir::DivOp>(op)) {
+      if (rhs == 0)
+        return op->emitError() << "division by zero";
       value = lhs / rhs;
-    else if (isa<mir::ModOp>(op))
+    } else if (isa<mir::ModOp>(op)) {
+      if (rhs == 0)
+        return op->emitError() << "modulo by zero";
       value = lhs % rhs;
+    }
     // Bitwise and shift ops use int64_t since DynamicAPInt does not
     // support these operations directly.
     else if (isa<mir::AndOp>(op))
@@ -89,10 +94,17 @@ LogicalResult Interpreter::executeOp(Operation *op,
       value = DynamicAPInt(int64_t(lhs) | int64_t(rhs));
     else if (isa<mir::XorOp>(op))
       value = DynamicAPInt(int64_t(lhs) ^ int64_t(rhs));
-    else if (isa<mir::ShlOp>(op))
+    else if (isa<mir::ShlOp>(op)) {
+      if (int64_t(rhs) < 0 || int64_t(rhs) >= 64)
+        return op->emitError()
+               << "shift amount " << rhs << " is out of range [0, 64)";
       value = DynamicAPInt(int64_t(lhs) << int64_t(rhs));
-    else if (isa<mir::ShrOp>(op))
+    } else if (isa<mir::ShrOp>(op)) {
+      if (int64_t(rhs) < 0 || int64_t(rhs) >= 64)
+        return op->emitError()
+               << "shift amount " << rhs << " is out of range [0, 64)";
       value = DynamicAPInt(int64_t(lhs) >> int64_t(rhs));
+    }
     values[op->getResult(0)] = base::IntAttr::get(op->getContext(), value);
   } else if (isa<mir::EqOp, mir::NeqOp, mir::LtOp, mir::GtOp, mir::GeqOp,
                  mir::LeqOp>(op)) {
