@@ -1037,6 +1037,22 @@ UnifiedCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 }
 
 //===----------------------------------------------------------------------===//
+// ConstantBoolOp
+//===----------------------------------------------------------------------===//
+
+/// Fold to the constant attribute value.
+OpFoldResult ConstantBoolOp::fold(FoldAdaptor) { return getValue(); }
+
+//===----------------------------------------------------------------------===//
+// ConstantUnitOp
+//===----------------------------------------------------------------------===//
+
+/// Fold to a unit attribute.
+OpFoldResult ConstantUnitOp::fold(FoldAdaptor) {
+  return base::UnitAttr::get(getContext());
+}
+
+//===----------------------------------------------------------------------===//
 // MIRConstantOp
 //===----------------------------------------------------------------------===//
 

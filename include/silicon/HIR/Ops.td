@@ -36,15 +36,17 @@ def ConstantIntOp : HIROp<"constant_int", [Pure]> {
   }];
 }
 
-def ConstantBoolOp : HIROp<"constant_bool", [Pure]> {
+def ConstantBoolOp : HIROp<"constant_bool", [ConstantLike, Pure]> {
   let arguments = (ins SiBoolAttr:$value);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$value attr-dict";
+  let hasFolder = 1;
 }
 
-def ConstantUnitOp : HIROp<"constant_unit", [Pure]> {
+def ConstantUnitOp : HIROp<"constant_unit", [ConstantLike, Pure]> {
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//

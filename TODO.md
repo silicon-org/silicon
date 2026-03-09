@@ -108,7 +108,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 - **MIR `FuncOp`**: missing `RecursiveMemoryEffects`
 - **MIR `ReturnOp`**: no verifier checking return types match enclosing `mir.func` results
 - **HIR `ExprOp`/`YieldOp`**: no verifier for operand count/type matching
-- **HIR constant ops**: missing `ConstantLike` trait
 - **Base `UIntType`**: no width verifier (e.g. reject width=0)
 
 ## Dialect Review: Missing Canonicalizers/Folders
