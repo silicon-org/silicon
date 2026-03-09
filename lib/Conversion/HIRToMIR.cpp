@@ -608,11 +608,26 @@ public:
 
     auto &entryBlock = func.getBody().front();
 
-    // Determine argument types from the return op's typeOfArgs operands.
-    // The return op is in the last block, which may differ from the entry
-    // block when the function body contains CFG branches (e.g., from if/else
-    // or short-circuiting logical operators).
-    auto returnOp = func.getReturnOp();
+    // Collect all return ops across all blocks. Multi-block functions (from
+    // if/else or short-circuiting) may have return ops in successor blocks.
+    SmallVector<hir::ReturnOp> returnOps;
+    func.getBody().walk([&](hir::ReturnOp op) { returnOps.push_back(op); });
+
+    // Verify all return ops use identical SSA values for their type operands.
+    // At this point in the pipeline all returns should agree on arg and result
+    // types; a mismatch indicates a compiler bug.
+    for (unsigned i = 1; i < returnOps.size(); ++i) {
+      if (returnOps[i].getTypeOfArgs() != returnOps[0].getTypeOfArgs())
+        return emitBug(returnOps[i].getLoc())
+               << "return op typeOfArgs mismatch with other return in @"
+               << func.getSymName();
+      if (returnOps[i].getTypeOfValues() != returnOps[0].getTypeOfValues())
+        return emitBug(returnOps[i].getLoc())
+               << "return op typeOfValues mismatch with other return in @"
+               << func.getSymName();
+    }
+
+    auto returnOp = returnOps.empty() ? hir::ReturnOp{} : returnOps.front();
     SmallVector<Type> argTypes;
     if (returnOp) {
       for (auto typeVal : returnOp.getTypeOfArgs())

@@ -13,12 +13,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 - **`test/EndToEnd/dyn-args.si`**: tests dyn-arg and mixed const+dyn arg splitting.
   Add dyn-arg and mixed const+dyn test cases to `test/HIR/split-phases.mlir`, then remove.
 
-## Dialect Review: Crash Risks
-
-- **HIRToMIR: `FuncOpConversion` only examines entry block.**
-  Multi-block functions (from if/else) have the return op in successor blocks.
-  Walk all blocks to find all `hir.return`s.
-
 ## Dialect Review: Missing Error Handling
 
 - **SplitPhases: silent skip when `calleeSplitFunc` is null.**
@@ -100,7 +94,7 @@ Prerequisite changes needed:
 - **HIR `UnifiedFuncOp::verifyRegions`** (`Ops.cpp`): asserts last body block has `ReturnOp` and last signature block has `SignatureOp` — relax to allow any structure
 - **HIR `SplitFuncOp::verifyRegions`** (`Ops.cpp`): same pattern for signature
 - **`UnifiedCallOp::verify`** (`Ops.cpp`): looks up callee's `getSignatureOp()` to validate arg/result counts — walk or collect from region instead
-- **HIRToMIR `FuncOpConversion`** (`HIRToMIR.cpp`): derives MLIR function signature types (`typeOfArgs`, `typeOfValues`) from the single return op — this is the most structurally coupled site; needs a new strategy for collecting type info (perhaps from the signature region or a dedicated attribute)
+- **HIRToMIR `FuncOpConversion`** (`HIRToMIR.cpp`): now walks all return ops and asserts they use identical type operands; consider adding a dedicated signature op in the function body to annotate arg/result types in one place, instead of deriving them from return ops
 - **SplitPhases** (`SplitPhases.cpp`): uses both `getReturnOp()` (for effective result phases, result names) and `getSignatureOp()` (for per-phase argument splitting) — needs to walk or iterate
 - **MIR `FuncOp::getReturnOp`** (`MIR/Ops.cpp`): same pattern as HIR; delete alongside
 - **CheckCalls** (`CheckCalls.cpp`): already uses `walk` for returns, so no change needed
