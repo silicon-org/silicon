@@ -37,8 +37,11 @@ struct CallFrame {
 struct Interpreter {
   SymbolTable &symbolTable;
   SmallVector<CallFrame> callStack;
+  unsigned maxSteps;
+  unsigned stepCount = 0;
 
-  Interpreter(SymbolTable &symbolTable) : symbolTable(symbolTable) {}
+  Interpreter(SymbolTable &symbolTable, unsigned maxSteps)
+      : symbolTable(symbolTable), maxSteps(maxSteps) {}
   FailureOr<SmallVector<Attribute>> run();
 
   /// Execute a single non-control-flow op within the given value map. Returns
@@ -162,6 +165,9 @@ LogicalResult Interpreter::executeOp(Operation *op,
 FailureOr<SmallVector<Attribute>> Interpreter::run() {
   SmallVector<Attribute> operands;
   while (auto *op = callStack.back().currentOp) {
+    if (++stepCount > maxSteps)
+      return op->emitError() << "interpreter exceeded " << maxSteps
+                             << " steps; possible infinite loop";
     auto &frame = callStack.back();
     LLVM_DEBUG(llvm::dbgs().indent(callStack.size() * 2)
                << "Executing " << *op << "\n");
@@ -262,6 +268,7 @@ FailureOr<SmallVector<Attribute>> Interpreter::run() {
 namespace {
 struct InterpretPass
     : public silicon::mir::impl::InterpretPassBase<InterpretPass> {
+  using InterpretPassBase::InterpretPassBase;
   void runOnOperation() override;
 };
 } // namespace
@@ -320,7 +327,7 @@ void InterpretPass::runOnOperation() {
       continue;
 
     LLVM_DEBUG(llvm::dbgs() << "Interpreting @" << func.getSymName() << "\n");
-    Interpreter interpreter(symbolTable);
+    Interpreter interpreter(symbolTable, maxSteps);
     interpreter.callStack.emplace_back();
     interpreter.callStack.back().currentOp = &func.getBody().front().front();
     auto result = interpreter.run();

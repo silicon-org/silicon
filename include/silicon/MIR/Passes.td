@@ -21,9 +21,18 @@ def InterpretPass : Pass<"interpret", "mlir::ModuleOp"> {
 
     Chaining and specialization are handled separately by the
     SpecializeFuncs pass.
+
+    The interpreter enforces a configurable step limit to prevent
+    non-terminating programs from hanging the compiler. Each executed
+    operation counts as one step. When the limit is exceeded, the pass
+    emits an error diagnostic and fails.
   }];
   let dependentDialects = [
     "mir::MIRDialect",
+  ];
+  let options = [
+    Option<"maxSteps", "max-steps", "unsigned", "1000000",
+           "Maximum number of interpreter steps before aborting">,
   ];
 }
 

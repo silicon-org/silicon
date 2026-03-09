@@ -15,10 +15,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 
 ## Dialect Review: Crash Risks
 
-- **Interpret: infinite loop on non-terminating programs.**
-  The interpreter loop has no iteration limit; a back-edge that never returns will hang.
-  Add a configurable `maxSteps` limit with a diagnostic on exhaustion.
-
 - **Interpret: unbounded call stack.**
   Recursive functions grow the call stack until OOM.
   Add a `maxCallDepth` check.
