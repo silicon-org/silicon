@@ -112,6 +112,7 @@ def ReturnOp : MIROp<"return", [Pure, ReturnLike, Terminator]> {
   let assemblyFormat = [{
     ($operands^ `:` type($operands))? attr-dict
   }];
+  let hasVerifier = 1;
 }
 
 def CallOp : MIROp<"call"> {

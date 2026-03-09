@@ -242,6 +242,36 @@ LogicalResult FuncOp::verify() {
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+// ReturnOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult ReturnOp::verify() {
+  // Only check return types when the parent is a FuncOp. The return may also
+  // appear inside an if-region or similar, where these checks don't apply.
+  auto funcOp = dyn_cast<FuncOp>((*this)->getParentOp());
+  if (!funcOp)
+    return success();
+
+  auto resultTypes = funcOp.getFunctionType().getResults();
+
+  // Check operand count matches function result count.
+  if (getNumOperands() != resultTypes.size())
+    return emitOpError() << "has " << getNumOperands()
+                         << " operands but enclosing function returns "
+                         << resultTypes.size() << " results";
+
+  // Check each operand type matches the corresponding function result type.
+  for (auto [i, operand, expected] :
+       llvm::enumerate(getOperands(), resultTypes))
+    if (operand.getType() != expected)
+      return emitOpError() << "operand #" << i << " has type "
+                           << operand.getType() << " but enclosing function "
+                           << "returns " << expected;
+
+  return success();
+}
+
 ReturnOp FuncOp::getReturnOp() {
   if (getBody().empty())
     return {};
