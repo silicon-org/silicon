@@ -56,8 +56,7 @@ Tests to convert to focused lit tests (then remove the e2e test):
 
 ### Roundtrip tests (`basic.mlir`)
 
-- **HIR**: 15 of 16 binary/cmp ops have no roundtrip test (only `hir.add` tested); `FuncTypeOp` and `NextPhaseOp` untested; visibility variants for `UnifiedFuncOp`/`SplitFuncOp`/`MultiphaseFuncOp` untested
-- **MIR**: 16 ops (all binary + all cmp) have zero roundtrip tests
+- **HIR**: `FuncTypeOp` and `NextPhaseOp` untested; visibility variants for `UnifiedFuncOp`/`SplitFuncOp`/`MultiphaseFuncOp` untested
 - **Base**: limited `OpaqueAttr` roundtrip coverage (no heterogeneous or nested opaque tests)
 
 ### Verifier error tests (`errors.mlir`)

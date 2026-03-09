@@ -82,6 +82,50 @@ mir.evaluated_func @eval_multi [#si.int<1> : !si.int, #si.type<!si.int> : !si.ty
 // CHECK: mir.evaluated_func private {{.*}}@eval_private [#si.unit : !si.unit]
 mir.evaluated_func private @eval_private [#si.unit : !si.unit]
 
+// Binary ops
+// CHECK-LABEL: mir.func @BinaryOps
+mir.func @BinaryOps(%x: !si.int, %y: !si.int) -> () {
+  // CHECK: mir.add %x, %y : !si.int
+  %0 = mir.add %x, %y : !si.int
+  // CHECK: mir.sub %x, %y : !si.int
+  %1 = mir.sub %x, %y : !si.int
+  // CHECK: mir.mul %x, %y : !si.int
+  %2 = mir.mul %x, %y : !si.int
+  // CHECK: mir.div %x, %y : !si.int
+  %3 = mir.div %x, %y : !si.int
+  // CHECK: mir.mod %x, %y : !si.int
+  %4 = mir.mod %x, %y : !si.int
+  // CHECK: mir.and %x, %y : !si.int
+  %5 = mir.and %x, %y : !si.int
+  // CHECK: mir.or %x, %y : !si.int
+  %6 = mir.or %x, %y : !si.int
+  // CHECK: mir.xor %x, %y : !si.int
+  %7 = mir.xor %x, %y : !si.int
+  // CHECK: mir.shl %x, %y : !si.int
+  %8 = mir.shl %x, %y : !si.int
+  // CHECK: mir.shr %x, %y : !si.int
+  %9 = mir.shr %x, %y : !si.int
+  mir.return
+}
+
+// Comparison ops
+// CHECK-LABEL: mir.func @CmpOps
+mir.func @CmpOps(%x: !si.int, %y: !si.int) -> () {
+  // CHECK: mir.eq %x, %y : !si.int -> !si.bool
+  %0 = mir.eq %x, %y : !si.int -> !si.bool
+  // CHECK: mir.neq %x, %y : !si.int -> !si.bool
+  %1 = mir.neq %x, %y : !si.int -> !si.bool
+  // CHECK: mir.lt %x, %y : !si.int -> !si.bool
+  %2 = mir.lt %x, %y : !si.int -> !si.bool
+  // CHECK: mir.gt %x, %y : !si.int -> !si.bool
+  %3 = mir.gt %x, %y : !si.int -> !si.bool
+  // CHECK: mir.leq %x, %y : !si.int -> !si.bool
+  %4 = mir.leq %x, %y : !si.int -> !si.bool
+  // CHECK: mir.geq %x, %y : !si.int -> !si.bool
+  %5 = mir.geq %x, %y : !si.int -> !si.bool
+  mir.return
+}
+
 // bool_to_i1
 // CHECK-LABEL: mir.func @BoolToI1
 mir.func @BoolToI1(%cond: !si.bool) -> () {

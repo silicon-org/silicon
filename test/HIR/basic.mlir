@@ -27,6 +27,21 @@ func.func @Foo(%arg0: !hir.any, %arg1: !hir.any, %arg2: !hir.any, %arg3: i1) {
   hir.inferrable
   hir.unify %arg0, %arg1
   hir.add %arg0, %arg1 : %arg2
+  hir.sub %arg0, %arg1 : %arg2
+  hir.mul %arg0, %arg1 : %arg2
+  hir.div %arg0, %arg1 : %arg2
+  hir.mod %arg0, %arg1 : %arg2
+  hir.and %arg0, %arg1 : %arg2
+  hir.or %arg0, %arg1 : %arg2
+  hir.xor %arg0, %arg1 : %arg2
+  hir.shl %arg0, %arg1 : %arg2
+  hir.shr %arg0, %arg1 : %arg2
+  hir.eq %arg0, %arg1 : %arg2
+  hir.neq %arg0, %arg1 : %arg2
+  hir.lt %arg0, %arg1 : %arg2
+  hir.gt %arg0, %arg1 : %arg2
+  hir.leq %arg0, %arg1 : %arg2
+  hir.geq %arg0, %arg1 : %arg2
   hir.let "x" : %arg0
   hir.store %arg0, %arg1 : %arg2
   cf.br ^bb1(%arg0 : !hir.any)
