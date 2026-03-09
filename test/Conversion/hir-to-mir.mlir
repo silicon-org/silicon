@@ -232,3 +232,58 @@ hir.func @UnusedBothArgs(%a, %b) -> (result) {
   // CHECK: mir.return
   hir.return %c42 : (%int, %int) -> (%int)
 }
+
+//===----------------------------------------------------------------------===//
+// hir.coerce_to_i1 → mir.bool_to_i1
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: mir.func @CoerceToI1(%a: !si.bool)
+hir.func @CoerceToI1(%a) -> () {
+  %bool = hir.bool_type
+  %a_typed = hir.coerce_type %a, %bool
+  // CHECK: mir.bool_to_i1 %a
+  %i1 = hir.coerce_to_i1 %a_typed
+  hir.return : (%bool) -> ()
+}
+
+//===----------------------------------------------------------------------===//
+// hir.type_of conversion (replaced with dummy type constant)
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: mir.func @TypeOf(%a: !si.int)
+hir.func @TypeOf(%a) -> () {
+  %int = hir.int_type
+  %a_typed = hir.coerce_type %a, %int
+  // type_of is replaced with a dummy constant; it should not appear in MIR.
+  // CHECK-NOT: hir.type_of
+  %ty = hir.type_of %a_typed
+  hir.return : (%int) -> ()
+}
+
+//===----------------------------------------------------------------------===//
+// hir.mir_constant passthrough
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: mir.func @MIRConstant
+hir.func @MIRConstant() -> (result) {
+  // CHECK: mir.constant #si.int<99>
+  %c = hir.mir_constant #si.int<99>
+  %int = hir.int_type
+  hir.return %c : () -> (%int)
+}
+
+//===----------------------------------------------------------------------===//
+// hir.opaque_pack → mir.opaque_pack (standalone, not via UnifyInOpaquePack)
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: mir.func @OpaquePack(%a: !si.int, %b: !si.bool)
+hir.func @OpaquePack(%a, %b) -> (ctx) {
+  %int = hir.int_type
+  %bool = hir.bool_type
+  %a_typed = hir.coerce_type %a, %int
+  %b_typed = hir.coerce_type %b, %bool
+  // CHECK: mir.opaque_pack(%a, %b) : (!si.int, !si.bool)
+  %packed = hir.opaque_pack(%a_typed, %b_typed)
+  %opaque = hir.opaque_type
+  hir.return %packed : (%int, %bool) -> (%opaque)
+}

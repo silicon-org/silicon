@@ -246,6 +246,15 @@ mir.func @test_cf_false() -> (result: !si.int) {
   mir.return %result : !si.int
 }
 
+//===----------------------------------------------------------------------===//
+// Zero-result function: verify that a function returning no values is
+// evaluated to an empty result list.
+
+// CHECK: mir.evaluated_func @test_zero_result []
+mir.func @test_zero_result() -> () {
+  mir.return
+}
+
 // CHECK: mir.evaluated_func @test_cf_compute [#si.int<15> : !si.int]
 mir.func @test_cf_compute() -> (result: !si.int) {
   %cond = mir.constant #si.bool<true> : !si.bool

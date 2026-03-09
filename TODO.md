@@ -26,9 +26,9 @@
 
 ### Pass positive tests
 
-- **HIRToMIR**: ~7 conversion patterns untested (`hir.mir_constant`, `hir.coerce_to_i1`, `arith.select`, `hir.opaque_pack`, `hir.opaque_unpack`, `hir.inferrable`, `hir.type_of`)
-- **Interpret**: missing tests for `arith.select`, `UnrealizedConversionCastOp` forwarding, `cond_br` condition error, module function skip, zero-result function
-- **MIRToCIRCT**: missing tests for `!si.bool` type conversion, multi-instance counter, source materialization (iN→i1), zero-result functions
+- **HIRToMIR**: remaining untested patterns (`arith.select` requires arith dialect registration in silicon-opt, `hir.opaque_unpack` blocked by shouldLower, `hir.inferrable` requires unresolved type setup)
+- **Interpret**: missing tests for `arith.select` (arith dialect not registered in silicon-opt), `UnrealizedConversionCastOp` forwarding, `cond_br` condition error, module function skip
+- **MIRToCIRCT**: missing tests for multi-instance counter, source materialization (iN→i1)
 
 ### Other focused test gaps
 

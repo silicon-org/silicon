@@ -131,6 +131,22 @@ mir.func @bool_to_i1(%a: !si.bool) -> (result: i1) attributes {isModule} {
   mir.return %0 : i1
 }
 
+// ---- !si.bool type maps to i1 ----
+
+// CHECK-LABEL: hw.module @bool_arg(in %x : i1, out result : i1)
+mir.func @bool_arg(%x: !si.bool) -> (result: !si.bool) attributes {isModule} {
+  // CHECK: hw.output %x : i1
+  mir.return %x : !si.bool
+}
+
+// ---- Zero-result module (no outputs) ----
+
+// CHECK-LABEL: hw.module @zero_result()
+// CHECK-NEXT:    hw.output
+mir.func @zero_result() -> () attributes {isModule} {
+  mir.return
+}
+
 // ---- Non-module functions are erased, not lowered ----
 
 // Non-module functions with convertible types should be erased by the
