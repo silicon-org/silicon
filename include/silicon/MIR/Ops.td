@@ -44,6 +44,7 @@ class MIRBinaryOp<string mnemonic>
   let arguments = (ins SiNumericType:$lhs, SiNumericType:$rhs);
   let results = (outs SiNumericType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+  let hasFolder = 1;
 }
 
 class MIRCmpOp<string mnemonic>
@@ -51,6 +52,7 @@ class MIRCmpOp<string mnemonic>
   let arguments = (ins SiNumericType:$lhs, SiNumericType:$rhs);
   let results = (outs BoolType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs)";
+  let hasFolder = 1;
 }
 
 // Arithmetic

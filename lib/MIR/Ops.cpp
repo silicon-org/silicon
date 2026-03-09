@@ -59,6 +59,139 @@ static bool getAttrAbbrev(llvm::raw_ostream &os, Attribute attr) {
 OpFoldResult ConstantOp::fold(FoldAdaptor adaptor) { return getValue(); }
 
 //===----------------------------------------------------------------------===//
+// Binary Ops
+//
+// Each binary op folds when both operands are constant IntAttrs. Arithmetic
+// ops use DynamicAPInt's native operators; bitwise ops convert to int64_t
+// since DynamicAPInt lacks bitwise operator overloads.
+//===----------------------------------------------------------------------===//
+
+/// Helper to extract IntAttr from both operands of a binary op adaptor.
+static std::optional<std::pair<llvm::DynamicAPInt, llvm::DynamicAPInt>>
+getConstantIntOperands(Attribute lhs, Attribute rhs) {
+  auto lhsAttr = dyn_cast_or_null<IntAttr>(lhs);
+  auto rhsAttr = dyn_cast_or_null<IntAttr>(rhs);
+  if (!lhsAttr || !rhsAttr)
+    return std::nullopt;
+  return std::make_pair(lhsAttr.getValue(), rhsAttr.getValue());
+}
+
+OpFoldResult AddOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
+    return IntAttr::get(getContext(), vals->first + vals->second);
+  return {};
+}
+
+OpFoldResult SubOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
+    return IntAttr::get(getContext(), vals->first - vals->second);
+  return {};
+}
+
+OpFoldResult MulOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
+    return IntAttr::get(getContext(), vals->first * vals->second);
+  return {};
+}
+
+OpFoldResult DivOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
+    return IntAttr::get(getContext(), vals->first / vals->second);
+  return {};
+}
+
+OpFoldResult ModOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
+    return IntAttr::get(getContext(), mod(vals->first, vals->second));
+  return {};
+}
+
+OpFoldResult AndOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs())) {
+    int64_t result =
+        static_cast<int64_t>(vals->first) & static_cast<int64_t>(vals->second);
+    return IntAttr::get(getContext(), llvm::DynamicAPInt(result));
+  }
+  return {};
+}
+
+OpFoldResult OrOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs())) {
+    int64_t result =
+        static_cast<int64_t>(vals->first) | static_cast<int64_t>(vals->second);
+    return IntAttr::get(getContext(), llvm::DynamicAPInt(result));
+  }
+  return {};
+}
+
+OpFoldResult XorOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs())) {
+    int64_t result =
+        static_cast<int64_t>(vals->first) ^ static_cast<int64_t>(vals->second);
+    return IntAttr::get(getContext(), llvm::DynamicAPInt(result));
+  }
+  return {};
+}
+
+OpFoldResult ShlOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs())) {
+    int64_t result = static_cast<int64_t>(vals->first)
+                     << static_cast<int64_t>(vals->second);
+    return IntAttr::get(getContext(), llvm::DynamicAPInt(result));
+  }
+  return {};
+}
+
+OpFoldResult ShrOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs())) {
+    int64_t result =
+        static_cast<int64_t>(vals->first) >> static_cast<int64_t>(vals->second);
+    return IntAttr::get(getContext(), llvm::DynamicAPInt(result));
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// Comparison Ops
+//===----------------------------------------------------------------------===//
+
+OpFoldResult EqOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
+    return base::BoolAttr::get(getContext(), vals->first == vals->second);
+  return {};
+}
+
+OpFoldResult NeqOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
+    return base::BoolAttr::get(getContext(), vals->first != vals->second);
+  return {};
+}
+
+OpFoldResult LtOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
+    return base::BoolAttr::get(getContext(), vals->first < vals->second);
+  return {};
+}
+
+OpFoldResult GtOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
+    return base::BoolAttr::get(getContext(), vals->first > vals->second);
+  return {};
+}
+
+OpFoldResult LeqOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
+    return base::BoolAttr::get(getContext(), vals->first <= vals->second);
+  return {};
+}
+
+OpFoldResult GeqOp::fold(FoldAdaptor adaptor) {
+  if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
+    return base::BoolAttr::get(getContext(), vals->first >= vals->second);
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
 // BoolToI1Op
 //===----------------------------------------------------------------------===//
 
