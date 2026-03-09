@@ -177,6 +177,23 @@ Tests to remove (redundant with existing coverage):
 - **HIR `OpaquePackOp`**: no fold for pack-of-unpack
 - **HIR `TypeOfOp` canonicalization for `constant_bool`**: exists but untested
 
+## Remove single-return/single-signature assumption
+
+The codebase assumes each function body has exactly one `ReturnOp` (in the last block) and each signature region has exactly one `SignatureOp`.
+This is baked into `getReturnOp()` and `getSignatureOp()` helper functions which grab `getBody().back().getTerminator()` / `getSignature().back().getTerminator()`.
+We want to allow 0, 1, or many return/signature terminators across arbitrarily structured regions, and delete these two helpers.
+
+Prerequisite changes needed:
+
+- **HIR `FuncOp::verify`** (`Ops.cpp`): uses `getReturnOp()` to check `resultNames` count — needs to walk all returns or defer the check
+- **HIR `UnifiedFuncOp::verifyRegions`** (`Ops.cpp`): asserts last body block has `ReturnOp` and last signature block has `SignatureOp` — relax to allow any structure
+- **HIR `SplitFuncOp::verifyRegions`** (`Ops.cpp`): same pattern for signature
+- **`UnifiedCallOp::verify`** (`Ops.cpp`): looks up callee's `getSignatureOp()` to validate arg/result counts — walk or collect from region instead
+- **HIRToMIR `FuncOpConversion`** (`HIRToMIR.cpp`): derives MLIR function signature types (`typeOfArgs`, `typeOfValues`) from the single return op — this is the most structurally coupled site; needs a new strategy for collecting type info (perhaps from the signature region or a dedicated attribute)
+- **SplitPhases** (`SplitPhases.cpp`): uses both `getReturnOp()` (for effective result phases, result names) and `getSignatureOp()` (for per-phase argument splitting) — needs to walk or iterate
+- **MIR `FuncOp::getReturnOp`** (`MIR/Ops.cpp`): same pattern as HIR; delete alongside
+- **CheckCalls** (`CheckCalls.cpp`): already uses `walk` for returns, so no change needed
+
 ## Postponed Long-Term Fixes
 
 - MIRToCIRCT: `!si.int` is temporarily mapped to `i64`; once bitwidth inference exists, this should be an error diagnostic instead
