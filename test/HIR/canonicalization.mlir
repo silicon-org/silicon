@@ -18,6 +18,15 @@ func.func @TypeOfConstantUnit() -> !hir.any {
   return %1 : !hir.any
 }
 
+// CHECK-LABEL: @TypeOfConstantBool
+func.func @TypeOfConstantBool() -> !hir.any {
+  // CHECK: [[TY:%.+]] = hir.bool_type
+  %0 = hir.constant_bool <true>
+  %1 = hir.type_of %0
+  // CHECK: return [[TY]]
+  return %1 : !hir.any
+}
+
 // CHECK-LABEL: @TypeOfConstantInt
 func.func @TypeOfConstantInt() -> !hir.any {
   // CHECK: [[TY:%.+]] = hir.int_type

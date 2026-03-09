@@ -114,7 +114,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 - **MIR `OpaquePackOp`/`OpaqueUnpackOp`**: no round-trip canonicalization
 - **HIR `CoerceTypeOp`**: no fold for identity coercions
 - **HIR `OpaquePackOp`**: no fold for pack-of-unpack
-- **HIR `TypeOfOp` canonicalization for `constant_bool`**: exists but untested
 
 ## Remove single-return/single-signature assumption
 
