@@ -439,6 +439,12 @@ static bool shouldLower(hir::FuncOp func) {
       if (!isResolvableType(coerce.getTypeOperand()))
         ready = false;
     } else if (auto call = dyn_cast<hir::CallOp>(op)) {
+      // Block lowering if the callee is a MultiphaseFuncOp that hasn't been
+      // fully resolved yet. Such calls must go through SpecializeFuncs first.
+      auto *calleeOp =
+          SymbolTable::lookupNearestSymbolFrom(func, call.getCalleeAttr());
+      if (isa_and_nonnull<hir::MultiphaseFuncOp>(calleeOp))
+        ready = false;
       for (auto val : call.getTypeOfArgs())
         if (!isResolvableType(val))
           ready = false;

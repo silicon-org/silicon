@@ -65,24 +65,6 @@ struct SpecializeFuncsPass
 };
 } // namespace
 
-/// Erase all void calls to a given symbol throughout the module. This is used
-/// when an evaluated function returned no results: any calls to it are no-ops
-/// and must be removed before the evaluated func itself can be erased.
-static void eraseVoidCalls(ModuleOp module, StringRef calleeName) {
-  SmallVector<Operation *> toErase;
-  module.walk([&](Operation *op) {
-    if (auto callOp = dyn_cast<hir::CallOp>(op)) {
-      if (callOp.getCallee() == calleeName && callOp.getNumResults() == 0)
-        toErase.push_back(callOp);
-    } else if (auto callOp = dyn_cast<mir::CallOp>(op)) {
-      if (callOp.getCallee() == calleeName && callOp.getNumResults() == 0)
-        toErase.push_back(callOp);
-    }
-  });
-  for (auto *op : toErase)
-    op->erase();
-}
-
 /// Replace the last block arg (the opaque context) with individual
 /// hir.mir_constant ops for each element of the opaque attribute. Erases the
 /// opaque_unpack consuming the context arg.
@@ -163,6 +145,120 @@ void SpecializeFuncsPass::transitiveSpecialize(hir::FuncOp func,
     auto opaqueAttr = dyn_cast<base::OpaqueAttr>(mirConst.getValue());
     if (!opaqueAttr)
       continue;
+
+    // Handle MultiphaseFuncOp callees: expand the opaque in the first
+    // sub-function and update the multiphase_func's args. This enables
+    // the first sub-function to be lowered and interpreted in the next
+    // PhaseEvalLoop iteration.
+    if (auto calleeMpFunc =
+            symbolTable.lookup<hir::MultiphaseFuncOp>(callOp.getCallee())) {
+      LLVM_DEBUG(llvm::dbgs() << "Transitive specializing multiphase @"
+                              << calleeMpFunc.getSymName() << "\n");
+
+      // Check specialization cache.
+      auto key =
+          std::make_pair(calleeMpFunc.getSymNameAttr(), Attribute(opaqueAttr));
+      auto cacheIt = specCache.find(key);
+      if (cacheIt != specCache.end()) {
+        auto specName = cacheIt->second;
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Reusing cached specialization @" << specName << "\n");
+        OpBuilder builder(callOp);
+        SmallVector<Value> newArgs(callOp.getArguments().drop_back());
+        SmallVector<Value> newTypeOfArgs(callOp.getTypeOfArgs().drop_back());
+        auto newCallOp = hir::CallOp::create(
+            builder, callOp.getLoc(), callOp.getResultTypes(), specName,
+            newArgs, newTypeOfArgs, callOp.getTypeOfResults());
+        callOp.replaceAllUsesWith(newCallOp.getResults());
+        callOp.erase();
+        continue;
+      }
+
+      // Clone the MultiphaseFuncOp if it has other users (e.g., from a
+      // split_func reference or another call site). Only mutate in place
+      // for the last remaining user.
+      auto mpFuncToSpecialize = calleeMpFunc;
+      unsigned useCount = 0;
+      if (auto uses =
+              SymbolTable::getSymbolUses(calleeMpFunc, getOperation())) {
+        for (auto &use : *uses) {
+          (void)use;
+          if (++useCount > 1)
+            break;
+        }
+      }
+      if (useCount > 1) {
+        // Clone the MultiphaseFuncOp and its sub-functions.
+        auto specName =
+            (calleeMpFunc.getSymName() + "_" + Twine(specCounter++)).str();
+        OpBuilder builder(calleeMpFunc);
+        builder.setInsertionPointAfter(calleeMpFunc);
+
+        // Clone sub-functions first.
+        SmallVector<Attribute> newSubFuncAttrs;
+        for (auto subRef : calleeMpFunc.getPhaseFuncs()) {
+          auto subName = cast<FlatSymbolRefAttr>(subRef).getValue();
+          if (auto subFunc = symbolTable.lookup<hir::FuncOp>(subName)) {
+            auto clonedSub = cast<hir::FuncOp>(builder.clone(*subFunc));
+            auto subSpecName = (subName + "_" + Twine(specCounter++)).str();
+            clonedSub.setSymName(subSpecName);
+            symbolTable.insert(clonedSub);
+            newSubFuncAttrs.push_back(
+                FlatSymbolRefAttr::get(&getContext(), clonedSub.getSymName()));
+          } else {
+            newSubFuncAttrs.push_back(subRef);
+          }
+        }
+
+        // Create the cloned MultiphaseFuncOp.
+        auto clonedMp = hir::MultiphaseFuncOp::create(
+            builder, calleeMpFunc.getLoc(), builder.getStringAttr(specName),
+            /*sym_visibility=*/StringAttr{}, calleeMpFunc.getArgNamesAttr(),
+            calleeMpFunc.getArgIsFirstAttr(), calleeMpFunc.getResultNamesAttr(),
+            builder.getArrayAttr(newSubFuncAttrs));
+        symbolTable.insert(clonedMp);
+        specCache[key] = clonedMp.getSymNameAttr();
+        mpFuncToSpecialize = clonedMp;
+      } else {
+        specCache[key] = calleeMpFunc.getSymNameAttr();
+      }
+
+      // Expand the opaque in the first sub-function.
+      auto firstSubSym =
+          cast<FlatSymbolRefAttr>(mpFuncToSpecialize.getPhaseFuncs()[0]);
+      if (auto firstSubFunc =
+              symbolTable.lookup<hir::FuncOp>(firstSubSym.getValue())) {
+        expandOpaqueContext(firstSubFunc, opaqueAttr);
+
+        // Remove the "first" args from the MultiphaseFuncOp.
+        auto argIsFirst = mpFuncToSpecialize.getArgIsFirst();
+        SmallVector<Attribute> newArgNames;
+        SmallVector<bool> newArgIsFirst;
+        for (unsigned k = 0; k < mpFuncToSpecialize.getArgNames().size(); ++k) {
+          if (!argIsFirst[k]) {
+            newArgNames.push_back(mpFuncToSpecialize.getArgNames()[k]);
+            newArgIsFirst.push_back(false);
+          }
+        }
+        mpFuncToSpecialize.setArgNamesAttr(
+            ArrayAttr::get(&getContext(), newArgNames));
+        mpFuncToSpecialize.setArgIsFirstAttr(
+            DenseBoolArrayAttr::get(&getContext(), newArgIsFirst));
+      }
+
+      // Update the call: drop the last argument and reference the
+      // specialized MultiphaseFuncOp.
+      OpBuilder builder(callOp);
+      SmallVector<Value> newArgs(callOp.getArguments().drop_back());
+      SmallVector<Value> newTypeOfArgs(callOp.getTypeOfArgs().drop_back());
+      auto newCallOp =
+          hir::CallOp::create(builder, callOp.getLoc(), callOp.getResultTypes(),
+                              mpFuncToSpecialize.getSymNameAttr(), newArgs,
+                              newTypeOfArgs, callOp.getTypeOfResults());
+      callOp.replaceAllUsesWith(newCallOp.getResults());
+      callOp.erase();
+      continue;
+    }
 
     auto calleeFunc = symbolTable.lookup<hir::FuncOp>(callOp.getCallee());
     if (!calleeFunc)
@@ -259,71 +355,14 @@ void SpecializeFuncsPass::runOnOperation() {
       // If only one sub-function remains after removing the evaluated one,
       // or there's no next function, dissolve.
       if (phaseFuncs.size() < 2) {
-        eraseVoidCalls(getOperation(), evalFunc.getSymName());
         symbolTable.erase(evalFunc);
         mpFunc.erase();
         changed = true;
         continue;
       }
 
-      // If the evaluated function has no results, there's no context to
-      // chain into the next sub-function. Just remove it and continue.
-      if (resultAttrs.empty()) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  No results to chain, removing evaluated func\n");
-        eraseVoidCalls(getOperation(), evalFunc.getSymName());
-        symbolTable.erase(evalFunc);
-        SmallVector<Attribute> newPhaseFuncs(phaseFuncs.begin() + 1,
-                                             phaseFuncs.end());
-
-        // Remove "first" args from the multiphase_func.
-        auto argIsFirst = mpFunc.getArgIsFirst();
-        SmallVector<Attribute> newArgNames;
-        SmallVector<bool> newArgIsFirst;
-        for (unsigned k = 0; k < mpFunc.getArgNames().size(); ++k) {
-          if (!argIsFirst[k]) {
-            newArgNames.push_back(mpFunc.getArgNames()[k]);
-            newArgIsFirst.push_back(false);
-          }
-        }
-        // Remaining args keep their original first/last designation. Don't
-        // relabel last args as first — they should stay targeted at the last
-        // sub-function.
-
-        if (newPhaseFuncs.size() <= 1) {
-          for (auto splitFunc : getOperation().getOps<hir::SplitFuncOp>()) {
-            auto pfAttrs = splitFunc.getPhaseFuncs();
-            bool updated = false;
-            SmallVector<Attribute> updatedPhaseFuncs(pfAttrs.begin(),
-                                                     pfAttrs.end());
-            for (unsigned i = 0; i < pfAttrs.size(); ++i) {
-              if (cast<FlatSymbolRefAttr>(pfAttrs[i]).getValue() ==
-                  mpFunc.getSymName()) {
-                updatedPhaseFuncs[i] = newPhaseFuncs.empty()
-                                           ? FlatSymbolRefAttr{}
-                                           : newPhaseFuncs[0];
-                updated = true;
-                break;
-              }
-            }
-            if (updated)
-              splitFunc.setPhaseFuncsAttr(
-                  ArrayAttr::get(&getContext(), updatedPhaseFuncs));
-          }
-          mpFunc.erase();
-        } else {
-          mpFunc.setPhaseFuncsAttr(
-              ArrayAttr::get(&getContext(), newPhaseFuncs));
-          mpFunc.setArgNamesAttr(ArrayAttr::get(&getContext(), newArgNames));
-          mpFunc.setArgIsFirstAttr(
-              DenseBoolArrayAttr::get(&getContext(), newArgIsFirst));
-        }
-
-        changed = true;
-        continue;
-      }
-
-      // The evaluated_func should have exactly one result (the opaque pack).
+      // SplitPhases always emits opaque pack/unpack pairs, so
+      // evaluated_func should always have exactly one result (the opaque).
       if (resultAttrs.size() != 1) {
         emitBug(evalFunc.getLoc())
             << "evaluated_func has " << resultAttrs.size()
@@ -353,7 +392,6 @@ void SpecializeFuncsPass::runOnOperation() {
       transitiveSpecialize(nextFunc, symbolTable);
 
       // Remove the evaluated first sub-function and update the multiphase_func.
-      eraseVoidCalls(getOperation(), evalFunc.getSymName());
       symbolTable.erase(evalFunc);
 
       SmallVector<Attribute> newPhaseFuncs(phaseFuncs.begin() + 1,
@@ -374,27 +412,18 @@ void SpecializeFuncsPass::runOnOperation() {
       // sub-function.
 
       if (newPhaseFuncs.size() <= 1) {
-        // Dissolve: update split_func to reference the remaining sub-function
-        // directly.
-        for (auto splitFunc : getOperation().getOps<hir::SplitFuncOp>()) {
-          auto pfAttrs = splitFunc.getPhaseFuncs();
-          bool updated = false;
-          SmallVector<Attribute> updatedPhaseFuncs(pfAttrs.begin(),
-                                                   pfAttrs.end());
-          for (unsigned i = 0; i < pfAttrs.size(); ++i) {
-            if (cast<FlatSymbolRefAttr>(pfAttrs[i]).getValue() ==
-                mpFunc.getSymName()) {
-              updatedPhaseFuncs[i] = newPhaseFuncs.empty() ? FlatSymbolRefAttr{}
-                                                           : newPhaseFuncs[0];
-              updated = true;
-              break;
-            }
+        // Dissolve: redirect all symbol uses of the multiphase_func to the
+        // remaining sub-function, then erase the multiphase_func.
+        if (!newPhaseFuncs.empty()) {
+          auto remainingSym = cast<FlatSymbolRefAttr>(newPhaseFuncs[0]);
+          if (failed(SymbolTable::replaceAllSymbolUses(
+                  mpFunc, remainingSym.getAttr(), getOperation()))) {
+            emitBug(mpFunc.getLoc())
+                << "failed to replace symbol uses of @" << mpFunc.getSymName();
+            return signalPassFailure();
           }
-          if (updated)
-            splitFunc.setPhaseFuncsAttr(
-                ArrayAttr::get(&getContext(), updatedPhaseFuncs));
         }
-        mpFunc.erase();
+        symbolTable.erase(mpFunc);
       } else {
         mpFunc.setPhaseFuncsAttr(ArrayAttr::get(&getContext(), newPhaseFuncs));
         mpFunc.setArgNamesAttr(ArrayAttr::get(&getContext(), newArgNames));
@@ -406,15 +435,41 @@ void SpecializeFuncsPass::runOnOperation() {
     }
   }
 
-  // Clean up void calls to evaluated funcs with empty results. These are
-  // no-op calls to phase sub-functions that have already been fully evaluated
-  // and returned nothing. This happens with multi-phase functions like
-  // `const const fn` where inner phases produce no results but other functions
-  // still reference them.
-  for (auto evalFunc : getOperation().getOps<mir::EvaluatedFuncOp>()) {
-    if (!evalFunc.getResults().empty())
-      continue;
-    eraseVoidCalls(getOperation(), evalFunc.getSymName());
+  // Split-func chaining: when a split_func entry is an evaluated_func and the
+  // next entry is an HIR func, chain the evaluated result's context (the last
+  // result, an opaque) into the next entry. This handles cross-phase chaining
+  // within split_funcs, complementing the within-MultiphaseFuncOp chaining
+  // above.
+  for (auto splitFunc : getOperation().getOps<hir::SplitFuncOp>()) {
+    auto entries = splitFunc.getPhaseFuncs();
+    for (unsigned i = 0; i + 1 < entries.size(); ++i) {
+      auto entrySym = cast<FlatSymbolRefAttr>(entries[i]);
+      auto evalFunc =
+          symbolTable.lookup<mir::EvaluatedFuncOp>(entrySym.getValue());
+      if (!evalFunc)
+        continue;
+
+      auto nextSym = cast<FlatSymbolRefAttr>(entries[i + 1]);
+      auto nextFunc = symbolTable.lookup<hir::FuncOp>(nextSym.getValue());
+      if (!nextFunc)
+        continue;
+
+      // The last result of the evaluated_func is the opaque context.
+      auto resultAttrs = evalFunc.getResults();
+      if (resultAttrs.empty())
+        continue;
+      auto opaqueAttr =
+          dyn_cast<base::OpaqueAttr>(resultAttrs[resultAttrs.size() - 1]);
+      if (!opaqueAttr)
+        continue;
+
+      LLVM_DEBUG(llvm::dbgs()
+                 << "Split-func chaining " << entrySym << " into " << nextSym
+                 << " in split_func @" << splitFunc.getSymName() << "\n");
+
+      expandOpaqueContext(nextFunc, opaqueAttr);
+      transitiveSpecialize(nextFunc, symbolTable);
+    }
   }
 
   // Strip unused opaque context args from HIR functions. When SplitPhases
@@ -457,6 +512,32 @@ void SpecializeFuncsPass::runOnOperation() {
     if (!lastTypeOfArg.getDefiningOp<hir::OpaqueTypeOp>())
       continue;
 
+    // Skip stripping if the function (or its parent MultiphaseFuncOp) has
+    // callers beyond split_func/multiphase_func references. Direct callers
+    // still pass the arg; transitiveSpecialize will handle it when the
+    // caller is processed.
+    auto checkExternalCallers = [&](Operation *symbolOp) -> bool {
+      if (auto uses = SymbolTable::getSymbolUses(symbolOp, getOperation())) {
+        for (auto &use : *uses) {
+          if (!isa<hir::SplitFuncOp, hir::MultiphaseFuncOp>(use.getUser()))
+            return true;
+        }
+      }
+      return false;
+    };
+
+    bool hasExternalCallers = checkExternalCallers(func);
+    if (!hasExternalCallers) {
+      auto it = mpFirstSubToParent.find(func.getSymName());
+      if (it != mpFirstSubToParent.end())
+        hasExternalCallers = checkExternalCallers(it->second);
+    }
+    if (hasExternalCallers) {
+      LLVM_DEBUG(llvm::dbgs() << "  Skipping strip of @" << func.getSymName()
+                              << " — has external callers\n");
+      continue;
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "Stripping unused opaque arg from @"
                             << func.getSymName() << "\n");
 
@@ -476,9 +557,9 @@ void SpecializeFuncsPass::runOnOperation() {
 
     // If this is the first sub-function of a multiphase_func, remove the
     // corresponding "first" arg from the multiphase declaration.
-    auto it = mpFirstSubToParent.find(func.getSymName());
-    if (it != mpFirstSubToParent.end()) {
-      auto mpFunc = it->second;
+    auto mpIt = mpFirstSubToParent.find(func.getSymName());
+    if (mpIt != mpFirstSubToParent.end()) {
+      auto mpFunc = mpIt->second;
       auto argIsFirst = mpFunc.getArgIsFirst();
       SmallVector<Attribute> mpArgNames;
       SmallVector<bool> mpArgIsFirst;
