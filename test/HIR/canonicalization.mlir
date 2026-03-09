@@ -57,6 +57,40 @@ func.func @CoerceTypeNonIdentity() -> !hir.any {
   return %1 : !hir.any
 }
 
+// CHECK-LABEL: @PackOfUnpack
+func.func @PackOfUnpack(%arg0: !hir.any) -> !hir.any {
+  %0:2 = hir.opaque_unpack %arg0 : !hir.any, !hir.any
+  // CHECK-NOT: hir.opaque_pack
+  %1 = hir.opaque_pack(%0#0, %0#1)
+  // CHECK: return %arg0
+  return %1 : !hir.any
+}
+
+// CHECK-LABEL: @PackOfUnpackPartial
+func.func @PackOfUnpackPartial(%arg0: !hir.any) -> !hir.any {
+  %0:3 = hir.opaque_unpack %arg0 : !hir.any, !hir.any, !hir.any
+  // CHECK: hir.opaque_pack
+  %1 = hir.opaque_pack(%0#0, %0#1)
+  return %1 : !hir.any
+}
+
+// CHECK-LABEL: @PackOfUnpackReordered
+func.func @PackOfUnpackReordered(%arg0: !hir.any) -> !hir.any {
+  %0:2 = hir.opaque_unpack %arg0 : !hir.any, !hir.any
+  // CHECK: hir.opaque_pack
+  %1 = hir.opaque_pack(%0#1, %0#0)
+  return %1 : !hir.any
+}
+
+// CHECK-LABEL: @PackOfDifferentUnpacks
+func.func @PackOfDifferentUnpacks(%arg0: !hir.any, %arg1: !hir.any) -> !hir.any {
+  %0:1 = hir.opaque_unpack %arg0 : !hir.any
+  %1:1 = hir.opaque_unpack %arg1 : !hir.any
+  // CHECK: hir.opaque_pack
+  %2 = hir.opaque_pack(%0#0, %1#0)
+  return %2 : !hir.any
+}
+
 hir.unified_func @dummy() -> (x: 0, y: 0) {
   %0 = hir.int_type
   %1 = hir.int_type

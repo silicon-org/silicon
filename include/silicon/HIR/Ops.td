@@ -474,6 +474,7 @@ def OpaquePackOp : HIROp<"opaque_pack", [Pure]> {
   let arguments = (ins Variadic<HIRAnyType>:$operands);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = [{ `(` $operands `)` attr-dict }];
+  let hasCanonicalizeMethod = 1;
 }
 
 def OpaqueUnpackOp : HIROp<"opaque_unpack", [Pure]> {

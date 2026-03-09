@@ -53,10 +53,6 @@
 - Add codegen test for `const { expr }` producing `hir.expr` with `phaseShift=-1` in `test/Codegen/basic.si`
 - Add `isModule` test cases to `test/MIR/interpret.mlir`, `test/HIR/specialize-funcs.mlir`, and `test/Transforms/phase-eval-loop.mlir`
 
-## Dialect Review: Missing Canonicalizers/Folders
-
-- **HIR `OpaquePackOp`**: no fold for pack-of-unpack
-
 ## Remove single-return/single-signature assumption
 
 The codebase assumes each function body has exactly one `ReturnOp` (in the last block) and each signature region has exactly one `SignatureOp`.

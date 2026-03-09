@@ -1088,6 +1088,37 @@ OpFoldResult ConstantUnitOp::fold(FoldAdaptor) {
 OpFoldResult MIRConstantOp::fold(FoldAdaptor) { return getValue(); }
 
 //===----------------------------------------------------------------------===//
+// OpaquePackOp
+//===----------------------------------------------------------------------===//
+
+/// Fold `opaque_pack(opaque_unpack(x)#0, ..., opaque_unpack(x)#N)` into `x`
+/// when all operands come from the same unpack and correspond to all of its
+/// results in order.
+LogicalResult OpaquePackOp::canonicalize(OpaquePackOp op,
+                                         PatternRewriter &rewriter) {
+  auto operands = op.getOperands();
+  if (operands.empty())
+    return failure();
+
+  // All operands must be results of the same OpaqueUnpackOp.
+  auto unpack = operands[0].getDefiningOp<OpaqueUnpackOp>();
+  if (!unpack)
+    return failure();
+
+  // The number of pack operands must match the number of unpack results.
+  if (operands.size() != unpack.getResults().size())
+    return failure();
+
+  // Each operand must correspond to the matching unpack result.
+  for (auto [i, operand] : llvm::enumerate(operands))
+    if (operand != unpack.getResult(i))
+      return failure();
+
+  rewriter.replaceOp(op, unpack.getInput());
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // OpaqueUnpackOp
 //===----------------------------------------------------------------------===//
 
