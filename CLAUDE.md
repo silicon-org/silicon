@@ -54,6 +54,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - Optimizations and dead code removal must not hide user errors; they should be reported before the compiler removes ops
 - Keep in mind that git stash will require you to recompile the silc or silicon-opt targets to not work with a stale compiler; consider copying the old compiler to tmp/silc, and using that instead of repeatedly stashing and unstashing.
 - IR ops that refer to other symbols need the verify symbol user interface and a verifier that checks whether the local use (call args, results) line up with the definition (func args, results)
+- Passes should rely on op invariants checked in verifiers and assert that those hold; don't silently skip on null or unresolvable, or gloss over errors -- these must be loud assertion failures
 
 ## Todos
 

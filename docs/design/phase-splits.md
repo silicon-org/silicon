@@ -20,15 +20,15 @@ hir.unified_func @foo(%a: -3, %b: -1) -> (c: 0) {
   %int_type = hir.int_type                                                // any phase
   %type_type = hir.type_type                                              // any phase
   %a.type = hir.unified_call @doU() : () -> (%type_type: 0)               // phase -4
-  %a0 = hir.coerce_type %a : %a.type                                      // phase -3
+  %a0 = hir.coerce_type %a, %a.type                                       // phase -3
   %a1 = hir.unified_call @doV(%a0) : (%a.type: 0) -> (%a.type: 0)         // phase -3
   %a2 = hir.expr -1 { hir.yield %a1 }                                     // phase -2
   %b.type = hir.unified_call @doW(%a2) : (%a.type: 0) -> (%type_type: 0)  // phase -2
-  %b0 = hir.coerce_type %b : %b.type                                      // phase -1
+  %b0 = hir.coerce_type %b, %b.type                                       // phase -1
   %b1 = hir.unified_call @doX(%b0) : (%b.type: 0) -> (%b.type: 0)         // phase -1
   %b2 = hir.expr -1 { hir.yield %b1 }                                     // phase 0
   %c = hir.unified_call @doY(%b2) : (%b.type: 0) -> (%int_type: 0)        // phase 0
-  hir.return %c : %int_type
+  hir.return %c
 }
 ```
 
@@ -70,7 +70,7 @@ hir.unified_func @hello(%a: 0, %b: -3, %c: 2) -> (x: 4, y: -2, z: 0) {
   hir.signature (%a.type, %b.type, %c.type) -> (%x.type, %y.type, %z.type)
 } {
   // body region
-  hir.return %x, %y, %z : %x.type, %y.type, %z.type
+  hir.return %x, %y, %z
 }
 ```
 
@@ -105,45 +105,58 @@ hir.multiphase_func @foo.0(last a) -> (ctx01) [
   @foo.0b   // implied (a, ctx0ab) -> (ctx01)
 ]
 hir.func @foo.0a() -> (ctx0ab) {
-  %type_type = hir.type_type
   %opaque_type = hir.opaque_type
+  hir.signature () -> (%opaque_type)
+} {
+  %type_type = hir.type_type
   %a.type = hir.call @doU() : () -> (%type_type)  // phase -4
   %ctx0ab = hir.opaque_pack (%a.type)
-  hir.return %ctx0ab : %opaque_type
+  hir.return %ctx0ab
 }
 hir.func @foo.0b(%a, %ctx0ab) -> (ctx01) {
   %opaque_type = hir.opaque_type
   %a.type = hir.opaque_unpack %ctx0ab
-  %a0 = hir.coerce_type %a : %a.type                 // phase -3
-  %a1 = hir.call @doV(%a0) : (%a.type) -> (%a.type)  // phase -3
+  hir.signature (%a.type, %opaque_type) -> (%opaque_type)
+} {
+  %a.type = hir.opaque_unpack %ctx0ab
+  %a0 = hir.coerce_type %a, %a.type                   // phase -3
+  %a1 = hir.call @doV(%a0) : (%a.type) -> (%a.type)   // phase -3
   %ctx01 = hir.opaque_pack (%a1, %a.type)
-  hir.return %ctx01 : %opaque_type
+  hir.return %ctx01
 }
 hir.multiphase_func @foo.1(last b, first ctx01) -> (ctx12) [
   @foo.1a,  // implied (ctx01) -> (ctx1ab)
   @foo.1b   // implied (b, ctx1ab) -> (ctx12)
 ]
 hir.func @foo.1a(%ctx01) -> (ctx1ab) {
-  %type_type = hir.type_type
   %opaque_type = hir.opaque_type
+  hir.signature (%opaque_type) -> (%opaque_type)
+} {
+  %type_type = hir.type_type
   %a2, %a.type = hir.opaque_unpack %ctx01
   %b.type = hir.call @doW(%a2) : (%a.type) -> (%type_type)  // phase -2
   %ctx1ab = hir.opaque_pack (%b.type)
-  hir.return %ctx1ab : %opaque_type
+  hir.return %ctx1ab
 }
 hir.func @foo.1b(%b, %ctx1ab) -> (ctx12) {
   %opaque_type = hir.opaque_type
   %b.type = hir.opaque_unpack %ctx1ab
-  %b0 = hir.coerce_type %b : %b.type                 // phase -1
-  %b1 = hir.call @doX(%b0) : (%b.type) -> (%b.type)  // phase -1
+  hir.signature (%b.type, %opaque_type) -> (%opaque_type)
+} {
+  %b.type = hir.opaque_unpack %ctx1ab
+  %b0 = hir.coerce_type %b, %b.type                   // phase -1
+  %b1 = hir.call @doX(%b0) : (%b.type) -> (%b.type)   // phase -1
   %ctx12 = hir.opaque_pack (%b1, %b.type)
-  hir.return %ctx12 : %opaque_type
+  hir.return %ctx12
 }
 hir.func @foo.2(%ctx12) -> (c) {
   %int_type = hir.int_type
+  %opaque_type = hir.opaque_type
+  hir.signature (%opaque_type) -> (%int_type)
+} {
   %b2, %b.type = hir.opaque_unpack %ctx12
   %c = hir.call @doY(%b2) : (%b.type) -> (%int_type)  // phase 0
-  hir.return %c : %int_type
+  hir.return %c
 }
 ```
 
@@ -250,22 +263,28 @@ A regular function consists of:
 - a symbol name, such as `@hello`
 - a list of block arguments, such as `(%a, %b, %c)`
 - a list of result names, such as `(d, e, f)`
+- a signature region computing the types of arguments and results, terminated with `hir.signature`
 - a body region describing the computation, terminated with `hir.return`
+
+This mirrors the structure of `hir.unified_func`: both have a signature region and a body region.
+The difference is purely semantic — `unified_func` represents multi-phase code (with `argPhases`, `resultPhases`, `unified_call`, and `hir.expr` boundaries), while `func` represents single-phase code.
+SplitPhases bridges the two by decomposing a `unified_func` into per-phase `func` ops, deriving each output func's signature region from the unified signature.
 
 All block arguments have MLIR type `!hir.any`, which is omitted in the assembly format.
 The SSA name of each block argument matches the name of the corresponding function argument.
-Types of block arguments are not passed into the function as distinct inputs, but can be obtained through a `hir.type_of` op.
-When a call site wants to specialize a function for concrete argument and result types, it inserts `hir.coerce_type` ops immediately after the block arguments and immediately before return ops, and inserts unification ops on the return ops' type operands.
+The signature region is the canonical source of argument and result type information for the function.
+HIRToMIR reads the signature to materialize concrete MLIR types during lowering.
+The body may also contain `hir.coerce_type` ops on block arguments, inserted by CheckCalls to provide ground truth for type inference within the body (see the inference design doc for details).
 
 The syntax of a function looks roughly like this:
 
 ```mlir
 hir.func @hello(%a, %b, %c) -> (d, e, f) {
-  %a.type = hir.type_of %a
-  %b.type = hir.type_of %b
-  %c.type = hir.type_of %c
-  // ...
-  hir.return %d, %e, %f : %d.type, %e.type, %f.type
+  // signature region
+  hir.signature (%a.type, %b.type, %c.type) -> (%d.type, %e.type, %f.type)
+} {
+  // body region
+  hir.return %d, %e, %f
 }
 ```
 
@@ -349,41 +368,51 @@ hir.multiphase_func @bar.0() [
   @bar.0e   // implied (ctx0de) -> ()
 ]
 hir.func @bar.0a() -> (ctx0ab) {
-  %type_type = hir.type_type
   %opaque_type = hir.opaque_type
+  hir.signature () -> (%opaque_type)
+} {
+  %type_type = hir.type_type
   %a.type = hir.call @doU() : () -> (%type_type)  // phase -4
   %ctx0ab = hir.opaque_pack (%a.type)
-  hir.return %ctx0ab : %opaque_type
+  hir.return %ctx0ab
 }
 hir.func @bar.0b(%ctx0ab) -> (ctx0bc) {
   %opaque_type = hir.opaque_type
+  hir.signature (%opaque_type) -> (%opaque_type)
+} {
   %a.type = hir.opaque_unpack %ctx0ab
   %a = hir.call @makeA() : () -> (%a.type)                        // phase -3
   %foo.ctx01 = hir.call @foo.0(%a) : (%a.type) -> (%opaque_type)  // phase -3
   %ctx0bc = hir.opaque_pack (%a, %foo.ctx01)
-  hir.return %ctx0bc : %opaque_type
+  hir.return %ctx0bc
 }
 hir.func @bar.0c(%ctx0bc) -> (ctx0cd) {
-  %type_type = hir.type_type
   %opaque_type = hir.opaque_type
+  hir.signature (%opaque_type) -> (%opaque_type)
+} {
+  %type_type = hir.type_type
   %a, %foo.ctx01 = hir.opaque_unpack %ctx0bc
   %a.type = hir.type_of %a
   %a2 = hir.call @doV(%a) : (%a.type) -> (%a.type)          // phase -2
   %b.type = hir.call @doW(%a2) : (%a.type) -> (%type_type)  // phase -2
   %ctx0cd = hir.opaque_pack (%b.type, %foo.ctx01)
-  hir.return %ctx0cd : %opaque_type
+  hir.return %ctx0cd
 }
 hir.func @bar.0d(%ctx0cd) -> (ctx0de) {
   %opaque_type = hir.opaque_type
+  hir.signature (%opaque_type) -> (%opaque_type)
+} {
   %b.type, %foo.ctx01 = hir.opaque_unpack %ctx0cd
   %b = hir.call @makeB() : () -> (%b.type)                                                  // phase -1
   %foo.ctx12 = hir.call @foo.1(%b, %foo.ctx01) : (%b.type, %opaque_type) -> (%opaque_type)  // phase -1
   %ctx0de = hir.opaque_pack (%foo.ctx12)
-  hir.return %ctx0de : %opaque_type
+  hir.return %ctx0de
 }
 hir.func @bar.0e(%ctx0de) -> () {
-  %int_type = hir.int_type
   %opaque_type = hir.opaque_type
+  hir.signature (%opaque_type) -> ()
+} {
+  %int_type = hir.int_type
   %foo.ctx12 = hir.opaque_unpack %ctx0de
   %c = hir.call @foo.2(%foo.ctx12) : (%opaque_type) -> (%int_type)  // phase 0
   hir.call @consumeC(%c) : (%int_type) -> ()                        // phase 0
@@ -517,7 +546,7 @@ Each iteration through the pipeline performs roughly the following steps:
     This is the user-facing mechanism that produces error messages about incompatible types.
 
 3.  **Lower HIR to MIR.**
-    Lower functions to MIR if all ops in the body have type operands defined entirely by `ConstantLike` operations.
+    Lower functions to MIR if all type operands in their signature region are resolvable to concrete MIR types.
 
 4.  **Pick functions to evaluate.**
     Collect the first sub-function from all executable multiphase functions.
@@ -569,7 +598,7 @@ We also assume that the `@do*`, `@make*`, and `@consumeC` functions are already 
 ### First Iteration
 
 The IR is already fully canonicalized and unified.
-Lower `@foo.0a` and `@bar.0a` to MIR since all type operands in the body are constants.
+Lower `@foo.0a` and `@bar.0a` to MIR since all type operands in their signature regions are constants.
 
 ```mlir
 mir.func @foo.0a() -> (ctx0ab: !mir.opaque) {
@@ -629,10 +658,13 @@ hir.func @foo.0b(%a) -> (ctx01) {
   %opaque_type = hir.opaque_type
   // ctx0ab has been inlined and converted to HIR constant
   %a.type = hir.mir_type !mir.uint<42>
-  %a0 = hir.coerce_type %a : %a.type
+  hir.signature (%a.type) -> (%opaque_type)
+} {
+  %a.type = hir.mir_type !mir.uint<42>
+  %a0 = hir.coerce_type %a, %a.type
   %a1 = hir.call @doV(%a0) : (%a.type) -> (%a.type)
   %ctx01 = hir.opaque_pack (%a1, %a.type)
-  hir.return %ctx01 : %opaque_type
+  hir.return %ctx01
 }
 
 // removed hir.func @bar.0a
@@ -644,13 +676,15 @@ hir.multiphase_func @bar.0() [
 ]
 hir.func @bar.0b() -> (ctx0bc) {
   %opaque_type = hir.opaque_type
+  hir.signature () -> (%opaque_type)
+} {
   // ctx0ab has been inlined and converted to HIR constant
   %a.type = hir.mir_type !mir.uint<42>
   %a = hir.call @makeA() : () -> (%a.type)
   // call to @foo.0 replaced with @foo.0b
   %foo.ctx01 = hir.call @foo.0b(%a) : (%a.type) -> (%opaque_type)
   %ctx0bc = hir.opaque_pack (%a, %foo.ctx01)
-  hir.return %ctx0bc : %opaque_type
+  hir.return %ctx0bc
 }
 ```
 
@@ -663,7 +697,7 @@ The packed opaque values obtained from execution are MIR attributes, which we ma
 
 ### Second Iteration
 
-Lower `@foo.0b` and `@bar.0b` to MIR since all type operands in the body are constants, and the type coercion on the block arguments provides for a concrete type to assign to those arguments.
+Lower `@foo.0b` and `@bar.0b` to MIR since all type operands in their signature regions are constants.
 
 ```mlir
 mir.func @foo.0b(%a: !mir.uint<42>) -> (ctx01: !mir.opaque) {
@@ -728,8 +762,10 @@ hir.multiphase_func @bar.0() [
   @bar.0e   // implied (ctx0de) -> ()
 ]
 hir.func @bar.0c() -> (ctx0cd) {
-  %type_type = hir.type_type
   %opaque_type = hir.opaque_type
+  hir.signature () -> (%opaque_type)
+} {
+  %type_type = hir.type_type
   // ctx0bc has been inlined and converted to HIR constants
   %a = hir.mir_constant #mir.uint<1337, 42>
   %foo.ctx01 = hir.mir_constant #mir.opaque<#mir.uint<1338, 42>, #mir.type<!mir.uint<42>>>
@@ -737,7 +773,7 @@ hir.func @bar.0c() -> (ctx0cd) {
   %a2 = hir.call @doV(%a) : (%a.type) -> (%a.type)
   %b.type = hir.call @doW(%a2) : (%a.type) -> (%type_type)
   %ctx0cd = hir.opaque_pack (%b.type, %foo.ctx01)
-  hir.return %ctx0cd : %opaque_type
+  hir.return %ctx0cd
 }
 ```
 
@@ -756,7 +792,7 @@ hir.func @bar.0c ... {
 }
 ```
 
-Lower `@bar.0c` to MIR since all type operands in the body are constants:
+Lower `@bar.0c` to MIR since all type operands in its signature region are constants:
 
 ```mlir
 mir.func @bar.0c() -> (ctx0cd: !mir.opaque) {
@@ -808,13 +844,15 @@ hir.multiphase_func @bar.0() [
 ]
 hir.func @bar.0d() -> (ctx0de) {
   %opaque_type = hir.opaque_type
+  hir.signature () -> (%opaque_type)
+} {
   // ctx0cd has been inlined and converted to HIR constants
   %b.type = hir.mir_type !mir.uint<9001>
   %foo.ctx01 = hir.mir_constant #mir.opaque<#mir.uint<1338, 42>, #mir.type<!mir.uint<42>>>
   %b = hir.call @makeB() : () -> (%b.type)
   %foo.ctx12 = hir.call @foo.1(%b, %foo.ctx01) : (%b.type, %opaque_type) -> (%opaque_type)
   %ctx0de = hir.opaque_pack (%foo.ctx12)
-  hir.return %ctx0de : %opaque_type
+  hir.return %ctx0de
 }
 ```
 
@@ -827,24 +865,28 @@ hir.multiphase_func @foo.1(last b) -> (ctx12) [
   @foo.1b   // implied (b, ctx1ab) -> (ctx12)
 ]
 hir.func @foo.1a() -> (ctx1ab) {
-  %type_type = hir.type_type
   %opaque_type = hir.opaque_type
+  hir.signature () -> (%opaque_type)
+} {
+  %type_type = hir.type_type
   // ctx01 has been inlined and converted to HIR constants
   %a2 = hir.mir_constant #mir.uint<1338, 42>
   %a.type = hir.mir_type !mir.uint<42>
   %b.type = hir.call @doW(%a2) : (%a.type) -> (%type_type)
   %ctx1ab = hir.opaque_pack (%b.type)
-  hir.return %ctx1ab : %opaque_type
+  hir.return %ctx1ab
 }
 
 hir.func @bar.0d() -> (ctx0de) {
   %opaque_type = hir.opaque_type
+  hir.signature () -> (%opaque_type)
+} {
   %b.type = hir.mir_type !mir.uint<9001>
   %b = hir.call @makeB() : () -> (%b.type)
   // foo.ctx01 has been inlined into foo.1
   %foo.ctx12 = hir.call @foo.1(%b) : (%b.type) -> (%opaque_type)
   %ctx0de = hir.opaque_pack (%foo.ctx12)
-  hir.return %ctx0de : %opaque_type
+  hir.return %ctx0de
 }
 ```
 
@@ -853,7 +895,7 @@ hir.func @bar.0d() -> (ctx0de) {
 
 ### Fourth Iteration
 
-Lower `@foo.1a` to MIR since all type operands in the body are constants:
+Lower `@foo.1a` to MIR since all type operands in its signature region are constants:
 
 ```mlir
 mir.func @foo.1a() -> (ctx1ab: !mir.opaque) {
@@ -895,10 +937,13 @@ hir.func @foo.1b(%b) -> (ctx12) {
   %opaque_type = hir.opaque_type
   // ctx1ab has been inlined and converted to HIR constants
   %b.type = hir.mir_type !mir.uint<9001>
-  %b0 = hir.coerce_type %b : %b.type
+  hir.signature (%b.type) -> (%opaque_type)
+} {
+  %b.type = hir.mir_type !mir.uint<9001>
+  %b0 = hir.coerce_type %b, %b.type
   %b1 = hir.call @doX(%b0) : (%b.type) -> (%b.type)
   %ctx12 = hir.opaque_pack (%b1, %b.type)
-  hir.return %ctx12 : %opaque_type
+  hir.return %ctx12
 }
 ```
 
@@ -909,12 +954,14 @@ We therefore replace all occurrences of it with direct calls to `@foo.1b`.
 ```mlir
 hir.func @bar.0d() -> (ctx0de) {
   %opaque_type = hir.opaque_type
+  hir.signature () -> (%opaque_type)
+} {
   %b.type = hir.mir_type !mir.uint<9001>
   %b = hir.call @makeB() : () -> (%b.type)
   // call to @foo.1 replaced with @foo.1b
   %foo.ctx12 = hir.call @foo.1b(%b) : (%b.type) -> (%opaque_type)
   %ctx0de = hir.opaque_pack (%foo.ctx12)
-  hir.return %ctx0de : %opaque_type
+  hir.return %ctx0de
 }
 ```
 
@@ -923,7 +970,7 @@ It can be evaluated in the next iteration.
 
 ### Fifth Iteration
 
-Lower `@bar.0d` and `@foo.1b` to MIR since all type operands in their bodies are constants:
+Lower `@bar.0d` and `@foo.1b` to MIR since all type operands in their signature regions are constants:
 
 ```mlir
 mir.func @foo.1b(%b: !mir.uint<9001>) -> (ctx12: !mir.opaque) {
@@ -978,6 +1025,8 @@ Remove the evaluated sub-function from the surrounding multiphase function and s
 // removed hir.multiphase_func @bar.0
 // removed hir.func @bar.0d
 hir.func @bar.0e() -> () {
+  hir.signature () -> ()
+} {
   %int_type = hir.int_type
   %opaque_type = hir.opaque_type
   // ctx0de has been inlined and converted to HIR constants
@@ -996,16 +1045,19 @@ The specialization step propagates the now-constant `%foo.ctx12` into `@foo.2`:
 ```mlir
 hir.func @foo.2() -> (c) {
   %int_type = hir.int_type
+  hir.signature () -> (%int_type)
+} {
   // ctx12 has been inlined and converted to HIR constants
   %b2 = hir.mir_constant #mir.uint<18, 9001>
   %b.type = hir.mir_type !mir.uint<9001>
   %c = hir.call @doY(%b2) : (%b.type) -> (%int_type)
-  hir.return %c : %int_type
+  hir.return %c
 }
 
 hir.func @bar.0e() -> () {
+  hir.signature () -> ()
+} {
   %int_type = hir.int_type
-  %opaque_type = hir.opaque_type
   // foo.ctx12 has been inlined into foo.2
   %c = hir.call @foo.2() : () -> (%int_type)
   hir.call @consumeC(%c) : (%int_type) -> ()

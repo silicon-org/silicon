@@ -71,10 +71,12 @@ For each call site, CheckCalls:
 
 1. Clones the callee's signature region into the caller.
 2. Replaces signature block arguments with actual call arguments.
-3. Inserts `hir.coerce_type` ops on body block arguments to connect them to declared parameter types.
+3. Inserts `hir.coerce_type` ops on body block arguments to connect them to declared parameter types from the function's signature region.
 4. For inferrable placeholders on call type-of-args and type-of-results: directly replaces them with the corresponding signature type and erases the inferrable op.
 5. For concrete (non-inferrable) type operands on calls: emits `hir.unify` between the declared signature types and the actual call type operands.
-6. Unifies body return types with declared result types from the signature.
+
+The `hir.coerce_type` ops inserted in step 3 serve a dual role: they provide **ground truth** for type inference (InferTypes can propagate the declared type into the body), and they act as an **inference barrier** (body-internal inference must not propagate back through a `coerce_type` to alter the function's declared argument or result types).
+The function's signature region remains the canonical source of argument and result type information; `coerce_type` ops project that information into the body's SSA graph for InferTypes to consume.
 
 Step 4 is a **dominance workaround**: when CheckCalls inlines signature ops, they appear after inferrable placeholders created by codegen.
 If CheckCalls emitted `hir.unify` instead, InferTypes would fail its dominance check because the concrete value (from the inlined signature) does not dominate the inferrable.
@@ -242,8 +244,9 @@ If symbolic width reasoning is needed in the future (e.g., for automatic bit-wid
 
 The HIRToMIR pass interacts with inference in several ways:
 
-- `shouldLower()` gates which functions are lowered: a function is only lowered when all type operands are resolvable to concrete MIR types.
+- `shouldLower()` gates which functions are lowered: a function is only lowered when all type operands in its signature region are resolvable to concrete MIR types.
   Functions with unresolved types are skipped and deferred to a later pipeline iteration.
+  The signature region is the canonical source of argument and result type information; HIRToMIR reads it to materialize concrete MLIR types for the `mir.func` signature.
 - `isResolvableType()` checks type values: simple type constructors (`int_type`, `unit_type`, `type_type`, `anyfunc_type`, `opaque_type`) always resolve; `uint_type` needs a constant integer width; `func_type` needs all arg/result types resolvable; `ConstantLike` ops with a non-`!hir.any` `TypeAttr` resolve.
 - `hir.inferrable` is lowered to a dummy `mir.constant #mir.type<!hir.any>` — by this point they should have been resolved, so only dead metadata remains.
 - `hir.type_of` is similarly lowered to a dummy `mir.constant` — it is consumed by binary ops, return ops, etc. and then discarded.
@@ -271,6 +274,7 @@ There is no notion of widening (e.g., `uint<8>` to `uint<16>`), implicit coercio
 
 Currently a pure annotation erased during lowering (input forwarded after type check).
 CheckCalls inserts it at function entry to associate body arguments with their declared types from the signature.
+It serves as both a ground truth for InferTypes (the declared type propagates into the body) and an inference barrier (body-internal inference must not alter the declared type).
 
 > Should `hir.coerce_type` create an implicit `hir.unify` constraint between the input's type and the declared type?
 > Currently it does not, which means the constraint only exists if CheckCalls explicitly emits a unify op.
