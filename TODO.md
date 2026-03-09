@@ -8,11 +8,6 @@
 - **MIRToCIRCT: `isModule` behavior mismatch.**
   Docs say "only `isModule` funcs and transitive callees" but implementation lowers ALL convertible `mir.func` ops.
 
-## Dialect Review: Missing Documentation
-
-- **Base types**: no `description` on any type in `Types.td`
-- **Base attrs**: no `summary`/`description` on `BaseTypeAttr`, `IntAttr`, `BaseUnitAttr`, `SiBoolAttr`
-
 ## Dialect Review: Missing Tests
 
 ### Roundtrip tests (`basic.mlir`)
