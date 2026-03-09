@@ -45,9 +45,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 - **SplitPhases: silent skip when `calleeSplitFunc` is null.**
   Line 383: if a `UnifiedCallOp` references a callee with no `SplitFuncOp`, it is silently skipped.
 
-- **HIRToMIR: `CoerceTypeOp` silently passes non-constant type operands.**
-  Falls through and drops the type annotation without diagnostic.
-
 - **HIRToMIR: no conversion patterns for `RefTypeOp`, `ExprOp`, `YieldOp`, `LetOp`, `StoreOp`, `NextPhaseOp`.**
   Produce opaque "failed to legalize" errors if they survive to HIRToMIR.
 

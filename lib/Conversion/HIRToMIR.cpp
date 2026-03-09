@@ -246,14 +246,15 @@ static LogicalResult convert(hir::CoerceTypeOp op,
                              hir::CoerceTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
   base::TypeAttr typeAttr;
-  if (matchPattern(adaptor.getTypeOperand(), m_Constant(&typeAttr))) {
-    auto expectedType = typeAttr.getValue();
-    auto actualType = adaptor.getInput().getType();
-    if (actualType != expectedType && !isa<hir::AnyType>(expectedType))
-      return emitBug(op.getLoc())
-             << "coerce_type type mismatch: input has " << actualType
-             << " but type operand says " << expectedType;
-  }
+  if (!matchPattern(adaptor.getTypeOperand(), m_Constant(&typeAttr)))
+    return emitBug(op.getLoc()) << "coerce_type has non-constant type operand; "
+                                   "type inference should have resolved it";
+  auto expectedType = typeAttr.getValue();
+  auto actualType = adaptor.getInput().getType();
+  if (actualType != expectedType && !isa<hir::AnyType>(expectedType))
+    return emitBug(op.getLoc())
+           << "coerce_type type mismatch: input has " << actualType
+           << " but type operand says " << expectedType;
   rewriter.replaceOp(op, adaptor.getInput());
   return success();
 }

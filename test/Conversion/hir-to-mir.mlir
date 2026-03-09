@@ -179,6 +179,18 @@ hir.func @UnresolvedCallArgType(%T) -> () {
   hir.return : (%T_type) -> ()
 }
 
+// Verify that a function with a non-constant type operand on coerce_type is
+// skipped by shouldLower and left as hir.func.
+//
+// CHECK-LABEL: hir.func @CoerceTypeNonConstant
+// CHECK-NOT: mir.func @CoerceTypeNonConstant
+hir.func @CoerceTypeNonConstant(%a, %ty) -> (result) {
+  %int = hir.int_type
+  // CHECK: hir.coerce_type
+  %r = hir.coerce_type %a, %ty
+  hir.return %r : (%int, %int) -> (%int)
+}
+
 // CHECK-LABEL: mir.func @Casts
 hir.func @Casts() -> (a) {
   // CHECK-NEXT: [[TMP1:%.+]] = mir.constant
