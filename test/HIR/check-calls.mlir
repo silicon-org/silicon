@@ -229,3 +229,48 @@ hir.unified_func private @UIntBody(%a: 0) -> (result: 0) {
   %1 = hir.unit_type
   hir.return %0 : () -> (%1)
 }
+
+//===----------------------------------------------------------------------===//
+// Duplicate calls: calling the same function twice with the same arguments.
+// This tests that return type unification works correctly when a callee's
+// signature is inlined multiple times. Previously, the hir.unify ops in return
+// type positions were not recognized as resolvable types during HIR-to-MIR
+// lowering.
+
+// CHECK-LABEL: hir.unified_func private @DupCallee
+hir.unified_func private @DupCallee(%a: 0, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: [[ARG_TY:%.+]] = hir.int_type
+  // CHECK: [[CA:%.+]] = hir.coerce_type %a, [[ARG_TY]]
+  // CHECK: [[CB:%.+]] = hir.coerce_type %b, [[ARG_TY]]
+  // CHECK: [[TA:%.+]] = hir.type_of [[CA]]
+  // CHECK: [[UNI:%.+]] = hir.unify [[TA]], [[ARG_TY]]
+  // CHECK: hir.return [[CA]] : ([[ARG_TY]], [[ARG_TY]]) -> ([[UNI]])
+  %t0 = hir.type_of %a
+  hir.return %a : () -> (%t0)
+}
+
+// CHECK-LABEL: hir.unified_func @DupCaller
+hir.unified_func @DupCaller() -> () {
+  hir.signature () -> ()
+} {
+  %v0 = builtin.unrealized_conversion_cast to !hir.any
+  %v1 = builtin.unrealized_conversion_cast to !hir.any
+  // First call: signature inlined, inferrables replaced with declared types.
+  // CHECK: [[INT1:%.+]] = hir.int_type
+  // CHECK: hir.unified_call @DupCallee({{.*}}) : ([[INT1]], [[INT1]]) -> ([[INT1]])
+  %i0 = hir.inferrable
+  %i1 = hir.inferrable
+  %i2 = hir.inferrable
+  %r0 = hir.unified_call @DupCallee(%v0, %v1) : (%i0, %i1) -> (%i2) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+  // Second call: separate inlined copy, also with unified return type.
+  // CHECK: [[INT2:%.+]] = hir.int_type
+  // CHECK: hir.unified_call @DupCallee({{.*}}) : ([[INT2]], [[INT2]]) -> ([[INT2]])
+  %i3 = hir.inferrable
+  %i4 = hir.inferrable
+  %i5 = hir.inferrable
+  %r1 = hir.unified_call @DupCallee(%v0, %v1) : (%i3, %i4) -> (%i5) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+  hir.return : () -> ()
+}

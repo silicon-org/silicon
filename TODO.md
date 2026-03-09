@@ -4,8 +4,6 @@
 
 Tests to convert to focused lit tests (then remove the e2e test):
 
-- **`test/EndToEnd/duplicate-calls.si`**: regression for `isResolvableType`; already covered by `hir-to-mir.mlir::UnifyInReturnType`.
-  Add a CheckCalls test for duplicate call-site unification, then remove.
 - **`test/EndToEnd/unused-args.si`**: tests HIRToMIR deriving arg types from `typeOfArgs` when args are unused.
   Add a test case to `test/Conversion/hir-to-mir.mlir` with unused block args, then remove.
 - **`test/EndToEnd/dyn-args.si`**: tests dyn-arg and mixed const+dyn arg splitting.
