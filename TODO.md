@@ -8,9 +8,6 @@
 - **MIRToCIRCT: `isModule` behavior mismatch.**
   Docs say "only `isModule` funcs and transitive callees" but implementation lowers ALL convertible `mir.func` ops.
 
-- **MIRToCIRCT: signed comparison predicates for unsigned types.**
-  All comparison ops use signed predicates even for `!si.uint<N>`.
-
 ## Dialect Review: Missing Documentation
 
 - **InferTypes**: no `summary` or `description` in `Passes.td`
@@ -55,10 +52,6 @@
 - Add positive `test/HIR/check-types.mlir` (only error tests exist today)
 - Add codegen test for `const { expr }` producing `hir.expr` with `phaseShift=-1` in `test/Codegen/basic.si`
 - Add `isModule` test cases to `test/MIR/interpret.mlir`, `test/HIR/specialize-funcs.mlir`, and `test/Transforms/phase-eval-loop.mlir`
-
-## Dialect Review: Missing Constraints and Traits
-
-- **MIR binary/cmp ops use `AnyType`**: should constrain to numeric types; cmp results should be `BoolType`
 
 ## Dialect Review: Missing Canonicalizers/Folders
 

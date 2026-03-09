@@ -314,19 +314,34 @@ public:
   }
 };
 
-/// Convert a MIR comparison op to comb.icmp with the given predicate.
-template <typename MIROp, circt::comb::ICmpPredicate pred>
+/// Convert a MIR comparison op to comb.icmp, choosing signed or unsigned
+/// predicates based on whether the original operand type is `!si.uint<N>`.
+///
+/// We look up the original operand type from a pre-built map because the
+/// conversion framework may have already retyped block arguments by the
+/// time this pattern runs.
+template <typename MIROp, circt::comb::ICmpPredicate signedPred,
+          circt::comb::ICmpPredicate unsignedPred>
 class CmpOpConversion : public OpConversionPattern<MIROp> {
 public:
-  using OpConversionPattern<MIROp>::OpConversionPattern;
+  CmpOpConversion(TypeConverter &converter, MLIRContext *ctx,
+                  const DenseMap<Operation *, Type> *cmpOperandTypes)
+      : OpConversionPattern<MIROp>(converter, ctx),
+        cmpOperandTypes(cmpOperandTypes) {}
 
   LogicalResult
   matchAndRewrite(MIROp op, typename MIROp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto it = cmpOperandTypes->find(op);
+    assert(it != cmpOperandTypes->end());
+    auto pred = isa<base::UIntType>(it->second) ? unsignedPred : signedPred;
     rewriter.replaceOpWithNewOp<circt::comb::ICmpOp>(op, pred, adaptor.getLhs(),
                                                      adaptor.getRhs());
     return success();
   }
+
+private:
+  const DenseMap<Operation *, Type> *cmpOperandTypes;
 };
 
 /// Convert mir.bool_to_i1 to a no-op. Since `!si.bool` maps to `i1` in the
@@ -402,6 +417,16 @@ void MIRToCIRCTPass::runOnOperation() {
   }
   LLVM_DEBUG(llvm::dbgs() << "MIR-to-CIRCT: " << funcsToLower.size()
                           << " function(s) to lower\n");
+
+  // Record the original operand types of comparison ops before conversion
+  // retypes block arguments. This allows CmpOpConversion to choose signed
+  // vs unsigned predicates based on the original Silicon type.
+  DenseMap<Operation *, Type> cmpOperandTypes;
+  moduleOp.walk([&](Operation *op) {
+    if (isa<mir::EqOp, mir::NeqOp, mir::LtOp, mir::GtOp, mir::LeqOp,
+            mir::GeqOp>(op))
+      cmpOperandTypes[op] = op->getOperand(0).getType();
+  });
 
   // # Type Converter
   //
@@ -486,18 +511,24 @@ void MIRToCIRCTPass::runOnOperation() {
       converter, &getContext());
   patterns.add<BinaryOpConversion<mir::ShrOp, circt::comb::ShrUOp>>(
       converter, &getContext());
-  patterns.add<CmpOpConversion<mir::EqOp, circt::comb::ICmpPredicate::eq>>(
-      converter, &getContext());
-  patterns.add<CmpOpConversion<mir::NeqOp, circt::comb::ICmpPredicate::ne>>(
-      converter, &getContext());
-  patterns.add<CmpOpConversion<mir::LtOp, circt::comb::ICmpPredicate::slt>>(
-      converter, &getContext());
-  patterns.add<CmpOpConversion<mir::GtOp, circt::comb::ICmpPredicate::sgt>>(
-      converter, &getContext());
-  patterns.add<CmpOpConversion<mir::LeqOp, circt::comb::ICmpPredicate::sle>>(
-      converter, &getContext());
-  patterns.add<CmpOpConversion<mir::GeqOp, circt::comb::ICmpPredicate::sge>>(
-      converter, &getContext());
+  patterns.add<CmpOpConversion<mir::EqOp, circt::comb::ICmpPredicate::eq,
+                               circt::comb::ICmpPredicate::eq>>(
+      converter, &getContext(), &cmpOperandTypes);
+  patterns.add<CmpOpConversion<mir::NeqOp, circt::comb::ICmpPredicate::ne,
+                               circt::comb::ICmpPredicate::ne>>(
+      converter, &getContext(), &cmpOperandTypes);
+  patterns.add<CmpOpConversion<mir::LtOp, circt::comb::ICmpPredicate::slt,
+                               circt::comb::ICmpPredicate::ult>>(
+      converter, &getContext(), &cmpOperandTypes);
+  patterns.add<CmpOpConversion<mir::GtOp, circt::comb::ICmpPredicate::sgt,
+                               circt::comb::ICmpPredicate::ugt>>(
+      converter, &getContext(), &cmpOperandTypes);
+  patterns.add<CmpOpConversion<mir::LeqOp, circt::comb::ICmpPredicate::sle,
+                               circt::comb::ICmpPredicate::ule>>(
+      converter, &getContext(), &cmpOperandTypes);
+  patterns.add<CmpOpConversion<mir::GeqOp, circt::comb::ICmpPredicate::sge,
+                               circt::comb::ICmpPredicate::uge>>(
+      converter, &getContext(), &cmpOperandTypes);
   patterns.add<BoolToI1OpConversion>(converter, &getContext());
   patterns.add<EraseUnusedSiliconOp>(&getContext());
 

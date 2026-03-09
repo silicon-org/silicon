@@ -50,23 +50,42 @@ mir.func @bitwise_ops(%a: !si.int, %b: !si.int) -> (result: !si.int) {
   mir.return %0 : !si.int
 }
 
-// ---- Comparison ops ----
+// ---- Comparison ops (unsigned) ----
 
-// CHECK-LABEL: hw.module @cmp_ops
-mir.func @cmp_ops(%a: !si.uint<8>, %b: !si.uint<8>) -> (result: !si.uint<8>) {
+// CHECK-LABEL: hw.module @cmp_ops_unsigned
+mir.func @cmp_ops_unsigned(%a: !si.uint<8>, %b: !si.uint<8>) -> (result: !si.uint<8>) {
   // CHECK: comb.icmp eq %a, %b : i8
-  %0 = mir.eq %a, %b : !si.uint<8> -> !si.uint<1>
+  %0 = mir.eq %a, %b : !si.uint<8>
   // CHECK: comb.icmp ne %a, %b : i8
-  %1 = mir.neq %a, %b : !si.uint<8> -> !si.uint<1>
-  // CHECK: comb.icmp slt %a, %b : i8
-  %2 = mir.lt %a, %b : !si.uint<8> -> !si.uint<1>
-  // CHECK: comb.icmp sgt %a, %b : i8
-  %3 = mir.gt %a, %b : !si.uint<8> -> !si.uint<1>
-  // CHECK: comb.icmp sle %a, %b : i8
-  %4 = mir.leq %a, %b : !si.uint<8> -> !si.uint<1>
-  // CHECK: comb.icmp sge %a, %b : i8
-  %5 = mir.geq %a, %b : !si.uint<8> -> !si.uint<1>
+  %1 = mir.neq %a, %b : !si.uint<8>
+  // CHECK: comb.icmp ult %a, %b : i8
+  %2 = mir.lt %a, %b : !si.uint<8>
+  // CHECK: comb.icmp ugt %a, %b : i8
+  %3 = mir.gt %a, %b : !si.uint<8>
+  // CHECK: comb.icmp ule %a, %b : i8
+  %4 = mir.leq %a, %b : !si.uint<8>
+  // CHECK: comb.icmp uge %a, %b : i8
+  %5 = mir.geq %a, %b : !si.uint<8>
   mir.return %a : !si.uint<8>
+}
+
+// ---- Comparison ops (signed) ----
+
+// CHECK-LABEL: hw.module @cmp_ops_signed
+mir.func @cmp_ops_signed(%a: !si.int, %b: !si.int) -> (result: !si.int) {
+  // CHECK: comb.icmp eq %a, %b : i64
+  %0 = mir.eq %a, %b : !si.int
+  // CHECK: comb.icmp ne %a, %b : i64
+  %1 = mir.neq %a, %b : !si.int
+  // CHECK: comb.icmp slt %a, %b : i64
+  %2 = mir.lt %a, %b : !si.int
+  // CHECK: comb.icmp sgt %a, %b : i64
+  %3 = mir.gt %a, %b : !si.int
+  // CHECK: comb.icmp sle %a, %b : i64
+  %4 = mir.leq %a, %b : !si.int
+  // CHECK: comb.icmp sge %a, %b : i64
+  %5 = mir.geq %a, %b : !si.int
+  mir.return %a : !si.int
 }
 
 // ---- Constants ----
@@ -93,16 +112,14 @@ mir.func @caller() -> (result: !si.int) {
   mir.return %0 : !si.int
 }
 
-// ---- Comparison result zero-extended to return type ----
+// ---- Comparison result returned directly as !si.bool ----
 
 // CHECK-LABEL: hw.module @cmp_as_return
-mir.func @cmp_as_return(%a: !si.int, %b: !si.int) -> (result: !si.int) {
-  // CHECK-DAG: [[CMP:%.+]] = comb.icmp sgt %a, %b : i64
-  // CHECK-DAG: [[ZERO:%.+]] = hw.constant 0 : i63
-  // CHECK:     [[EXT:%.+]] = comb.concat [[ZERO]], [[CMP]] : i63, i1
-  // CHECK:     hw.output [[EXT]] : i64
-  %0 = mir.gt %a, %b : !si.int -> !si.int
-  mir.return %0 : !si.int
+mir.func @cmp_as_return(%a: !si.int, %b: !si.int) -> (result: !si.bool) {
+  // CHECK: [[CMP:%.+]] = comb.icmp sgt %a, %b : i64
+  // CHECK: hw.output [[CMP]] : i1
+  %0 = mir.gt %a, %b : !si.int
+  mir.return %0 : !si.bool
 }
 
 // ---- Bool-to-i1 is a no-op after type conversion ----

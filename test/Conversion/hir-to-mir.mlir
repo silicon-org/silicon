@@ -113,12 +113,12 @@ hir.func @BinaryComparison(%a, %b) -> (r0, r1, r2, r3, r4, r5) {
   %r3 = hir.gt %a_typed, %b_typed : %bool
   %r4 = hir.geq %a_typed, %b_typed : %bool
   %r5 = hir.leq %a_typed, %b_typed : %bool
-  // CHECK: mir.eq %a, %b : !si.int -> !si.bool
-  // CHECK: mir.neq %a, %b : !si.int -> !si.bool
-  // CHECK: mir.lt %a, %b : !si.int -> !si.bool
-  // CHECK: mir.gt %a, %b : !si.int -> !si.bool
-  // CHECK: mir.geq %a, %b : !si.int -> !si.bool
-  // CHECK: mir.leq %a, %b : !si.int -> !si.bool
+  // CHECK: mir.eq %a, %b : !si.int
+  // CHECK: mir.neq %a, %b : !si.int
+  // CHECK: mir.lt %a, %b : !si.int
+  // CHECK: mir.gt %a, %b : !si.int
+  // CHECK: mir.geq %a, %b : !si.int
+  // CHECK: mir.leq %a, %b : !si.int
   hir.return %r0, %r1, %r2, %r3, %r4, %r5 : (%int, %int) -> (%bool, %bool, %bool, %bool, %bool, %bool)
 }
 

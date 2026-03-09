@@ -88,7 +88,7 @@ mir.func @test_shr() -> (result: !si.int) {
 mir.func @test_eq() -> (result: !si.bool) {
   %0 = mir.constant #si.int<3> : !si.int
   %1 = mir.constant #si.int<3> : !si.int
-  %2 = mir.eq %0, %1 : !si.int -> !si.bool
+  %2 = mir.eq %0, %1 : !si.int
   mir.return %2 : !si.bool
 }
 
@@ -96,7 +96,7 @@ mir.func @test_eq() -> (result: !si.bool) {
 mir.func @test_neq() -> (result: !si.bool) {
   %0 = mir.constant #si.int<3> : !si.int
   %1 = mir.constant #si.int<4> : !si.int
-  %2 = mir.neq %0, %1 : !si.int -> !si.bool
+  %2 = mir.neq %0, %1 : !si.int
   mir.return %2 : !si.bool
 }
 
@@ -104,7 +104,7 @@ mir.func @test_neq() -> (result: !si.bool) {
 mir.func @test_lt() -> (result: !si.bool) {
   %0 = mir.constant #si.int<2> : !si.int
   %1 = mir.constant #si.int<5> : !si.int
-  %2 = mir.lt %0, %1 : !si.int -> !si.bool
+  %2 = mir.lt %0, %1 : !si.int
   mir.return %2 : !si.bool
 }
 
@@ -112,7 +112,7 @@ mir.func @test_lt() -> (result: !si.bool) {
 mir.func @test_gt() -> (result: !si.bool) {
   %0 = mir.constant #si.int<5> : !si.int
   %1 = mir.constant #si.int<3> : !si.int
-  %2 = mir.gt %0, %1 : !si.int -> !si.bool
+  %2 = mir.gt %0, %1 : !si.int
   mir.return %2 : !si.bool
 }
 
@@ -120,7 +120,7 @@ mir.func @test_gt() -> (result: !si.bool) {
 mir.func @test_geq() -> (result: !si.bool) {
   %0 = mir.constant #si.int<3> : !si.int
   %1 = mir.constant #si.int<3> : !si.int
-  %2 = mir.geq %0, %1 : !si.int -> !si.bool
+  %2 = mir.geq %0, %1 : !si.int
   mir.return %2 : !si.bool
 }
 
@@ -128,7 +128,7 @@ mir.func @test_geq() -> (result: !si.bool) {
 mir.func @test_leq() -> (result: !si.bool) {
   %0 = mir.constant #si.int<2> : !si.int
   %1 = mir.constant #si.int<5> : !si.int
-  %2 = mir.leq %0, %1 : !si.int -> !si.bool
+  %2 = mir.leq %0, %1 : !si.int
   mir.return %2 : !si.bool
 }
 

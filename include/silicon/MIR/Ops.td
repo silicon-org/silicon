@@ -24,6 +24,9 @@ include "silicon/MIR/Dialect.td"
 class MIROp<string mnemonic, list<Trait> traits = []> :
   Op<MIRDialect, mnemonic, traits>;
 
+/// A signed or unsigned integer type.
+def SiNumericType : AnyTypeOf<[IntType, UIntType]>;
+
 def ConstantOp : MIROp<"constant", [
   AllTypesMatch<["value", "result"]>,
   ConstantLike,
@@ -38,16 +41,16 @@ def ConstantOp : MIROp<"constant", [
 
 class MIRBinaryOp<string mnemonic>
     : MIROp<mnemonic, [Pure, SameOperandsAndResultType]> {
-  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
-  let results = (outs AnyType:$result);
+  let arguments = (ins SiNumericType:$lhs, SiNumericType:$rhs);
+  let results = (outs SiNumericType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
 }
 
 class MIRCmpOp<string mnemonic>
     : MIROp<mnemonic, [Pure, SameTypeOperands]> {
-  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
-  let results = (outs AnyType:$result);
-  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
+  let arguments = (ins SiNumericType:$lhs, SiNumericType:$rhs);
+  let results = (outs BoolType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs)";
 }
 
 // Arithmetic

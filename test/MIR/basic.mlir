@@ -111,18 +111,18 @@ mir.func @BinaryOps(%x: !si.int, %y: !si.int) -> () {
 // Comparison ops
 // CHECK-LABEL: mir.func @CmpOps
 mir.func @CmpOps(%x: !si.int, %y: !si.int) -> () {
-  // CHECK: mir.eq %x, %y : !si.int -> !si.bool
-  %0 = mir.eq %x, %y : !si.int -> !si.bool
-  // CHECK: mir.neq %x, %y : !si.int -> !si.bool
-  %1 = mir.neq %x, %y : !si.int -> !si.bool
-  // CHECK: mir.lt %x, %y : !si.int -> !si.bool
-  %2 = mir.lt %x, %y : !si.int -> !si.bool
-  // CHECK: mir.gt %x, %y : !si.int -> !si.bool
-  %3 = mir.gt %x, %y : !si.int -> !si.bool
-  // CHECK: mir.leq %x, %y : !si.int -> !si.bool
-  %4 = mir.leq %x, %y : !si.int -> !si.bool
-  // CHECK: mir.geq %x, %y : !si.int -> !si.bool
-  %5 = mir.geq %x, %y : !si.int -> !si.bool
+  // CHECK: mir.eq %x, %y : !si.int
+  %0 = mir.eq %x, %y : !si.int
+  // CHECK: mir.neq %x, %y : !si.int
+  %1 = mir.neq %x, %y : !si.int
+  // CHECK: mir.lt %x, %y : !si.int
+  %2 = mir.lt %x, %y : !si.int
+  // CHECK: mir.gt %x, %y : !si.int
+  %3 = mir.gt %x, %y : !si.int
+  // CHECK: mir.leq %x, %y : !si.int
+  %4 = mir.leq %x, %y : !si.int
+  // CHECK: mir.geq %x, %y : !si.int
+  %5 = mir.geq %x, %y : !si.int
   mir.return
 }
 
