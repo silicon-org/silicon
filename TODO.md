@@ -4,8 +4,6 @@
 
 Tests to convert to focused lit tests (then remove the e2e test):
 
-- **`test/EndToEnd/unused-args.si`**: tests HIRToMIR deriving arg types from `typeOfArgs` when args are unused.
-  Add a test case to `test/Conversion/hir-to-mir.mlir` with unused block args, then remove.
 - **`test/EndToEnd/dyn-args.si`**: tests dyn-arg and mixed const+dyn arg splitting.
   Add dyn-arg and mixed const+dyn test cases to `test/HIR/split-phases.mlir`, then remove.
 
@@ -62,7 +60,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 ### Other focused test gaps
 
 - Add `hir.if` → `mir.if` test case to `test/Conversion/hir-to-mir.mlir` -- unless we've already removed the op
-- Add unused block args test case to `test/Conversion/hir-to-mir.mlir`
 - Add per-argument `dyn` and mixed const+dyn arg cases to `test/HIR/split-phases.mlir`
 - Add positive `test/HIR/check-types.mlir` (only error tests exist today)
 - Add codegen test for `const { expr }` producing `hir.expr` with `phaseShift=-1` in `test/Codegen/basic.si`

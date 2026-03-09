@@ -201,3 +201,34 @@ hir.func @Casts() -> (a) {
   // CHECK: mir.return [[TMP1]]
   hir.return %a1 : () -> (%ta)
 }
+
+//===----------------------------------------------------------------------===//
+// Unused block arguments
+//===----------------------------------------------------------------------===//
+
+// Arg types are derived from the return op's typeOfArgs, even when the
+// corresponding block arguments are unused in the function body.
+
+// CHECK-LABEL: mir.func @UnusedSecondArg(%a: !si.int, %b: !si.int) -> (result: !si.int)
+hir.func @UnusedSecondArg(%a, %b) -> (result) {
+  %int = hir.int_type
+  %a_typed = hir.coerce_type %a, %int
+  // CHECK: mir.return %a
+  hir.return %a_typed : (%int, %int) -> (%int)
+}
+
+// CHECK-LABEL: mir.func @UnusedFirstArg(%a: !si.int, %b: !si.int) -> (result: !si.int)
+hir.func @UnusedFirstArg(%a, %b) -> (result) {
+  %int = hir.int_type
+  %b_typed = hir.coerce_type %b, %int
+  // CHECK: mir.return %b
+  hir.return %b_typed : (%int, %int) -> (%int)
+}
+
+// CHECK-LABEL: mir.func @UnusedBothArgs(%a: !si.int, %b: !si.int) -> (result: !si.int)
+hir.func @UnusedBothArgs(%a, %b) -> (result) {
+  %int = hir.int_type
+  %c42 = hir.constant_int 42 : %int
+  // CHECK: mir.return
+  hir.return %c42 : (%int, %int) -> (%int)
+}
