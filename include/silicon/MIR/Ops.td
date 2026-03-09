@@ -17,6 +17,7 @@ include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "silicon/MIR/Attributes.td"
+include "silicon/Base/Types.td"
 include "silicon/MIR/Dialect.td"
 
 // Base class for the operations in this dialect.
@@ -99,9 +100,9 @@ def BoolToI1Op : MIROp<"bool_to_i1", [Pure]> {
     Converts an `!si.bool` value to an `i1` value for use with `cf.cond_br`.
     During interpretation, this simply forwards the `BoolAttr` unchanged.
   }];
-  let arguments = (ins AnyType:$input);
+  let arguments = (ins BoolType:$input);
   let results = (outs I1:$result);
-  let assemblyFormat = "$input attr-dict `:` type($input)";
+  let assemblyFormat = "$input attr-dict";
 }
 
 def ReturnOp : MIROp<"return", [Pure, ReturnLike, Terminator]> {

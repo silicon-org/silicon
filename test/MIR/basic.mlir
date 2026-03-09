@@ -85,8 +85,8 @@ mir.evaluated_func private @eval_private [#si.unit : !si.unit]
 // bool_to_i1
 // CHECK-LABEL: mir.func @BoolToI1
 mir.func @BoolToI1(%cond: !si.bool) -> () {
-  // CHECK: mir.bool_to_i1 %cond : !si.bool
-  %0 = mir.bool_to_i1 %cond : !si.bool
+  // CHECK: mir.bool_to_i1 %cond
+  %0 = mir.bool_to_i1 %cond
   mir.return
 }
 

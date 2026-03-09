@@ -221,7 +221,7 @@ mir.func @test_cf_true() -> (result: !si.int) {
   %cond = mir.constant #si.bool<true> : !si.bool
   %a = mir.constant #si.int<42> : !si.int
   %b = mir.constant #si.int<7> : !si.int
-  %i1 = mir.bool_to_i1 %cond : !si.bool
+  %i1 = mir.bool_to_i1 %cond
   cf.cond_br %i1, ^then, ^else
 ^then:
   cf.br ^merge(%a : !si.int)
@@ -236,7 +236,7 @@ mir.func @test_cf_false() -> (result: !si.int) {
   %cond = mir.constant #si.bool<false> : !si.bool
   %a = mir.constant #si.int<42> : !si.int
   %b = mir.constant #si.int<7> : !si.int
-  %i1 = mir.bool_to_i1 %cond : !si.bool
+  %i1 = mir.bool_to_i1 %cond
   cf.cond_br %i1, ^then, ^else
 ^then:
   cf.br ^merge(%a : !si.int)
@@ -251,7 +251,7 @@ mir.func @test_cf_compute() -> (result: !si.int) {
   %cond = mir.constant #si.bool<true> : !si.bool
   %a = mir.constant #si.int<10> : !si.int
   %b = mir.constant #si.int<5> : !si.int
-  %i1 = mir.bool_to_i1 %cond : !si.bool
+  %i1 = mir.bool_to_i1 %cond
   cf.cond_br %i1, ^then, ^else
 ^then:
   %sum = mir.add %a, %b : !si.int
