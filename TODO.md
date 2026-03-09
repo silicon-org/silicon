@@ -28,9 +28,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
   Recursive functions grow the call stack until OOM.
   Add a `maxCallDepth` check.
 
-- **SplitPhases: `resolveTypeIntoRegion` null deref on block args.**
-  Line 39-40: `val.getDefiningOp()` can return null for block arguments.
-
 - **SplitPhases: `clonePureOp` assumes op has results.**
   Line 63: `op->getResult(0)` called without checking `getNumResults() > 0`.
 

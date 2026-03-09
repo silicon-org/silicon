@@ -37,6 +37,12 @@ static Value resolveTypeIntoRegion(OpBuilder &builder, Value val,
   if (auto mapped = mapping.lookupOrNull(val))
     return mapped;
   auto *defOp = val.getDefiningOp();
+  if (!defOp) {
+    emitBug(val.getLoc())
+        << "cannot resolve block argument into region; value has no "
+           "defining op and is not in the mapping";
+    return {};
+  }
   for (Value operand : defOp->getOperands())
     resolveTypeIntoRegion(builder, operand, mapping);
   auto *cloned = builder.clone(*defOp, mapping);
@@ -703,6 +709,8 @@ LogicalResult PhaseSplitter::run() {
         // recursively clones the defining op and its transitive operands.
         Value resolvedType =
             resolveTypeIntoRegion(insertBuilder, sigTypeVal, sigToBody);
+        if (!resolvedType)
+          return failure();
 
         auto coerceOp = CoerceTypeOp::create(insertBuilder, ownArg.getLoc(),
                                              ownArg, resolvedType);
