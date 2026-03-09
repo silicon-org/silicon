@@ -29,6 +29,7 @@ class HIROp<string mnemonic, list<Trait> traits = []> :
 //===----------------------------------------------------------------------===//
 
 def ConstantIntOp : HIROp<"constant_int", [Pure]> {
+  let summary = "constant integer value";
   let arguments = (ins IntAttr:$value, HIRAnyType:$typeOperand);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = [{
@@ -37,6 +38,7 @@ def ConstantIntOp : HIROp<"constant_int", [Pure]> {
 }
 
 def ConstantBoolOp : HIROp<"constant_bool", [ConstantLike, Pure]> {
+  let summary = "constant boolean value";
   let arguments = (ins SiBoolAttr:$value);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$value attr-dict";
@@ -44,6 +46,7 @@ def ConstantBoolOp : HIROp<"constant_bool", [ConstantLike, Pure]> {
 }
 
 def ConstantUnitOp : HIROp<"constant_unit", [ConstantLike, Pure]> {
+  let summary = "constant unit value";
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
   let hasFolder = 1;
@@ -54,16 +57,19 @@ def ConstantUnitOp : HIROp<"constant_unit", [ConstantLike, Pure]> {
 //===----------------------------------------------------------------------===//
 
 def UnitTypeOp : HIROp<"unit_type", [Pure]> {
+  let summary = "construct the unit type";
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def BoolTypeOp : HIROp<"bool_type", [Pure]> {
+  let summary = "construct the bool type";
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def IntTypeOp : HIROp<"int_type", [Pure]> {
+  let summary = "construct the int type";
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
@@ -75,17 +81,20 @@ def TypeTypeOp : HIROp<"type_type", [Pure]> {
 }
 
 def UIntTypeOp : HIROp<"uint_type", [Pure]> {
+  let summary = "construct a uint type with given width";
   let arguments = (ins HIRAnyType:$width);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$width attr-dict";
 }
 
 def AnyfuncTypeOp : HIROp<"anyfunc_type", [Pure]> {
+  let summary = "construct the anyfunc type";
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def RefTypeOp : HIROp<"ref_type", [Pure]> {
+  let summary = "construct a ref type";
   let arguments = (ins HIRAnyType:$innerType);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$innerType attr-dict";
@@ -95,6 +104,7 @@ def FuncTypeOp : HIROp<"func_type", [
   AttrSizedOperandSegments,
   Pure,
 ]> {
+  let summary = "construct a function type";
   let arguments = (ins
     Variadic<HIRAnyType>:$typeOfArgs,
     Variadic<HIRAnyType>:$typeOfResults
@@ -186,6 +196,13 @@ def CoerceTypeOp : HIROp<"coerce_type", [Pure]> {
 /// concrete types, but since they have no operands, no attributes, and the same
 /// result type, CSE would merge them if they were marked `Pure`.
 def InferrableOp : HIROp<"inferrable", []> {
+  let summary = "a free type variable for inference";
+  let description = [{
+    Represents a type that has not yet been determined and will be resolved
+    by the type inference pass. Must not be marked `Pure` because two
+    distinct inferrables may resolve to different concrete types, and CSE
+    would incorrectly merge them.
+  }];
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
@@ -198,28 +215,29 @@ class HIRBinaryOp<string mnemonic>
 }
 
 // Arithmetic
-def AddOp : HIRBinaryOp<"add">;
-def SubOp : HIRBinaryOp<"sub">;
-def MulOp : HIRBinaryOp<"mul">;
-def DivOp : HIRBinaryOp<"div">;
-def ModOp : HIRBinaryOp<"mod">;
+def AddOp : HIRBinaryOp<"add"> { let summary = "add two values"; }
+def SubOp : HIRBinaryOp<"sub"> { let summary = "subtract two values"; }
+def MulOp : HIRBinaryOp<"mul"> { let summary = "multiply two values"; }
+def DivOp : HIRBinaryOp<"div"> { let summary = "divide two values"; }
+def ModOp : HIRBinaryOp<"mod"> { let summary = "modulo of two values"; }
 
 // Bitwise
-def AndOp : HIRBinaryOp<"and">;
-def OrOp  : HIRBinaryOp<"or">;
-def XorOp : HIRBinaryOp<"xor">;
-def ShlOp : HIRBinaryOp<"shl">;
-def ShrOp : HIRBinaryOp<"shr">;
+def AndOp : HIRBinaryOp<"and"> { let summary = "bitwise AND"; }
+def OrOp  : HIRBinaryOp<"or">  { let summary = "bitwise OR"; }
+def XorOp : HIRBinaryOp<"xor"> { let summary = "bitwise XOR"; }
+def ShlOp : HIRBinaryOp<"shl"> { let summary = "shift left"; }
+def ShrOp : HIRBinaryOp<"shr"> { let summary = "shift right"; }
 
 // Comparison
-def EqOp  : HIRBinaryOp<"eq">;
-def NeqOp : HIRBinaryOp<"neq">;
-def LtOp  : HIRBinaryOp<"lt">;
-def GtOp  : HIRBinaryOp<"gt">;
-def GeqOp : HIRBinaryOp<"geq">;
-def LeqOp : HIRBinaryOp<"leq">;
+def EqOp  : HIRBinaryOp<"eq">  { let summary = "compare for equality"; }
+def NeqOp : HIRBinaryOp<"neq"> { let summary = "compare for inequality"; }
+def LtOp  : HIRBinaryOp<"lt">  { let summary = "compare less than"; }
+def GtOp  : HIRBinaryOp<"gt">  { let summary = "compare greater than"; }
+def GeqOp : HIRBinaryOp<"geq"> { let summary = "compare greater or equal"; }
+def LeqOp : HIRBinaryOp<"leq"> { let summary = "compare less or equal"; }
 
 def LetOp : HIROp<"let", []> {
+  let summary = "declare a named variable";
   let arguments = (ins StrAttr:$name, HIRAnyType:$type);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$name `:` $type attr-dict";
@@ -230,6 +248,12 @@ def UnifyOp : HIROp<"unify", [
   Commutative,
   Pure,
 ]> {
+  let summary = "unify two types during inference";
+  let description = [{
+    Constrains two type values to be equal, used by the type inference
+    pass. The result is the unified type. Folds away once both operands
+    are identical.
+  }];
   let arguments = (ins HIRAnyType:$lhs, HIRAnyType:$rhs);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict";
@@ -237,6 +261,7 @@ def UnifyOp : HIROp<"unify", [
 }
 
 def StoreOp : HIROp<"store", []> {
+  let summary = "store a value into a variable";
   let arguments = (ins HIRAnyType:$target, HIRAnyType:$value, HIRAnyType:$valueType);
   let assemblyFormat = "$target `,` $value `:` $valueType attr-dict";
 }
@@ -247,6 +272,13 @@ def FuncOp : HIROp<"func", [
   Symbol,
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
 ]> {
+  let summary = "a single-phase HIR function";
+  let description = [{
+    Represents a function that operates within a single phase. Produced
+    by `SplitPhases` from a `hir.unified_func`, or directly by codegen
+    for functions that don't span multiple phases. Lowered to `mir.func`
+    by the HIR-to-MIR conversion.
+  }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,
     OptionalAttr<StrAttr>:$sym_visibility,
@@ -299,6 +331,12 @@ def NextPhaseOp : HIROp<"next_phase", [
   Pure,
   Terminator,
 ]> {
+  let summary = "transition to the next phase block";
+  let description = [{
+    Terminates a block within an `hir.func` and branches to the next
+    phase block. Used by `SplitPhases` to separate code that runs in
+    consecutive phases within the same function.
+  }];
   let successors = (successor AnySuccessor:$dest);
   let assemblyFormat = "$dest attr-dict";
 }

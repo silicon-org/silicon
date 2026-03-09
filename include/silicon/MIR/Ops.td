@@ -33,6 +33,7 @@ def ConstantOp : MIROp<"constant", [
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
   Pure,
 ]> {
+  let summary = "materialize a constant value";
   let arguments = (ins TypedAttrInterface:$value);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$value attr-dict";
@@ -56,26 +57,26 @@ class MIRCmpOp<string mnemonic>
 }
 
 // Arithmetic
-def AddOp : MIRBinaryOp<"add">;
-def SubOp : MIRBinaryOp<"sub">;
-def MulOp : MIRBinaryOp<"mul">;
-def DivOp : MIRBinaryOp<"div">;
-def ModOp : MIRBinaryOp<"mod">;
+def AddOp : MIRBinaryOp<"add"> { let summary = "add two values"; }
+def SubOp : MIRBinaryOp<"sub"> { let summary = "subtract two values"; }
+def MulOp : MIRBinaryOp<"mul"> { let summary = "multiply two values"; }
+def DivOp : MIRBinaryOp<"div"> { let summary = "divide two values"; }
+def ModOp : MIRBinaryOp<"mod"> { let summary = "modulo of two values"; }
 
 // Bitwise
-def AndOp : MIRBinaryOp<"and">;
-def OrOp  : MIRBinaryOp<"or">;
-def XorOp : MIRBinaryOp<"xor">;
-def ShlOp : MIRBinaryOp<"shl">;
-def ShrOp : MIRBinaryOp<"shr">;
+def AndOp : MIRBinaryOp<"and"> { let summary = "bitwise AND"; }
+def OrOp  : MIRBinaryOp<"or">  { let summary = "bitwise OR"; }
+def XorOp : MIRBinaryOp<"xor"> { let summary = "bitwise XOR"; }
+def ShlOp : MIRBinaryOp<"shl"> { let summary = "shift left"; }
+def ShrOp : MIRBinaryOp<"shr"> { let summary = "shift right"; }
 
 // Comparison
-def EqOp  : MIRCmpOp<"eq">;
-def NeqOp : MIRCmpOp<"neq">;
-def LtOp  : MIRCmpOp<"lt">;
-def GtOp  : MIRCmpOp<"gt">;
-def GeqOp : MIRCmpOp<"geq">;
-def LeqOp : MIRCmpOp<"leq">;
+def EqOp  : MIRCmpOp<"eq">  { let summary = "compare for equality"; }
+def NeqOp : MIRCmpOp<"neq"> { let summary = "compare for inequality"; }
+def LtOp  : MIRCmpOp<"lt">  { let summary = "compare less than"; }
+def GtOp  : MIRCmpOp<"gt">  { let summary = "compare greater than"; }
+def GeqOp : MIRCmpOp<"geq"> { let summary = "compare greater or equal"; }
+def LeqOp : MIRCmpOp<"leq"> { let summary = "compare less or equal"; }
 
 def FuncOp : MIROp<"func", [
   IsolatedFromAbove,
@@ -113,6 +114,7 @@ def BoolToI1Op : MIROp<"bool_to_i1", [Pure]> {
 }
 
 def ReturnOp : MIROp<"return", [Pure, ReturnLike, Terminator]> {
+  let summary = "return from an MIR function";
   let arguments = (ins Variadic<AnyType>:$operands);
   let assemblyFormat = [{
     ($operands^ `:` type($operands))? attr-dict
@@ -121,6 +123,7 @@ def ReturnOp : MIROp<"return", [Pure, ReturnLike, Terminator]> {
 }
 
 def CallOp : MIROp<"call"> {
+  let summary = "call an MIR function";
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
     Variadic<AnyType>:$arguments

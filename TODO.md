@@ -12,8 +12,6 @@
 
 - **Base types**: no `description` on any type in `Types.td`
 - **Base attrs**: no `summary`/`description` on `BaseTypeAttr`, `IntAttr`, `BaseUnitAttr`, `SiBoolAttr`
-- **HIR ops**: ~20 ops missing `summary`, most ops missing `description`
-- **MIR ops**: 19 ops missing `summary`/`description` (all binary/cmp ops, `ConstantOp`, `ReturnOp`, `CallOp`)
 
 ## Dialect Review: Missing Tests
 
