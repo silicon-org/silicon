@@ -63,6 +63,8 @@ static std::string describeTypeValue(Value typeValue) {
     return "`ref`";
   if (isa<FuncTypeOp>(defOp))
     return "a function type";
+  if (isa<OpaqueTypeOp>(defOp))
+    return "`opaque`";
 
   return "(unknown)";
 }

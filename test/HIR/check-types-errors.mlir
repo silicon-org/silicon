@@ -41,6 +41,20 @@ func.func @InferrableVsConcrete() {
 
 func.func private @use_type(%arg0: !hir.any)
 
+// Type mismatch between opaque_type and int_type.
+func.func @OpaqueVsInt() {
+  %0 = hir.opaque_type
+  %1 = hir.int_type
+  // expected-error @below {{type mismatch: `opaque` is not compatible with `int`}}
+  %2 = hir.unify %0, %1
+  call @use_type(%2) : (!hir.any) -> ()
+  return
+}
+
+// -----
+
+func.func private @use_type(%arg0: !hir.any)
+
 // Both inferrable should not produce an error.
 func.func @BothInferrable() {
   %0 = hir.inferrable

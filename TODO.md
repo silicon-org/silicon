@@ -54,9 +54,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 - **PhaseEvalLoop: dangling symbol references silently ignored.**
   If a `multiphase_func`'s first phase symbol doesn't resolve, it's silently not counted.
 
-- **CheckTypes: `OpaqueTypeOp` in `isConcreteTypeConstructor` but not in `describeTypeValue`.**
-  Produces confusing `(unknown)` in error messages.
-
 - **MIRToCIRCT: `isModule` behavior mismatch.**
   Docs say "only `isModule` funcs and transitive callees" but implementation lowers ALL convertible `mir.func` ops.
 
