@@ -103,7 +103,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 ## Dialect Review: Missing Constraints and Traits
 
 - **MIR binary/cmp ops use `AnyType`**: should constrain to numeric types; cmp results should be `BoolType`
-- **MIR `OpaquePackOp`/`OpaqueUnpackOp`**: result/input unconstrained, should be `OpaqueType`
 - **MIR `ReturnOp`**: no verifier checking return types match enclosing `mir.func` results
 - **HIR `ExprOp`/`YieldOp`**: no verifier for operand count/type matching
 - **Base `UIntType`**: no width verifier (e.g. reject width=0)

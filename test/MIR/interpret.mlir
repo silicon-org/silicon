@@ -198,8 +198,8 @@ mir.func @OuterCaller() -> (result: !si.int) {
 mir.func @test_opaque_pack_unpack() -> (result: !si.int) {
   %0 = mir.constant #si.int<10> : !si.int
   %1 = mir.constant #si.int<20> : !si.int
-  %2 = mir.opaque_pack (%0, %1) : (!si.int, !si.int) -> !si.opaque
-  %3, %4 = mir.opaque_unpack %2 : !si.opaque -> !si.int, !si.int
+  %2 = mir.opaque_pack (%0, %1) : (!si.int, !si.int)
+  %3, %4 = mir.opaque_unpack %2 : !si.int, !si.int
   %5 = mir.add %3, %4 : !si.int
   mir.return %5 : !si.int
 }
@@ -207,8 +207,8 @@ mir.func @test_opaque_pack_unpack() -> (result: !si.int) {
 // CHECK: mir.evaluated_func @test_opaque_single [#si.int<42> : !si.int]
 mir.func @test_opaque_single() -> (result: !si.int) {
   %0 = mir.constant #si.int<42> : !si.int
-  %1 = mir.opaque_pack (%0) : (!si.int) -> !si.opaque
-  %2 = mir.opaque_unpack %1 : !si.opaque -> !si.int
+  %1 = mir.opaque_pack (%0) : (!si.int)
+  %2 = mir.opaque_unpack %1 : !si.int
   mir.return %2 : !si.int
 }
 

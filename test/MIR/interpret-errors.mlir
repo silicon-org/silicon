@@ -90,7 +90,7 @@ mir.func @ShrNegative() -> (result: !si.int) {
 mir.func @CondBrUnknownCondType() -> (result: !si.int) {
   %a = mir.constant #si.int<1> : !si.int
   %b = mir.constant #si.int<2> : !si.int
-  %opaque = mir.opaque_pack (%a) : (!si.int) -> !si.opaque
+  %opaque = mir.opaque_pack (%a) : (!si.int)
   %cond = "builtin.unrealized_conversion_cast"(%opaque) : (!si.opaque) -> i1
   // expected-error @below {{compiler bug: unsupported condition type}}
   // expected-note @below {{Interpreter::run()}}

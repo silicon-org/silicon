@@ -130,7 +130,7 @@ hir.func @UnifyInOpaquePack(%T) -> (ctx) {
   %type_type = hir.type_type
   %coerced = hir.coerce_type %T, %type_type
   %unified = hir.unify %coerced, %T
-  // CHECK: mir.opaque_pack(%T) : (!si.type) -> !si.opaque
+  // CHECK: mir.opaque_pack(%T) : (!si.type)
   %packed = hir.opaque_pack(%unified)
   %opaque = hir.opaque_type
   hir.return %packed : (%type_type) -> (%opaque)

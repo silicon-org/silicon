@@ -69,8 +69,8 @@ unrealized_conversion_cast to !si.opaque
 unrealized_conversion_cast to index {attr = #si.opaque<[#si.int<42>, #si.type<!si.int>]>}
 
 // Opaque pack/unpack
-%opaque_ctx = mir.opaque_pack (%c42_int, %int_type) : (!si.int, !si.type) -> !si.opaque
-%opaque_a, %opaque_b = mir.opaque_unpack %opaque_ctx : !si.opaque -> !si.int, !si.type
+%opaque_ctx = mir.opaque_pack (%c42_int, %int_type) : (!si.int, !si.type)
+%opaque_a, %opaque_b = mir.opaque_unpack %opaque_ctx : !si.int, !si.type
 
 // Evaluated func
 // CHECK: mir.evaluated_func @eval_test [#si.int<42> : !si.int]
