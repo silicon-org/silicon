@@ -20,3 +20,35 @@ hir.func @UnifyTypeMismatch() -> (result) {
   %c0 = hir.constant_int 0 : %ty
   hir.return %c0 : () -> (%ty)
 }
+
+// -----
+
+// Negative uint width: shouldLower passes (ConstantIntOp exists), but the
+// conversion pattern rejects the negative value.
+
+hir.func @NegativeUIntWidth() -> () {
+  %int = hir.int_type
+  %neg = hir.constant_int -1 : %int
+  // expected-error @below {{compiler bug: negative uint width -1}}
+  // expected-note @below {{}}
+  // expected-error @below {{failed to legalize operation 'hir.uint_type'}}
+  %ty = hir.uint_type %neg
+  hir.return : () -> ()
+}
+
+// -----
+
+// Coerce_type type mismatch: the return op declares the arg type as bool, but
+// the coerce_type annotates it as int. After signature conversion the block arg
+// becomes !si.bool, conflicting with the !si.int expected by the coerce_type.
+
+hir.func @CoerceTypeMismatch(%a) -> (result) {
+  %bool = hir.bool_type
+  %int = hir.int_type
+  // expected-error @below {{compiler bug: coerce_type type mismatch: input has '!si.bool' but type operand says '!si.int'}}
+  // expected-note @below {{}}
+  // expected-error @below {{failed to legalize operation 'hir.coerce_type'}}
+  %r = hir.coerce_type %a, %int
+  hir.return %r : (%bool) -> (%int)
+}
+

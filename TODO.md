@@ -17,12 +17,11 @@
 - **HIR**: missing tests for `SplitFuncOp` array-size mismatches, `MultiphaseFuncOp` `argIsFirst` size mismatch, `ReturnOp` `values`/`typeOfValues` size mismatch, `SignatureOp` outside valid parent, `NextPhaseOp` outside `hir.func`
 ### Pass error tests
 
-- **HIRToMIR**: 13 error paths untested (non-constant/negative/excessive uint width, non-constant func_type args/results, coerce_type type mismatch, call non-constant result type, etc.)
+- **HIRToMIR**: remaining untested `emitBug` paths (non-constant uint width, excessive uint width, non-constant func_type args/results, non-constant call result type, return op typeOfArgs/typeOfValues mismatch between multiple returns); most are guarded by `shouldLower` and hard to trigger from IR
 - **MIRToCIRCT**: empty error file, 8 `emitBug` paths untested
 - **PhaseEvalLoop**: no test for "still pending" multiphase_func note, sub-pipeline failure propagation
-- **CheckTypes**: only 1 type mismatch combination tested (unit vs int); add int vs uint, ref vs int, etc.
 - **SpecializeFuncs**: no test for void-result evaluated func chaining
-- **SplitPhases**: no test for "op uses value from later phase" error
+- **SplitPhases**: no test for "op uses value from later phase" `emitBug` (defensive check, hard to trigger from well-formed IR)
 - **InferTypes**: no error test file
 
 ### Pass positive tests
