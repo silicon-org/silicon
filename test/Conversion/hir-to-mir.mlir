@@ -143,11 +143,13 @@ hir.func @OpaqueTypes() -> () {
   hir.return : () -> ()
 }
 
-// CHECK-LABEL: mir.func @OpaqueArg(%a: !si.opaque)
+// Opaque args block lowering — the opaque context must be resolved through
+// specialization first. The function stays as HIR until then.
+// CHECK-LABEL: hir.func @OpaqueArg(%a) -> (result)
 hir.func @OpaqueArg(%a) -> (result) {
   %opaque = hir.opaque_type
   %a0 = hir.coerce_type %a, %opaque
-  // CHECK: mir.return %a
+  // CHECK: hir.return
   hir.return %a0 : (%opaque) -> (%opaque)
 }
 

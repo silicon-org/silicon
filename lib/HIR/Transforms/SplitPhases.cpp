@@ -530,13 +530,18 @@ LogicalResult PhaseSplitter::run() {
         analysis.opPhases[call] = phase;
         for (auto result : call.getResults())
           analysis.valuePhases[result] = phase;
-        prevResults.assign(call.getResults().begin(), call.getResults().end());
 
         // Capture the results from the result phase as replacements for the
-        // original unified_call.
+        // original unified_call. Only context results (beyond the user results)
+        // should be threaded to the next phase.
         if (isResultPhase) {
           for (unsigned i = 0; i < callOp.getNumResults(); ++i)
             unifiedCallReplacements.push_back(call.getResult(i));
+          prevResults.assign(call.getResults().begin() + callOp.getNumResults(),
+                             call.getResults().end());
+        } else {
+          prevResults.assign(call.getResults().begin(),
+                             call.getResults().end());
         }
       }
 
@@ -832,8 +837,6 @@ LogicalResult PhaseSplitter::run() {
     unsigned ownArgs = numOwnArgs[phase - minPhase];
     unsigned totalArgs = block.getNumArguments();
     unsigned contextArgs = totalArgs - ownArgs;
-    if (contextArgs == 0)
-      continue;
 
     // In this phase: replace trailing context block args with a single opaque
     // arg followed by an opaque_unpack. The opaque context arg feeds directly
@@ -861,10 +864,6 @@ LogicalResult PhaseSplitter::run() {
     auto prevReturnOp =
         cast<ReturnOp>(prevSplit.funcOp.getBody().back().getTerminator());
     unsigned prevOwnReturns = numOwnReturns[phase - 1 - minPhase];
-    unsigned prevTotalReturns = prevReturnOp.getValues().size();
-    unsigned contextReturns = prevTotalReturns - prevOwnReturns;
-    if (contextReturns == 0)
-      continue;
 
     OpBuilder packBuilder(prevReturnOp);
     SmallVector<Value> contextValues(

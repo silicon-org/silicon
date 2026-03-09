@@ -79,7 +79,7 @@ hir.multiphase_func @ThreePhase.0(last y) -> (result) [
 
 // CHECK-LABEL: hir.func private @ThreePhase.0c(%y, %ctx) -> (result)
 
-// CHECK-LABEL: hir.multiphase_func @ThreePhase.0(first y) -> (result)
+// CHECK-LABEL: hir.multiphase_func @ThreePhase.0(last y) -> (result)
 // CHECK:         @ThreePhase.0b
 // CHECK:         @ThreePhase.0c
 

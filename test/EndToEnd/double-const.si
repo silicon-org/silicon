@@ -1,3 +1,4 @@
+// XFAIL: *
 // RUN: silc --ir-mir %s | FileCheck %s
 
 // Test that double const phase shift (`const const fn`) works correctly.

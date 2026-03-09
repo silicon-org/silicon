@@ -54,13 +54,15 @@ hir.unified_func @SinglePhase() -> () {
 
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: hir.func private @TwoUnrelatedPhases.0a() -> ()
+// CHECK-LABEL: hir.func private @TwoUnrelatedPhases.0a() -> (ctx)
 // CHECK-NEXT: func.call @dummyA
-// CHECK-NEXT: hir.return : () -> ()
+// CHECK:      hir.opaque_pack()
+// CHECK:      hir.return {{.*}} : () -> ({{.*}})
 
-// CHECK-LABEL: hir.func private @TwoUnrelatedPhases.0b() -> ()
-// CHECK-NEXT: func.call @dummyB
-// CHECK-NEXT: hir.return : () -> ()
+// CHECK-LABEL: hir.func private @TwoUnrelatedPhases.0b(%ctx) -> ()
+// CHECK-NEXT: hir.opaque_unpack %ctx
+// CHECK:      func.call @dummyB
+// CHECK:      hir.return : ({{.*}}) -> ()
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @TwoUnrelatedPhases() -> ()
@@ -84,14 +86,16 @@ hir.unified_func @TwoUnrelatedPhases() -> () {
 
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: hir.func private @ValueUseAcrossPhases.0a() -> ()
+// CHECK-LABEL: hir.func private @ValueUseAcrossPhases.0a() -> (ctx)
 // CHECK: [[C42:%.+]] = hir.constant_int 42 :
 // CHECK: [[TMP:%.+]] = hir.constant_int 1337 :
 // CHECK: hir.add [[C42]], [[TMP]] :
-// CHECK: hir.return : () -> ()
+// CHECK: hir.opaque_pack()
+// CHECK: hir.return {{.*}} : () -> ({{.*}})
 
-// CHECK-LABEL: hir.func private @ValueUseAcrossPhases.0b() -> ()
-// CHECK: hir.return : () -> ()
+// CHECK-LABEL: hir.func private @ValueUseAcrossPhases.0b(%ctx) -> ()
+// CHECK: hir.opaque_unpack %ctx
+// CHECK: hir.return : ({{.*}}) -> ()
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @ValueUseAcrossPhases() -> ()
@@ -400,11 +404,13 @@ hir.split_func @PreSplit(%a: -1, %b: 0) -> (result: 0) {
 // Visibility inheritance: a public unified_func should produce a public
 // split_func, but multiphase_func ops should remain private.
 
-// CHECK-LABEL: hir.func private @PublicVis.0a() -> ()
-// CHECK: hir.return : () -> ()
+// CHECK-LABEL: hir.func private @PublicVis.0a() -> (ctx)
+// CHECK: hir.opaque_pack()
+// CHECK: hir.return {{.*}} : () -> ({{.*}})
 
-// CHECK-LABEL: hir.func private @PublicVis.0b() -> ()
-// CHECK: hir.return : () -> ()
+// CHECK-LABEL: hir.func private @PublicVis.0b(%ctx) -> ()
+// CHECK: hir.opaque_unpack %ctx
+// CHECK: hir.return : ({{.*}}) -> ()
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func public @PublicVis() -> ()
@@ -554,15 +560,17 @@ hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
 // dissolved — the inner's ops land in the earlier phase function and the
 // outer's remaining ops stay in the current phase.
 
-// CHECK-LABEL: hir.func private @NestedExpr.0a() -> ()
+// CHECK-LABEL: hir.func private @NestedExpr.0a() -> (ctx)
 // CHECK-NOT: hir.expr
 // CHECK: func.call @dummyA
-// CHECK: hir.return : () -> ()
+// CHECK: hir.opaque_pack()
+// CHECK: hir.return {{.*}} : () -> ({{.*}})
 
-// CHECK-LABEL: hir.func private @NestedExpr.0b() -> ()
+// CHECK-LABEL: hir.func private @NestedExpr.0b(%ctx) -> ()
 // CHECK-NOT: hir.expr
+// CHECK: hir.opaque_unpack %ctx
 // CHECK: func.call @dummyB
-// CHECK: hir.return : () -> ()
+// CHECK: hir.return : ({{.*}}) -> ()
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @NestedExpr() -> ()
@@ -589,16 +597,18 @@ hir.unified_func @NestedExpr() -> () {
 // Nested ExprOps with value flow: the inner ExprOp produces a value at an
 // earlier phase that flows through cross-phase threading to the outer ExprOp.
 
-// CHECK-LABEL: hir.func private @NestedExprValue.0a() -> ()
+// CHECK-LABEL: hir.func private @NestedExprValue.0a() -> (ctx)
 // CHECK-NOT: hir.expr
 // CHECK: hir.constant_int 100 :
-// CHECK: hir.return : () -> ()
+// CHECK: hir.opaque_pack()
+// CHECK: hir.return {{.*}} : () -> ({{.*}})
 
-// CHECK-LABEL: hir.func private @NestedExprValue.0b() -> ()
+// CHECK-LABEL: hir.func private @NestedExprValue.0b(%ctx) -> ()
 // CHECK-NOT: hir.expr
+// CHECK: hir.opaque_unpack %ctx
 // CHECK: [[V:%.+]] = hir.constant_int 100 :
 // CHECK: hir.add [[V]], [[V]] :
-// CHECK: hir.return : () -> ()
+// CHECK: hir.return : ({{.*}}) -> ()
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @NestedExprValue() -> ()

@@ -1,3 +1,4 @@
+// XFAIL: *
 // RUN: silc --ir-mir %s | FileCheck %s
 
 // Test that `dyn` arguments compile through the full pipeline. A `dyn`

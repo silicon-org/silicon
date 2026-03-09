@@ -17,6 +17,10 @@
   Input: `pub fn widen(a: uint<8>) -> uint<16> { a }` — error: `hir.unify survived to HIR-to-MIR lowering`.
   There's no implicit widening conversion.
   Low priority; explicit cast syntax would be the right fix, but that syntax doesn't exist yet either.
+- Add a test to phase splitting to verify that the pass works if a `hir.unified_call` targets a `hir.split_func`; this is relevant for the library compilation model, where a library already contains split funcs and user code must be able to properly phase-split unified calls to a func that is already split in the IR.
+- **XFAIL `double-const.si`**: SplitPhases call decomposition expands multiphase sub-functions, causing SpecializeFuncs to mutate them in place and crash callers with stale references.
+- **XFAIL `dyn-args.si`**: Same call decomposition bug; callers bypass multiphase_func and call sub-functions directly with wrong arg counts.
+- **XFAIL `dyn-fn-call.si`**: Same pattern; `dyn fn` callee sub-functions called directly instead of through multiphase_func.
 
 ## End-to-End Test Cleanup
 

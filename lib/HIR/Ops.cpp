@@ -577,6 +577,62 @@ LogicalResult MultiphaseFuncOp::verify() {
   return success();
 }
 
+/// Verify that each sub-function referenced by the multiphase_func exists and
+/// has the expected number of arguments and results. The protocol is:
+///
+/// - First sub-func: args = `first`-marked args, results = 1 (ctx)
+/// - Middle sub-funcs: args = 1 (ctx), results = 1 (ctx)
+/// - Last sub-func: args = `last`-marked args + 1 (ctx), results = declared
+///   results
+/// - Single sub-func (N=1): args = all args, results = declared results
+LogicalResult
+MultiphaseFuncOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto phaseFuncs = getPhaseFuncs();
+  unsigned n = phaseFuncs.size();
+
+  unsigned firstArgs = llvm::count(getArgIsFirst(), true);
+  unsigned lastArgs = getArgNames().size() - firstArgs;
+  unsigned declaredResults = getResultNames().size();
+
+  for (unsigned i = 0; i < n; ++i) {
+    auto sym = cast<FlatSymbolRefAttr>(phaseFuncs[i]);
+    auto func =
+        symbolTable.lookupNearestSymbolFrom<FuncOp>(getOperation(), sym);
+    if (!func)
+      // The sub-function may have been lowered to MIR or evaluated already.
+      continue;
+
+    unsigned actualArgs = func.getBody().front().getNumArguments();
+    unsigned actualResults = func.getResultNames().size();
+
+    // Compute expected arg/result counts based on position.
+    unsigned expectedArgs, expectedResults;
+    if (n == 1) {
+      expectedArgs = firstArgs + lastArgs;
+      expectedResults = declaredResults;
+    } else if (i == 0) {
+      expectedArgs = firstArgs;
+      expectedResults = 1; // ctx
+    } else if (i == n - 1) {
+      expectedArgs = lastArgs + 1; // last args + ctx
+      expectedResults = declaredResults;
+    } else {
+      expectedArgs = 1;    // ctx
+      expectedResults = 1; // ctx
+    }
+
+    if (actualArgs != expectedArgs)
+      return emitOpError() << "sub-function " << sym << " has " << actualArgs
+                           << " arguments, expected " << expectedArgs;
+
+    if (actualResults != expectedResults)
+      return emitOpError() << "sub-function " << sym << " has " << actualResults
+                           << " results, expected " << expectedResults;
+  }
+
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // CallOp
 //===----------------------------------------------------------------------===//
@@ -593,6 +649,42 @@ CallOp::inferReturnTypes(MLIRContext *ctx, std::optional<Location>,
   auto anyType = AnyType::get(ctx);
   for (size_t i = 0; i < adaptor.getTypeOfResults().size(); ++i)
     inferredReturnTypes.push_back(anyType);
+  return success();
+}
+
+/// Verify that the call's argument and result counts match the callee's
+/// interface. The callee may be an `hir.func` (matched against block args and
+/// return values) or an `hir.multiphase_func` (matched against declared args
+/// and results).
+LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto callee = getCalleeAttr();
+  unsigned expectedArgs, expectedResults;
+
+  if (auto func =
+          symbolTable.lookupNearestSymbolFrom<FuncOp>(getOperation(), callee)) {
+    expectedArgs = func.getBody().front().getNumArguments();
+    expectedResults = func.getResultNames().size();
+  } else if (auto mpFunc =
+                 symbolTable.lookupNearestSymbolFrom<MultiphaseFuncOp>(
+                     getOperation(), callee)) {
+    expectedArgs = mpFunc.getArgNames().size();
+    expectedResults = mpFunc.getResultNames().size();
+  } else {
+    // The callee may have been lowered to MIR or evaluated already. In that
+    // case we can't check counts — just succeed.
+    return success();
+  }
+
+  if (getArguments().size() != expectedArgs)
+    return emitOpError() << "has " << getArguments().size()
+                         << " arguments, but callee " << callee << " expects "
+                         << expectedArgs;
+
+  if (getResults().size() != expectedResults)
+    return emitOpError() << "has " << getResults().size()
+                         << " results, but callee " << callee << " expects "
+                         << expectedResults;
+
   return success();
 }
 

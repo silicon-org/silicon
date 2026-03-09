@@ -302,6 +302,7 @@ def NextPhaseOp : HIROp<"next_phase", [
 def CallOp : HIROp<"call", [
   AttrSizedOperandSegments,
   DeclareOpInterfaceMethods<InferTypeOpInterface>,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
   RangedTypesMatchWith<"arguments match argument types", "arguments", "typeOfArgs", "$_self">,
   RangedTypesMatchWith<"results match result types", "results", "typeOfResults", "$_self">,
 ]> {
@@ -430,6 +431,7 @@ def SplitFuncOp : HIROp<"split_func", [
 
 def MultiphaseFuncOp : HIROp<"multiphase_func", [
   Symbol,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
 ]> {
   let summary = "A chain of sub-functions evaluated iteratively, one phase at a time";
   let description = [{
@@ -474,7 +476,7 @@ def OpaqueUnpackOp : HIROp<"opaque_unpack", [Pure]> {
   let summary = "Unpack an opaque bundle into individual values";
   let arguments = (ins HIRAnyType:$input);
   let results = (outs Variadic<HIRAnyType>:$results);
-  let assemblyFormat = [{ $input attr-dict `:` type($results) }];
+  let assemblyFormat = [{ $input attr-dict (`:` type($results)^)? }];
   let hasCanonicalizeMethod = 1;
 }
 

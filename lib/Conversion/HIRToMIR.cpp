@@ -449,6 +449,14 @@ static bool shouldLower(hir::FuncOp func) {
       for (auto val : ret.getTypeOfValues())
         if (!isResolvableType(val))
           ready = false;
+      // An opaque_type in typeOfArgs indicates the function has an opaque
+      // context argument that must be resolved through specialization before
+      // lowering. The zero-result opaque_unpack that originally guards this
+      // may have been removed by canonicalization, but the opaque_type in
+      // the return's typeOfArgs persists as a reliable signal.
+      for (auto val : ret.getTypeOfArgs())
+        if (val.getDefiningOp<hir::OpaqueTypeOp>())
+          ready = false;
     } else if (auto uintType = dyn_cast<hir::UIntTypeOp>(op)) {
       if (!uintType.getWidth().getDefiningOp<hir::ConstantIntOp>())
         ready = false;

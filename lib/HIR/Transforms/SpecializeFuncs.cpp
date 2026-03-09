@@ -286,8 +286,9 @@ void SpecializeFuncsPass::runOnOperation() {
             newArgIsFirst.push_back(false);
           }
         }
-        if (!newArgIsFirst.empty())
-          newArgIsFirst[0] = true;
+        // Remaining args keep their original first/last designation. Don't
+        // relabel last args as first — they should stay targeted at the last
+        // sub-function.
 
         if (newPhaseFuncs.size() <= 1) {
           for (auto splitFunc : getOperation().getOps<hir::SplitFuncOp>()) {
@@ -322,15 +323,6 @@ void SpecializeFuncsPass::runOnOperation() {
         continue;
       }
 
-      // Find the next sub-function.
-      auto nextSym = cast<FlatSymbolRefAttr>(phaseFuncs[1]);
-      auto nextFunc = symbolTable.lookup<hir::FuncOp>(nextSym.getValue());
-      if (!nextFunc) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  Next sub-function " << nextSym << " not found\n");
-        continue;
-      }
-
       // The evaluated_func should have exactly one result (the opaque pack).
       if (resultAttrs.size() != 1) {
         emitBug(evalFunc.getLoc())
@@ -343,6 +335,15 @@ void SpecializeFuncsPass::runOnOperation() {
         emitBug(evalFunc.getLoc())
             << "evaluated_func result is not an opaque attribute";
         return signalPassFailure();
+      }
+
+      // Find the next sub-function.
+      auto nextSym = cast<FlatSymbolRefAttr>(phaseFuncs[1]);
+      auto nextFunc = symbolTable.lookup<hir::FuncOp>(nextSym.getValue());
+      if (!nextFunc) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Next sub-function " << nextSym << " not found\n");
+        continue;
       }
 
       // Expand the opaque context in the next function.
@@ -368,8 +369,9 @@ void SpecializeFuncsPass::runOnOperation() {
           newArgIsFirst.push_back(false);
         }
       }
-      if (!newArgIsFirst.empty())
-        newArgIsFirst[0] = true;
+      // Remaining args keep their original first/last designation. Don't
+      // relabel last args as first — they should stay targeted at the last
+      // sub-function.
 
       if (newPhaseFuncs.size() <= 1) {
         // Dissolve: update split_func to reference the remaining sub-function
@@ -413,6 +415,83 @@ void SpecializeFuncsPass::runOnOperation() {
     if (!evalFunc.getResults().empty())
       continue;
     eraseVoidCalls(getOperation(), evalFunc.getSymName());
+  }
+
+  // Strip unused opaque context args from HIR functions. When SplitPhases
+  // emits an empty opaque pair (zero cross-phase values), the zero-result
+  // opaque_unpack gets removed by canonicalization, leaving an unused block
+  // arg with opaque_type. Remove it so the function can be lowered to MIR.
+  // Skip multiphase sub-functions — their opaque args are resolved through
+  // SpecializeFuncs chaining, not this cleanup.
+  // Collect non-first sub-functions of multiphase_funcs (their opaque args
+  // are part of the within-group protocol) and map first sub-functions to
+  // their parent multiphase_func (so we can update it when stripping).
+  DenseSet<StringRef> mpNonFirstSubs;
+  DenseMap<StringRef, hir::MultiphaseFuncOp> mpFirstSubToParent;
+  for (auto mpFunc : getOperation().getOps<hir::MultiphaseFuncOp>()) {
+    auto refs = mpFunc.getPhaseFuncs();
+    if (!refs.empty())
+      mpFirstSubToParent[cast<FlatSymbolRefAttr>(refs[0]).getValue()] = mpFunc;
+    for (unsigned i = 1; i < refs.size(); ++i)
+      mpNonFirstSubs.insert(cast<FlatSymbolRefAttr>(refs[i]).getValue());
+  }
+
+  for (auto func : getOperation().getOps<hir::FuncOp>()) {
+    if (mpNonFirstSubs.contains(func.getSymName()))
+      continue;
+    auto &block = func.getBody().front();
+    if (block.getNumArguments() == 0)
+      continue;
+    auto lastArg = block.getArgument(block.getNumArguments() - 1);
+    if (!lastArg.use_empty())
+      continue;
+
+    // Check if the corresponding typeOfArgs entry is opaque_type.
+    auto retOp = dyn_cast<hir::ReturnOp>(block.getTerminator());
+    if (!retOp)
+      continue;
+    auto typeOfArgs = retOp.getTypeOfArgs();
+    if (typeOfArgs.size() != block.getNumArguments())
+      continue;
+    auto lastTypeOfArg = typeOfArgs[block.getNumArguments() - 1];
+    if (!lastTypeOfArg.getDefiningOp<hir::OpaqueTypeOp>())
+      continue;
+
+    LLVM_DEBUG(llvm::dbgs() << "Stripping unused opaque arg from @"
+                            << func.getSymName() << "\n");
+
+    // Erase the block arg.
+    block.eraseArgument(block.getNumArguments() - 1);
+
+    // Drop the last typeOfArgs entry.
+    SmallVector<Value> newArgTypes(typeOfArgs.drop_back());
+    retOp.getTypeOfArgsMutable().assign(newArgTypes);
+
+    // Update argNames on the function.
+    SmallVector<Attribute> newArgNames(func.getArgNames().begin(),
+                                       func.getArgNames().end());
+    if (!newArgNames.empty())
+      newArgNames.pop_back();
+    func.setArgNamesAttr(ArrayAttr::get(&getContext(), newArgNames));
+
+    // If this is the first sub-function of a multiphase_func, remove the
+    // corresponding "first" arg from the multiphase declaration.
+    auto it = mpFirstSubToParent.find(func.getSymName());
+    if (it != mpFirstSubToParent.end()) {
+      auto mpFunc = it->second;
+      auto argIsFirst = mpFunc.getArgIsFirst();
+      SmallVector<Attribute> mpArgNames;
+      SmallVector<bool> mpArgIsFirst;
+      for (unsigned k = 0; k < mpFunc.getArgNames().size(); ++k) {
+        if (!argIsFirst[k]) {
+          mpArgNames.push_back(mpFunc.getArgNames()[k]);
+          mpArgIsFirst.push_back(false);
+        }
+      }
+      mpFunc.setArgNamesAttr(ArrayAttr::get(&getContext(), mpArgNames));
+      mpFunc.setArgIsFirstAttr(
+          DenseBoolArrayAttr::get(&getContext(), mpArgIsFirst));
+    }
   }
 
   // Clean up multiphase_func ops that are no longer referenced by any

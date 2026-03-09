@@ -6,7 +6,7 @@
 // earlier (const) phase functions, and SpecializeFuncs to dissolve
 // multiphase_func ops with zero-result evaluated functions.
 
-// CHECK: mir.func private @const_fn.0(%x: !si.int) -> (result: !si.int)
+// CHECK: mir.func private @const_fn.0(%x: !si.int) -> (result: !si.int, ctx: !si.opaque)
 // CHECK: mir.evaluated_func {{.*}}@const_fn.1 []
 pub const fn const_fn(x: int) -> int { x }
 
@@ -14,7 +14,7 @@ pub const fn const_fn(x: int) -> int { x }
 // CHECK: hir.split_func @dyn_fn(%a: 1) -> (result: 1)
 pub dyn fn dyn_fn(a: int) -> int { a }
 
-// CHECK: mir.func private @const_const_fn.0(%x: !si.int) -> (result: !si.int)
+// CHECK: mir.func private @const_const_fn.0(%x: !si.int) -> (result: !si.int, ctx: !si.opaque)
 // CHECK: mir.evaluated_func {{.*}}@const_const_fn.1b []
 pub const const fn const_const_fn(x: int) -> int { x }
 
@@ -22,5 +22,5 @@ pub const const fn const_const_fn(x: int) -> int { x }
 // CHECK-NOT: hir.multiphase_func @cancel_fn
 pub const dyn fn cancel_fn(x: int) -> int { x }
 
-// CHECK: mir.func private @pub_const_fn.0(%x: !si.int) -> (result: !si.int)
+// CHECK: mir.func private @pub_const_fn.0(%x: !si.int) -> (result: !si.int, ctx: !si.opaque)
 pub const fn pub_const_fn(x: int) -> int { x }
