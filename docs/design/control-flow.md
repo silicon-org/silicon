@@ -1,6 +1,6 @@
 # Control Flow
 
-This document describes the design of control flow in Silicon: how `if`, `for`, `while`, `break`, `continue`, and early `return` work across compile-time phases and in the final hardware phase.
+This document describes the design of control flow in Silicon: how `if`, `for`, `while`, `loop`, `break`, `continue`, and early `return` work across compile-time phases and in the final hardware phase.
 It builds on the phased execution model described in {{< page-link "/design/phase-splits" >}}.
 
 > [!WARNING]
@@ -13,7 +13,7 @@ It builds on the phased execution model described in {{< page-link "/design/phas
 Control flow in Silicon spans two fundamentally different execution models:
 
 - **Early phases** (compile-time): Standard imperative execution with a program counter.
-  `if`, `for`, `while`, `break`, `continue`, and `return` have their usual software semantics.
+  `if`, `for`, `while`, `loop`, `break`, `continue`, and `return` have their usual software semantics.
   Code is interpreted or JIT-compiled.
 - **Final phase** (hardware): No program counter.
   Control flow must be lowered to structural hardware: muxes for conditionals, unrolled instances for loops.
@@ -43,7 +43,7 @@ Prefer `fn foo(const n: int, x: int) -> int` or `fn foo(n: int, dyn x: int) -> d
 
 ### Control flow inherits phase from surrounding block
 
-The phase of an `if`, `for`, `while`, `return`, `break`, or `continue` is determined by the surrounding code block, **not** by the phase of the condition or loop bound.
+The phase of an `if`, `for`, `while`, `loop`, `return`, `break`, or `continue` is determined by the surrounding code block, **not** by the phase of the condition or loop bound.
 Phase shifts are only introduced by explicit `const { ... }` and `dyn { ... }` blocks.
 
 This means:
@@ -93,9 +93,38 @@ const {
 }
 ```
 
+Only `if` and `for` get the `const` shorthand, since these are the overwhelmingly common cross-phase patterns.
+`while` and `loop` do not have a `const` shorthand — the user writes `const { while ... { dyn { ... } } }` or `const { loop { dyn { ... } } }` explicitly if needed.
+
 A bare `if cond` requires the condition to be at the current block's phase or earlier.
 A bare `for i in 0..n` requires the bound to be at the current block's phase or earlier.
 Using a condition or bound from a later phase is a compile error — the user must explicitly shift phases with `dyn { ... }`.
+
+### `if` vs `if const` with a const condition
+
+When the condition of a bare `if` happens to be a const value (available one phase earlier), the `if` still executes at the current phase.
+The condition is a known constant flowing into a regular conditional — both branches structurally exist, and canonicalization/folding may eliminate the dead branch.
+
+In contrast, `if const` is a **structural guarantee**: the decision is made during the earlier phase's execution, and the untaken branch never appears in the IR at all.
+This matters when the branches contain structurally significant operations like instantiating different hardware modules or having different numbers of ports.
+
+```silicon
+fn foo(const n: u32, x: u32) -> u32 {
+    // ✓ Works: structure determined at compile time.
+    // The pipeline stage is either present or absent.
+    if const n > 0 {
+        x = pipeline_stage(x);
+    }
+
+    // This is a current-phase if with a const condition.
+    // Both branches exist structurally and the const condition
+    // selects between them. Optimization may fold this away,
+    // but the compiler does not guarantee it.
+    if n > 0 {
+        x = pipeline_stage(x);
+    }
+}
+```
 
 ### No dynamic loops
 
@@ -106,6 +135,41 @@ If a loop has a statically known bound, it can be a `for const` loop that unroll
 All loops in Silicon execute at the current phase or earlier.
 They produce a fixed, unrolled structure in later phases.
 This covers the overwhelmingly common hardware use case: parameterized repetition with known bounds.
+
+### `while` and `loop`
+
+In addition to `for`, Silicon supports `while` and `loop` (unconditional loop, like Rust's `loop`):
+
+```silicon
+// while: conditional loop.
+while !done {
+    // ...
+    done = check();
+}
+
+// loop: unconditional loop, exited with break.
+loop {
+    // ...
+    if found { break; }
+}
+```
+
+Both fit the replicate model naturally.
+The earlier phase runs the loop (with real control flow) and collects hits.
+The replicate in the next phase expands based on however many iterations actually happened.
+
+There is no iteration limit.
+Compile-time phases are real programs — if a user writes an infinite loop, the compiler hangs, just as any program with an infinite loop would.
+The user can abort, add a print for debugging, and retry.
+This is consistent with Silicon's philosophy that compile-time code is just code.
+
+### Recursion constraints
+
+Silicon supports recursive functions, but recursive calls must be at the same phase as the function body.
+A recursive call inside a `const { ... }` or `dyn { ... }` block is an error — that would create unbounded phase nesting, where each recursive call produces another level of replicate expansion.
+
+In practice, recursion is only useful in earlier (compile-time) phases, since the final phase can't represent it in hardware (no call stack).
+This follows the same principle as `return`, `break`, and `continue`: cross-phase control flow is not allowed.
 
 ### `return`, `break`, and `continue` phase constraints
 
@@ -246,23 +310,23 @@ The const values captured by the body (loop variables, const locals) become entr
 **After splitting:**
 
 ```
-// Phase -1: a plain program that returns data
+// Phase -1: a plain program that collects hits
 fn foo_phase_neg1(const n: u32) -> opaque_list {
-    let mut hits = [];
+    hits = opaque_list_create()
     for i in 0..n {
-        hits.push((i,));
-        print("iteration");
+        entry = opaque_pack(i)
+        opaque_list_push(hits, entry)
+        print("iteration")
     }
-    return hits;
+    return hits
 }
 
 // Phase 0: IR with a replicate op
-fn foo_phase0(%hits: !hir.opaque_list, %x: u32) -> u32 {
-    %x_final = hir.replicate %hits
-        iter_args(%x_iter = %x) -> (u32) {
-        ^body(%i: u32, %x_in: u32):
-            %x_next = add %x_in, %i
-            hir.yield %x_next
+fn foo_phase0(%hits, %x) {
+    %x_final = hir.replicate %hit in %hits, (%x_iter = %x) {
+        %i = hir.opaque_unpack %hit
+        %x_next = hir.add %x_iter, %i
+        hir.yield %x_next
     }
     return %x_final
 }
@@ -277,7 +341,7 @@ Only the body of the `for const` (the `x = x + i` part) is extracted into the re
    It's a plain function that does control flow and appends to vectors.
    No coupling to the MLIR context.
    No IR manipulation during execution.
-   The hits vector is returned as opaque data via the existing `opaque_pack`/`opaque_unpack` machinery.
+   The hits vector is built using `opaque_list_create` and `opaque_list_push` ops, which allocate and mutate a heap-backed dynamic array.
 
 2. **Phase 0 is pure IR.**
    The `replicate` op is a standard IR construct with a body region.
@@ -289,18 +353,43 @@ Only the body of the `for const` (the `x = x + i` part) is extracted into the re
 
 ### The replicate op
 
-The `hir.replicate` op borrows its structure from `scf.for`'s `iter_args` model:
+The `hir.replicate` op consumes a hits vector and stamps out its body once per entry, threading values between iterations.
+Its assembly syntax is:
 
-- **`%hits`**: An opaque list of entries from the previous phase.
-  Each entry contains the const values captured by the body for one "hit" (one loop iteration, one taken if-branch, etc.).
-- **`iter_args(%x_iter = %x_init)`**: Declares threaded values with their initial values.
+```mlir
+%result = hir.replicate %hit in %hits, (%x = %x_init) {
+  %i = hir.opaque_unpack %hit
+  %x_next = hir.add %x, %i
+  hir.yield %x_next
+}
+```
+
+The components:
+
+- **`%hit in %hits`**: Iterates over the entries in the hits vector.
+  `%hits` is the opaque list from the previous phase.
+  `%hit` is a block argument of the body's entry block, receiving one opaque entry per iteration.
+  The body uses `hir.opaque_unpack` to extract the individual const values from the entry.
+- **`(%x = %x_init)`**: Declares threaded values with their initial values.
   `%x_init` flows into the first iteration.
-- **Body parameters**: Receive the unpacked hits entry _and_ the current threaded values.
-  The hits entry's fields are typed according to the body's block argument types, which serve as the "schema" for deserialization.
+  The names (`%x`) become block arguments of the body, available directly without a `^bb0` line.
 - **`hir.yield`**: Produces the threaded values for the next iteration.
 - **Result**: The replicate op's result is the yield from the last iteration.
   Code after the replicate uses this result as a normal SSA value.
-  For zero iterations, the result is the initial value from `iter_args`.
+  For zero iterations, the result is the initial value from the threaded args.
+
+Since the replicate op lives in HIR, all values (hits, threaded args, results) have the implicit `!hir.any` type.
+No type annotations are needed in the syntax.
+The replicate is always fully expanded by `SpecializeFuncs` and never lowered to MIR.
+
+A replicate with no threaded args (side-effect-only) omits the threaded arg list:
+
+```mlir
+hir.replicate %hit in %hits {
+  hir.call @side_effect()
+  hir.yield
+}
+```
 
 ### Replicate expansion
 
@@ -318,8 +407,8 @@ This avoids a separate pass and handles transitive/nested cases naturally.
 
 1. For each entry `k` in `0..N`:
    - Clone the body.
-   - Substitute the entry's const values into the const block arguments.
-   - Replace the threaded block arguments with the previous iteration's yield (or the `iter_args` initial values for `k=0`).
+   - Replace the `%hit` block argument with the entry's opaque value, which allows `opaque_unpack` to fold into concrete constants.
+   - Replace the threaded block arguments with the previous iteration's yield (or the initial values for `k=0`).
    - The `hir.yield` operands become the threaded values for iteration `k+1`.
 2. Replace the replicate op's results with the final iteration's yield operands.
 3. Delete the replicate op.
@@ -443,17 +532,15 @@ hits = [
 The current phase has nested replicates:
 
 ```mlir
-%a_final, %b_final = hir.replicate %hits
-    iter_args(%a_iter = %a, %b_iter = %b) -> (u32, u32) {
-    ^body(%i: u32, %inner_hits: !hir.opaque_list, %a_in: u32, %b_in: u32):
-        %a_out = call @f(%a_in, %i)
-        %b_out = hir.replicate %inner_hits
-            iter_args(%b_inner = %b_in) -> (u32) {
-            ^body(%i2: u32, %b_in2: u32):
-                %b_next = call @g(%b_in2, %i2)
-                hir.yield %b_next
-        }
-        hir.yield %a_out, %b_out
+%a_final, %b_final = hir.replicate %hit in %hits, (%a_iter = %a, %b_iter = %b) {
+    %i, %inner_hits = hir.opaque_unpack %hit
+    %a_out = hir.call @f(%a_iter, %i)
+    %b_out = hir.replicate %inner_hit in %inner_hits, (%b_inner = %b_iter) {
+        %j = hir.opaque_unpack %inner_hit
+        %b_next = hir.call @g(%b_inner, %j)
+        hir.yield %b_next
+    }
+    hir.yield %a_out, %b_out
 }
 ```
 
@@ -467,18 +554,32 @@ For deeply nested phasing (phase -2 → phase -1 → phase 0), each level of `co
 The `PhaseEvalLoop` iterates: phase -2 runs and produces hits vectors for phase -1, which runs and produces hits vectors for phase 0.
 Each iteration peels off one phase.
 
-### The `opaque_list` type
+### Hits vector ops and the `opaque_list` type
 
-The hits vectors use an `!hir.opaque_list` type — a dynamically-sized, type-erased container for inter-phase data.
-This is a distinct type from `!hir.opaque` (which carries single values), signaling "this is a hits vector for a replicate."
+The earlier phase builds the hits vector using dedicated ops that allocate and mutate a heap-backed dynamic array:
 
-- The element structure is erased.
-  The replicate body's block argument types serve as the schema for unpacking.
-- Passes can identify replicate-related values by type without inspecting uses.
-- The verifier can check that a replicate's input is an `opaque_list`.
-- Serialization uses the existing `opaque_pack`/`opaque_unpack` machinery.
+- **`opaque_list_create`**: Allocates an empty list.
+  Has `MemAlloc` semantics — it creates a new heap allocation.
+  Returns an `!si.opaque_list` value.
+- **`opaque_list_push %list, %entry`**: Appends an `!si.opaque` entry to the list.
+  Has `MemWrite` semantics — it mutates the list in-place, no result.
+  This maps naturally to LLVM lowering: the list is a heap-allocated dynamic array and push appends to it.
 
-This avoids the need for complex recursive types like `!hir.const_vec<tuple<u32, !hir.const_vec<tuple<u32>>>>` in the type system.
+These ops exist alongside the existing `opaque_pack`/`opaque_unpack` ops for individual entries.
+The `!si.opaque_list` type is defined in the Base dialect, distinct from `!si.opaque`, so that verifiers and type converters can distinguish lists from scalar opaques.
+
+In HIR, the replicate op's hits input is just `!hir.any` — the type distinction only matters after lowering to MIR, where the interpreter or JIT needs to handle the list correctly.
+
+Example of the earlier phase after HIR-to-MIR lowering:
+
+```mlir
+%hits = mir.opaque_list_create
+scf.for %i = 0 to %n {
+  %entry = mir.opaque_pack(%i)
+  mir.opaque_list_push %hits, %entry
+}
+return %hits
+```
 
 ## Dyn Control Flow: CFG to Dataflow
 
@@ -912,6 +1013,39 @@ fn cascade(const a: bool, const b: bool, x: u32) -> u32 {
 }
 ```
 
+### `while` and `loop`
+
+```silicon
+// while loop at compile time — collects hits until condition is false.
+fn collatz_steps(const n: u32, x: u32) -> u32 {
+    const k = n;
+    const {
+        while k != 1 {
+            dyn { x = x + k; }
+            if k % 2 == 0 {
+                k = k / 2;
+            } else {
+                k = k * 3 + 1;
+            }
+        }
+    }
+    return x;
+}
+
+// loop with break at compile time.
+fn find_power_of_two(const start: u32, x: u32) -> u32 {
+    const k = start;
+    const {
+        loop {
+            if k % 2 == 0 { break; }
+            dyn { x = x + k; }
+            k = k + 1;
+        }
+    }
+    return x;
+}
+```
+
 ### Dyn control flow (final-phase if)
 
 ```silicon
@@ -1090,22 +1224,46 @@ fn complex_body(const n: u32, x: u32, y: u32) -> (u32, u32) {
 }
 ```
 
-## Open Questions
+## Control Flow Summary
+
+The full set of control flow constructs in Silicon:
+
+**Core constructs:**
+- `if cond { ... } else { ... }` — conditional at current phase
+- `for i in range { ... }` — bounded loop at current phase
+- `while cond { ... }` — conditional loop at current phase
+- `loop { ... }` — unconditional loop at current phase (exited with `break`)
+- `break` — exit loop, must be at the loop's phase
+- `continue` — skip to next iteration, must be at the loop's phase
+- `return` — exit function, must be at the function body's phase
+
+**Syntactic sugar:**
+- `if const cond { ... }` — shorthand for `const { if cond { dyn { ... } } }`
+- `for const i in range { ... }` — shorthand for `const { for i in range { dyn { ... } } }`
+
+**Phase shift blocks:**
+- `const { ... }` — evaluate one phase earlier
+- `dyn { ... }` — defer to one phase later
+
+## Resolved Design Questions
 
 - **Independent vs threaded iterations.**
-  The `iter_args` model assumes sequential threading.
-  For truly independent iterations (each writes to a different array index), should there be a separate `hir.replicate_parallel` that doesn't thread state?
-  Or is the threading model general enough, and the lack of data dependence is just an optimization opportunity?
+  The threaded `iter_args` model is sufficient.
+  For truly independent iterations (each writes to a different array index), the threading is correct — it just introduces artificial sequencing.
+  Independence is an optimization concern, not a correctness concern.
+  A separate `replicate_parallel` op may be added later when arrays are in the language.
 
-- **Interaction with recursion.**
-  Silicon does not currently support recursive functions, but if it ever does, a recursive function with cross-phase blocks would produce a dynamically-deep nesting of replicates.
-  This is likely out of scope, but worth noting as a constraint.
+- **Recursion.**
+  Silicon supports recursive functions, but recursive calls must be at the same phase as the function body.
+  Cross-phase recursion would produce unbounded phase nesting and is an error.
+  In practice, recursion is only useful in earlier (compile-time) phases.
 
-- **Representation of `while` loops.**
-  `while` loops with const conditions (e.g., `while !done { ... done = check(); }`) fit the replicate model — the earlier phase runs the loop and collects hits.
-  But the iteration count is not syntactically bounded.
-  Should we require the user to provide an upper bound for safety (to prevent infinite compile-time loops)?
+- **`while` and `loop`.**
+  Both fit the replicate model naturally.
+  There is no iteration limit — compile-time phases are real programs, and an infinite loop hangs the compiler just as it would hang any program.
+  The user can abort, debug, and retry.
 
-- **Error reporting for non-terminating const loops.**
-  A `for const i in 0..n` with a very large `n` could produce enormous hardware.
-  Should the compiler warn or error when a replicate expansion exceeds some threshold?
+- **Large expansions.**
+  No limit on replicate expansion size.
+  The compiler trusts the user.
+  A diagnostic flag (e.g., `--warn-replicate-size=N`) may be added later as a quality-of-life feature.
