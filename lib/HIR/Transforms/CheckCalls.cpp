@@ -197,7 +197,7 @@ static void consolidateSignatureTerminators(Region &clonedSig) {
 /// new entry of the body region. The signature terminator's operands feed into
 /// coerce_type ops on the block arguments and into the body return's type
 /// operands.
-static void cloneSignatureIntoBody(UnifiedFuncOp funcOp) {
+static LogicalResult cloneSignatureIntoBody(UnifiedFuncOp funcOp) {
   auto &sigRegion = funcOp.getSignature();
   auto &bodyRegion = funcOp.getBody();
   auto &bodyBlock = bodyRegion.front();
@@ -215,7 +215,10 @@ static void cloneSignatureIntoBody(UnifiedFuncOp funcOp) {
   for (auto &block : clonedSig)
     if (auto op = dyn_cast<SignatureOp>(block.getTerminator()))
       clonedSigOp = op;
-  assert(clonedSigOp && "expected a single signature terminator");
+  if (!clonedSigOp) {
+    emitBug(funcOp.getLoc()) << "expected a single signature terminator";
+    return failure();
+  }
   SmallVector<Value> clonedArgTypes(clonedSigOp.getTypeOfArgs());
   SmallVector<Value> clonedResultTypes(clonedSigOp.getTypeOfResults());
 
@@ -348,6 +351,7 @@ static void cloneSignatureIntoBody(UnifiedFuncOp funcOp) {
       newTypeOfArgs.push_back(argType);
     returnOp.getTypeOfArgsMutable().assign(newTypeOfArgs);
   });
+  return success();
 }
 
 LogicalResult CheckCallsPass::checkRegion(Region &region,
@@ -387,7 +391,10 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
     for (auto &block : signature)
       if (auto op = dyn_cast<SignatureOp>(block.getTerminator()))
         terminatorOp = op;
-    assert(terminatorOp && "expected a single signature terminator");
+    if (!terminatorOp) {
+      emitBug(callOp.getLoc()) << "expected a single signature terminator";
+      return failure();
+    }
 
     // Replace the signature's entry block arguments with the actual call
     // arguments. These stand in for function parameters in dependent-type
@@ -541,7 +548,8 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
   // block's arguments with the signature entry block's arguments, inserts
   // coerce_type ops, and wires up the return type operands.
   if (isBody)
-    cloneSignatureIntoBody(funcOp);
+    if (failed(cloneSignatureIntoBody(funcOp)))
+      return failure();
 
   return success();
 }

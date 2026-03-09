@@ -40,10 +40,6 @@ Tests to remove (redundant with existing coverage):
   Recursive functions grow the call stack until OOM.
   Add a `maxCallDepth` check.
 
-- **CheckCalls: `assert` instead of diagnostic for missing SignatureOp.**
-  Lines 221 and 390 of `CheckCalls.cpp` use `assert(terminatorOp)`.
-  Replace with `emitBug` diagnostic.
-
 - **SplitPhases: `resolveTypeIntoRegion` null deref on block args.**
   Line 39-40: `val.getDefiningOp()` can return null for block arguments.
 
