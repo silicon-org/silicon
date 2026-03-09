@@ -24,3 +24,15 @@ void BaseDialect::registerTypes() {
 // Pull in the generated type definitions.
 #define GET_TYPEDEF_CLASSES
 #include "silicon/Base/Types.cpp.inc"
+
+//===----------------------------------------------------------------------===//
+// UIntType
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+UIntType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+                 uint64_t width) {
+  if (width == 0)
+    return emitError() << "uint width must be at least 1, got 0";
+  return success();
+}

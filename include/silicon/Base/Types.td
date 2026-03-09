@@ -35,6 +35,7 @@ def UIntType : BaseTypeDef<"UInt"> {
   let summary = "sized unsigned integer type";
   let parameters = (ins "uint64_t":$width);
   let assemblyFormat = "`<` $width `>`";
+  let genVerifyDecl = 1;
 }
 
 def UnitType : BaseTypeDef<"Unit"> {
