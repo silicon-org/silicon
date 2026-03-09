@@ -130,6 +130,85 @@ For computed `int` values that aren't known until interpretation, a `mir.int_to_
 The interpreter evaluates this and produces an error if the value doesn't fit.
 Since `int` is a compile-time-only type, this conversion must be fully resolved before the final hardware phase.
 
+## Tuple Types
+
+Tuples are ordered, fixed-size collections of values.
+They are the primary aggregate type in Silicon, used for grouping related values and for multi-return functions.
+
+### Surface Syntax
+
+Tuple literals use parenthesized, comma-separated expressions:
+
+```
+let pair: (uint<8>, uint<16>) = (a, b);
+let x = pair.0;
+let y = pair.1;
+```
+
+Fields are accessed by index using `.0`, `.1`, etc.
+Tuples are always positional — fields do not have names.
+
+Tuples can contain any combination of types, including `int`:
+
+```
+let mixed: (int, uint<8>) = (42, x);
+```
+
+A tuple containing `int` fields cannot survive into the final hardware phase.
+The compiler reports an error if such a tuple reaches hardware lowering without all `int` fields having been resolved.
+
+### No Bit-Width or Packed Layout
+
+Unlike integer types, tuples do not define a bit width or a packed bit layout.
+A `(uint<8>, uint<8>)` is not interchangeable with a `uint<16>`.
+If the user needs to pack or unpack values into a flat bit vector, they should do so explicitly using shifts, concatenation, and truncation — or via helper functions, which are a great use case for const-phase metaprogramming.
+
+### Multi-Return Functions
+
+Functions can declare multiple named results using a tuple-like syntax after `->`:
+
+```
+fn adder(a: uint<8>, b: uint<8>) -> (sum: uint<9>, overflow: uint<1>) {
+    let full = zext(a, 9) + zext(b, 9);
+    return (trunc_unsafe(full, 9), trunc_unsafe(full >> 9, 1));
+}
+```
+
+The result names and phase annotations are part of the function declaration, not the tuple type.
+They serve as documentation and are stored as metadata on the function (as `FnRes` entries tracking name, phase, and type), but the caller receives an ordinary unnamed tuple:
+
+```
+let result = adder(x, y);
+result.0    // the sum
+result.1    // the overflow
+```
+
+The number of results determines the return and call conventions:
+
+- **0 results**: `return` or `return ()`. Calls produce `()` (unit).
+- **1 result**: `return x`. Calls produce the result value directly, not a 1-tuple.
+- **>1 results**: `return (a, b, c)`. Calls produce a tuple.
+
+The parentheses in `return (a, b, c)` are required for multi-return, making it visually clear that a tuple is being constructed.
+
+### Destructuring
+
+Tuple destructuring in `let` bindings and patterns is planned but deferred to keep the initial implementation simple:
+
+```
+// Future:
+let (sum, overflow) = adder(x, y);
+```
+
+### Per-Field Phases
+
+> [!NOTE]
+> This section is a forward-looking note. The design is not yet fleshed out.
+
+In the future, individual tuple fields (and later struct fields) may carry their own phase annotations, such as `(const uint<8>, uint<8>)`.
+This would allow a single aggregate to span multiple phases, with some fields resolved at compile time and others surviving into hardware.
+The semantics of such mixed-phase aggregates — when the tuple itself "exists", how it interacts with phase boundaries, and whether it can be partially materialized — remain open questions.
+
 ## Boolean Conversions
 
 Boolean conversions are handled by expressions, not cast operations:
@@ -171,6 +250,56 @@ For example, `let b: uint<42> = zext(a, _)` infers the width argument from conte
 // %w resolves to 42 through unification with the let binding's type
 ```
 
+### Tuple Ops
+
+Tuple types, construction, and field access in HIR:
+
+```mlir
+// Type construction
+%t0 = hir.uint_type %eight
+%t1 = hir.uint_type %sixteen
+%tuple_ty = hir.tuple_type %t0, %t1
+
+// Tuple creation
+%tup = hir.tuple_create %a, %b : %tuple_ty
+
+// Field access
+%x = hir.tuple_get %tup[0] : %elem_ty
+%y = hir.tuple_get %tup[1] : %elem_ty
+```
+
+In MIR, the tuple type is a concrete MLIR type `!si.tuple<...>`:
+
+```mlir
+%tup = mir.tuple_create %a, %b : !si.tuple<!si.uint<8>, !si.uint<16>>
+%x = mir.tuple_get %tup[0] : !si.uint<8>
+```
+
+#### Multi-Return Functions in IR
+
+At the IR level, functions with multiple results use MLIR's native multi-result mechanism.
+The surface-level tuple is destructured on return and reconstructed at call sites:
+
+```mlir
+// fn adder(a: uint<8>, b: uint<8>) -> (sum: uint<9>, overflow: uint<1>)
+hir.func @adder(%a, %b) -> (%sum_ty, %ovf_ty) {
+    ...
+    hir.return %sum, %ovf : %sum_ty, %ovf_ty
+}
+
+// let result = adder(x, y);
+%sum, %ovf = hir.call @adder(%x, %y) : ...
+%result = hir.tuple_create %sum, %ovf : %result_tuple_ty
+```
+
+This means that when all uses of `result` are `.0` and `.1` accesses, canonicalization folds through the `tuple_create`/`tuple_get` pair and the tuple disappears entirely, leaving clean multi-result SSA:
+
+```mlir
+// After canonicalization of: result.0 + result.1
+%sum, %ovf = hir.call @adder(%x, %y) : ...
+%r = hir.add %sum, %ovf : ...
+```
+
 ### Type Checking
 
 CheckTypes validates cast ops after inference has resolved all types:
@@ -191,3 +320,7 @@ These are all straightforward post-inference checks on resolved types.
 - **Method syntax**: `a.zext(16)` instead of `zext(a, 16)`.
   Requires type-dependent function resolution.
 - **Subtyping and coercion**: Not currently planned, but the design should not preclude it.
+- **Tuple destructuring**: `let (a, b) = expr` in bindings and match patterns.
+- **Named tuple fields**: Allowing field names on tuples (or introducing lightweight struct syntax) for ergonomic access to multi-return results by name.
+- **Per-field phase annotations**: Mixed-phase aggregates like `(const uint<8>, uint<8>)`, allowing tuples and structs to span phase boundaries.
+- **Structs**: Named aggregate types, building on the tuple IR infrastructure.
