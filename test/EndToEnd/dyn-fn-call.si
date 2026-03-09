@@ -1,4 +1,3 @@
-// XFAIL: *
 // RUN: silc --ir-mir --split-input-file --verify-diagnostics %s | FileCheck %s
 
 // Test that calling a `dyn fn` from another `dyn fn` compiles through the

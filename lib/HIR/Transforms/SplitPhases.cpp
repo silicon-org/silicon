@@ -383,44 +383,47 @@ LogicalResult PhaseSplitter::run() {
       if (!calleeSplitFunc)
         continue;
 
-      SmallVector<std::pair<int16_t, FuncOp>> splitFuncs;
+      // Build a list of call entries from the callee's split_func. Each
+      // entry produces exactly one call, whether it's a standalone FuncOp
+      // or a MultiphaseFuncOp. We do NOT expand MultiphaseFuncOps into
+      // their sub-functions — callers call the multiphase_func itself, and
+      // SpecializeFuncs handles the internal decomposition later.
+      struct CallEntry {
+        int16_t phase;
+        StringRef symbolName;
+        unsigned numResults;
+      };
+      SmallVector<CallEntry> splitEntries;
       {
         auto phaseNums = calleeSplitFunc.getPhaseNumbers();
         auto phaseFuncRefs = calleeSplitFunc.getPhaseFuncs();
 
-        // Reconstruct the callee's full phase range from its split_func
-        // entries. Each entry records the last phase of a group. A
-        // MultiphaseFuncOp group with N sub-functions spans phases
-        // [entryPhase - N + 1, entryPhase]; a standalone FuncOp is just
-        // [entryPhase]. The caller-frame phase is callOpPhase + calleePhase.
         for (auto [entryPhase, funcRef] : llvm::zip(phaseNums, phaseFuncRefs)) {
           auto name = cast<FlatSymbolRefAttr>(funcRef).getValue();
+          int16_t callerPhase = callOpPhase + entryPhase;
+          unsigned numResults;
           if (auto mpFunc = symbolTable.lookup<MultiphaseFuncOp>(name)) {
-            unsigned numSubs = mpFunc.getPhaseFuncs().size();
-            int16_t subPhase =
-                callOpPhase + entryPhase - static_cast<int16_t>(numSubs) + 1;
-            for (auto subRef : mpFunc.getPhaseFuncs()) {
-              auto subName = cast<FlatSymbolRefAttr>(subRef).getValue();
-              splitFuncs.push_back(
-                  {subPhase++, symbolTable.lookup<FuncOp>(subName)});
-            }
+            numResults = mpFunc.getResultNames().size();
+          } else if (auto func = symbolTable.lookup<FuncOp>(name)) {
+            numResults = func.getReturnOp().getValues().size();
           } else {
-            splitFuncs.push_back(
-                {callOpPhase + entryPhase, symbolTable.lookup<FuncOp>(name)});
+            continue;
           }
+          splitEntries.push_back({callerPhase, name, numResults});
         }
       }
-      if (splitFuncs.empty())
+      if (splitEntries.empty())
         continue;
 
-      // Determine the caller-frame phase range from the actual split
-      // functions. This is more accurate than deriving it from arg/result
-      // phases alone, since the callee may have internal phases that extend
-      // beyond the visible arg/result phases (e.g., a `dyn fn` has internal
-      // body ops at phase 0 even though its args/results are at phase 1).
+      // Determine the caller-frame phase range from the split entries.
+      // This is more accurate than deriving it from arg/result phases
+      // alone, since the callee may have internal phases that extend
+      // beyond the visible arg/result phases (e.g., a `dyn fn` has
+      // internal body ops at phase 0 even though its args/results are at
+      // phase 1).
       int16_t calleeMaxPhase = INT16_MIN;
-      for (auto &[phase, _] : splitFuncs)
-        calleeMaxPhase = std::max(calleeMaxPhase, phase);
+      for (auto &entry : splitEntries)
+        calleeMaxPhase = std::max(calleeMaxPhase, entry.phase);
 
       OpBuilder callBuilder(callOp);
       auto loc = callOp.getLoc();
@@ -478,10 +481,11 @@ LogicalResult PhaseSplitter::run() {
       // phase's arguments plus all results from the previous phase's call.
       // The call at the result phase produces the unified_call's original
       // result types; all other phases use opaque types derived from the
-      // split function's return op.
+      // precomputed entry result count.
       SmallVector<Value> prevResults;
       SmallVector<Value> unifiedCallReplacements;
-      for (auto &[phase, splitFunc] : splitFuncs) {
+      for (auto &entry : splitEntries) {
+        int16_t phase = entry.phase;
         SmallVector<Value> callArgs(phaseArgs[phase]);
         SmallVector<Value> callTypeOfArgs(phaseTypeOfArgs[phase]);
 
@@ -495,8 +499,8 @@ LogicalResult PhaseSplitter::run() {
         }
 
         // The result phase uses the original unified_call's result types.
-        // All other phases determine their result count from the split
-        // function's return op.
+        // All other phases determine their result count from the entry's
+        // precomputed numResults.
         bool isResultPhase = (phase == maxResultPhase);
         SmallVector<Value> callTypeOfResults;
         SmallVector<Type> resultTypes;
@@ -508,25 +512,22 @@ LogicalResult PhaseSplitter::run() {
         }
 
         // For non-result phases (and result phases that also forward context
-        // to later phases), add opaque result types for the split function's
-        // return values beyond the unified_call's own results.
+        // to later phases), add opaque result types for the entry's
+        // remaining results beyond the unified_call's own results.
         if (!isResultPhase || phase != calleeMaxPhase) {
-          auto retOp =
-              cast<ReturnOp>(splitFunc.getBody().front().getTerminator());
           unsigned startIdx = isResultPhase ? callOp.getNumResults() : 0;
-          for (unsigned i = startIdx; i < retOp.getValues().size(); ++i) {
+          for (unsigned i = startIdx; i < entry.numResults; ++i) {
             auto opaqueType = OpaqueTypeOp::create(callBuilder, loc);
             analysis.opPhases[opaqueType] = phase;
             analysis.valuePhases[opaqueType.getResult()] = phase;
             callTypeOfResults.push_back(opaqueType.getResult());
-            resultTypes.push_back(retOp.getValues()[i].getType());
+            resultTypes.push_back(AnyType::get(callBuilder.getContext()));
           }
         }
 
-        auto call =
-            CallOp::create(callBuilder, loc, resultTypes,
-                           callBuilder.getStringAttr(splitFunc.getSymName()),
-                           callArgs, callTypeOfArgs, callTypeOfResults);
+        auto call = CallOp::create(callBuilder, loc, resultTypes,
+                                   callBuilder.getStringAttr(entry.symbolName),
+                                   callArgs, callTypeOfArgs, callTypeOfResults);
         analysis.opPhases[call] = phase;
         for (auto result : call.getResults())
           analysis.valuePhases[result] = phase;
