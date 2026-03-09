@@ -3,7 +3,18 @@
 - Add a type operand to `hir.constant_int`, such that we can infer the type to be `int` or `uint<N>`.
   When we infer the concrete type of such a constant, also check that the integer fits into the chosen type.
   We may want to do this as part of type inference, since this is a user-facing error.
-- Investigate why the `eraseVoidCalls` is needed in function specialization; is this a hack?
+- **Unify void and non-void specialization paths in SpecializeFuncs.**
+  Root cause: SplitPhases skips `opaque_pack`/`opaque_unpack` insertion when there are no cross-phase context values (`if (contextReturns == 0) continue`).
+  This causes sub-functions to sometimes have an opaque result and sometimes not, forcing SpecializeFuncs to maintain separate code paths for `resultAttrs.empty()` vs non-empty.
+  Fix: SplitPhases should always emit the opaque pack/unpack pair, even when empty.
+  Then `expandOpaqueContext` handles the empty case naturally (erases the trivial unpack and context arg), and the `resultAttrs.empty()` branch in SpecializeFuncs can be removed.
+  The `phaseFuncs.size() < 2` dissolution case remains but doesn't need call erasure — it just redirects `split_func` symbol references from the `multiphase_func` to its remaining sub-function.
+- **Remove `eraseVoidCalls` from SpecializeFuncs; rely on SymbolDCE.**
+  `eraseVoidCalls` walks the entire module to erase zero-result calls before erasing the symbol.
+  It's unclear whether such calls actually exist — sub-functions are dispatched via `split_func`, not direct `hir.call`/`mir.call`.
+  `EvaluatedFuncOp` has the `Symbol` trait, and SymbolDCE already runs inside PhaseEvalLoop and after it.
+  With the SplitPhases fix above, `evaluated_func` ops would always have one result (possibly an empty opaque), making the zero-result filter in `eraseVoidCalls` a no-op anyway.
+  Remove `eraseVoidCalls`, the trailing cleanup loop, and the eager `symbolTable.erase(evalFunc)` calls; let SymbolDCE handle cleanup.
 - Implement CFG-to-dataflow conversion (phi→mux) in MIRToCIRCT.
 - **Implicit type widening (`uint<8>` to `uint<16>`) not supported.**
   Input: `pub fn widen(a: uint<8>) -> uint<16> { a }` — error: `hir.unify survived to HIR-to-MIR lowering`.
@@ -137,7 +148,7 @@ Tests to remove (redundant with existing coverage):
 - **MIRToCIRCT**: empty error file, 8 `emitBug` paths untested
 - **PhaseEvalLoop**: no test for `maxIterations` exhaustion, "still pending" multiphase_func note, sub-pipeline failure propagation
 - **CheckTypes**: only 1 type mismatch combination tested (unit vs int); add int vs uint, ref vs int, etc.
-- **SpecializeFuncs**: no test for void-result evaluated func chaining (`eraseVoidCalls` path)
+- **SpecializeFuncs**: no test for void-result evaluated func chaining
 - **SplitPhases**: no test for "op uses value from later phase" error
 - **InferTypes**: no error test file
 
