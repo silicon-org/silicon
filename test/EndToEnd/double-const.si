@@ -1,10 +1,9 @@
-// XFAIL: *
 // RUN: silc --ir-mir %s | FileCheck %s
 
 // Test that double const phase shift (`const const fn`) works correctly.
 // The `very_early` function is shifted to phase -2, requiring multiple
 // iterations of the PhaseEvalLoop to fully lower and interpret.
 
-// CHECK: mir.evaluated_func {{.*}} [#si.int<5> : !si.int]
+// CHECK: mir.evaluated_func {{.*}} @main.0c [#si.int<5> : !si.int]
 const const fn very_early(a: int) -> int { a }
 pub fn main() -> int { very_early(5) }

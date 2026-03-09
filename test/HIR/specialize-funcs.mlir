@@ -269,3 +269,118 @@ hir.multiphase_func @Dedup.0(last x1, last x2) -> (result) [
 // CHECK-LABEL: hir.func private @callee3_{{[0-9]+}}(%a) -> (result)
 // CHECK:         hir.mir_constant #si.int<7>
 // CHECK-NOT:   hir.func private @callee3_{{[0-9]+}}
+
+//===----------------------------------------------------------------------===//
+// Split-func chaining: when a split_func entry is an evaluated_func and the
+// next entry is an HIR func, the opaque context from the evaluated result is
+// chained into the next entry's opaque arg.
+
+hir.func private @SplitChain.1(%ctx) -> () {
+  %0 = hir.opaque_unpack %ctx : !hir.any
+  %1 = hir.opaque_type
+  hir.return : (%1) -> ()
+}
+
+mir.evaluated_func @SplitChain.0 [#si.int<42> : !si.int, #si.opaque<[#si.int<99>]> : !si.opaque]
+
+hir.split_func @SplitChain() -> (result: 0) {
+  %0 = hir.int_type
+  hir.signature () -> (%0)
+} [
+  0: @SplitChain.0,
+  1: @SplitChain.1
+]
+
+// The opaque context (last result of evaluated_func) is chained into the next
+// entry. The opaque_unpack is replaced with a mir_constant.
+// CHECK-LABEL: hir.func private @SplitChain.1() -> ()
+// CHECK:         hir.mir_constant #si.int<99>
+
+//===----------------------------------------------------------------------===//
+// MultiphaseFuncOp transitive specialization: when a caller passes an
+// hir.mir_constant opaque to a MultiphaseFuncOp callee, the first sub-function
+// is specialized and the MultiphaseFuncOp's "first" args are removed.
+
+hir.func private @MpCallee.0a(%ctx) -> (ctx) {
+  %0 = hir.opaque_unpack %ctx : !hir.any
+  %1 = hir.opaque_pack(%0)
+  %2 = hir.opaque_type
+  hir.return %1 : (%2) -> (%2)
+}
+
+hir.func private @MpCallee.0b(%x, %ctx) -> (result) {
+  %0 = hir.opaque_unpack %ctx : !hir.any
+  %1 = hir.add %x, %0 : %0
+  %2 = hir.opaque_type
+  hir.return %1 : (%0, %2) -> (%0)
+}
+
+hir.multiphase_func @MpCallee.0(first ctx, last x) -> (result) [
+  @MpCallee.0a,
+  @MpCallee.0b
+]
+
+// Caller passes a concrete opaque to the MultiphaseFuncOp.
+hir.func private @MpCaller.0b(%x, %ctx) -> (result) {
+  %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %opaque = hir.mir_constant #si.opaque<[#si.int<3>]> : !si.opaque
+  %2 = hir.call @MpCallee.0(%x, %opaque) : (%0, %0) -> (%0)
+  %3 = hir.opaque_type
+  hir.return %2 : (%0, %3) -> (%0)
+}
+
+mir.evaluated_func @MpCaller.0a [#si.opaque<[#si.type<!si.int>, #si.int<5>]> : !si.opaque]
+
+hir.split_func @MpCaller(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.signature (%0) -> (%0)
+} [
+  0: @MpCaller.0
+]
+
+hir.multiphase_func @MpCaller.0(last x) -> (result) [
+  @MpCaller.0a,
+  @MpCaller.0b
+]
+
+// After transitive specialization, the MultiphaseFuncOp callee's first
+// sub-function is specialized and the "first" arg is removed from the
+// multiphase_func declaration.
+// CHECK-LABEL: hir.func private @MpCallee.0a{{.*}}() -> (ctx)
+// CHECK:         hir.mir_constant #si.int<3>
+// CHECK-LABEL: hir.multiphase_func @MpCallee.0{{.*}}(last x) -> (result)
+// The call in the caller drops the opaque arg.
+// CHECK-LABEL: hir.func private @MpCaller.0b(%x) -> (result)
+// CHECK:         hir.call @MpCallee.0{{.*}}(%x)
+
+//===----------------------------------------------------------------------===//
+// MultiphaseFuncOp dissolve: when chaining reduces a multiphase_func to one
+// sub-function, all symbol uses (including direct calls, not just split_func
+// references) are redirected to the remaining sub-function.
+
+hir.func private @Dissolve.0b(%x, %ctx) -> (result) {
+  %0 = hir.opaque_type
+  %1 = hir.int_type
+  hir.return %x : (%1, %0) -> (%1)
+}
+
+mir.evaluated_func @Dissolve.0a [#si.opaque<[]> : !si.opaque]
+
+hir.multiphase_func @Dissolve.0(last x) -> (result) [
+  @Dissolve.0a,
+  @Dissolve.0b
+]
+
+// A direct caller referencing the multiphase_func (not through a split_func).
+hir.func private @DissolveUser(%x) -> (result) {
+  %0 = hir.int_type
+  %1 = hir.call @Dissolve.0(%x) : (%0) -> (%0)
+  hir.return %1 : (%0) -> (%0)
+}
+
+// After dissolution, the opaque context arg is expanded (empty opaque → arg
+// removed), and the call is redirected to @Dissolve.0b.
+// CHECK-NOT: hir.multiphase_func @Dissolve.0
+// CHECK-LABEL: hir.func private @Dissolve.0b(%x) -> (result)
+// CHECK-LABEL: hir.func private @DissolveUser(%x) -> (result)
+// CHECK:         hir.call @Dissolve.0b(%x)

@@ -1,26 +1,11 @@
 # TODO
 
-- **Unify void and non-void specialization paths in SpecializeFuncs.**
-  Root cause: SplitPhases skips `opaque_pack`/`opaque_unpack` insertion when there are no cross-phase context values (`if (contextReturns == 0) continue`).
-  This causes sub-functions to sometimes have an opaque result and sometimes not, forcing SpecializeFuncs to maintain separate code paths for `resultAttrs.empty()` vs non-empty.
-  Fix: SplitPhases should always emit the opaque pack/unpack pair, even when empty.
-  Then `expandOpaqueContext` handles the empty case naturally (erases the trivial unpack and context arg), and the `resultAttrs.empty()` branch in SpecializeFuncs can be removed.
-  The `phaseFuncs.size() < 2` dissolution case remains but doesn't need call erasure — it just redirects `split_func` symbol references from the `multiphase_func` to its remaining sub-function.
-- **Remove `eraseVoidCalls` from SpecializeFuncs; rely on SymbolDCE.**
-  `eraseVoidCalls` walks the entire module to erase zero-result calls before erasing the symbol.
-  It's unclear whether such calls actually exist — sub-functions are dispatched via `split_func`, not direct `hir.call`/`mir.call`.
-  `EvaluatedFuncOp` has the `Symbol` trait, and SymbolDCE already runs inside PhaseEvalLoop and after it.
-  With the SplitPhases fix above, `evaluated_func` ops would always have one result (possibly an empty opaque), making the zero-result filter in `eraseVoidCalls` a no-op anyway.
-  Remove `eraseVoidCalls`, the trailing cleanup loop, and the eager `symbolTable.erase(evalFunc)` calls; let SymbolDCE handle cleanup.
 - Implement CFG-to-dataflow conversion (phi→mux) in MIRToCIRCT.
 - **Implicit type widening (`uint<8>` to `uint<16>`) not supported.**
   Input: `pub fn widen(a: uint<8>) -> uint<16> { a }` — error: `hir.unify survived to HIR-to-MIR lowering`.
   There's no implicit widening conversion.
   Low priority; explicit cast syntax would be the right fix, but that syntax doesn't exist yet either.
 - Add a test to phase splitting to verify that the pass works if a `hir.unified_call` targets a `hir.split_func`; this is relevant for the library compilation model, where a library already contains split funcs and user code must be able to properly phase-split unified calls to a func that is already split in the IR.
-- **XFAIL `double-const.si`**: SplitPhases call decomposition expands multiphase sub-functions, causing SpecializeFuncs to mutate them in place and crash callers with stale references.
-- **XFAIL `dyn-args.si`**: Same call decomposition bug; callers bypass multiphase_func and call sub-functions directly with wrong arg counts.
-- **XFAIL `dyn-fn-call.si`**: Same pattern; `dyn fn` callee sub-functions called directly instead of through multiphase_func.
 
 ## End-to-End Test Cleanup
 
