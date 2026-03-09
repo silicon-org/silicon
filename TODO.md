@@ -1,12 +1,5 @@
 # TODO
 
-## End-to-End Test Cleanup
-
-Tests to convert to focused lit tests (then remove the e2e test):
-
-- **`test/EndToEnd/dyn-args.si`**: tests dyn-arg and mixed const+dyn arg splitting.
-  Add dyn-arg and mixed const+dyn test cases to `test/HIR/split-phases.mlir`, then remove.
-
 ## Dialect Review: Missing Error Handling
 
 - **SplitPhases: silent skip when `calleeSplitFunc` is null.**
@@ -60,7 +53,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 ### Other focused test gaps
 
 - Add `hir.if` → `mir.if` test case to `test/Conversion/hir-to-mir.mlir` -- unless we've already removed the op
-- Add per-argument `dyn` and mixed const+dyn arg cases to `test/HIR/split-phases.mlir`
 - Add positive `test/HIR/check-types.mlir` (only error tests exist today)
 - Add codegen test for `const { expr }` producing `hir.expr` with `phaseShift=-1` in `test/Codegen/basic.si`
 - Add `isModule` test cases to `test/MIR/interpret.mlir`, `test/HIR/specialize-funcs.mlir`, and `test/Transforms/phase-eval-loop.mlir`

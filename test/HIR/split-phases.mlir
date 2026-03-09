@@ -751,3 +751,76 @@ hir.unified_func @DynReturnPhase0Val(%x: 0) -> (result: 1) {
   %tx = hir.type_of %x
   hir.return %x : () -> (%tx)
 }
+
+//===----------------------------------------------------------------------===//
+// Dyn argument identity: `fn dyn_identity(dyn x: int) -> dyn int { x }`.
+// Both the argument and the result are at phase 1. The body is moved to the
+// phase-0 function initially, then all ops land in a multiphase split since
+// the arg is in phase 1. Phase 0 produces an empty context, and phase 1
+// (the `0b` sub-function) holds the coerced identity return.
+
+// CHECK-LABEL: hir.func private @DynArgIdentity.0a() -> (ctx)
+// CHECK:      [[PACK:%.+]] = hir.opaque_pack()
+// CHECK:      [[OT:%.+]] = hir.opaque_type
+// CHECK:      hir.return [[PACK]] : () -> ([[OT]])
+
+// CHECK-LABEL: hir.func private @DynArgIdentity.0b(%x, %ctx) -> (result)
+// CHECK:      hir.opaque_unpack %ctx
+// CHECK:      hir.coerce_type %x,
+// CHECK:      hir.return {{.*}} : ({{.*}}) -> ({{.*}})
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @DynArgIdentity(%x: 1) -> (result: 1)
+// CHECK:         hir.signature
+// CHECK:       1: @DynArgIdentity.0
+// CHECK-LABEL: hir.multiphase_func @DynArgIdentity.0(last x) -> (result)
+// CHECK:       @DynArgIdentity.0a
+// CHECK:       @DynArgIdentity.0b
+hir.unified_func @DynArgIdentity(%x: 1) -> (result: 1) {
+  %0 = hir.int_type
+  hir.signature (%0) -> (%0)
+} {
+  %0 = hir.int_type
+  %1 = hir.coerce_type %x, %0
+  hir.return %1 : (%0) -> (%0)
+}
+
+//===----------------------------------------------------------------------===//
+// Mixed const + dyn arguments: `fn mixed(const a: int, dyn b: int) -> int`.
+// The const arg is at phase -1, the dyn arg at phase 1, and the result at
+// phase 0. The body returns only `a`, so the value flows from phase -1 through
+// context to phase 0. Phase 1 has no body ops but still gets a function.
+
+// CHECK-LABEL: hir.func private @MixedConstDynArg.0(%a) -> (ctx)
+// CHECK:      [[INT:%.+]] = hir.int_type
+// CHECK:      [[A0:%.+]] = hir.coerce_type %a, [[INT]]
+// CHECK:      [[A1:%.+]] = hir.coerce_type [[A0]],
+// CHECK:      [[PACK:%.+]] = hir.opaque_pack([[A1]])
+// CHECK:      [[OT:%.+]] = hir.opaque_type
+// CHECK:      hir.return [[PACK]] : (%0) -> ([[OT]])
+
+// CHECK-LABEL: hir.func private @MixedConstDynArg.1(%ctx) -> (result, ctx)
+// CHECK:      [[UNPACK:%.+]]{{.*}} = hir.opaque_unpack %ctx
+// CHECK:      [[PACK:%.+]] = hir.opaque_pack()
+// CHECK:      hir.return {{.*}} : ({{.*}}) -> ({{.*}})
+
+// CHECK-LABEL: hir.func private @MixedConstDynArg.2(%b, %ctx) -> ()
+// CHECK:      hir.opaque_unpack %ctx
+// CHECK:      [[INT:%.+]] = hir.int_type
+// CHECK:      [[B0:%.+]] = hir.coerce_type %b, [[INT]]
+// CHECK:      hir.return : ({{.*}}) -> ()
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @MixedConstDynArg(%a: -1, %b: 1) -> (result: 0)
+// CHECK:         hir.signature
+// CHECK:       -1: @MixedConstDynArg.0
+// CHECK:       0: @MixedConstDynArg.1
+// CHECK:       1: @MixedConstDynArg.2
+hir.unified_func @MixedConstDynArg(%a: -1, %b: 1) -> (result: 0) {
+  %0 = hir.int_type
+  hir.signature (%0, %0) -> (%0)
+} {
+  %0 = hir.int_type
+  %1 = hir.coerce_type %a, %0
+  hir.return %1 : (%0, %0) -> (%0)
+}
