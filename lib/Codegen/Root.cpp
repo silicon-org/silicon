@@ -86,7 +86,7 @@ Value Context::withinExpr(llvm::function_ref<Value()> fn, int phaseShift) {
   // level of constness determined by a later lowering pass.
   bool allSideEffectFree = llvm::all_of(region, [](auto &block) {
     return llvm::all_of(block,
-                        [](auto &op) { return mlir::isMemoryEffectFree(&op); });
+                        [](auto &op) { return hir::isEffectivelyPure(&op); });
   });
   if (allSideEffectFree) {
     // Inline the first block at the location where we would put the expr op.
@@ -113,8 +113,8 @@ Value Context::withinExpr(llvm::function_ref<Value()> fn, int phaseShift) {
   // the region in an expr op.
   hir::YieldOp::create(builder, value.getLoc(), value);
   builder.restoreInsertionPoint(ip);
-  auto op = hir::ExprOp::create(builder, value.getLoc(), value.getType(),
-                                phaseShift);
+  auto op =
+      hir::ExprOp::create(builder, value.getLoc(), value.getType(), phaseShift);
   op.getRegion().takeBody(region);
   return op.getResult(0);
 }

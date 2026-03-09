@@ -47,7 +47,7 @@ static Value resolveTypeIntoRegion(OpBuilder &builder, Value val,
 /// free). This is used to decide whether an op can be cloned into a split
 /// phase function instead of being threaded through as a block argument.
 static bool isPurelyLocal(Operation *op) {
-  if (!mlir::isMemoryEffectFree(op))
+  if (!hir::isEffectivelyPure(op))
     return false;
   for (Value operand : op->getOperands()) {
     auto *defOp = operand.getDefiningOp();

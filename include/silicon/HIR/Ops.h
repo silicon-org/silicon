@@ -27,6 +27,14 @@
 namespace silicon {
 namespace hir {
 
+/// Check whether an op is effectively pure (side-effect free). This is the same
+/// as `mlir::isMemoryEffectFree`, but also treats `InferrableOp` as pure.
+/// `InferrableOp` cannot carry the `Pure` trait because that would allow CSE to
+/// merge distinct inferrables, but it is semantically side-effect free.
+inline bool isEffectivelyPure(mlir::Operation *op) {
+  return mlir::isMemoryEffectFree(op) || mlir::isa<InferrableOp>(op);
+}
+
 /// Try to extract the type of a value as an SSA value by inspecting its
 /// defining op. Returns nullptr if the type cannot be determined without
 /// creating a new op.

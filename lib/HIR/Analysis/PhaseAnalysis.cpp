@@ -47,7 +47,7 @@ void PhaseAnalysis::analyze() {
     int16_t phase;
     if (auto exprOp = dyn_cast<ExprOp>(op); exprOp && exprOp.getPhaseShift()) {
       phase = parentPhase + exprOp.getPhaseShift();
-    } else if (!isa<ExprOp>(op) && mlir::isMemoryEffectFree(op)) {
+    } else if (!isa<ExprOp>(op) && hir::isEffectivelyPure(op)) {
       // Pure ops: phase is max of floor and all operand phases.
       phase = floor;
       for (auto operand : op->getOperands())
@@ -212,7 +212,7 @@ void PhaseAnalysis::refreshPhases() {
     int16_t phase;
     if (auto exprOp = dyn_cast<ExprOp>(op); exprOp && exprOp.getPhaseShift()) {
       phase = parentPhase + exprOp.getPhaseShift();
-    } else if (!isa<ExprOp>(op) && mlir::isMemoryEffectFree(op)) {
+    } else if (!isa<ExprOp>(op) && hir::isEffectivelyPure(op)) {
       phase = floor;
       for (auto operand : op->getOperands())
         phase = std::max(phase, getValuePhase(operand));
@@ -237,7 +237,7 @@ void PhaseAnalysis::recomputeRegionPhases(Region &region, int16_t floor) {
     int16_t phase;
     if (auto exprOp = dyn_cast<ExprOp>(op); exprOp && exprOp.getPhaseShift()) {
       phase = parentPhase + exprOp.getPhaseShift();
-    } else if (!isa<ExprOp>(op) && mlir::isMemoryEffectFree(op)) {
+    } else if (!isa<ExprOp>(op) && hir::isEffectivelyPure(op)) {
       phase = floor;
       for (auto operand : op->getOperands())
         phase = std::max(phase, getValuePhase(operand));

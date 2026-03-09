@@ -178,7 +178,10 @@ def CoerceTypeOp : HIROp<"coerce_type", [Pure]> {
 // Operations
 //===----------------------------------------------------------------------===//
 
-def InferrableOp : HIROp<"inferrable", [Pure]> {
+/// Must NOT be `Pure`: two distinct `hir.inferrable` ops may infer to different
+/// concrete types, but since they have no operands, no attributes, and the same
+/// result type, CSE would merge them if they were marked `Pure`.
+def InferrableOp : HIROp<"inferrable", []> {
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
