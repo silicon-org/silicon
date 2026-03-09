@@ -24,7 +24,8 @@ fn dependent_types(a: int, const b: int, c: uint<b>) {}
 
 // CHECK-LABEL: hir.unified_func private @uint_literal_width
 // CHECK-SAME: (%a: 0) -> (result: 0)
-// CHECK-NEXT: [[WIDTH:%.+]] = hir.constant_int 42
+// CHECK-NEXT: [[INFER:%.+]] = hir.inferrable
+// CHECK-NEXT: [[WIDTH:%.+]] = hir.constant_int 42 : [[INFER]]
 // CHECK-NEXT: [[A_TYPE:%.+]] = hir.uint_type [[WIDTH]]
 // CHECK-NEXT: [[UNIT_TYPE:%.+]] = hir.unit_type
 // CHECK-NEXT: hir.signature ([[A_TYPE]]) -> ([[UNIT_TYPE]])

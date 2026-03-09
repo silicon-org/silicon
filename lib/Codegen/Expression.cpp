@@ -24,11 +24,16 @@ static Value convert(ast::BoolLitExpr &expr, Context &cx) {
       base::BoolAttr::get(cx.module.getContext(), expr.value));
 }
 
-/// Handle number literal expressions.
+/// Handle number literal expressions. The type operand starts as an
+/// inferrable, allowing context (e.g., assignment to `uint<8>`) to constrain
+/// the integer literal's type during type inference.
 static Value convert(ast::NumLitExpr &expr, Context &cx) {
+  auto typeOperand =
+      hir::InferrableOp::create(cx.builder, expr.loc).getResult();
   return hir::ConstantIntOp::create(
       cx.builder, expr.loc,
-      base::IntAttr::get(cx.module.getContext(), DynamicAPInt(expr.value)));
+      base::IntAttr::get(cx.module.getContext(), DynamicAPInt(expr.value)),
+      typeOperand);
 }
 
 /// Handle identifier expressions.
@@ -106,17 +111,18 @@ static Value convert(ast::UnaryExpr &expr, Context &cx) {
 
   switch (expr.op) {
   case ast::UnaryOp::Neg: {
-    // Lower `-x` to `0 - x`.
+    // Lower `-x` to `0 - x`. The constant inherits the argument's type.
     auto zero = hir::ConstantIntOp::create(
         cx.builder, loc,
-        base::IntAttr::get(cx.module.getContext(), DynamicAPInt(0)));
+        base::IntAttr::get(cx.module.getContext(), DynamicAPInt(0)), argType);
     return hir::SubOp::create(cx.builder, loc, zero, arg, argType);
   }
   case ast::UnaryOp::Not: {
-    // Lower `!x` to `x ^ -1` (bitwise NOT).
+    // Lower `!x` to `x ^ -1` (bitwise NOT). The constant inherits the
+    // argument's type.
     auto allOnes = hir::ConstantIntOp::create(
         cx.builder, loc,
-        base::IntAttr::get(cx.module.getContext(), DynamicAPInt(-1)));
+        base::IntAttr::get(cx.module.getContext(), DynamicAPInt(-1)), argType);
     return hir::XorOp::create(cx.builder, loc, arg, allOnes, argType);
   }
   default:

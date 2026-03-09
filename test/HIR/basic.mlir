@@ -11,8 +11,8 @@ func.func @TypeConstructors(%value: !hir.any, %type: !hir.any) {
   return
 }
 
-func.func @ValueTyping() {
-  %0 = hir.constant_int 42
+func.func @ValueTyping(%type: !hir.any) {
+  %0 = hir.constant_int 42 : %type
   %1 = hir.type_of %0
   %2 = hir.int_type
   %3 = hir.coerce_type %0, %2
@@ -22,7 +22,7 @@ func.func @ValueTyping() {
 func.func @Foo(%arg0: !hir.any, %arg1: !hir.any, %arg2: !hir.any, %arg3: i1) {
   hir.constant_bool <true>
   hir.constant_bool <false>
-  hir.constant_int 42
+  hir.constant_int 42 : %arg0
   hir.constant_unit
   hir.inferrable
   hir.unify %arg0, %arg1
@@ -39,7 +39,7 @@ func.func @Foo(%arg0: !hir.any, %arg1: !hir.any, %arg2: !hir.any, %arg3: i1) {
 hir.int_type {x = #si.int<42>}
 
 %int_type = hir.int_type
-%c42_int = hir.constant_int 42
+%c42_int = hir.constant_int 42 : %int_type
 
 hir.call @foo() : () -> ()
 hir.call @foo(%int_type) : (%int_type) -> (%int_type)
@@ -57,7 +57,7 @@ hir.func @FuncWithIsModule() -> () attributes {isModule} {}
 // Test return with operands
 hir.func @ReturnWithOperands() -> (result) {
   %t = hir.int_type
-  %0 = hir.constant_int 42
+  %0 = hir.constant_int 42 : %t
   hir.return %0 : () -> (%t)
 }
 
@@ -147,7 +147,7 @@ hir.multiphase_func @MultiNoArgs() -> (out) [
 // opaque ops
 hir.opaque_type
 %opaque_a = hir.int_type
-%opaque_b = hir.constant_int 42
+%opaque_b = hir.constant_int 42 : %opaque_a
 %packed = hir.opaque_pack (%opaque_a, %opaque_b)
 %unp_x, %unp_y = hir.opaque_unpack %packed : !hir.any, !hir.any
 

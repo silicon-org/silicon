@@ -140,11 +140,13 @@ func.func @UnifyConcreteOpsSwapped() {
 
 // CHECK-LABEL: func @InferConstantInt
 func.func @InferConstantInt() {
-  // CHECK: [[TMP:%.+]] = hir.constant_int 42
+  // CHECK: [[TY:%.+]] = hir.int_type
+  // CHECK: [[TMP:%.+]] = hir.constant_int 42 : [[TY]]
   // CHECK-NEXT: call @use_value([[TMP]])
   // CHECK-NEXT: call @use_value([[TMP]])
   // CHECK-NEXT: call @use_value([[TMP]])
-  %0 = hir.constant_int 42
+  %t = hir.int_type
+  %0 = hir.constant_int 42 : %t
   %1 = hir.inferrable
   %2 = hir.unify %0, %1
   call @use_value(%0) : (!hir.any) -> ()

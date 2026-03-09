@@ -12,7 +12,7 @@ In addition to annotating function arguments, you can use `const { ... }` and `d
 A `const { ... }` block forces the enclosed expression to evaluate one phase earlier than the surrounding code.
 This is useful when you want to compute a value at compile time without making it a separate function argument.
 
-```silicon
+```silicon-todo
 fn example(x: int) -> int {
     const { 2 + 3 } + x
 }
@@ -24,7 +24,7 @@ Here `2 + 3` is evaluated at compile time, producing `5`, and the remaining code
 
 A `dyn { ... }` block is the opposite: it defers the enclosed expression to one phase later than the surrounding code.
 
-```silicon
+```silicon-todo
 fn example(const x: int) -> int {
     x + dyn { 1 }
 }

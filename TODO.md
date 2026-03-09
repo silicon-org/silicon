@@ -1,8 +1,5 @@
 # TODO
 
-- Add a type operand to `hir.constant_int`, such that we can infer the type to be `int` or `uint<N>`.
-  When we infer the concrete type of such a constant, also check that the integer fits into the chosen type.
-  We may want to do this as part of type inference, since this is a user-facing error.
 - **Unify void and non-void specialization paths in SpecializeFuncs.**
   Root cause: SplitPhases skips `opaque_pack`/`opaque_unpack` insertion when there are no cross-phase context values (`if (contextReturns == 0) continue`).
   This causes sub-functions to sometimes have an opaque result and sometimes not, forcing SpecializeFuncs to maintain separate code paths for `resultAttrs.empty()` vs non-empty.
@@ -174,7 +171,6 @@ Tests to remove (redundant with existing coverage):
 - **MIR `OpaquePackOp`/`OpaqueUnpackOp`**: result/input unconstrained, should be `OpaqueType`
 - **MIR `FuncOp`**: missing `RecursiveMemoryEffects`
 - **MIR `ReturnOp`**: no verifier checking return types match enclosing `mir.func` results
-- **HIR `InferrableOp`**: missing `Pure` trait
 - **HIR `ExprOp`/`YieldOp`**: no verifier for operand count/type matching
 - **HIR constant ops**: missing `ConstantLike` trait
 - **Base `UIntType`**: no width verifier (e.g. reject width=0)

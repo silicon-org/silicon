@@ -10,8 +10,8 @@
 // CHECK: hir.constant_int 42
 
 module {
-  func.func @test() {
-    %0 = hir.constant_int 42
+  func.func @test(%t: !hir.any) {
+    %0 = hir.constant_int 42 : %t
     return
   }
 }

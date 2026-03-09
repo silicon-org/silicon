@@ -215,13 +215,14 @@ hir.unified_func @NestedBar(%a: 0) -> (result: 0) {
 
 // CHECK-LABEL: hir.unified_func private @UIntBody
 hir.unified_func private @UIntBody(%a: 0) -> (result: 0) {
-  %0 = hir.constant_int 42
+  %tc0 = hir.int_type
+  %0 = hir.constant_int 42 : %tc0
   %1 = hir.uint_type %0
   %2 = hir.unit_type
   hir.signature (%1) -> (%2)
 } {
   // CHECK:       {
-  // CHECK-DAG:     [[W:%.+]] = hir.constant_int 42
+  // CHECK-DAG:     [[W:%.+]] = hir.constant_int 42 :
   // CHECK-DAG:     [[T:%.+]] = hir.uint_type [[W]]
   // CHECK:         hir.coerce_type %a, [[T]]
   %0 = hir.constant_unit

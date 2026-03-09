@@ -515,11 +515,21 @@ LogicalResult CheckCallsPass::checkRegion(Region &region,
     }
 
     // Replace inferrable placeholders with the final unified type values.
+    // When the inferrable has uses beyond the call's type operands (e.g., as
+    // the type operand of a constant_int defined before the call), we cannot
+    // simply RAUW because the replacement value (from the inlined signature)
+    // may not dominate those earlier uses. In that case, create a unify op
+    // right before the call and let InferTypes resolve the inferrable later.
     for (auto &r : inferrables) {
       Value replacement =
           r.isResult ? unifiedResultTypes[r.index] : unifiedArgTypes[r.index];
-      r.op.replaceAllUsesWith(replacement);
-      r.op.erase();
+      if (r.op->hasOneUse()) {
+        r.op.replaceAllUsesWith(replacement);
+        r.op.erase();
+      } else {
+        OpBuilder unifyBuilder(callOp);
+        UnifyOp::create(unifyBuilder, r.op.getLoc(), r.op, replacement);
+      }
     }
 
     // Update the call's type operands in-place.

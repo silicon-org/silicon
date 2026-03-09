@@ -29,9 +29,11 @@ class HIROp<string mnemonic, list<Trait> traits = []> :
 //===----------------------------------------------------------------------===//
 
 def ConstantIntOp : HIROp<"constant_int", [Pure]> {
-  let arguments = (ins IntAttr:$value);
+  let arguments = (ins IntAttr:$value, HIRAnyType:$typeOperand);
   let results = (outs HIRAnyType:$result);
-  let assemblyFormat = "custom<IntAttr>($value) attr-dict";
+  let assemblyFormat = [{
+    custom<IntAttr>($value) `:` $typeOperand attr-dict
+  }];
 }
 
 def ConstantBoolOp : HIROp<"constant_bool", [Pure]> {
@@ -176,7 +178,7 @@ def CoerceTypeOp : HIROp<"coerce_type", [Pure]> {
 // Operations
 //===----------------------------------------------------------------------===//
 
-def InferrableOp : HIROp<"inferrable", []> {
+def InferrableOp : HIROp<"inferrable", [Pure]> {
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }

@@ -23,7 +23,7 @@ hir.unified_func @main() -> (r0: 0, r1: 0) {
 
   // Call @identity with an int argument.
   %int_type = hir.int_type
-  %c42 = hir.constant_int 42
+  %c42 = hir.constant_int 42 : %int_type
   %r0 = hir.unified_call @identity(%int_type, %c42) : (%type_type, %int_type) -> (%int_type) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
 
   // Call @identity with a unit argument.

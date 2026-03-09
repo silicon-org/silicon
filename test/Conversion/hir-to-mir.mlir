@@ -16,7 +16,7 @@ hir.func @Types() -> () {
 
   // CHECK: mir.constant #si.int<42>
   // CHECK: mir.constant #si.type<!si.uint<42>>
-  %c42_int = hir.constant_int 42
+  %c42_int = hir.constant_int 42 : %int_type
   %uint42_type = hir.uint_type %c42_int
 
   // CHECK: mir.constant #si.type<!si.anyfunc>
@@ -37,7 +37,8 @@ hir.func @Constants() -> () {
   // CHECK: mir.constant #si.bool<false>
   hir.constant_bool <false>
   // CHECK: mir.constant #si.int<42>
-  hir.constant_int 42
+  %int0 = hir.int_type
+  hir.constant_int 42 : %int0
   // CHECK: mir.constant #si.unit
   hir.constant_unit
   hir.return : () -> ()
@@ -50,7 +51,7 @@ hir.func @Calls() -> () {
 
   %int_type = hir.int_type
   // CHECK: [[C42:%.+]] = mir.constant #si.int<42>
-  %c42 = hir.constant_int 42
+  %c42 = hir.constant_int 42 : %int_type
   // CHECK: mir.constant #si.type<!si.uint<42>>
   %uint42_type = hir.uint_type %c42
 
@@ -159,7 +160,7 @@ hir.func @UnifyInReturnType() -> (result) {
   %int = hir.int_type
   %int2 = hir.int_type
   %ty = hir.unify %int, %int2
-  %c0 = hir.constant_int 0
+  %c0 = hir.constant_int 0 : %ty
   hir.return %c0 : () -> (%ty)
 }
 
@@ -170,7 +171,7 @@ hir.func @UnifyInReturnType() -> (result) {
 // CHECK-LABEL: hir.func @UnresolvedCallArgType
 // CHECK-NOT: mir.func @UnresolvedCallArgType
 hir.func @UnresolvedCallArgType(%T) -> () {
-  %x = hir.constant_int 0
+  %x = hir.constant_int 0 : %T
   %T_type = hir.type_of %T
   hir.call @identity(%x) : (%T) -> ()
   hir.return : (%T_type) -> ()

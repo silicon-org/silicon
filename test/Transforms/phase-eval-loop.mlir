@@ -36,7 +36,7 @@ hir.split_func @noop_fn(%x: 0) -> (result: 0) {
 
 hir.func private @add42.0a() -> (ctx) {
   %0 = hir.int_type
-  %1 = hir.constant_int 42
+  %1 = hir.constant_int 42 : %0
   %2 = hir.opaque_pack(%0, %1)
   %3 = hir.opaque_type
   hir.return %2 : () -> (%3)
@@ -132,7 +132,7 @@ hir.split_func @inner(%a: -1, %b: 0) -> (result: 0) {
 
 hir.func private @outer.0a() -> (ctx) {
   %0 = hir.int_type
-  %1 = hir.constant_int 10
+  %1 = hir.constant_int 10 : %0
   %2 = hir.opaque_type
   %3 = hir.call @inner.0(%1) : (%0) -> (%2)
   %4 = hir.opaque_pack(%3)

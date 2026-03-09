@@ -70,16 +70,18 @@ hir.unified_func @ExprPhaseShift() -> () {
 hir.unified_func @PureFloating() -> () {
   hir.signature () -> ()
 } {
-  // CHECK: hir.constant_int 42 {phase = "float"}
-  %0 = hir.constant_int 42
-  // CHECK: hir.constant_int 100 {phase = "float"}
-  %1 = hir.constant_int 100
+  // CHECK: hir.constant_int 42 : {{%.+}} {phase = "float"}
+  %t0 = hir.inferrable
+  %0 = hir.constant_int 42 : %t0
+  // CHECK: hir.constant_int 100 : {{%.+}} {phase = "float"}
+  %t1 = hir.inferrable
+  %1 = hir.constant_int 100 : %t1
   // CHECK: hir.type_of {{.*}} {phase = "float"}
-  %t0 = hir.type_of %0
+  %t2 = hir.type_of %0
   // CHECK: hir.type_of {{.*}} {phase = "float"}
-  %t1 = hir.type_of %1
+  %t3 = hir.type_of %1
   // CHECK: hir.unify {{.*}} {phase = "float"}
-  %t = hir.unify %t0, %t1
+  %t = hir.unify %t2, %t3
   // CHECK: hir.add {{.*}} {phase = "float"}
   %2 = hir.add %0, %1 : %t
   // CHECK: hir.return : () -> () {phase = "float"}
@@ -121,10 +123,12 @@ hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.signature (%0) -> (%0)
 } {
-  // CHECK: hir.constant_int 19 {phase = "float"}
-  %c19 = hir.constant_int 19
-  // CHECK: hir.constant_int 23 {phase = "float"}
-  %c23 = hir.constant_int 23
+  // CHECK: hir.constant_int 19 : {{%.+}} {phase = "float"}
+  %tc19 = hir.inferrable
+  %c19 = hir.constant_int 19 : %tc19
+  // CHECK: hir.constant_int 23 : {{%.+}} {phase = "float"}
+  %tc23 = hir.inferrable
+  %c23 = hir.constant_int 23 : %tc23
   // CHECK: hir.expr 0 {{.*}}attributes {phase = -1 : si16}
   %key = hir.expr 0 : !hir.any {
     // CHECK: hir.unified_call @Adder({{.*}}{phase = -1 : si16}

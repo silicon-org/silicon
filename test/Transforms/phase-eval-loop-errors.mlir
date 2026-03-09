@@ -22,7 +22,8 @@ module {
 
   // expected-note @below {{hir.func @stuck.0 could not be lowered to MIR}}
   hir.func private @stuck.0(%T) -> (result) {
-    %0 = hir.constant_int 0
+    %ti = hir.inferrable
+    %0 = hir.constant_int 0 : %ti
     %1 = hir.coerce_type %0, %T
     %2 = hir.type_of %T
     hir.return %1 : (%2) -> (%T)

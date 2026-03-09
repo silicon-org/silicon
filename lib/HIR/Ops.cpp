@@ -633,11 +633,6 @@ LogicalResult TypeOfOp::canonicalize(TypeOfOp op, PatternRewriter &rewriter) {
     rewriter.replaceOpWithNewOp<BoolTypeOp>(op);
     return success();
   }
-  // type_of(constant_int) -> int_type
-  if (op.getInput().getDefiningOp<ConstantIntOp>()) {
-    rewriter.replaceOpWithNewOp<IntTypeOp>(op);
-    return success();
-  }
   // type_of(constant_unit) -> unit_type
   if (op.getInput().getDefiningOp<ConstantUnitOp>()) {
     rewriter.replaceOpWithNewOp<UnitTypeOp>(op);
@@ -1038,6 +1033,8 @@ Value hir::getTypeOf(Value value) {
       .Case<AddOp, SubOp, MulOp, DivOp, ModOp, AndOp, OrOp, XorOp, ShlOp, ShrOp,
             EqOp, NeqOp, LtOp, GtOp, GeqOp, LeqOp>(
           [](auto op) { return op.getResultType(); })
+      .Case<ConstantIntOp>(
+          [](ConstantIntOp op) -> Value { return op.getTypeOperand(); })
       .Case<CoerceTypeOp>([](CoerceTypeOp op) { return op.getTypeOperand(); })
       .Case<LetOp>([](LetOp op) { return op.getType(); })
       .Case<CallOp>([&](CallOp op) {
@@ -1053,21 +1050,27 @@ Value hir::getTypeOf(Value value) {
 
 Value hir::getOrCreateTypeOf(OpBuilder &builder, Location loc, Value value) {
   if (auto type = getTypeOf(value)) {
-    // Verify the type value is accessible at the current insertion point.
-    auto *insertBlock = builder.getInsertionBlock();
-    if (auto *defOp = type.getDefiningOp()) {
-      if (defOp->getBlock() && insertBlock &&
-          defOp->getBlock()->getParent() == insertBlock->getParent())
-        return type;
-    } else if (auto blockArg = dyn_cast<BlockArgument>(type)) {
-      if (blockArg.getOwner()->getParent() == insertBlock->getParent())
-        return type;
+    // When the type operand is inferrable, fall through to the default type
+    // for the value kind. This ensures that e.g. constant_int gets int_type
+    // rather than the raw inferrable, which would allow the literal to take
+    // on any type from context (including incompatible types like unit).
+    if (!type.getDefiningOp<InferrableOp>()) {
+      // Verify the type value is accessible at the current insertion point.
+      auto *insertBlock = builder.getInsertionBlock();
+      if (auto *defOp = type.getDefiningOp()) {
+        if (defOp->getBlock() && insertBlock &&
+            defOp->getBlock()->getParent() == insertBlock->getParent())
+          return type;
+      } else if (auto blockArg = dyn_cast<BlockArgument>(type)) {
+        if (blockArg.getOwner()->getParent() == insertBlock->getParent())
+          return type;
+      }
     }
   }
-  if (value.getDefiningOp<ConstantBoolOp>())
-    return BoolTypeOp::create(builder, loc).getResult();
   if (value.getDefiningOp<ConstantIntOp>())
     return IntTypeOp::create(builder, loc).getResult();
+  if (value.getDefiningOp<ConstantBoolOp>())
+    return BoolTypeOp::create(builder, loc).getResult();
   if (value.getDefiningOp<ConstantUnitOp>())
     return UnitTypeOp::create(builder, loc).getResult();
   return TypeOfOp::create(builder, loc, value).getResult();

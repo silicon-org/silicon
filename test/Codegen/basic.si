@@ -25,6 +25,7 @@ fn unitResult2() {
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: hir.unified_func private @numLiteral
+// CHECK: hir.inferrable
 // CHECK: hir.constant_int 42
 fn numLiteral() -> int { 42 }
 
@@ -110,20 +111,20 @@ fn testLeq(a: int, b: int) -> bool { a <= b }
 
 // Ensure unary negation lowers to `0 - x`.
 // CHECK-LABEL: hir.unified_func private @testNeg
-// CHECK: hir.constant_int 0
+// CHECK: hir.constant_int 0 :
 // CHECK: hir.sub %{{.+}}, %a
 fn testNeg(a: int) -> int { -a }
 
 // Ensure negation of a literal also works.
 // CHECK-LABEL: hir.unified_func private @testNegLiteral
-// CHECK: hir.constant_int 5
-// CHECK: hir.constant_int 0
+// CHECK: hir.constant_int 5 :
+// CHECK: hir.constant_int 0 :
 // CHECK: hir.sub
 fn testNegLiteral() -> int { -5 }
 
 // Ensure bitwise NOT lowers to `x ^ -1`.
 // CHECK-LABEL: hir.unified_func private @testNot
-// CHECK: hir.constant_int -1
+// CHECK: hir.constant_int -1 :
 // CHECK: hir.xor %a, %{{.+}}
 fn testNot(a: int) -> int { !a }
 
@@ -198,9 +199,10 @@ fn callWithArgs(x: int, y: int) -> int { testAdd(x, y) }
 // type of the value expression.
 // CHECK-LABEL: hir.unified_func private @letBinding
 // CHECK: [[T:%.+]] = hir.int_type
-// CHECK: [[V:%.+]] = hir.constant_int 42
-// CHECK: [[VT:%.+]] = hir.int_type
-// CHECK: hir.unify [[T]], [[VT]]
+// CHECK: [[INFER:%.+]] = hir.inferrable
+// CHECK: [[V:%.+]] = hir.constant_int 42 : [[INFER]]
+// CHECK: [[VTYPE:%.+]] = hir.int_type
+// CHECK: hir.unify [[T]], [[VTYPE]]
 // CHECK: hir.return [[V]]
 fn letBinding() -> int {
   let x: int = 42;
@@ -209,7 +211,7 @@ fn letBinding() -> int {
 
 // Ensure let bindings without a type annotation produce no unify op.
 // CHECK-LABEL: hir.unified_func private @letBindingNoType
-// CHECK: [[V:%.+]] = hir.constant_int 7
+// CHECK: [[V:%.+]] = hir.constant_int 7 :
 // CHECK-NOT: hir.unify
 // CHECK: hir.return [[V]]
 fn letBindingNoType() -> int {
@@ -233,7 +235,7 @@ fn constExpr() -> int { const { unitResult1() } }
 // Ensure `const { ... }` without side effects inlines directly (no `hir.expr`).
 // CHECK-LABEL: hir.unified_func private @constExprInlined
 // CHECK-NOT: hir.expr
-// CHECK: hir.constant_int 7
+// CHECK: hir.constant_int 7 :
 fn constExprInlined() -> int { const { 7 } }
 
 //===----------------------------------------------------------------------===//
@@ -252,7 +254,7 @@ fn dynExpr() -> int { dyn { unitResult1() } }
 // Ensure `dyn { ... }` without side effects inlines directly (no `hir.expr`).
 // CHECK-LABEL: hir.unified_func private @dynExprInlined
 // CHECK-NOT: hir.expr
-// CHECK: hir.constant_int 7
+// CHECK: hir.constant_int 7 :
 fn dynExprInlined() -> int { dyn { 7 } }
 
 //===----------------------------------------------------------------------===//
@@ -261,7 +263,7 @@ fn dynExprInlined() -> int { dyn { 7 } }
 
 // Ensure `return <value>` produces a `hir.return` with the value.
 // CHECK-LABEL: hir.unified_func private @returnWithValue
-// CHECK: [[V:%.+]] = hir.constant_int 42
+// CHECK: [[V:%.+]] = hir.constant_int 42 :
 // CHECK: hir.return [[V]]
 fn returnWithValue() -> int { return 42 }
 
@@ -302,9 +304,9 @@ const mod testConstMod(const a: int) -> int { a }
 // Ensure early return works: `return` terminates the current block and any
 // subsequent code ends up in an unreachable block.
 // CHECK-LABEL: hir.unified_func private @earlyReturn
-// CHECK: [[V:%.+]] = hir.constant_int 1
+// CHECK: [[V:%.+]] = hir.constant_int 1 :
 // CHECK: hir.return [[V]]
-// CHECK: hir.constant_int 2
+// CHECK: hir.constant_int 2 :
 // CHECK: hir.return
 fn earlyReturn() -> int {
   return 1;

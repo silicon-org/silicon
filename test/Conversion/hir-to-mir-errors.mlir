@@ -17,6 +17,6 @@ hir.func @UnifyTypeMismatch() -> (result) {
   // expected-note @below {{}}
   // expected-error @below {{failed to legalize operation 'hir.unify'}}
   %ty = hir.unify %int, %unit
-  %c0 = hir.constant_int 0
+  %c0 = hir.constant_int 0 : %ty
   hir.return %c0 : () -> (%ty)
 }

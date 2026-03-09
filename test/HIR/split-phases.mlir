@@ -85,8 +85,8 @@ hir.unified_func @TwoUnrelatedPhases() -> () {
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: hir.func private @ValueUseAcrossPhases.0a() -> ()
-// CHECK: [[C42:%.+]] = hir.constant_int 42
-// CHECK: [[TMP:%.+]] = hir.constant_int 1337
+// CHECK: [[C42:%.+]] = hir.constant_int 42 :
+// CHECK: [[TMP:%.+]] = hir.constant_int 1337 :
 // CHECK: hir.add [[C42]], [[TMP]] :
 // CHECK: hir.return : () -> ()
 
@@ -103,9 +103,11 @@ hir.unified_func @TwoUnrelatedPhases() -> () {
 hir.unified_func @ValueUseAcrossPhases() -> () {
   hir.signature () -> ()
 } {
-  %0 = hir.constant_int 42
+  %tc0 = hir.inferrable
+  %0 = hir.constant_int 42 : %tc0
   %1 = hir.expr -1 : !hir.any {
-    %3 = hir.constant_int 1337
+    %tc3 = hir.inferrable
+    %3 = hir.constant_int 1337 : %tc3
     hir.yield %3 : !hir.any
   }
   %t0 = hir.type_of %0
@@ -274,8 +276,10 @@ hir.unified_func @ThreePhaseCaller(%z: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.signature (%0) -> (%0)
 } {
-  %a = hir.constant_int 10
-  %b = hir.constant_int 20
+  %ta = hir.inferrable
+  %a = hir.constant_int 10 : %ta
+  %tb = hir.inferrable
+  %b = hir.constant_int 20 : %tb
   %t0 = hir.inferrable
   %t1 = hir.inferrable
   %t2 = hir.inferrable
@@ -310,7 +314,8 @@ hir.unified_func @InternalPhase(%y: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.signature (%0) -> (%0)
 } {
-  %a = hir.constant_int 42
+  %tca = hir.inferrable
+  %a = hir.constant_int 42 : %tca
   %t0 = hir.inferrable
   %t1 = hir.inferrable
   %t2 = hir.inferrable
@@ -472,7 +477,8 @@ hir.unified_func @CallsPreSplit(%y: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.signature (%0) -> (%0)
 } {
-  %a = hir.constant_int 99
+  %tca = hir.inferrable
+  %a = hir.constant_int 99 : %tca
   %t0 = hir.inferrable
   %t1 = hir.inferrable
   %t2 = hir.inferrable
@@ -523,8 +529,10 @@ hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.signature (%0) -> (%0)
 } {
-  %c19 = hir.constant_int 19
-  %c23 = hir.constant_int 23
+  %tc19 = hir.inferrable
+  %c19 = hir.constant_int 19 : %tc19
+  %tc23 = hir.inferrable
+  %c23 = hir.constant_int 23 : %tc23
   %key = hir.expr 0 : !hir.any {
     %t0 = hir.int_type
     %t1 = hir.int_type
@@ -583,12 +591,12 @@ hir.unified_func @NestedExpr() -> () {
 
 // CHECK-LABEL: hir.func private @NestedExprValue.0a() -> ()
 // CHECK-NOT: hir.expr
-// CHECK: hir.constant_int 100
+// CHECK: hir.constant_int 100 :
 // CHECK: hir.return : () -> ()
 
 // CHECK-LABEL: hir.func private @NestedExprValue.0b() -> ()
 // CHECK-NOT: hir.expr
-// CHECK: [[V:%.+]] = hir.constant_int 100
+// CHECK: [[V:%.+]] = hir.constant_int 100 :
 // CHECK: hir.add [[V]], [[V]] :
 // CHECK: hir.return : () -> ()
 
@@ -604,7 +612,8 @@ hir.unified_func @NestedExprValue() -> () {
 } {
   hir.expr 0 {
     %0 = hir.expr -1 : !hir.any {
-      %1 = hir.constant_int 100
+      %tc1 = hir.inferrable
+      %1 = hir.constant_int 100 : %tc1
       hir.yield %1 : !hir.any
     }
     %t = hir.type_of %0
@@ -642,8 +651,8 @@ hir.unified_func @ConstBlockCallee() -> (result: 0) {
   %0 = hir.int_type
   hir.signature () -> (%0)
 } {
-  %0 = hir.constant_int 42
   %1 = hir.int_type
+  %0 = hir.constant_int 42 : %1
   hir.return %0 : () -> (%1)
 }
 
@@ -667,17 +676,18 @@ hir.unified_func @ConstBlockCall() -> (result: 0) {
 // operand. Both must be cloned transitively into the split function.
 
 // CHECK-LABEL: hir.func private @UIntLiteral.0(%a) -> (result)
-// CHECK:         hir.constant_int 42
+// CHECK:         hir.constant_int 42 :
 // CHECK-NEXT:    hir.uint_type
 // CHECK:         hir.return
 
 // CHECK-LABEL: hir.split_func private @UIntLiteral(%a: 0) -> (result: 0)
-// CHECK:         hir.constant_int 42
+// CHECK:         hir.constant_int 42 :
 // CHECK-NEXT:    hir.uint_type
 // CHECK:         hir.signature
 
 hir.unified_func private @UIntLiteral(%a: 0) -> (result: 0) attributes {isModule} {
-  %0 = hir.constant_int 42
+  %tc0 = hir.int_type
+  %0 = hir.constant_int 42 : %tc0
   %1 = hir.uint_type %0
   %2 = hir.unit_type
   hir.signature (%1) -> (%2)

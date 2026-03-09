@@ -43,6 +43,13 @@ void InferTypesPass::runOnOperation() {
     auto unifyOp = worklist.pop_back_val();
     LLVM_DEBUG(llvm::dbgs() << "Processing " << unifyOp << "\n");
 
+    // If both operands are the same value, the unify is trivially resolved.
+    if (unifyOp.getLhs() == unifyOp.getRhs()) {
+      unifyOp.replaceAllUsesWith(unifyOp.getLhs());
+      unifyOp.erase();
+      continue;
+    }
+
     auto inferrableLhs = unifyOp.getLhs().getDefiningOp<InferrableOp>();
     auto inferrableRhs = unifyOp.getRhs().getDefiningOp<InferrableOp>();
 
