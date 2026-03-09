@@ -329,6 +329,20 @@ public:
   }
 };
 
+/// Convert mir.bool_to_i1 to a no-op. Since `!si.bool` maps to `i1` in the
+/// type converter, the input is already `i1` after conversion.
+class BoolToI1OpConversion : public OpConversionPattern<mir::BoolToI1Op> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(mir::BoolToI1Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, adaptor.getInput());
+    return success();
+  }
+};
+
 /// Erase any remaining Silicon dialect op that has no uses.
 class EraseUnusedSiliconOp : public ConversionPattern {
 public:
@@ -484,6 +498,7 @@ void MIRToCIRCTPass::runOnOperation() {
       converter, &getContext());
   patterns.add<CmpOpConversion<mir::GeqOp, circt::comb::ICmpPredicate::sge>>(
       converter, &getContext());
+  patterns.add<BoolToI1OpConversion>(converter, &getContext());
   patterns.add<EraseUnusedSiliconOp>(&getContext());
 
   if (failed(applyFullConversion(moduleOp, target, std::move(patterns))))

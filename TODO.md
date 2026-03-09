@@ -38,8 +38,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
 - **MIRToCIRCT: signed comparison predicates for unsigned types.**
   All comparison ops use signed predicates even for `!si.uint<N>`.
 
-- **MIRToCIRCT: missing `mir.bool_to_i1` conversion pattern.**
-
 ## Dialect Review: Missing Documentation
 
 - **InferTypes**: no `summary` or `description` in `Passes.td`

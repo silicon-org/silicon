@@ -105,6 +105,15 @@ mir.func @cmp_as_return(%a: !si.int, %b: !si.int) -> (result: !si.int) {
   mir.return %0 : !si.int
 }
 
+// ---- Bool-to-i1 is a no-op after type conversion ----
+
+// CHECK-LABEL: hw.module @bool_to_i1
+mir.func @bool_to_i1(%a: !si.bool) -> (result: i1) {
+  // CHECK: hw.output %a : i1
+  %0 = mir.bool_to_i1 %a
+  mir.return %0 : i1
+}
+
 // ---- Remaining Silicon ops are erased ----
 
 // The evaluated_func and split_func ops should be erased by the conversion.
