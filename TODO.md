@@ -32,7 +32,6 @@
 
 ### Verifier error tests (`errors.mlir`)
 
-- **MIR `errors.mlir` is empty**: `FuncOp::verify()` has 4+ error paths, none tested
 - **HIR**: missing tests for `SplitFuncOp` array-size mismatches, `MultiphaseFuncOp` `argIsFirst` size mismatch, `ReturnOp` `values`/`typeOfValues` size mismatch, `SignatureOp` outside valid parent, `NextPhaseOp` outside `hir.func`
 ### Pass error tests
 
