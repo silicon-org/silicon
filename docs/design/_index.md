@@ -28,11 +28,6 @@ See {{< page-link "/design/state" >}}.
 - **Read latency.** Should memories support configurable read latency? CIRCT's `seq.firmem` supports this. A possible syntax is an additional `latency: 1` parameter.
 - **Clock per-memory or per-port.** Per-memory is simpler; per-port allows dual-clock memories.
 
-### Control Flow
-
-See {{< page-link "/design/control-flow" >}} for the work-in-progress design document.
-The open questions at the end of that document need further discussion and resolution.
-
 ### Inference
 
 See {{< page-link "/design/inference" >}} for the design document on type and value inference.
