@@ -30,18 +30,18 @@ class HIROp<string mnemonic, list<Trait> traits = []> :
 
 def ConstantIntOp : HIROp<"constant_int", [Pure]> {
   let arguments = (ins IntAttr:$value);
-  let results = (outs AnyHIRType:$result);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "custom<IntAttr>($value) attr-dict";
 }
 
 def ConstantBoolOp : HIROp<"constant_bool", [Pure]> {
   let arguments = (ins SiBoolAttr:$value);
-  let results = (outs AnyHIRType:$result);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$value attr-dict";
 }
 
 def ConstantUnitOp : HIROp<"constant_unit", [Pure]> {
-  let results = (outs AnyHIRType:$result);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
 
@@ -50,40 +50,40 @@ def ConstantUnitOp : HIROp<"constant_unit", [Pure]> {
 //===----------------------------------------------------------------------===//
 
 def UnitTypeOp : HIROp<"unit_type", [Pure]> {
-  let results = (outs AnyHIRType:$result);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def BoolTypeOp : HIROp<"bool_type", [Pure]> {
-  let results = (outs AnyHIRType:$result);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def IntTypeOp : HIROp<"int_type", [Pure]> {
-  let results = (outs AnyHIRType:$result);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def TypeTypeOp : HIROp<"type_type", [Pure]> {
   let summary = "Construct the metatype 'Type'";
-  let results = (outs AnyHIRType:$result);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def UIntTypeOp : HIROp<"uint_type", [Pure]> {
-  let arguments = (ins AnyHIRType:$width);
-  let results = (outs AnyHIRType:$result);
+  let arguments = (ins HIRAnyType:$width);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$width attr-dict";
 }
 
 def AnyfuncTypeOp : HIROp<"anyfunc_type", [Pure]> {
-  let results = (outs AnyHIRType:$result);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def RefTypeOp : HIROp<"ref_type", [Pure]> {
-  let arguments = (ins AnyHIRType:$innerType);
-  let results = (outs AnyHIRType:$result);
+  let arguments = (ins HIRAnyType:$innerType);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$innerType attr-dict";
 }
 
@@ -92,10 +92,10 @@ def FuncTypeOp : HIROp<"func_type", [
   Pure,
 ]> {
   let arguments = (ins
-    Variadic<AnyHIRType>:$typeOfArgs,
-    Variadic<AnyHIRType>:$typeOfResults
+    Variadic<HIRAnyType>:$typeOfArgs,
+    Variadic<HIRAnyType>:$typeOfResults
   );
-  let results = (outs AnyHIRType:$result);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = [{
     ` ` `(` $typeOfArgs `)` `->` `(` $typeOfResults `)` attr-dict
   }];
@@ -142,8 +142,8 @@ def YieldOp : HIROp<"yield", [
 
 def TypeOfOp : HIROp<"type_of", [Pure]> {
   let summary = "Determine the type of a value";
-  let arguments = (ins AnyHIRType:$input);
-  let results = (outs AnyHIRType:$result);
+  let arguments = (ins HIRAnyType:$input);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = [{
     $input attr-dict
   }];
@@ -158,15 +158,15 @@ def CoerceToI1Op : HIROp<"coerce_to_i1", [Pure]> {
     to `i1` for use with `cf.cond_br`. Lowered to `mir.bool_to_i1` by
     HIR-to-MIR conversion.
   }];
-  let arguments = (ins AnyHIRType:$input);
+  let arguments = (ins HIRAnyType:$input);
   let results = (outs I1:$result);
   let assemblyFormat = "$input attr-dict";
 }
 
 def CoerceTypeOp : HIROp<"coerce_type", [Pure]> {
   let summary = "Coerce a value to a given type";
-  let arguments = (ins AnyHIRType:$input, AnyHIRType:$typeOperand);
-  let results = (outs AnyHIRType:$result);
+  let arguments = (ins HIRAnyType:$input, HIRAnyType:$typeOperand);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = [{
     $input `,` $typeOperand attr-dict
   }];
@@ -177,14 +177,14 @@ def CoerceTypeOp : HIROp<"coerce_type", [Pure]> {
 //===----------------------------------------------------------------------===//
 
 def InferrableOp : HIROp<"inferrable", []> {
-  let results = (outs AnyHIRType:$result);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 class HIRBinaryOp<string mnemonic>
     : HIROp<mnemonic, [Pure]> {
-  let arguments = (ins AnyHIRType:$lhs, AnyHIRType:$rhs, AnyHIRType:$resultType);
-  let results = (outs AnyHIRType:$result);
+  let arguments = (ins HIRAnyType:$lhs, HIRAnyType:$rhs, HIRAnyType:$resultType);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$lhs `,` $rhs `:` $resultType attr-dict";
 }
 
@@ -211,8 +211,8 @@ def GeqOp : HIRBinaryOp<"geq">;
 def LeqOp : HIRBinaryOp<"leq">;
 
 def LetOp : HIROp<"let", []> {
-  let arguments = (ins StrAttr:$name, AnyHIRType:$type);
-  let results = (outs AnyHIRType:$result);
+  let arguments = (ins StrAttr:$name, HIRAnyType:$type);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$name `:` $type attr-dict";
 }
 
@@ -221,14 +221,14 @@ def UnifyOp : HIROp<"unify", [
   Commutative,
   Pure,
 ]> {
-  let arguments = (ins AnyHIRType:$lhs, AnyHIRType:$rhs);
-  let results = (outs AnyHIRType:$result);
+  let arguments = (ins HIRAnyType:$lhs, HIRAnyType:$rhs);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict";
   let hasFolder = 1;
 }
 
 def StoreOp : HIROp<"store", []> {
-  let arguments = (ins AnyHIRType:$target, AnyHIRType:$value, AnyHIRType:$valueType);
+  let arguments = (ins HIRAnyType:$target, HIRAnyType:$value, HIRAnyType:$valueType);
   let assemblyFormat = "$target `,` $value `:` $valueType attr-dict";
 }
 
@@ -273,9 +273,9 @@ def ReturnOp : HIROp<"return", [
     of argument-type information for the HIR-to-MIR lowering.
   }];
   let arguments = (ins
-    Variadic<AnyHIRType>:$values,
-    Variadic<AnyHIRType>:$typeOfValues,
-    Variadic<AnyHIRType>:$typeOfArgs
+    Variadic<HIRAnyType>:$values,
+    Variadic<HIRAnyType>:$typeOfValues,
+    Variadic<HIRAnyType>:$typeOfArgs
   );
   let assemblyFormat = [{
     ($values^)?
@@ -303,11 +303,11 @@ def CallOp : HIROp<"call", [
   let summary = "A direct call to a named function";
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
-    Variadic<AnyHIRType>:$arguments,
-    Variadic<AnyHIRType>:$typeOfArgs,
-    Variadic<AnyHIRType>:$typeOfResults
+    Variadic<HIRAnyType>:$arguments,
+    Variadic<HIRAnyType>:$typeOfArgs,
+    Variadic<HIRAnyType>:$typeOfResults
   );
-  let results = (outs Variadic<AnyHIRType>:$results);
+  let results = (outs Variadic<HIRAnyType>:$results);
   let assemblyFormat = [{
     $callee `(` $arguments `)` `:` `(` $typeOfArgs `)` `->` `(` $typeOfResults `)`
     attr-dict
@@ -354,8 +354,8 @@ def UnifiedCallOp : HIROp<"unified_call", [
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
     Variadic<AnyType>:$arguments,
-    Variadic<AnyHIRType>:$typeOfArgs,
-    Variadic<AnyHIRType>:$typeOfResults,
+    Variadic<HIRAnyType>:$typeOfArgs,
+    Variadic<HIRAnyType>:$typeOfResults,
     DenseI32ArrayAttr:$argPhases,
     DenseI32ArrayAttr:$resultPhases
   );
@@ -381,8 +381,8 @@ def SignatureOp : HIROp<"signature", [
 ]> {
   let summary = "Terminator for the signature region of a function";
   let arguments = (ins
-    Variadic<AnyHIRType>:$typeOfArgs,
-    Variadic<AnyHIRType>:$typeOfResults
+    Variadic<HIRAnyType>:$typeOfArgs,
+    Variadic<HIRAnyType>:$typeOfResults
   );
   let assemblyFormat = [{
     ` ` `(` $typeOfArgs `)` `->` `(` $typeOfResults `)` attr-dict
@@ -454,21 +454,21 @@ def MultiphaseFuncOp : HIROp<"multiphase_func", [
 
 def OpaqueTypeOp : HIROp<"opaque_type", [Pure]> {
   let summary = "Type constructor for opaque bundles";
-  let results = (outs AnyHIRType:$result);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = "attr-dict";
 }
 
 def OpaquePackOp : HIROp<"opaque_pack", [Pure]> {
   let summary = "Pack multiple values into a single opaque bundle";
-  let arguments = (ins Variadic<AnyHIRType>:$operands);
-  let results = (outs AnyHIRType:$result);
+  let arguments = (ins Variadic<HIRAnyType>:$operands);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = [{ `(` $operands `)` attr-dict }];
 }
 
 def OpaqueUnpackOp : HIROp<"opaque_unpack", [Pure]> {
   let summary = "Unpack an opaque bundle into individual values";
-  let arguments = (ins AnyHIRType:$input);
-  let results = (outs Variadic<AnyHIRType>:$results);
+  let arguments = (ins HIRAnyType:$input);
+  let results = (outs Variadic<HIRAnyType>:$results);
   let assemblyFormat = [{ $input attr-dict `:` type($results) }];
   let hasCanonicalizeMethod = 1;
 }
@@ -484,7 +484,7 @@ def MIRConstantOp : HIROp<"mir_constant", [ConstantLike, Pure]> {
     function during specialization. Lowered to `mir.constant` by HIR-to-MIR.
   }];
   let arguments = (ins TypedAttrInterface:$value);
-  let results = (outs AnyHIRType:$result);
+  let results = (outs HIRAnyType:$result);
   let assemblyFormat = [{
     $value attr-dict
   }];

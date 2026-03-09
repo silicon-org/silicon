@@ -18,7 +18,7 @@ class HIRTypeDef<string name, list<Trait> traits = [],
   let mnemonic = ?;
 }
 
-def AnyHIRType : HIRTypeDef<"Any"> {
+def HIRAnyType : HIRTypeDef<"Any"> {
   let mnemonic = "any";
 }
 

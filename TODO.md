@@ -1,6 +1,5 @@
 # TODO
 
-- Rename `AnyHIRType` to `HIRAnyType`
 - Add a type operand to `hir.constant_int`, such that we can infer the type to be `int` or `uint<N>`.
   When we infer the concrete type of such a constant, also check that the integer fits into the chosen type.
   We may want to do this as part of type inference, since this is a user-facing error.
