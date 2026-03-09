@@ -5,15 +5,6 @@
   We may want to do this as part of type inference, since this is a user-facing error.
 - Investigate why the `eraseVoidCalls` is needed in function specialization; is this a hack?
 - Implement CFG-to-dataflow conversion (phi→mux) in MIRToCIRCT.
-- **`if` conditions accept any type without a type error.**
-  `if cond { ... }` where `cond: int` silently works because `coerce_to_i1` doesn't enforce a bool type.
-  The old `hir.if` also didn't check, so this isn't a regression, but we should add a proper check.
-  Codegen should unify the condition with `bool` and emit a type error for non-bool conditions; no implicit truthiness.
-- **`getTypeOf` returns null for block arguments.**
-  After the IfOp removal, block arguments at CFG merge points have no type metadata.
-  `getOrCreateTypeOf` falls back to inserting a `TypeOfOp`, which works but is less efficient than directly resolving the type.
-  Consider teaching `getTypeOf` to look at predecessor branch operands, with a dominance check to avoid returning values from non-dominating blocks.
-
 - **Implicit type widening (`uint<8>` to `uint<16>`) not supported.**
   Input: `pub fn widen(a: uint<8>) -> uint<16> { a }` — error: `hir.unify survived to HIR-to-MIR lowering`.
   There's no implicit widening conversion.
@@ -37,7 +28,126 @@ Tests to remove (redundant with existing coverage):
 - **`test/EndToEnd/double-const.si`**: `const const fn` already tested in `fn-phase-modifiers.si::const_const_fn` with richer assertions.
 - **`test/EndToEnd/dyn-arg-return.si`**: CHECK lines map 1:1 to single-pass outputs; dyn return covered in `split-phases.mlir::DynReturn` and `Codegen/signature.si`.
 
-## Focused Test Coverage Gaps
+## Dialect Review: Crash Risks
+
+- **Interpret: division by zero crash.**
+  `mir.div` and `mir.mod` with a zero RHS will crash.
+  Add a zero check and emit a diagnostic.
+  Also add shift-amount validation for `mir.shl`/`mir.shr` (negative or >=64 is UB).
+
+- **Interpret: infinite loop on non-terminating programs.**
+  The interpreter loop has no iteration limit; a back-edge that never returns will hang.
+  Add a configurable `maxSteps` limit with a diagnostic on exhaustion.
+
+- **Interpret: unbounded call stack.**
+  Recursive functions grow the call stack until OOM.
+  Add a `maxCallDepth` check.
+
+- **CheckCalls: `assert` instead of diagnostic for missing SignatureOp.**
+  Lines 221 and 390 of `CheckCalls.cpp` use `assert(terminatorOp)`.
+  Replace with `emitBug` diagnostic.
+
+- **SplitPhases: `resolveTypeIntoRegion` null deref on block args.**
+  Line 39-40: `val.getDefiningOp()` can return null for block arguments.
+
+- **SplitPhases: `clonePureOp` assumes op has results.**
+  Line 63: `op->getResult(0)` called without checking `getNumResults() > 0`.
+
+- **SpecializeFuncs: unbounded recursion in `transitiveSpecialize`.**
+  A cycle in the call graph could recurse unboundedly.
+  Add a visited set or depth limit.
+
+- **HIRToMIR: `isResolvableType`/`resolveHIRType` can infinite-loop on cyclic IR.**
+  Both are recursive without cycle detection.
+  Add a `SmallPtrSet<Operation*>` visited set.
+
+- **HIRToMIR: `FuncOpConversion` only examines entry block.**
+  Multi-block functions (from if/else) have the return op in successor blocks.
+  Walk all blocks to find `hir.return`.
+
+- **PhaseEvalLoop: silent success when `maxIterations` exhausted.**
+  If the loop runs all 100 iterations without converging, it silently succeeds.
+  Add an error diagnostic.
+  Make `maxIterations` a pass option so tests can exercise this path.
+
+## Dialect Review: Missing Error Handling
+
+- **Interpret: silent fallthrough on unknown condition type.**
+  `cf.cond_br` and `arith.select` check `BoolAttr`, `IntAttr`, `IntegerAttr` but fall through silently for others.
+
+- **SplitPhases: silent skip when `calleeSplitFunc` is null.**
+  Line 383: if a `UnifiedCallOp` references a callee with no `SplitFuncOp`, it is silently skipped.
+
+- **SpecializeFuncs: `nextFunc` null silently skipped.**
+  Line 327-330: missing sub-function produces a debug message but should be `emitBug` + `signalPassFailure()`.
+
+- **HIRToMIR: `CoerceTypeOp` silently passes non-constant type operands.**
+  Falls through and drops the type annotation without diagnostic.
+
+- **HIRToMIR: no conversion patterns for `RefTypeOp`, `ExprOp`, `YieldOp`, `LetOp`, `StoreOp`, `NextPhaseOp`.**
+  Produce opaque "failed to legalize" errors if they survive to HIRToMIR.
+
+- **PhaseEvalLoop: dangling symbol references silently ignored.**
+  If a `multiphase_func`'s first phase symbol doesn't resolve, it's silently not counted.
+
+- **CheckTypes: `OpaqueTypeOp` in `isConcreteTypeConstructor` but not in `describeTypeValue`.**
+  Produces confusing `(unknown)` in error messages.
+
+- **MIRToCIRCT: `isModule` behavior mismatch.**
+  Docs say "only `isModule` funcs and transitive callees" but implementation lowers ALL convertible `mir.func` ops.
+
+- **MIRToCIRCT: signed comparison predicates for unsigned types.**
+  All comparison ops use signed predicates even for `!si.uint<N>`.
+
+- **MIRToCIRCT: constant value truncation.**
+  `static_cast<int64_t>` silently truncates values larger than 64 bits.
+
+- **MIRToCIRCT: missing `mir.bool_to_i1` conversion pattern.**
+
+## Dialect Review: Missing Documentation
+
+- **InferTypes**: no `summary` or `description` in `Passes.td`
+- **CheckCalls**: no `description` in `Passes.td`
+- **SplitPhases**: no `description` in `Passes.td` (most complex pass, 1180 lines)
+- **PhaseEvalLoop**: no `description` in `Passes.td`
+- **HIRToMIR**: no `summary` or `description` in `Passes.td`
+- **Base types**: no `description` on any type in `Types.td`
+- **Base attrs**: no `summary`/`description` on `BaseTypeAttr`, `IntAttr`, `BaseUnitAttr`, `SiBoolAttr`
+- **HIR ops**: ~20 ops missing `summary`, most ops missing `description`
+- **MIR ops**: 19 ops missing `summary`/`description` (all binary/cmp ops, `ConstantOp`, `ReturnOp`, `CallOp`)
+
+## Dialect Review: Missing Tests
+
+### Roundtrip tests (`basic.mlir`)
+
+- **HIR**: 15 of 16 binary/cmp ops have no roundtrip test (only `hir.add` tested); `FuncTypeOp` and `NextPhaseOp` untested; visibility variants for `UnifiedFuncOp`/`SplitFuncOp`/`MultiphaseFuncOp` untested
+- **MIR**: 16 ops (all binary + all cmp) have zero roundtrip tests
+- **Base**: limited `OpaqueAttr` roundtrip coverage (no heterogeneous or nested opaque tests)
+
+### Verifier error tests (`errors.mlir`)
+
+- **MIR `errors.mlir` is empty**: `FuncOp::verify()` has 4+ error paths, none tested
+- **HIR**: missing tests for `SplitFuncOp` array-size mismatches, `MultiphaseFuncOp` `argIsFirst` size mismatch, `ReturnOp` `values`/`typeOfValues` size mismatch, `SignatureOp` outside valid parent, `NextPhaseOp` outside `hir.func`
+- **HIR**: `ExprOp`/`YieldOp` lack a verifier for operand count/type matching
+- **Base**: no `errors.mlir` file
+
+### Pass error tests
+
+- **HIRToMIR**: 13 error paths untested (non-constant/negative/excessive uint width, non-constant func_type args/results, coerce_type type mismatch, call non-constant result type, etc.)
+- **MIRToCIRCT**: empty error file, 8 `emitBug` paths untested
+- **PhaseEvalLoop**: no test for `maxIterations` exhaustion, "still pending" multiphase_func note, sub-pipeline failure propagation
+- **CheckTypes**: only 1 type mismatch combination tested (unit vs int); add int vs uint, ref vs int, etc.
+- **SpecializeFuncs**: no test for void-result evaluated func chaining (`eraseVoidCalls` path)
+- **SplitPhases**: no test for "op uses value from later phase" error
+- **InferTypes**: no error test file
+
+### Pass positive tests
+
+- **HIRToMIR**: ~7 conversion patterns untested (`hir.mir_constant`, `hir.coerce_to_i1`, `arith.select`, `hir.opaque_pack`, `hir.opaque_unpack`, `hir.inferrable`, `hir.type_of`)
+- **Interpret**: missing tests for `arith.select`, `UnrealizedConversionCastOp` forwarding, `cond_br` condition error, module function skip, zero-result function
+- **MIRToCIRCT**: missing tests for `!si.bool` type conversion, multi-instance counter, source materialization (iN→i1), zero-result functions
+
+### Other focused test gaps
 
 - Add `hir.if` → `mir.if` test case to `test/Conversion/hir-to-mir.mlir`
 - Add unused block args test case to `test/Conversion/hir-to-mir.mlir`
@@ -46,6 +156,29 @@ Tests to remove (redundant with existing coverage):
 - Add codegen test for `const { expr }` producing `hir.expr` with `phaseShift=-1` in `test/Codegen/basic.si`
 - Add `isModule` test cases to `test/MIR/interpret.mlir`, `test/HIR/specialize-funcs.mlir`, and `test/Transforms/phase-eval-loop.mlir`
 
+## Dialect Review: Missing Constraints and Traits
+
+- **MIR binary/cmp ops use `AnyType`**: should constrain to numeric types; cmp results should be `BoolType`
+- **MIR `BoolToI1Op`**: `$input` is `AnyType`, should be `BoolType`
+- **MIR `OpaquePackOp`/`OpaqueUnpackOp`**: result/input unconstrained, should be `OpaqueType`
+- **MIR `FuncOp`**: missing `RecursiveMemoryEffects`
+- **MIR `ReturnOp`**: no verifier checking return types match enclosing `mir.func` results
+- **HIR `InferrableOp`**: missing `Pure` trait
+- **HIR `ExprOp`/`YieldOp`**: no verifier for operand count/type matching
+- **HIR constant ops**: missing `ConstantLike` trait
+- **Base `UIntType`**: no width verifier (e.g. reject width=0)
+
+## Dialect Review: Missing Canonicalizers/Folders
+
+- **MIR binary ops**: no constant folding (`mir.add #si.int<1>, #si.int<2>` → `#si.int<3>`)
+- **MIR `BoolToI1Op`**: no fold for constant bool input
+- **MIR `OpaquePackOp`/`OpaqueUnpackOp`**: no round-trip canonicalization
+- **HIR `CoerceTypeOp`**: no fold for identity coercions
+- **HIR `OpaquePackOp`**: no fold for pack-of-unpack
+- **HIR `TypeOfOp` canonicalization for `constant_bool`**: exists but untested
+
 ## Postponed Long-Term Fixes
 
 - MIRToCIRCT: `!si.int` is temporarily mapped to `i64`; once bitwidth inference exists, this should be an error diagnostic instead
+- Consider implementing `FunctionOpInterface` on `mir.func` and `CallOpInterface` on `mir.call`/`hir.call`
+- Consider consistent naming for Base attributes (currently mixed `Base`/`Si`/no prefix)
