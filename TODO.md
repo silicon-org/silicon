@@ -1,7 +1,5 @@
 # TODO
 
-- Add a test to phase splitting to verify that the pass works if a `hir.unified_call` targets a `hir.split_func`; this is relevant for the library compilation model, where a library already contains split funcs and user code must be able to properly phase-split unified calls to a func that is already split in the IR.
-
 ## End-to-End Test Cleanup
 
 Tests to convert to focused lit tests (then remove the e2e test):

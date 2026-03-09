@@ -376,6 +376,11 @@ hir.unified_func @LeadingExternal(%a: -2, %c: 0) -> (result: 0) {
 // in the input IR (not a unified_func). The pass should decompose the
 // unified_call using the split_func's phase mapping.
 
+// CHECK-LABEL: hir.func private @PreSplit.0(%a) -> (ctx)
+// CHECK:         hir.int_type
+// CHECK:         hir.coerce_type %a
+// CHECK:         hir.opaque_pack
+// CHECK:         hir.return {{.*}} : ({{.*}}) -> ({{.*}})
 hir.func private @PreSplit.0(%a) -> (ctx) {
   %0 = hir.int_type
   %1 = hir.coerce_type %a, %0
@@ -384,6 +389,12 @@ hir.func private @PreSplit.0(%a) -> (ctx) {
   %4 = hir.opaque_type
   hir.return %3 : (%0) -> (%4)
 }
+// CHECK-LABEL: hir.func private @PreSplit.1(%b, %ctx) -> (result)
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.int_type
+// CHECK:         hir.coerce_type %b
+// CHECK:         hir.add
+// CHECK:         hir.return {{.*}} : ({{.*}}) -> ({{.*}})
 hir.func private @PreSplit.1(%b, %ctx) -> (result) {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.int_type
@@ -392,6 +403,11 @@ hir.func private @PreSplit.1(%b, %ctx) -> (result) {
   %4 = hir.opaque_type
   hir.return %3 : (%1, %4) -> (%1)
 }
+// CHECK-LABEL: hir.split_func @PreSplit(%a: -1, %b: 0) -> (result: 0)
+// CHECK:         hir.int_type
+// CHECK:         hir.signature
+// CHECK:       -1: @PreSplit.0
+// CHECK:        0: @PreSplit.1
 hir.split_func @PreSplit(%a: -1, %b: 0) -> (result: 0) {
   %0 = hir.int_type
   hir.signature (%0, %0) -> (%0)
