@@ -383,6 +383,34 @@ public:
 
 } // namespace
 
+/// Check whether a function transitively calls any function in the given set.
+static bool callsModule(mir::FuncOp func, SymbolTable &symbolTable,
+                        const DenseSet<Operation *> &moduleFuncs) {
+  SmallVector<mir::FuncOp> worklist = {func};
+  DenseSet<Operation *> visited;
+  while (!worklist.empty()) {
+    auto current = worklist.pop_back_val();
+    if (!visited.insert(current).second)
+      continue;
+    bool found = false;
+    current.walk([&](mir::CallOp callOp) {
+      if (found)
+        return;
+      auto callee = symbolTable.lookup<mir::FuncOp>(callOp.getCallee());
+      if (!callee)
+        return;
+      if (moduleFuncs.contains(callee)) {
+        found = true;
+        return;
+      }
+      worklist.push_back(callee);
+    });
+    if (found)
+      return true;
+  }
+  return false;
+}
+
 //===----------------------------------------------------------------------===//
 // MIRToCIRCT Pass
 //
@@ -394,26 +422,62 @@ public:
 void MIRToCIRCTPass::runOnOperation() {
   auto moduleOp = getOperation();
 
-  // Collect all surviving mir.func ops whose types can be converted.
-  // Functions with unconvertible types (e.g., opaque) are leftovers from
-  // phase evaluation and will be erased by the catch-all pattern.
+  // Collect isModule functions and their transitive callees, as well as any
+  // function that transitively calls a module. These represent hardware and
+  // need to be lowered. Everything else is a leftover from phase evaluation
+  // and will be erased by the catch-all pattern.
+  SymbolTable symbolTable(moduleOp);
   DenseSet<Operation *> funcsToLower;
+
+  // First, collect isModule entry points and walk their callees.
+  SmallVector<mir::FuncOp> worklist;
+  for (auto func : moduleOp.getOps<mir::FuncOp>())
+    if (func.getIsModuleAttr())
+      worklist.push_back(func);
+  while (!worklist.empty()) {
+    auto func = worklist.pop_back_val();
+    if (!funcsToLower.insert(func).second)
+      continue;
+    func.walk([&](mir::CallOp callOp) {
+      auto callee = symbolTable.lookup<mir::FuncOp>(callOp.getCallee());
+      if (callee)
+        worklist.push_back(callee);
+    });
+  }
+
+  // Also include any function that transitively calls a module function,
+  // since it produces hardware through instantiation.
   for (auto func : moduleOp.getOps<mir::FuncOp>()) {
+    if (funcsToLower.contains(func))
+      continue;
+    if (callsModule(func, symbolTable, funcsToLower))
+      worklist.push_back(func);
+  }
+  while (!worklist.empty()) {
+    auto func = worklist.pop_back_val();
+    if (!funcsToLower.insert(func).second)
+      continue;
+    func.walk([&](mir::CallOp callOp) {
+      auto callee = symbolTable.lookup<mir::FuncOp>(callOp.getCallee());
+      if (callee)
+        worklist.push_back(callee);
+    });
+  }
+
+  // Check that all reachable functions have convertible types.
+  for (auto *op : funcsToLower) {
+    auto func = cast<mir::FuncOp>(op);
     auto funcType = func.getFunctionType();
-    bool convertible = true;
     for (auto t : funcType.getInputs())
       if (!convertType(t)) {
-        convertible = false;
-        break;
+        func.emitError("module function has unconvertible input type: ") << t;
+        return signalPassFailure();
       }
-    if (convertible)
-      for (auto t : funcType.getResults())
-        if (!convertType(t)) {
-          convertible = false;
-          break;
-        }
-    if (convertible)
-      funcsToLower.insert(func);
+    for (auto t : funcType.getResults())
+      if (!convertType(t)) {
+        func.emitError("module function has unconvertible result type: ") << t;
+        return signalPassFailure();
+      }
   }
   LLVM_DEBUG(llvm::dbgs() << "MIR-to-CIRCT: " << funcsToLower.size()
                           << " function(s) to lower\n");

@@ -19,7 +19,7 @@ mir.func @uint_types(%x: !si.uint<8>) -> (result: !si.uint<8>) attributes {isMod
 // ---- Arithmetic ops ----
 
 // CHECK-LABEL: hw.module @arith_ops
-mir.func @arith_ops(%a: !si.int, %b: !si.int) -> (result: !si.int) {
+mir.func @arith_ops(%a: !si.int, %b: !si.int) -> (result: !si.int) attributes {isModule} {
   // CHECK: comb.add %a, %b : i64
   %0 = mir.add %a, %b : !si.int
   // CHECK: comb.sub %a, %b : i64
@@ -36,7 +36,7 @@ mir.func @arith_ops(%a: !si.int, %b: !si.int) -> (result: !si.int) {
 // ---- Bitwise ops ----
 
 // CHECK-LABEL: hw.module @bitwise_ops
-mir.func @bitwise_ops(%a: !si.int, %b: !si.int) -> (result: !si.int) {
+mir.func @bitwise_ops(%a: !si.int, %b: !si.int) -> (result: !si.int) attributes {isModule} {
   // CHECK: comb.and %a, %b : i64
   %0 = mir.and %a, %b : !si.int
   // CHECK: comb.or %a, %b : i64
@@ -53,7 +53,7 @@ mir.func @bitwise_ops(%a: !si.int, %b: !si.int) -> (result: !si.int) {
 // ---- Comparison ops (unsigned) ----
 
 // CHECK-LABEL: hw.module @cmp_ops_unsigned
-mir.func @cmp_ops_unsigned(%a: !si.uint<8>, %b: !si.uint<8>) -> (result: !si.uint<8>) {
+mir.func @cmp_ops_unsigned(%a: !si.uint<8>, %b: !si.uint<8>) -> (result: !si.uint<8>) attributes {isModule} {
   // CHECK: comb.icmp eq %a, %b : i8
   %0 = mir.eq %a, %b : !si.uint<8>
   // CHECK: comb.icmp ne %a, %b : i8
@@ -72,7 +72,7 @@ mir.func @cmp_ops_unsigned(%a: !si.uint<8>, %b: !si.uint<8>) -> (result: !si.uin
 // ---- Comparison ops (signed) ----
 
 // CHECK-LABEL: hw.module @cmp_ops_signed
-mir.func @cmp_ops_signed(%a: !si.int, %b: !si.int) -> (result: !si.int) {
+mir.func @cmp_ops_signed(%a: !si.int, %b: !si.int) -> (result: !si.int) attributes {isModule} {
   // CHECK: comb.icmp eq %a, %b : i64
   %0 = mir.eq %a, %b : !si.int
   // CHECK: comb.icmp ne %a, %b : i64
@@ -91,7 +91,7 @@ mir.func @cmp_ops_signed(%a: !si.int, %b: !si.int) -> (result: !si.int) {
 // ---- Constants ----
 
 // CHECK-LABEL: hw.module @constants
-mir.func @constants() -> (result: !si.int) {
+mir.func @constants() -> (result: !si.int) attributes {isModule} {
   // CHECK: %c42_i64 = hw.constant 42 : i64
   %c = mir.constant #si.int<42> : !si.int
   mir.return %c : !si.int
@@ -105,7 +105,7 @@ mir.func @callee(%x: !si.int) -> (result: !si.int) {
 }
 
 // CHECK-LABEL: hw.module @caller
-mir.func @caller() -> (result: !si.int) {
+mir.func @caller() -> (result: !si.int) attributes {isModule} {
   %c = mir.constant #si.int<7> : !si.int
   // CHECK: hw.instance "callee_inst0" @callee
   %0 = mir.call @callee(%c) : (!si.int) -> !si.int
@@ -115,7 +115,7 @@ mir.func @caller() -> (result: !si.int) {
 // ---- Comparison result returned directly as !si.bool ----
 
 // CHECK-LABEL: hw.module @cmp_as_return
-mir.func @cmp_as_return(%a: !si.int, %b: !si.int) -> (result: !si.bool) {
+mir.func @cmp_as_return(%a: !si.int, %b: !si.int) -> (result: !si.bool) attributes {isModule} {
   // CHECK: [[CMP:%.+]] = comb.icmp sgt %a, %b : i64
   // CHECK: hw.output [[CMP]] : i1
   %0 = mir.gt %a, %b : !si.int
@@ -125,10 +125,19 @@ mir.func @cmp_as_return(%a: !si.int, %b: !si.int) -> (result: !si.bool) {
 // ---- Bool-to-i1 is a no-op after type conversion ----
 
 // CHECK-LABEL: hw.module @bool_to_i1
-mir.func @bool_to_i1(%a: !si.bool) -> (result: i1) {
+mir.func @bool_to_i1(%a: !si.bool) -> (result: i1) attributes {isModule} {
   // CHECK: hw.output %a : i1
   %0 = mir.bool_to_i1 %a
   mir.return %0 : i1
+}
+
+// ---- Non-module functions are erased, not lowered ----
+
+// Non-module functions with convertible types should be erased by the
+// catch-all pattern, not lowered to hw.module.
+// CHECK-NOT: hw.module @non_module
+mir.func @non_module(%a: !si.int) -> (result: !si.int) {
+  mir.return %a : !si.int
 }
 
 // ---- Remaining Silicon ops are erased ----

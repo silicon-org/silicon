@@ -5,9 +5,6 @@
 - **SplitPhases: silent skip when `calleeSplitFunc` is null.**
   Line 383: if a `UnifiedCallOp` references a callee with no `SplitFuncOp`, it is silently skipped.
 
-- **MIRToCIRCT: `isModule` behavior mismatch.**
-  Docs say "only `isModule` funcs and transitive callees" but implementation lowers ALL convertible `mir.func` ops.
-
 ## Dialect Review: Missing Tests
 
 ### Roundtrip tests (`basic.mlir`)
