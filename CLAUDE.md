@@ -52,6 +52,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - Errors reported in op verifiers and rewrite/conversion patterns are internal compiler errors, not user-facing errors
 - User-facing errors should be emitted in well-known locations, ideally in dedicated passes
 - Optimizations and dead code removal must not hide user errors; they should be reported before the compiler removes ops
+- Keep in mind that git stash will require you to recompile the silc or silicon-opt targets to not work with a stale compiler; consider copying the old compiler to tmp/silc, and using that instead of repeatedly stashing and unstashing.
 
 ## Todos
 
