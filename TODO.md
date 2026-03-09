@@ -28,9 +28,6 @@ Tests to convert to focused lit tests (then remove the e2e test):
   Recursive functions grow the call stack until OOM.
   Add a `maxCallDepth` check.
 
-- **SplitPhases: `clonePureOp` assumes op has results.**
-  Line 63: `op->getResult(0)` called without checking `getNumResults() > 0`.
-
 - **SpecializeFuncs: unbounded recursion in `transitiveSpecialize`.**
   A cycle in the call graph could recurse unboundedly.
   Add a visited set or depth limit.

@@ -66,6 +66,11 @@ static bool isPurelyLocal(Operation *op) {
 /// Clone a pure op and its transitive operand tree into the target location.
 /// The mapping is populated with the original-to-clone correspondence.
 static void clonePureOp(Operation *op, OpBuilder &builder, IRMapping &mapping) {
+  if (op->getNumResults() == 0) {
+    emitBug(op->getLoc()) << "clonePureOp called on zero-result op `"
+                          << op->getName() << "`";
+    return;
+  }
   if (mapping.contains(op->getResult(0)))
     return;
   for (Value operand : op->getOperands()) {
