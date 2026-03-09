@@ -19,58 +19,229 @@ Control flow in Silicon spans two fundamentally different execution models:
   Control flow must be lowered to structural hardware: muxes for conditionals, unrolled instances for loops.
 
 Silicon's phased execution model bridges these two worlds.
-The `const`/`dyn` annotations determine which control flow runs at compile time and which survives into hardware.
-Compile-time control flow drives the *generation* of hardware; it does not become hardware itself.
+The `const`/`dyn` annotations shift code to earlier or later phases relative to the current block.
+Compile-time control flow drives the _generation_ of hardware; it does not become hardware itself.
+
+### Phases are relative
+
+The `const` and `dyn` annotations are relative phase shifts, not absolute markers:
+
+- **`const`**: Evaluate one phase earlier than the current block. The value is a known constant when the current block executes.
+- **(nothing)**: Evaluate at the current block's phase.
+- **`dyn`**: Defer to one phase later than the current block. The value is symbolic/unknown when the current block executes.
+
+Hardware conversion picks a function, runs it through all its phases, and converts the last remaining phase into hardware.
+A function `fn foo(const n: int, x: int) -> int` has two phases: phase -1 for `n`, phase 0 for `x` and the result.
+A function `fn foo(n: int, dyn x: int) -> dyn int` also has two phases: phase 0 for `n`, phase 1 for `x` and the result.
+Both produce the same effective result — the `const`/`dyn` annotations determine relative ordering, not absolute "is hardware" vs "is not hardware."
+
+Avoid skipping phases.
+A function like `fn foo(const n: int, dyn x: int) -> dyn int` creates three phases (-1, 0, 1), but phase 0 is empty.
+Prefer `fn foo(const n: int, x: int) -> int` or `fn foo(n: int, dyn x: int) -> dyn int` instead.
 
 ## Design Decisions
 
-### No dynamic loops in hardware
+### Control flow inherits phase from surrounding block
 
-We do not support `dyn` loops — loops whose bound is a runtime hardware signal.
+The phase of an `if`, `for`, `while`, `return`, `break`, or `continue` is determined by the surrounding code block, **not** by the phase of the condition or loop bound.
+Phase shifts are only introduced by explicit `const { ... }` and `dyn { ... }` blocks.
+
+This means:
+
+- An `if` at the function body's phase is always control flow at that phase, regardless of whether the condition is const or dyn.
+- The condition's phase determines the _mechanism_ (compile-time elimination vs hardware mux), not the phase of the body.
+- There are no implicit phase shifts from control flow constructs.
+
+This avoids a class of subtle bugs where changing a parameter annotation (e.g., `x: int` to `dyn x: int`) would silently change the execution semantics of an entire function body.
+
+### `if const` and `for const` shorthands
+
+The most common cross-phase pattern is "evaluate control flow one phase earlier, but keep the body at the current phase."
+For example, a compile-time loop that stamps out hardware, or a compile-time condition that includes or excludes a block.
+
+`if const` and `for const` are shorthands for this pattern:
+
+```silicon
+// if const: condition evaluated one phase earlier, body at current phase.
+if const n > 3 {
+    x = x + n;
+}
+
+// Equivalent to:
+const {
+    if n > 3 {
+        dyn {
+            x = x + n;
+        }
+    }
+}
+```
+
+```silicon
+// for const: loop runs one phase earlier, body stamped out at current phase.
+for const i in 0..n {
+    x = x + i;
+}
+
+// Equivalent to:
+const {
+    for i in 0..n {
+        dyn {
+            x = x + i;
+        }
+    }
+}
+```
+
+A bare `if cond` requires the condition to be at the current block's phase or earlier.
+A bare `for i in 0..n` requires the bound to be at the current block's phase or earlier.
+Using a condition or bound from a later phase is a compile error — the user must explicitly shift phases with `dyn { ... }`.
+
+### No dynamic loops
+
+We do not support loops whose bound is a later-phase value.
 A dynamic loop is essentially unbounded in space: the hardware would need to implement a finite state machine (FSM) that iterates over clock cycles.
-If a loop has a statically known bound, it might as well be a `const` loop that unrolls at compile time.
+If a loop has a statically known bound, it can be a `for const` loop that unrolls at compile time.
 
-All loops in Silicon are `const` loops.
-They execute during an earlier phase and produce a fixed, unrolled structure in the next phase.
+All loops in Silicon execute at the current phase or earlier.
+They produce a fixed, unrolled structure in later phases.
 This covers the overwhelmingly common hardware use case: parameterized repetition with known bounds.
 
-### If semantics follow from the phase of the condition
+### `return`, `break`, and `continue` phase constraints
 
-There is no separate `const if` vs `dyn if` syntax.
-The phase of the condition expression determines the behavior:
+`return`, `break`, and `continue` are control flow at the phase of their target:
 
-- **Const condition**: The `if` evaluates at compile time.
-  One branch is eliminated entirely, similar to `if constexpr` in C++ or `@compileIf` in Zig.
-- **Dyn condition**: The `if` survives into hardware.
-  Both branches execute unconditionally and the results are selected with a mux.
+- **`return`** targets the function body — it must be at the function body's phase.
+- **`break`** and **`continue`** target a loop — they must be at the loop's phase.
 
-This falls out naturally from the phased execution model — no special-casing required.
+These constructs are **not allowed inside phase-shifted blocks** (`dyn { ... }` or `const { ... }`), because that would require cross-phase control flow:
+
+```silicon
+fn foo(n: int, dyn x: int) -> dyn int {
+    // function body at phase 0
+
+    // ✓ return at phase 0 = function body's phase
+    if n > 3 { return 42; }
+
+    // ✗ ERROR: return inside dyn block is at phase 1, not phase 0
+    dyn { return x; }
+
+    for const i in 0..n {
+        // The loop runs at phase -1. The body is at phase 0.
+        // ✗ ERROR: break at phase 0, but loop is at phase -1.
+        if i == 3 { break; }
+
+        // ✓ break inside const block, at phase -1 = loop's phase.
+        const { if i == 3 { break; } }
+
+        x = x + i;
+    }
+    return x;
+}
+```
+
+This model treats `return` as "assign to implicit result slots and jump to end."
+Each result slot lives at its declared phase, and the jump is control flow at the function body's phase.
+Similarly, `break` is "jump to after the loop" at the loop's phase.
+
+### If-else with const conditions
+
+An `if const` with bodies in both branches uses two separate replicates (one per branch), each with a 0-or-1 element hits vector.
+Threaded values flow through both replicates; the one with 0 entries passes them through unchanged.
+
+### Dyn `if` is value selection
+
+A bare `if` with a dyn condition (at the final phase) becomes hardware.
+Both branches exist structurally and results are selected with a mux.
+No `return`, `break`, or `continue` is allowed inside — the `if` is purely for value selection:
+
+```silicon
+fn abs(x: int) -> int {
+    var result: int;
+    if x < 0 {
+        result = -x;
+    } else {
+        result = x;
+    }
+    return result;
+}
+```
+
+Early returns based on dynamic conditions require restructuring as if-else:
+
+```silicon
+// Instead of early return:
+//   if x > 0 { return x; }
+//   return 0;
+
+// Use if-else value selection:
+var result: int;
+if x > 0 {
+    result = x;
+} else {
+    result = 0;
+}
+return result;
+```
+
+Alternatively, the user can pull the dyn values to the call site:
+
+```silicon
+fn select(a: bool, x: int, y: int) -> int {
+    if a { return x; }
+    return y;
+}
+
+fn main() {
+    // The call site wraps this in dyn, making select's
+    // body evaluate at the dyn phase.
+    w = dyn { select(cond, x, y) };
+}
+```
+
+### Side effects in dyn branches
+
+Side effects inside dyn `if` branches are gated by enable signals.
+Both branches exist in hardware, but side-effecting operations (assertions, prints, debug statements) only fire when their branch's condition is true:
+
+```silicon
+if x > 0 {
+    assert(x < 100);   // gated by x > 0
+    result = x;
+} else {
+    print(x);           // gated by !(x > 0)
+    result = 0;
+}
+```
+
+The compiler derives enable signals from the CFG structure.
+The user never writes them explicitly.
 
 ## Const Control Flow and Phase Splitting
 
-The interesting design challenge is how `const` control flow (loops, ifs) interacts with `dyn` blocks inside it.
+The interesting design challenge is how `for const` and `if const` interact with the body at the current phase.
 Consider:
 
 ```silicon
-fn foo(const n: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
-        dyn { x = x + i; }
+fn foo(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
+        x = x + i;
         print("iteration");
     }
     return x;
 }
 ```
 
-Phase splitting separates this into a phase -1 function (the loop, the print) and a phase 0 template (the dyn block).
+Phase splitting separates this into a phase -1 function (the loop, the print) and a phase 0 template (the body).
 But at split time, we don't know `n`.
-Phase 0 can't contain a fixed number of copies of the dyn block — it must be a *template* that phase -1's execution instantiates.
+Phase 0 can't contain a fixed number of copies of the body — it must be a _template_ that phase -1's execution instantiates.
 
 ### The replicate model
 
-The core idea: phase -1 is a plain program that collects data, and phase 0 contains a `replicate` op that consumes that data to stamp out hardware.
+The core idea: phase -1 is a plain program that collects data, and phase 0 contains a `replicate` op that consumes that data to stamp out instances.
 
-**During phase splitting**, each `dyn { ... }` block inside const control flow is extracted into the body region of an `hir.replicate` op in the next phase.
-The const values captured by the dyn block (loop variables, const locals) become entries in a **hits vector** that phase -1 builds up and returns as an opaque list.
+**During phase splitting**, each `for const` / `if const` body is extracted into the body region of an `hir.replicate` op in the next phase.
+The const values captured by the body (loop variables, const locals) become entries in a **hits vector** that the earlier phase builds up and returns as an opaque list.
 
 **After splitting:**
 
@@ -86,7 +257,7 @@ fn foo_phase_neg1(const n: u32) -> opaque_list {
 }
 
 // Phase 0: IR with a replicate op
-fn foo_phase0(%hits: !hir.opaque_list, dyn %x: u32) -> dyn u32 {
+fn foo_phase0(%hits: !hir.opaque_list, %x: u32) -> u32 {
     %x_final = hir.replicate %hits
         iter_args(%x_iter = %x) -> (u32) {
         ^body(%i: u32, %x_in: u32):
@@ -96,6 +267,9 @@ fn foo_phase0(%hits: !hir.opaque_list, dyn %x: u32) -> dyn u32 {
     return %x_final
 }
 ```
+
+Note that the `print("iteration")` stays in phase -1 — it runs at compile time.
+Only the body of the `for const` (the `x = x + i` part) is extracted into the replicate.
 
 **Key properties of this model:**
 
@@ -118,10 +292,10 @@ fn foo_phase0(%hits: !hir.opaque_list, dyn %x: u32) -> dyn u32 {
 The `hir.replicate` op borrows its structure from `scf.for`'s `iter_args` model:
 
 - **`%hits`**: An opaque list of entries from the previous phase.
-  Each entry contains the const values captured by the dyn block for one "hit" (one loop iteration, one taken if-branch, etc.).
+  Each entry contains the const values captured by the body for one "hit" (one loop iteration, one taken if-branch, etc.).
 - **`iter_args(%x_iter = %x_init)`**: Declares threaded values with their initial values.
   `%x_init` flows into the first iteration.
-- **Body parameters**: Receive the unpacked hits entry *and* the current threaded values.
+- **Body parameters**: Receive the unpacked hits entry _and_ the current threaded values.
   The hits entry's fields are typed according to the body's block argument types, which serve as the "schema" for deserialization.
 - **`hir.yield`**: Produces the threaded values for the next iteration.
 - **Result**: The replicate op's result is the yield from the last iteration.
@@ -160,60 +334,102 @@ After expansion with a 4-element hits vector `[(0,), (1,), (2,), (3,)]`:
 return %x_final
 ```
 
-### Ifs as 0-or-1 element replicates
+### `if const` as 0-or-1 element replicates
 
-An `if` with a dyn block in its body is just a replicate with a 0-or-1 element hits vector:
+An `if const` is just a replicate with a 0-or-1 element hits vector:
 
 ```silicon
-if cond {
-    dyn { x = x + 1; }
+if const cond {
+    x = x + 1;
 }
 ```
 
-Phase -1 returns `[()]` if `cond` is true, `[]` if false.
+The earlier phase returns `[()]` if `cond` is true, `[]` if false.
 A replicate with 0 entries expands to nothing — threaded values pass through unchanged.
 A replicate with 1 entry inlines the body once.
 No separate mechanism needed.
 
-For `if-else` with dyn blocks in both branches, each branch gets its own replicate with its own hits vector.
+For `if const`-`else` with bodies in both branches, each branch gets its own replicate with its own hits vector.
 Exactly one will have a single entry; the other will be empty.
+Threaded values flow through both, and the empty replicate passes them unchanged.
 
-### Break and continue
+### Break and continue in `for const`
 
-Break and continue in const loops naturally affect the hits vector:
-
-- **`break`**: Phase -1 stops the loop, so it stops appending to the hits vector.
-  The replicate sees fewer entries.
-- **`continue`**: Phase -1 skips the rest of the loop body for that iteration.
-  If the `continue` is before the dyn block, that iteration isn't recorded.
-  If after, it is.
+Break and continue affect the hits vector by controlling what the earlier phase collects.
+Since `break` and `continue` must be at the loop's phase, they need to be inside `const { ... }` blocks within a `for const` body:
 
 ```silicon
-for i in 0..10 {
-    if i == 5 { break; }
-    if i % 2 == 0 { continue; }
-    dyn { x = x + i; }
+for const i in 0..10 {
+    const {
+        if i == 5 { break; }
+        if i % 2 == 0 { continue; }
+    }
+    x = x + i;
 }
 // hits = [(1,), (3,)]  — only odd iterations before the break
 ```
 
-No special handling in the replicate — break and continue are pure phase -1 control flow that determines what gets collected.
+- **`break`**: The earlier phase stops the loop, so it stops appending to the hits vector.
+  The replicate sees fewer entries.
+- **`continue`**: The earlier phase skips the rest of the loop body for that iteration.
+  If the `continue` is before the body's extraction point, that iteration isn't recorded.
+  If after, it is.
 
-### Nested control flow
+No special handling in the replicate — break and continue are pure earlier-phase control flow that determines what gets collected.
 
-Nested loops and ifs produce nested hits vectors.
-The outer hits vector entries contain inner hits vectors as fields:
+### Early return in `for const`
+
+Early `return` inside a `for const` body follows the same rule as other control flow: it must be at the function body's phase.
+Since the `for const` body is at the function body's phase, `return` is directly allowed:
 
 ```silicon
-for i in 0..n {
-    dyn { a = f(a, i); }           // always runs
-    if expensive_check(i) {
-        dyn { b = g(b, i); }       // conditionally runs
+fn foo(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
+        if i == 3 { return x; }   // ✓ phase 0, function body's phase
+        x = x + i;
     }
+    return x;
 }
 ```
 
-Phase -1 returns entries like `(i, inner_hits)` where `inner_hits` is itself a list:
+This works with the "assign + jump" model: `return x` assigns `x` to the result slot and jumps to the function end.
+The jump is at phase 0.
+The earlier phase (phase -1) sees the `return` as part of the body template — when the replicate expands and the return is reached, it exits the function.
+
+In the replicate model, the hits vector is truncated at the return point.
+Phase -1 stops collecting after the return's condition is met.
+The replicate sees only the entries before the return, and the threaded value at the return point becomes the result.
+
+For `break` and `continue`, the user wraps them in `const { ... }` to match the loop's phase:
+
+```silicon
+fn bar(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
+        const { if i == 5 { break; } }   // ✓ phase -1, loop's phase
+        x = x + i;
+    }
+    return x;
+}
+```
+
+### Nested control flow
+
+Nested `for const` loops and `if const` blocks produce nested hits vectors.
+The outer hits vector entries contain inner hits vectors as fields:
+
+```silicon
+fn foo(const n: u32, a: u32, b: u32) -> (u32, u32) {
+    for const i in 0..n {
+        a = f(a, i);                         // always runs
+        if const expensive_check(i) {
+            b = g(b, i);                     // conditionally runs
+        }
+    }
+    return (a, b);
+}
+```
+
+The earlier phase returns entries like `(i, inner_hits)` where `inner_hits` is itself a list:
 
 ```
 hits = [
@@ -224,7 +440,7 @@ hits = [
 ]
 ```
 
-Phase 0 has nested replicates:
+The current phase has nested replicates:
 
 ```mlir
 %a_final, %b_final = hir.replicate %hits
@@ -247,7 +463,7 @@ The worklist in `SpecializeFuncs` handles this transitively.
 
 ### Multiple phases
 
-For deeply nested phasing (phase -2 → phase -1 → phase 0), each level of const nesting produces one level of replicate.
+For deeply nested phasing (phase -2 → phase -1 → phase 0), each level of `const` nesting produces one level of replicate.
 The `PhaseEvalLoop` iterates: phase -2 runs and produces hits vectors for phase -1, which runs and produces hits vectors for phase 0.
 Each iteration peels off one phase.
 
@@ -266,18 +482,17 @@ This avoids the need for complex recursive types like `!hir.const_vec<tuple<u32,
 
 ## Dyn Control Flow: CFG to Dataflow
 
-After all const control flow has been resolved (loops unrolled via replicate expansion, const ifs eliminated), the remaining control flow is `dyn`: conditions that are runtime hardware signals.
+After all const control flow has been resolved (loops unrolled via replicate expansion, const ifs eliminated), the remaining control flow operates on values at the final phase.
 This must be lowered from a CFG (basic blocks with conditional branches) to a flat dataflow graph of muxes suitable for CIRCT.
 
 ### Why CFG rather than structured ops
 
 We considered keeping structured ops like `hir.if`, but a CFG representation with basic blocks and conditional branches is more general:
 
-- `break`, `continue`, and early `return` are just branches — no special representation needed.
 - Nested and irregular control flow doesn't require pattern-matching on structured op nesting.
 - Standard compiler analyses (dominance, SSA) work directly.
 
-The tradeoff is that we need a pass to recover the dataflow structure, but for acyclic CFGs (which is all we have, since there are no dyn loops) this is well-studied.
+The tradeoff is that we need a pass to recover the dataflow structure, but for acyclic CFGs (which is all we have, since there are no dynamic loops) this is well-studied.
 
 ### Converting phi nodes to muxes
 
@@ -287,11 +502,14 @@ Each block argument at a merge point selects between values from different prede
 **Example:**
 
 ```silicon
-fn abs(dyn x: i32) -> dyn i32 {
+fn abs(x: i32) -> i32 {
+    var result: i32;
     if x < 0 {
-        return -x;
+        result = -x;
+    } else {
+        result = x;
     }
-    return x;
+    return result;
 }
 ```
 
@@ -330,12 +548,17 @@ These are computed by walking blocks in topological order:
 > For each block, its predicate is the OR of (predecessor's predicate AND the condition under which that predecessor branches to this block).
 
 For simple if/else diamonds, this reduces to the branch condition or its negation.
-For chained branches (multiple early returns, nested ifs), predicates compose:
+For chained branches (multiple conditions, nested ifs), predicates compose:
 
 ```silicon
-if a { return x; }
-if b { return y; }
-return z;
+var result: int;
+if a {
+    result = x;
+} else if b {
+    result = y;
+} else {
+    result = z;
+}
 ```
 
 Becomes:
@@ -390,12 +613,12 @@ Parse → AST → HIR (unified_func)
 → PhaseEvalLoop:
     → HIRToMIR
     → Canonicalize, CSE
-    → Interpret (runs phase -1, produces hits vectors)
+    → Interpret (runs earlier phase, produces hits vectors)
     → SpecializeFuncs (specializes functions AND expands replicates)
     → Canonicalize, CSE
     → (repeat until fixpoint)
-→ All const control flow resolved, only dyn CFG remains
-→ CFG-to-dataflow (flatten dyn ifs to muxes, compute path predicates)
+→ All const control flow resolved, only final-phase CFG remains
+→ CFG-to-dataflow (flatten ifs to muxes, compute path predicates)
 → Enable injection (gate side effects, thread enables through calls)
 → Lower to CIRCT (comb.mux, hw.module, etc.)
 ```
@@ -408,41 +631,42 @@ They are organized by category and escalate in complexity.
 ### Basic replicate
 
 ```silicon
-// Simplest case: loop with no captured const, no threading.
+// Simplest case: for const loop with no captured values, no threading.
 fn emit_four() {
-    for i in 0..4 {
-        dyn { side_effect(); }
+    for const i in 0..4 {
+        side_effect();
     }
 }
 
 // Threading a single value.
-fn sum_ones(dyn x: u32) -> dyn u32 {
-    for i in 0..4 {
-        dyn { x = x + 1; }
+fn sum_ones(x: u32) -> u32 {
+    for const i in 0..4 {
+        x = x + 1;
     }
     return x;
 }
 
 // Captured const loop variable.
-fn sum_indices(dyn x: u32) -> dyn u32 {
-    for i in 0..4 {
-        dyn { x = x + i; }
+fn sum_indices(x: u32) -> u32 {
+    for const i in 0..4 {
+        x = x + i;
     }
     return x;
 }
 
 // Captured const from outer scope (not the loop variable).
-fn add_n_times(const n: u32, const val: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
-        dyn { x = x + val; }
+fn add_n_times(const n: u32, const val: u32, x: u32) -> u32 {
+    for const i in 0..n {
+        x = x + val;
     }
     return x;
 }
 
 // Multiple threaded values.
-fn dual_accum(dyn a: u32, dyn b: u32) -> (dyn u32, dyn u32) {
-    for i in 0..4 {
-        dyn { a = a + i; b = b * i; }
+fn dual_accum(a: u32, b: u32) -> (u32, u32) {
+    for const i in 0..4 {
+        a = a + i;
+        b = b * i;
     }
     return (a, b);
 }
@@ -452,75 +676,75 @@ fn dual_accum(dyn a: u32, dyn b: u32) -> (dyn u32, dyn u32) {
 
 ```silicon
 // Zero iterations — replicate is a no-op, threaded values pass through.
-fn zero_iters(dyn x: u32) -> dyn u32 {
-    for i in 0..0 {
-        dyn { x = x + 1; }
+fn zero_iters(x: u32) -> u32 {
+    for const i in 0..0 {
+        x = x + 1;
     }
     return x; // must be original x
 }
 
 // Single iteration — degenerate case, body inlined once.
-fn one_iter(dyn x: u32) -> dyn u32 {
-    for i in 0..1 {
-        dyn { x = x + i; }
+fn one_iter(x: u32) -> u32 {
+    for const i in 0..1 {
+        x = x + i;
     }
     return x;
 }
 
 // Iteration count determined by const argument.
-fn n_iters(const n: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
-        dyn { x = x + 1; }
+fn n_iters(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
+        x = x + 1;
     }
     return x;
 }
 
 // Iteration count determined by const computation.
-fn computed_bound(const a: u32, const b: u32, dyn x: u32) -> dyn u32 {
-    const n = a * b + 1;
-    for i in 0..n {
-        dyn { x = x + i; }
+fn computed_bound(const a: u32, const b: u32, x: u32) -> u32 {
+    const bound = a * b + 1;
+    for const i in 0..bound {
+        x = x + i;
     }
     return x;
 }
 ```
 
-### If as 0-or-1 replicate
+### `if const` as 0-or-1 replicate
 
 ```silicon
-// Simple conditional dyn block.
-fn maybe_inc(const cond: bool, dyn x: u32) -> dyn u32 {
-    if cond {
-        dyn { x = x + 1; }
+// Simple conditional block.
+fn maybe_inc(const cond: bool, x: u32) -> u32 {
+    if const cond {
+        x = x + 1;
     }
     return x;
 }
 
-// If-else with dyn blocks in both branches.
-fn branch_both(const cond: bool, dyn x: u32) -> dyn u32 {
-    if cond {
-        dyn { x = x + 1; }
+// If-else with bodies in both branches.
+fn branch_both(const cond: bool, x: u32) -> u32 {
+    if const cond {
+        x = x + 1;
     } else {
-        dyn { x = x + 2; }
+        x = x + 2;
     }
     return x;
 }
 
 // Const value captured from the if condition's scope.
-fn conditional_add(const n: u32, dyn x: u32) -> dyn u32 {
-    if n > 3 {
-        dyn { x = x + n; }
+fn conditional_add(const n: u32, x: u32) -> u32 {
+    if const n > 3 {
+        x = x + n;
     }
     return x;
 }
 
-// Nested ifs.
+// Nested if const.
 // a=T,b=T → x+3; a=T,b=F → x+1; a=F → x.
-fn nested_cond(const a: bool, const b: bool, dyn x: u32) -> dyn u32 {
-    if a {
-        dyn { x = x + 1; }
-        if b {
-            dyn { x = x + 2; }
+fn nested_cond(const a: bool, const b: bool, x: u32) -> u32 {
+    if const a {
+        x = x + 1;
+        if const b {
+            x = x + 2;
         }
     }
     return x;
@@ -530,36 +754,36 @@ fn nested_cond(const a: bool, const b: bool, dyn x: u32) -> dyn u32 {
 ### Loop with conditional filtering
 
 ```silicon
-// If inside loop — some iterations produce hits, others don't.
+// If const inside for const — some iterations produce hits, others don't.
 // n=6: x + 0 + 2 + 4.
-fn filter_evens(const n: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
-        if i % 2 == 0 {
-            dyn { x = x + i; }
+fn filter_evens(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
+        if const i % 2 == 0 {
+            x = x + i;
         }
     }
     return x;
 }
 
-// Dyn block both inside and outside the if.
-fn mixed_filter(const n: u32, dyn a: u32, dyn b: u32) -> (dyn u32, dyn u32) {
-    for i in 0..n {
-        dyn { a = a + 1; }           // always runs
-        if i % 2 == 0 {
-            dyn { b = b + i; }       // only even iterations
+// Body both inside and outside the if const.
+fn mixed_filter(const n: u32, a: u32, b: u32) -> (u32, u32) {
+    for const i in 0..n {
+        a = a + 1;                           // always runs
+        if const i % 2 == 0 {
+            b = b + i;                       // only even iterations
         }
     }
     return (a, b);
 }
 
-// Multiple conditions filtering different dyn blocks.
-fn multi_filter(const n: u32, dyn x: u32, dyn y: u32) -> (dyn u32, dyn u32) {
-    for i in 0..n {
-        if i % 2 == 0 {
-            dyn { x = x + i; }
+// Multiple conditions filtering different parts of the body.
+fn multi_filter(const n: u32, x: u32, y: u32) -> (u32, u32) {
+    for const i in 0..n {
+        if const i % 2 == 0 {
+            x = x + i;
         }
-        if i % 3 == 0 {
-            dyn { y = y + i; }
+        if const i % 3 == 0 {
+            y = y + i;
         }
     }
     return (x, y);
@@ -570,10 +794,10 @@ fn multi_filter(const n: u32, dyn x: u32, dyn y: u32) -> (dyn u32, dyn u32) {
 
 ```silicon
 // Inner loop with const bound.
-fn nested_simple(dyn x: u32) -> dyn u32 {
-    for i in 0..3 {
-        for j in 0..4 {
-            dyn { x = x + 1; }
+fn nested_simple(x: u32) -> u32 {
+    for const i in 0..3 {
+        for const j in 0..4 {
+            x = x + 1;
         }
     }
     return x; // x + 12
@@ -582,31 +806,31 @@ fn nested_simple(dyn x: u32) -> dyn u32 {
 // Inner bound depends on outer variable.
 // i=0: nothing; i=1: +0; i=2: +0+1; i=3: +0+1+2.
 // hits: [(0,[]), (1,[(0,)]), (2,[(0,),(1,)]), (3,[(0,),(1,),(2,)])].
-fn triangular(dyn x: u32) -> dyn u32 {
-    for i in 0..4 {
-        for j in 0..i {
-            dyn { x = x + j; }
+fn triangular(x: u32) -> u32 {
+    for const i in 0..4 {
+        for const j in 0..i {
+            x = x + j;
         }
     }
     return x;
 }
 
 // Both loop variables captured.
-fn grid(dyn x: u32) -> dyn u32 {
-    for i in 0..3 {
-        for j in 0..3 {
-            dyn { x = x + i * 3 + j; }
+fn grid(x: u32) -> u32 {
+    for const i in 0..3 {
+        for const j in 0..3 {
+            x = x + i * 3 + j;
         }
     }
     return x;
 }
 
 // Deeply nested (3 levels).
-fn cube(dyn x: u32) -> dyn u32 {
-    for i in 0..2 {
-        for j in 0..2 {
-            for k in 0..2 {
-                dyn { x = x + i * 4 + j * 2 + k; }
+fn cube(x: u32) -> u32 {
+    for const i in 0..2 {
+        for const j in 0..2 {
+            for const k in 0..2 {
+                x = x + i * 4 + j * 2 + k;
             }
         }
     }
@@ -619,41 +843,41 @@ fn cube(dyn x: u32) -> dyn u32 {
 ```silicon
 // Break shortens the hits vector.
 // n=10: hits = [(0,),(1,),(2,)], x + 0 + 1 + 2.
-fn break_early(const n: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
-        if i == 3 { break; }
-        dyn { x = x + i; }
+fn break_early(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
+        const { if i == 3 { break; } }
+        x = x + i;
     }
     return x;
 }
 
 // Continue skips iterations.
 // n=6: hits = [(1,),(3,),(5,)].
-fn skip_evens(const n: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
-        if i % 2 == 0 { continue; }
-        dyn { x = x + i; }
+fn skip_evens(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
+        const { if i % 2 == 0 { continue; } }
+        x = x + i;
     }
     return x;
 }
 
-// Break with dyn block before the break condition.
-// n=10: iterations 0,1,2 all execute the dyn block, then break.
-fn partial_then_break(const n: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
-        dyn { x = x + i; }
-        if i == 2 { break; }
+// Break with body before the break condition.
+// n=10: iterations 0,1,2 all run the body, then break at i=2.
+fn partial_then_break(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
+        x = x + i;
+        const { if i == 2 { break; } }
     }
     return x;
 }
 
-// Continue with dyn blocks before and after.
-// n=4: a hits all, b hits all except i=2.
-fn continue_split(const n: u32, dyn a: u32, dyn b: u32) -> (dyn u32, dyn u32) {
-    for i in 0..n {
-        dyn { a = a + i; }              // always
-        if i == 2 { continue; }
-        dyn { b = b + i; }              // skipped for i=2
+// Continue with body parts before and after.
+// n=4: a gets all iterations, b gets all except i=2.
+fn continue_split(const n: u32, a: u32, b: u32) -> (u32, u32) {
+    for const i in 0..n {
+        a = a + i;                              // always
+        const { if i == 2 { continue; } }
+        b = b + i;                              // skipped for i=2
     }
     return (a, b);
 }
@@ -662,75 +886,54 @@ fn continue_split(const n: u32, dyn a: u32, dyn b: u32) -> (dyn u32, dyn u32) {
 ### Early return
 
 ```silicon
-// Early return from inside a loop.
-// n=10: iterations 0,1 do x+1, iteration 2 returns x+2+2.
-fn find_first(const n: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
-        if i == 2 {
-            dyn { return x + i; }
-        }
-        dyn { x = x + 1; }
+// Early return from inside a for const loop.
+// n=10: iterations 0,1 do x+1, iteration 2 returns x+2.
+fn find_first(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
+        if i == 2 { return x; }
+        x = x + 1;
     }
     return x;
 }
 
-// Early return from inside a const if (no loop).
-fn clamp(const max: u32, dyn x: u32) -> dyn u32 {
-    if max == 0 {
-        dyn { return 0; }
+// Early return from inside an if const (no loop).
+fn clamp(const max: u32, x: u32) -> u32 {
+    if const max == 0 {
+        return 0;
     }
     return x;
 }
 
 // Multiple early return points.
-fn cascade(const a: bool, const b: bool, dyn x: u32) -> dyn u32 {
-    if a {
-        dyn { return x + 1; }
-    }
-    if b {
-        dyn { return x + 2; }
-    }
+fn cascade(const a: bool, const b: bool, x: u32) -> u32 {
+    if const a { return x + 1; }
+    if const b { return x + 2; }
     return x + 3;
 }
 ```
 
-### Dyn control flow inside dyn blocks
+### Dyn control flow (final-phase if)
 
 ```silicon
-// Dyn if inside a const loop — becomes muxes after expansion.
-fn conditional_accum(const n: u32, dyn x: u32, dyn cond: bool) -> dyn u32 {
-    for i in 0..n {
-        dyn {
-            if cond {
-                x = x + i;
-            }
-        }
-    }
-    return x;
-}
-
-// Dyn if-else inside a const loop.
-fn select_per_iter(const n: u32, dyn x: u32, dyn sel: bool) -> dyn u32 {
-    for i in 0..n {
-        dyn {
-            if sel {
-                x = x + i;
-            } else {
-                x = x - i;
-            }
-        }
-    }
-    return x;
-}
-
-// Complex dyn control flow: dyn early return becomes mux + enable.
-fn dyn_cfg_in_loop(const n: u32, dyn x: u32, dyn limit: u32) -> dyn u32 {
-    for i in 0..n {
-        dyn {
-            if x > limit {
-                return x;
-            }
+// Dyn if inside a for const loop — becomes muxes after expansion.
+fn conditional_accum(const n: u32, x: u32, cond: bool) -> u32 {
+    for const i in 0..n {
+        if cond {
             x = x + i;
+        } else {
+            x = x;
+        }
+    }
+    return x;
+}
+
+// Dyn if-else inside a for const loop.
+fn select_per_iter(const n: u32, x: u32, sel: bool) -> u32 {
+    for const i in 0..n {
+        if sel {
+            x = x + i;
+        } else {
+            x = x - i;
         }
     }
     return x;
@@ -740,51 +943,51 @@ fn dyn_cfg_in_loop(const n: u32, dyn x: u32, dyn limit: u32) -> dyn u32 {
 ### Function calls across phases
 
 ```silicon
-// Dyn block calls a dyn function.
-fn helper(dyn a: u32, dyn b: u32) -> dyn u32 {
+// Body calls a function.
+fn helper(a: u32, b: u32) -> u32 {
     return a + b;
 }
 
-fn caller(const n: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
-        dyn { x = helper(x, i); }
+fn caller(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
+        x = helper(x, i);
     }
     return x;
 }
 
-// Callee itself contains a const loop with replication.
+// Callee itself contains a for const loop with replication.
 // Transitive specialization: inner_loop gets specialized for each value of i,
 // and each specialization has its own replicate that expands.
-fn inner_loop(const m: u32, dyn x: u32) -> dyn u32 {
-    for j in 0..m {
-        dyn { x = x + j; }
+fn inner_loop(const m: u32, x: u32) -> u32 {
+    for const j in 0..m {
+        x = x + j;
     }
     return x;
 }
 
-fn outer_loop(const n: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
+fn outer_loop(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
         x = inner_loop(i, x);
     }
     return x;
 }
 
 // Two levels of call nesting.
-fn level2(const k: u32, dyn x: u32) -> dyn u32 {
-    for j in 0..k {
-        dyn { x = x + j; }
+fn level2(const k: u32, x: u32) -> u32 {
+    for const j in 0..k {
+        x = x + j;
     }
     return x;
 }
 
-fn level1(const n: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
+fn level1(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
         x = level2(i * 2, x);
     }
     return x;
 }
 
-fn top(dyn x: u32) -> dyn u32 {
+fn top(x: u32) -> u32 {
     return level1(3, x);
     // level1 specialized with n=3
     // level2 specialized with k=0, k=2, k=4
@@ -798,11 +1001,11 @@ fn top(dyn x: u32) -> dyn u32 {
 // Phase -2 runs, produces hits for the outer loop.
 // Phase -1 expands outer, runs inner loops, produces hits for inner.
 // Phase 0 expands inner, produces flat hardware.
-fn multi_phase(const const n: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
+fn multi_phase(const const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
         const m = i + 1;
-        for j in 0..m {
-            dyn { x = x + i * 10 + j; }
+        for const j in 0..m {
+            x = x + i * 10 + j;
         }
     }
     return x;
@@ -812,28 +1015,24 @@ fn multi_phase(const const n: u32, dyn x: u32) -> dyn u32 {
 ### Interaction with enable threading
 
 ```silicon
-// Side effects inside replicated dyn blocks need enable signals.
-fn guarded_assert(const n: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..n {
-        dyn {
-            assert(x > 0);
-            x = x + i;
-        }
+// Side effects inside replicated bodies need enable signals.
+fn guarded_assert(const n: u32, x: u32) -> u32 {
+    for const i in 0..n {
+        assert(x > 0);
+        x = x + i;
     }
     return x;
 }
 
 // Side effects gated by both const conditions (filtering the hits vector)
 // and dyn conditions (enable signals from CFG-to-dataflow lowering).
-fn double_guarded(const n: u32, dyn x: u32, dyn dbg: bool) -> dyn u32 {
-    for i in 0..n {
-        if i % 2 == 0 {                    // const: filters hits
-            dyn {
-                if dbg {                    // dyn: becomes enable
-                    print(x);
-                }
-                x = x + i;
+fn double_guarded(const n: u32, x: u32, dbg: bool) -> u32 {
+    for const i in 0..n {
+        if const i % 2 == 0 {
+            if dbg {
+                print(x);
             }
+            x = x + i;
         }
     }
     return x;
@@ -843,52 +1042,49 @@ fn double_guarded(const n: u32, dyn x: u32, dyn dbg: bool) -> dyn u32 {
 ### Corner cases
 
 ```silicon
-// Empty dyn block — replicate body is a no-op.
-fn empty_body(dyn x: u32) -> dyn u32 {
-    for i in 0..4 {
-        dyn { }
+// Empty for const body — replicate body is a no-op.
+fn empty_body(x: u32) -> u32 {
+    for const i in 0..4 {
     }
     return x;
 }
 
 // Independent instances (no threading).
-fn independent(const n: u32, dyn out: [u32; n]) -> dyn [u32; n] {
-    for i in 0..n {
-        dyn { out[i] = i * i; }
+fn independent(const n: u32, out: [u32; n]) -> [u32; n] {
+    for const i in 0..n {
+        out[i] = i * i;
     }
     return out;
 }
 
-// Loop variable not used in dyn block — hits are [(),(),(),()].
-fn ignore_index(dyn x: u32) -> dyn u32 {
-    for i in 0..4 {
-        dyn { x = x + 1; }
+// Loop variable not used in body — hits are [(),(),(),()].
+fn ignore_index(x: u32) -> u32 {
+    for const i in 0..4 {
+        x = x + 1;
     }
     return x;
 }
 
 // Many captured const values.
-fn many_captures(const a: u32, const b: u32, dyn x: u32) -> dyn u32 {
-    for i in 0..4 {
+fn many_captures(const a: u32, const b: u32, x: u32) -> u32 {
+    for const i in 0..4 {
         const c = a + i;
         const d = b * i;
         const e = c ^ d;
-        dyn { x = x + e; }
+        x = x + e;
     }
     return x;
 }
 
-// Replicate body with complex dyn control flow (multi-block CFG).
-fn complex_body(const n: u32, dyn x: u32, dyn y: u32) -> (dyn u32, dyn u32) {
-    for i in 0..n {
-        dyn {
-            if x > y {
-                x = x - 1;
-            } else {
-                y = y - 1;
-            }
-            x = x + i;
+// Replicate body with dyn control flow (multi-block CFG).
+fn complex_body(const n: u32, x: u32, y: u32) -> (u32, u32) {
+    for const i in 0..n {
+        if x > y {
+            x = x - 1;
+        } else {
+            y = y - 1;
         }
+        x = x + i;
     }
     return (x, y);
 }
@@ -896,37 +1092,20 @@ fn complex_body(const n: u32, dyn x: u32, dyn y: u32) -> (dyn u32, dyn u32) {
 
 ## Open Questions
 
-- **Early `return` from inside const control flow.**
-  How exactly does an early return from inside a const loop body interact with the replicate model?
-  The return exits the function, not just the loop.
-  If the return's value is dyn, the replicate body needs to communicate "I'm done, here's the result" — but the replicate expects to chain through all entries.
-  One approach: the hits vector is truncated (phase -1 stops collecting after the return), and the return value flows out of the last replicate entry.
-  But what if the return is conditional on a const condition that varies per iteration?
-
-- **If-else with dyn blocks in both branches.**
-  The current model uses two separate replicates (one for each branch).
-  Should we instead have a single replicate that handles both branches, with the hits vector encoding which branch was taken?
-  This might matter for threaded values that need to flow through whichever branch executes.
-
 - **Independent vs threaded iterations.**
   The `iter_args` model assumes sequential threading.
   For truly independent iterations (each writes to a different array index), should there be a separate `hir.replicate_parallel` that doesn't thread state?
   Or is the threading model general enough, and the lack of data dependence is just an optimization opportunity?
 
 - **Interaction with recursion.**
-  Silicon does not currently support recursive functions, but if it ever does, a recursive function with dyn blocks would produce a dynamically-deep nesting of replicates.
+  Silicon does not currently support recursive functions, but if it ever does, a recursive function with cross-phase blocks would produce a dynamically-deep nesting of replicates.
   This is likely out of scope, but worth noting as a constraint.
 
-- **Dyn early return inside a replicate body.**
-  A `dyn { if cond { return x; } }` inside a const loop means the replicate body has a dyn early return.
-  After replicate expansion, this becomes a dyn CFG with multiple potential exit points across the unrolled iterations.
-  The CFG-to-dataflow lowering handles this (mux chain with "done" flag), but the interaction between replicate expansion and CFG construction needs careful design.
-
 - **Representation of `while` loops.**
-  `while` loops with const conditions (e.g., `while !done { ... done = check(); }`) fit the replicate model — phase -1 runs the loop and collects hits.
+  `while` loops with const conditions (e.g., `while !done { ... done = check(); }`) fit the replicate model — the earlier phase runs the loop and collects hits.
   But the iteration count is not syntactically bounded.
   Should we require the user to provide an upper bound for safety (to prevent infinite compile-time loops)?
 
 - **Error reporting for non-terminating const loops.**
-  A `for i in 0..n` with a very large `n` could produce enormous hardware.
+  A `for const i in 0..n` with a very large `n` could produce enormous hardware.
   Should the compiler warn or error when a replicate expansion exceeds some threshold?
