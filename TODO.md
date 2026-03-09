@@ -55,7 +55,6 @@
 
 ## Dialect Review: Missing Canonicalizers/Folders
 
-- **MIR `OpaquePackOp`/`OpaqueUnpackOp`**: no round-trip canonicalization
 - **HIR `OpaquePackOp`**: no fold for pack-of-unpack
 
 ## Remove single-return/single-signature assumption

@@ -176,6 +176,7 @@ def MIROpaqueUnpackOp : MIROp<"opaque_unpack", [Pure]> {
   let assemblyFormat = [{
     $input `:` type($results) attr-dict
   }];
+  let hasFolder = 1;
 }
 
 #endif // SILICON_MIR_OPS_TD

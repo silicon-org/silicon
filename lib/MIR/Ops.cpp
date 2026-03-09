@@ -411,6 +411,23 @@ ReturnOp FuncOp::getReturnOp() {
   return dyn_cast<ReturnOp>(getBody().back().getTerminator());
 }
 
+//===----------------------------------------------------------------------===//
+// OpaqueUnpackOp
+//===----------------------------------------------------------------------===//
+
+/// Fold `mir.opaque_unpack(mir.opaque_pack(...))` into the pack's operands.
+LogicalResult
+MIROpaqueUnpackOp::fold(FoldAdaptor adaptor,
+                        SmallVectorImpl<OpFoldResult> &foldResults) {
+  auto packOp = getInput().getDefiningOp<MIROpaquePackOp>();
+  if (!packOp)
+    return failure();
+  if (packOp.getOperands().size() != getResults().size())
+    return failure();
+  foldResults.append(packOp.getOperands().begin(), packOp.getOperands().end());
+  return success();
+}
+
 void FuncOp::getAsmBlockArgumentNames(Region &region,
                                       OpAsmSetValueNameFn setNameFn) {
   if (&region != &getBody() || region.empty())

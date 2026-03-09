@@ -113,3 +113,33 @@ func.func @BoolToI1False() -> i1 {
   %1 = mir.bool_to_i1 %0
   return %1 : i1
 }
+
+// CHECK-LABEL: @UnpackOfPack
+// CHECK-NEXT: %[[A:.*]] = mir.constant #si.int<1>
+// CHECK-NEXT: %[[B:.*]] = mir.constant #si.int<2>
+// CHECK-NEXT: return %[[A]], %[[B]]
+func.func @UnpackOfPack() -> (!si.int, !si.int) {
+  %a = mir.constant #si.int<1>
+  %b = mir.constant #si.int<2>
+  %packed = mir.opaque_pack(%a, %b) : (!si.int, !si.int)
+  %x, %y = mir.opaque_unpack %packed : !si.int, !si.int
+  return %x, %y : !si.int, !si.int
+}
+
+// CHECK-LABEL: @UnpackOfPackSingle
+// CHECK-NEXT: %[[V:.*]] = mir.constant #si.int<42>
+// CHECK-NEXT: return %[[V]]
+func.func @UnpackOfPackSingle() -> !si.int {
+  %a = mir.constant #si.int<42>
+  %packed = mir.opaque_pack(%a) : (!si.int)
+  %x = mir.opaque_unpack %packed : !si.int
+  return %x : !si.int
+}
+
+// Unpack of a non-pack input should not be canonicalized away.
+// CHECK-LABEL: @UnpackOfNonPack
+// CHECK: mir.opaque_unpack
+func.func @UnpackOfNonPack(%arg0: !si.opaque) -> (!si.int, !si.int) {
+  %x, %y = mir.opaque_unpack %arg0 : !si.int, !si.int
+  return %x, %y : !si.int, !si.int
+}
