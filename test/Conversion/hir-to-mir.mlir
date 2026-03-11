@@ -2,6 +2,8 @@
 
 // CHECK-LABEL: mir.func @Types
 hir.func @Types() -> () {
+  hir.signature () -> ()
+} {
   // CHECK: mir.constant #si.type<!si.bool>
   %bool_type = hir.bool_type
 
@@ -32,6 +34,8 @@ hir.func @Types() -> () {
 
 // CHECK-LABEL: mir.func @Constants
 hir.func @Constants() -> () {
+  hir.signature () -> ()
+} {
   // CHECK: mir.constant #si.bool<true>
   hir.constant_bool <true>
   // CHECK: mir.constant #si.bool<false>
@@ -46,6 +50,8 @@ hir.func @Constants() -> () {
 
 // CHECK-LABEL: mir.func @Calls
 hir.func @Calls() -> () {
+  hir.signature () -> ()
+} {
   // CHECK: mir.call @foo() : () -> ()
   hir.call @foo() : () -> ()
 
@@ -68,6 +74,9 @@ hir.func @Calls() -> () {
 // CHECK-LABEL: mir.func @BinaryArithmetic(%a: !si.int, %b: !si.int)
 hir.func @BinaryArithmetic(%a, %b) -> (r0, r1, r2, r3, r4) {
   %int = hir.int_type
+  hir.signature (%int, %int) -> (%int, %int, %int, %int, %int)
+} {
+  %int = hir.int_type
   %a_typed = hir.coerce_type %a, %int
   %b_typed = hir.coerce_type %b, %int
   %r0 = hir.add %a_typed, %b_typed : %int
@@ -86,6 +95,9 @@ hir.func @BinaryArithmetic(%a, %b) -> (r0, r1, r2, r3, r4) {
 // CHECK-LABEL: mir.func @BinaryBitwise(%a: !si.int, %b: !si.int)
 hir.func @BinaryBitwise(%a, %b) -> (r0, r1, r2, r3, r4) {
   %int = hir.int_type
+  hir.signature (%int, %int) -> (%int, %int, %int, %int, %int)
+} {
+  %int = hir.int_type
   %a_typed = hir.coerce_type %a, %int
   %b_typed = hir.coerce_type %b, %int
   %r0 = hir.and %a_typed, %b_typed : %int
@@ -103,6 +115,10 @@ hir.func @BinaryBitwise(%a, %b) -> (r0, r1, r2, r3, r4) {
 
 // CHECK-LABEL: mir.func @BinaryComparison(%a: !si.int, %b: !si.int)
 hir.func @BinaryComparison(%a, %b) -> (r0, r1, r2, r3, r4, r5) {
+  %int = hir.int_type
+  %bool = hir.bool_type
+  hir.signature (%int, %int) -> (%bool, %bool, %bool, %bool, %bool, %bool)
+} {
   %int = hir.int_type
   %bool = hir.bool_type
   %a_typed = hir.coerce_type %a, %int
@@ -128,6 +144,10 @@ hir.func @BinaryComparison(%a, %b) -> (r0, r1, r2, r3, r4, r5) {
 // CHECK-LABEL: mir.func @UnifyInOpaquePack(%T: !si.type)
 hir.func @UnifyInOpaquePack(%T) -> (ctx) {
   %type_type = hir.type_type
+  %opaque = hir.opaque_type
+  hir.signature (%type_type) -> (%opaque)
+} {
+  %type_type = hir.type_type
   %coerced = hir.coerce_type %T, %type_type
   %unified = hir.unify %coerced, %T
   // CHECK: mir.opaque_pack(%T) : (!si.type)
@@ -138,6 +158,8 @@ hir.func @UnifyInOpaquePack(%T) -> (ctx) {
 
 // CHECK-LABEL: mir.func @OpaqueTypes
 hir.func @OpaqueTypes() -> () {
+  hir.signature () -> ()
+} {
   // CHECK: mir.constant #si.type<!si.opaque>
   %opaque_type = hir.opaque_type
   hir.return : () -> ()
@@ -147,6 +169,9 @@ hir.func @OpaqueTypes() -> () {
 // specialization first. The function stays as HIR until then.
 // CHECK-LABEL: hir.func @OpaqueArg(%a) -> (result)
 hir.func @OpaqueArg(%a) -> (result) {
+  %opaque = hir.opaque_type
+  hir.signature (%opaque) -> (%opaque)
+} {
   %opaque = hir.opaque_type
   %a0 = hir.coerce_type %a, %opaque
   // CHECK: hir.return
@@ -159,6 +184,9 @@ hir.func @OpaqueArg(%a) -> (result) {
 // CHECK-LABEL: mir.func @UnifyInReturnType
 // CHECK: mir.return
 hir.func @UnifyInReturnType() -> (result) {
+  %int = hir.int_type
+  hir.signature () -> (%int)
+} {
   %int = hir.int_type
   %int2 = hir.int_type
   %ty = hir.unify %int, %int2
@@ -173,6 +201,9 @@ hir.func @UnifyInReturnType() -> (result) {
 // CHECK-LABEL: hir.func @UnresolvedCallArgType
 // CHECK-NOT: mir.func @UnresolvedCallArgType
 hir.func @UnresolvedCallArgType(%T) -> () {
+  %T_type = hir.type_of %T
+  hir.signature (%T_type) -> ()
+} {
   %x = hir.constant_int 0 : %T
   %T_type = hir.type_of %T
   hir.call @identity(%x) : (%T) -> ()
@@ -186,6 +217,9 @@ hir.func @UnresolvedCallArgType(%T) -> () {
 // CHECK-NOT: mir.func @CoerceTypeNonConstant
 hir.func @CoerceTypeNonConstant(%a, %ty) -> (result) {
   %int = hir.int_type
+  hir.signature (%int, %int) -> (%int)
+} {
+  %int = hir.int_type
   // CHECK: hir.coerce_type
   %r = hir.coerce_type %a, %ty
   hir.return %r : (%int, %int) -> (%int)
@@ -193,6 +227,9 @@ hir.func @CoerceTypeNonConstant(%a, %ty) -> (result) {
 
 // CHECK-LABEL: mir.func @Casts
 hir.func @Casts() -> (a) {
+  %ta = hir.int_type
+  hir.signature () -> (%ta)
+} {
   // CHECK-NEXT: [[TMP1:%.+]] = mir.constant
   %a0 = mir.constant #si.int<42>
   %a1 = builtin.unrealized_conversion_cast %a0 : !si.int to !hir.any
@@ -212,6 +249,9 @@ hir.func @Casts() -> (a) {
 // CHECK-LABEL: mir.func @UnusedSecondArg(%a: !si.int, %b: !si.int) -> (result: !si.int)
 hir.func @UnusedSecondArg(%a, %b) -> (result) {
   %int = hir.int_type
+  hir.signature (%int, %int) -> (%int)
+} {
+  %int = hir.int_type
   %a_typed = hir.coerce_type %a, %int
   // CHECK: mir.return %a
   hir.return %a_typed : (%int, %int) -> (%int)
@@ -220,6 +260,9 @@ hir.func @UnusedSecondArg(%a, %b) -> (result) {
 // CHECK-LABEL: mir.func @UnusedFirstArg(%a: !si.int, %b: !si.int) -> (result: !si.int)
 hir.func @UnusedFirstArg(%a, %b) -> (result) {
   %int = hir.int_type
+  hir.signature (%int, %int) -> (%int)
+} {
+  %int = hir.int_type
   %b_typed = hir.coerce_type %b, %int
   // CHECK: mir.return %b
   hir.return %b_typed : (%int, %int) -> (%int)
@@ -227,6 +270,9 @@ hir.func @UnusedFirstArg(%a, %b) -> (result) {
 
 // CHECK-LABEL: mir.func @UnusedBothArgs(%a: !si.int, %b: !si.int) -> (result: !si.int)
 hir.func @UnusedBothArgs(%a, %b) -> (result) {
+  %int = hir.int_type
+  hir.signature (%int, %int) -> (%int)
+} {
   %int = hir.int_type
   %c42 = hir.constant_int 42 : %int
   // CHECK: mir.return
@@ -239,6 +285,9 @@ hir.func @UnusedBothArgs(%a, %b) -> (result) {
 
 // CHECK-LABEL: mir.func @CoerceToI1(%a: !si.bool)
 hir.func @CoerceToI1(%a) -> () {
+  %bool = hir.bool_type
+  hir.signature (%bool) -> ()
+} {
   %bool = hir.bool_type
   %a_typed = hir.coerce_type %a, %bool
   // CHECK: mir.bool_to_i1 %a
@@ -253,6 +302,9 @@ hir.func @CoerceToI1(%a) -> () {
 // CHECK-LABEL: mir.func @TypeOf(%a: !si.int)
 hir.func @TypeOf(%a) -> () {
   %int = hir.int_type
+  hir.signature (%int) -> ()
+} {
+  %int = hir.int_type
   %a_typed = hir.coerce_type %a, %int
   // type_of is replaced with a dummy constant; it should not appear in MIR.
   // CHECK-NOT: hir.type_of
@@ -266,6 +318,9 @@ hir.func @TypeOf(%a) -> () {
 
 // CHECK-LABEL: mir.func @MIRConstant
 hir.func @MIRConstant() -> (result) {
+  %int = hir.int_type
+  hir.signature () -> (%int)
+} {
   // CHECK: mir.constant #si.int<99>
   %c = hir.mir_constant #si.int<99>
   %int = hir.int_type
@@ -278,6 +333,11 @@ hir.func @MIRConstant() -> (result) {
 
 // CHECK-LABEL: mir.func @OpaquePack(%a: !si.int, %b: !si.bool)
 hir.func @OpaquePack(%a, %b) -> (ctx) {
+  %int = hir.int_type
+  %bool = hir.bool_type
+  %opaque = hir.opaque_type
+  hir.signature (%int, %bool) -> (%opaque)
+} {
   %int = hir.int_type
   %bool = hir.bool_type
   %a_typed = hir.coerce_type %a, %int

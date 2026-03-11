@@ -442,6 +442,39 @@ For `if const`-`else` with bodies in both branches, each branch gets its own rep
 Exactly one will have a single entry; the other will be empty.
 Threaded values flow through both, and the empty replicate passes them unchanged.
 
+### General principle: `dyn` blocks inside control flow become replicates
+
+The `if const` and `for const` patterns are instances of a more general principle: **every `dyn { ... }` block inside control flow at the producing phase becomes a replicate at the receiving phase.**
+The producing phase's control flow determines the hits vectors; the receiving phase has replicates that expand based on those hits.
+
+This applies uniformly across all phase boundaries, not just to the `const` sugar.
+For example, a bare `if` at the function body's phase with `dyn { ... }` blocks in both branches:
+
+```silicon
+fn foo(cond: Bool, dyn a: Int, dyn b: Int) -> dyn Int {
+    if cond { dyn { a } } else { dyn { b } }
+}
+```
+
+The `if` is at phase 0.
+The `dyn { ... }` blocks shift their contents to phase 1.
+During phase splitting, each `dyn { ... }` block becomes a replicate at phase 1 with a 0-or-1 hits vector:
+
+- Phase 0 runs the `if`. The taken branch appends `()` to its hits vector; the other branch's hits vector stays empty.
+- Phase 1 has two chained replicates. The one with `[()]` inlines its body (computing `a` or `b`); the one with `[]` passes the threaded value through unchanged.
+
+This means the body-level CFG stays entirely at phase 0.
+Phase 1 has no branches — just flat replicates that the producing phase's control flow selectively activates via hits vectors.
+No CFG replication into later phases is needed.
+
+The same pattern applies at every phase boundary:
+
+| Producing phase | Receiving phase | Example |
+|---|---|---|
+| Phase -2 | Phase -1 | `const { for i in 0..n { dyn { ... } } }` inside a `const` block |
+| Phase -1 | Phase 0 | `if const cond { body }` (sugar for `const { if cond { dyn { body } } }`) |
+| Phase 0 | Phase 1 | `if cond { dyn { a } } else { dyn { b } }` |
+
 ### Break and continue in `for const`
 
 Break and continue affect the hits vector by controlling what the earlier phase collects.

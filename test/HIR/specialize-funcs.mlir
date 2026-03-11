@@ -7,6 +7,10 @@
 
 hir.func private @BasicChain.0b(%x, %ctx) -> (result) {
   %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %2 = hir.opaque_type
+  hir.signature (%0, %2) -> (%0)
+} {
+  %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %2 = hir.add %x, %1 : %0
   %3 = hir.opaque_type
   hir.return %2 : (%0, %3) -> (%0)
@@ -30,6 +34,8 @@ hir.multiphase_func @BasicChain.0(last x) -> (result) [
 // CHECK-NOT: hir.multiphase_func @BasicChain.0
 
 // CHECK-LABEL: hir.func private @BasicChain.0b(%x) -> (result)
+// CHECK:         hir.signature (%{{.*}}) -> (%{{.*}})
+// CHECK:       } {
 // CHECK-NEXT:    %{{.*}} = hir.mir_constant #si.type<!si.int> : !si.type
 // CHECK-NEXT:    %{{.*}} = hir.mir_constant #si.int<42> : !si.int
 // CHECK-NEXT:    %{{.*}} = hir.add %x, %{{.*}} : %{{.*}}
@@ -43,6 +49,9 @@ hir.multiphase_func @BasicChain.0(last x) -> (result) [
 // consumed; the remaining two sub-functions stay in a multiphase_func.
 
 hir.func private @ThreePhase.0b(%ctx) -> (ctx) {
+  %0 = hir.opaque_type
+  hir.signature (%0) -> (%0)
+} {
   %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %2 = hir.opaque_pack(%0, %1)
   %3 = hir.opaque_type
@@ -50,6 +59,10 @@ hir.func private @ThreePhase.0b(%ctx) -> (ctx) {
 }
 
 hir.func private @ThreePhase.0c(%y, %ctx) -> (result) {
+  %0:2 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %1 = hir.opaque_type
+  hir.signature (%0#0, %1) -> (%0#0)
+} {
   %0:2 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %1 = hir.add %y, %0#1 : %0#0
   %2 = hir.opaque_type
@@ -74,6 +87,8 @@ hir.multiphase_func @ThreePhase.0(last y) -> (result) [
 // CHECK-NOT: mir.evaluated_func @ThreePhase.0a
 
 // CHECK-LABEL: hir.func private @ThreePhase.0b() -> (ctx)
+// CHECK:         hir.signature () -> (%{{.*}})
+// CHECK:       } {
 // CHECK:         hir.mir_constant #si.type<!si.int>
 // CHECK:         hir.mir_constant #si.int<10>
 
@@ -89,6 +104,8 @@ hir.multiphase_func @ThreePhase.0(last y) -> (result) [
 // canonicalization to expand it later.
 
 hir.func private @NoUnpack.0b(%x, %ctx) -> (result) {
+  hir.signature (%x, %x) -> (%x)
+} {
   %0 = hir.coerce_type %ctx, %x
   hir.return %0 : (%x, %x) -> (%x)
 }
@@ -111,6 +128,8 @@ hir.multiphase_func @NoUnpack.0(last x) -> (result) [
 // CHECK-NOT: hir.multiphase_func @NoUnpack.0
 
 // CHECK-LABEL: hir.func private @NoUnpack.0b(%x) -> (result)
+// CHECK:         hir.signature (%{{.*}}) -> (%{{.*}})
+// CHECK:       } {
 // CHECK:         hir.mir_constant #si.opaque<[#si.int<99> : !si.int]>
 // CHECK:         hir.coerce_type
 // CHECK:         hir.return {{.*}} : ({{.*}}) -> ({{.*}})
@@ -125,6 +144,10 @@ hir.multiphase_func @NoUnpack.0(last x) -> (result) [
 
 hir.func private @callee(%a, %ctx) -> (result) {
   %0 = hir.opaque_unpack %ctx : !hir.any
+  %1 = hir.opaque_type
+  hir.signature (%0, %1) -> (%0)
+} {
+  %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.add %a, %0 : %0
   %2 = hir.opaque_type
   hir.return %1 : (%0, %2) -> (%0)
@@ -134,6 +157,10 @@ hir.func private @callee(%a, %ctx) -> (result) {
 // After transitive specialization, @callee is cloned, specialized, and the call
 // is updated to drop the last arg.
 hir.func private @TransSpec.0b(%x, %ctx) -> (result) {
+  %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %2 = hir.opaque_type
+  hir.signature (%0, %2) -> (%0)
+} {
   %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %opaque = hir.mir_constant #si.opaque<[#si.int<7>]> : !si.opaque
   %3 = hir.call @callee(%x, %opaque) : (%0, %0) -> (%0)
@@ -160,11 +187,15 @@ hir.multiphase_func @TransSpec.0(last x) -> (result) [
 
 // The cloned and specialized callee has the opaque context arg removed.
 // CHECK-LABEL: hir.func private @callee_0(%a) -> (result)
+// CHECK:         hir.signature (%{{.*}}) -> (%{{.*}})
+// CHECK:       } {
 // CHECK:         hir.mir_constant #si.int<7>
 // CHECK:         hir.add
 
 // The specialized function has its context expanded.
 // CHECK-LABEL: hir.func private @TransSpec.0b(%x) -> (result)
+// CHECK:         hir.signature (%{{.*}}) -> (%{{.*}})
+// CHECK:       } {
 // CHECK:         hir.mir_constant #si.type<!si.int>
 // CHECK:         hir.mir_constant #si.int<5>
 // CHECK:         hir.call @callee_0(%x)
@@ -196,12 +227,20 @@ hir.multiphase_func @SingleSub.0() -> () [
 
 hir.func private @callee2(%a, %ctx) -> (result) {
   %0 = hir.opaque_unpack %ctx : !hir.any
+  %1 = hir.opaque_type
+  hir.signature (%0, %1) -> (%0)
+} {
+  %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.add %a, %0 : %0
   %2 = hir.opaque_type
   hir.return %1 : (%0, %2) -> (%0)
 }
 
 hir.func private @TwoCalls.0b(%x, %ctx) -> (result) {
+  %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %2 = hir.opaque_type
+  hir.signature (%0, %2) -> (%0)
+} {
   %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %opaqueA = hir.mir_constant #si.opaque<[#si.int<7>]> : !si.opaque
   %opaqueB = hir.mir_constant #si.opaque<[#si.int<8>]> : !si.opaque
@@ -236,12 +275,20 @@ hir.multiphase_func @TwoCalls.0(last x) -> (result) [
 
 hir.func private @callee3(%a, %ctx) -> (result) {
   %0 = hir.opaque_unpack %ctx : !hir.any
+  %1 = hir.opaque_type
+  hir.signature (%0, %1) -> (%0)
+} {
+  %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.add %a, %0 : %0
   %2 = hir.opaque_type
   hir.return %1 : (%0, %2) -> (%0)
 }
 
 hir.func private @Dedup.0b(%x1, %x2, %ctx) -> (result) {
+  %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %2 = hir.opaque_type
+  hir.signature (%0, %0, %2) -> (%0)
+} {
   %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %opaqueA = hir.mir_constant #si.opaque<[#si.int<7>]> : !si.opaque
   %opaqueB = hir.mir_constant #si.opaque<[#si.int<7>]> : !si.opaque
@@ -276,6 +323,9 @@ hir.multiphase_func @Dedup.0(last x1, last x2) -> (result) [
 // chained into the next entry's opaque arg.
 
 hir.func private @SplitChain.1(%ctx) -> () {
+  %0 = hir.opaque_type
+  hir.signature (%0) -> ()
+} {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.opaque_type
   hir.return : (%1) -> ()
@@ -294,6 +344,8 @@ hir.split_func @SplitChain() -> (result: 0) {
 // The opaque context (last result of evaluated_func) is chained into the next
 // entry. The opaque_unpack is replaced with a mir_constant.
 // CHECK-LABEL: hir.func private @SplitChain.1() -> ()
+// CHECK:         hir.signature () -> ()
+// CHECK:       } {
 // CHECK:         hir.mir_constant #si.int<99>
 
 //===----------------------------------------------------------------------===//
@@ -302,6 +354,9 @@ hir.split_func @SplitChain() -> (result: 0) {
 // is specialized and the MultiphaseFuncOp's "first" args are removed.
 
 hir.func private @MpCallee.0a(%ctx) -> (ctx) {
+  %0 = hir.opaque_type
+  hir.signature (%0) -> (%0)
+} {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.opaque_pack(%0)
   %2 = hir.opaque_type
@@ -309,6 +364,10 @@ hir.func private @MpCallee.0a(%ctx) -> (ctx) {
 }
 
 hir.func private @MpCallee.0b(%x, %ctx) -> (result) {
+  %0 = hir.opaque_unpack %ctx : !hir.any
+  %1 = hir.opaque_type
+  hir.signature (%0, %1) -> (%0)
+} {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.add %x, %0 : %0
   %2 = hir.opaque_type
@@ -322,6 +381,10 @@ hir.multiphase_func @MpCallee.0(first ctx, last x) -> (result) [
 
 // Caller passes a concrete opaque to the MultiphaseFuncOp.
 hir.func private @MpCaller.0b(%x, %ctx) -> (result) {
+  %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %2 = hir.opaque_type
+  hir.signature (%0, %2) -> (%0)
+} {
   %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %opaque = hir.mir_constant #si.opaque<[#si.int<3>]> : !si.opaque
   %2 = hir.call @MpCallee.0(%x, %opaque) : (%0, %0) -> (%0)
@@ -347,6 +410,8 @@ hir.multiphase_func @MpCaller.0(last x) -> (result) [
 // sub-function is specialized and the "first" arg is removed from the
 // multiphase_func declaration.
 // CHECK-LABEL: hir.func private @MpCallee.0a{{.*}}() -> (ctx)
+// CHECK:         hir.signature () -> (%{{.*}})
+// CHECK:       } {
 // CHECK:         hir.mir_constant #si.int<3>
 // CHECK-LABEL: hir.multiphase_func @MpCallee.0{{.*}}(last x) -> (result)
 // The call in the caller drops the opaque arg.
@@ -359,6 +424,10 @@ hir.multiphase_func @MpCaller.0(last x) -> (result) [
 // references) are redirected to the remaining sub-function.
 
 hir.func private @Dissolve.0b(%x, %ctx) -> (result) {
+  %0 = hir.int_type
+  %1 = hir.opaque_type
+  hir.signature (%0, %1) -> (%0)
+} {
   %0 = hir.opaque_type
   %1 = hir.int_type
   hir.return %x : (%1, %0) -> (%1)
@@ -374,11 +443,14 @@ hir.multiphase_func @Dissolve.0(last x) -> (result) [
 // A direct caller referencing the multiphase_func (not through a split_func).
 hir.func private @DissolveUser(%x) -> (result) {
   %0 = hir.int_type
+  hir.signature (%0) -> (%0)
+} {
+  %0 = hir.int_type
   %1 = hir.call @Dissolve.0(%x) : (%0) -> (%0)
   hir.return %1 : (%0) -> (%0)
 }
 
-// After dissolution, the opaque context arg is expanded (empty opaque → arg
+// After dissolution, the opaque context arg is expanded (empty opaque -> arg
 // removed), and the call is redirected to @Dissolve.0b.
 // CHECK-NOT: hir.multiphase_func @Dissolve.0
 // CHECK-LABEL: hir.func private @Dissolve.0b(%x) -> (result)

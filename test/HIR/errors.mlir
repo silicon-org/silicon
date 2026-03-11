@@ -45,10 +45,10 @@ hir.unified_func @foo() -> () {
 
 // -----
 
-// expected-error @below {{signature has 1 argument types but function has 2 arguments}}
 hir.unified_func @foo(%a: 0, %b: -1) -> (result: 0) {
   %0 = hir.int_type
   %1 = hir.int_type
+  // expected-error @below {{has 1 argument types but parent function has 2 arguments}}
   hir.signature (%0) -> (%1)
 } {
   hir.return : () -> ()
@@ -56,10 +56,10 @@ hir.unified_func @foo(%a: 0, %b: -1) -> (result: 0) {
 
 // -----
 
-// expected-error @below {{signature has 1 result types but function has 2 results}}
 hir.unified_func @foo(%a: 0) -> (x: 0, y: -1) {
   %0 = hir.int_type
   %1 = hir.int_type
+  // expected-error @below {{has 1 result types but parent function has 2 results}}
   hir.signature (%0) -> (%1)
 } {
   hir.return : () -> ()
@@ -163,9 +163,9 @@ hir.split_func @bad_term() -> () {
 
 // -----
 
-// expected-error @below {{signature has 1 argument types but function has 0 arguments}}
 hir.split_func @bad_sig_args() -> () {
   %0 = hir.int_type
+  // expected-error @below {{has 1 argument types but parent function has 0 arguments}}
   hir.signature (%0) -> ()
 } [
   0: @bad_sig_args.0
@@ -173,9 +173,9 @@ hir.split_func @bad_sig_args() -> () {
 
 // -----
 
-// expected-error @below {{signature has 1 result types but function has 0 results}}
 hir.split_func @bad_sig_results() -> () {
   %0 = hir.int_type
+  // expected-error @below {{has 1 result types but parent function has 0 results}}
   hir.signature () -> (%0)
 } [
   0: @bad_sig_results.0
@@ -215,24 +215,71 @@ hir.expr 0 {
 
 // expected-error @below {{block argument must have type !hir.any, got '!si.int'}}
 "hir.func"() ({
+  "hir.signature"() : () -> ()
+}, {
 ^bb0(%arg0: !si.int):
   "mir.return"() : () -> ()
 }) {sym_name = "bad_block_arg_type", argNames = ["arg0"], resultNames = []} : () -> ()
 
 // -----
 
-// hir.return with wrong number of typeOfArgs
-hir.func @bad_return_args(%a) -> () {
-  %t = hir.int_type
-  // expected-error @below {{has 0 typeOfArgs operands but parent function has 1 arguments}}
-  hir.return : () -> ()
+// expected-error @below {{requires `hir.signature` terminator in the signature}}
+hir.func @missing_sig_term() -> () {
+^bb0:
+  cf.br ^bb1
+^bb1:
+  cf.br ^bb1
+} {
+  mir.return
 }
 
 // -----
 
-// hir.return with excess typeOfArgs
-hir.func @excess_return_args() -> () {
+hir.func @sig_in_body() -> () {
+  hir.signature () -> ()
+} {
+  // expected-error @below {{cannot appear in the body}}
+  hir.signature () -> ()
+}
+
+// -----
+
+hir.func @sig_arg_mismatch() -> () {
+  %0 = hir.int_type
+  // expected-error @below {{has 1 argument types but parent function has 0 arguments}}
+  hir.signature (%0) -> ()
+} {
+  mir.return
+}
+
+// -----
+
+hir.func @sig_result_mismatch() -> () {
+  %0 = hir.int_type
+  // expected-error @below {{has 1 result types but parent function has 0 results}}
+  hir.signature () -> (%0)
+} {
+  mir.return
+}
+
+// -----
+
+// expected-error @below {{signature region has 1 block arguments but function has 0 arguments}}
+hir.func @sig_block_arg_mismatch() -> () {
+  ^bb0(%x: !hir.any):
+  hir.signature () -> ()
+} {
+  mir.return
+}
+
+// -----
+
+hir.func @return_values_mismatch() -> (a, b) {
   %t = hir.int_type
-  // expected-error @below {{has 1 typeOfArgs operands but parent function has 0 arguments}}
-  hir.return : (%t) -> ()
+  hir.signature () -> (%t, %t)
+} {
+  %t = hir.int_type
+  %0 = hir.constant_int 42 : %t
+  // expected-error @below {{has 1 values but parent function has 2 results}}
+  hir.return %0 : () -> (%t)
 }

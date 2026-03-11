@@ -44,11 +44,12 @@ static void printIntAttr(OpAsmPrinter &printer, Operation *op,
 // # Custom Parser for FuncOp
 //
 // The assembly format is:
-//   hir.func [visibility] @name(%arg, ...) -> (result, ...) { <body> }
+//   hir.func [visibility] @name(%arg, ...) -> (result, ...)
+//     { <signature> } { <body> }
 //
-// Argument names use `%` because they become SSA block arguments in the body
-// region. All block args have type `!hir.any`. Result names are bare
-// identifiers.
+// Argument names use `%` because they become SSA block arguments in both the
+// signature and body regions. All block args have type `!hir.any`. Result
+// names are bare identifiers.
 
 ParseResult FuncOp::parse(OpAsmParser &parser, OperationState &result) {
   auto &props = result.getOrAddProperties<FuncOp::Properties>();
@@ -107,9 +108,12 @@ ParseResult FuncOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
     return failure();
 
-  // Parse body region with the inline arguments as entry block args.
-  auto *region = result.addRegion();
-  if (parser.parseRegion(*region, args))
+  // Parse signature and body regions, both sharing the inline arg definitions.
+  auto *sigRegion = result.addRegion();
+  if (parser.parseRegion(*sigRegion, args))
+    return failure();
+  auto *bodyRegion = result.addRegion();
+  if (parser.parseRegion(*bodyRegion, args))
     return failure();
 
   return success();
@@ -147,14 +151,15 @@ void FuncOp::print(OpAsmPrinter &p) {
       (*this)->getAttrs(), {getSymNameAttrName(), getSymVisibilityAttrName(),
                             getArgNamesAttrName(), getResultNamesAttrName()});
 
-  // Print body region without entry block arguments.
+  // Print signature and body regions without entry block arguments.
+  p << ' ';
+  p.printRegion(getSignature(), /*printEntryBlockArgs=*/false);
   p << ' ';
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
 }
 
 LogicalResult FuncOp::verify() {
-  if (getBody().empty())
-    return success();
+  auto numArgs = getArgNames().size();
 
   // All block arguments must have type !hir.any.
   auto anyType = AnyType::get(getContext());
@@ -163,26 +168,89 @@ LogicalResult FuncOp::verify() {
       return emitOpError() << "block argument must have type !hir.any, got "
                            << arg.getType();
 
-  if (getArgNames().size() != getBody().front().getNumArguments())
-    return emitOpError() << "argNames has " << getArgNames().size()
+  // Check signature entry block arg count.
+  if (getSignature().front().getNumArguments() != numArgs)
+    return emitOpError() << "signature region has "
+                         << getSignature().front().getNumArguments()
+                         << " block arguments but function has " << numArgs
+                         << " arguments";
+
+  // Check body entry block arg count.
+  if (getBody().front().getNumArguments() != numArgs)
+    return emitOpError() << "argNames has " << numArgs
                          << " entries but body has "
                          << getBody().front().getNumArguments()
                          << " block arguments";
 
-  if (auto returnOp = getReturnOp()) {
-    if (getResultNames().size() != returnOp.getValues().size())
-      return emitOpError() << "resultNames has " << getResultNames().size()
-                           << " entries but return has "
-                           << returnOp.getValues().size() << " values";
-  }
+  return success();
+}
+
+LogicalResult FuncOp::verifyRegions() {
+  // Ensure no SignatureOp in the body region.
+  for (auto &block : getBody())
+    if (isa<SignatureOp>(block.getTerminator()))
+      return block.getTerminator()->emitOpError()
+             << "cannot appear in the body";
+
+  // Require SignatureOp terminator in the signature region's last block.
+  if (!isa<SignatureOp>(getSignature().back().getTerminator()))
+    return emitOpError()
+           << "requires `hir.signature` terminator in the signature";
+
+  // Check all block args in signature entry block have type !hir.any.
+  auto anyType = AnyType::get(getContext());
+  for (auto arg : getSignature().front().getArguments())
+    if (arg.getType() != anyType)
+      return emitOpError()
+             << "signature block argument must have type !hir.any, got "
+             << arg.getType();
 
   return success();
 }
 
+SignatureOp FuncOp::getSignatureOp() {
+  return cast<SignatureOp>(getSignature().back().getTerminator());
+}
+
 ReturnOp FuncOp::getReturnOp() {
-  if (getBody().empty())
-    return {};
   return dyn_cast<ReturnOp>(getBody().back().getTerminator());
+}
+
+//===----------------------------------------------------------------------===//
+// SignatureOp
+//===----------------------------------------------------------------------===//
+
+/// Verify that the signature terminator's operand counts match the parent
+/// function's declared arg/result counts. Works uniformly for FuncOp,
+/// UnifiedFuncOp, and SplitFuncOp.
+LogicalResult SignatureOp::verify() {
+  auto *parentOp = (*this)->getParentOp();
+  unsigned numArgs, numResults;
+
+  if (auto func = dyn_cast<FuncOp>(parentOp)) {
+    numArgs = func.getArgNames().size();
+    numResults = func.getResultNames().size();
+  } else if (auto func = dyn_cast<UnifiedFuncOp>(parentOp)) {
+    numArgs = func.getArgNames().size();
+    numResults = func.getResultNames().size();
+  } else if (auto func = dyn_cast<SplitFuncOp>(parentOp)) {
+    numArgs = func.getArgNames().size();
+    numResults = func.getResultNames().size();
+  } else {
+    return success();
+  }
+
+  if (getTypeOfArgs().size() != numArgs)
+    return emitOpError() << "has " << getTypeOfArgs().size()
+                         << " argument types but parent function has "
+                         << numArgs << " arguments";
+
+  if (getTypeOfResults().size() != numResults)
+    return emitOpError() << "has " << getTypeOfResults().size()
+                         << " result types but parent function has "
+                         << numResults << " results";
+
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -203,33 +271,25 @@ LogicalResult YieldOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ReturnOp::verify() {
-  // Only enforce operand count constraints when the parent is a FuncOp.
+  auto *parentOp = (*this)->getParentOp();
+
+  if (auto funcOp = dyn_cast<FuncOp>(parentOp)) {
+    // For FuncOp parents, check values count matches resultNames.
+    auto numResults = funcOp.getResultNames().size();
+    if (getValues().size() != numResults)
+      return emitOpError() << "has " << getValues().size()
+                           << " values but parent function has " << numResults
+                           << " results";
+  }
+
   // UnifiedFuncOp parents have their return operands populated incrementally
   // by CheckCalls, so counts may not match until that pass completes.
-  auto *parentOp = (*this)->getParentOp();
-  auto funcOp = dyn_cast<FuncOp>(parentOp);
-  if (!funcOp)
-    return success();
-
-  auto numArgs = funcOp.getArgNames().size();
-  auto numResults = funcOp.getResultNames().size();
-
-  if (getTypeOfArgs().size() != numArgs)
-    return emitOpError() << "has " << getTypeOfArgs().size()
-                         << " typeOfArgs operands but parent function has "
-                         << numArgs << " arguments";
-
-  if (getTypeOfValues().size() != numResults)
-    return emitOpError() << "has " << getTypeOfValues().size()
-                         << " typeOfValues operands but parent function has "
-                         << numResults << " results";
-
   return success();
 }
 
 void FuncOp::getAsmBlockArgumentNames(Region &region,
                                       OpAsmSetValueNameFn setNameFn) {
-  if (&region != &getBody() || region.empty())
+  if ((&region != &getSignature() && &region != &getBody()) || region.empty())
     return;
   auto argNames = getArgNames();
   for (auto [name, arg] : llvm::zip(argNames, region.front().getArguments()))
@@ -406,21 +466,6 @@ LogicalResult SplitFuncOp::verify() {
     return emitOpError() << "phaseNumbers has " << getPhaseNumbers().size()
                          << " entries but phaseFuncs has "
                          << getPhaseFuncs().size() << " entries";
-
-  // Verify the signature terminator's operand counts match.
-  auto sigOp = dyn_cast<SignatureOp>(getSignature().back().getTerminator());
-  if (!sigOp)
-    return success(); // verifyRegions will catch missing terminator
-
-  if (sigOp.getTypeOfArgs().size() != getArgNames().size())
-    return emitOpError() << "signature has " << sigOp.getTypeOfArgs().size()
-                         << " argument types but function has "
-                         << getArgNames().size() << " arguments";
-
-  if (sigOp.getTypeOfResults().size() != getResultNames().size())
-    return emitOpError() << "signature has " << sigOp.getTypeOfResults().size()
-                         << " result types but function has "
-                         << getResultNames().size() << " results";
 
   return success();
 }
@@ -937,22 +982,6 @@ LogicalResult UnifiedFuncOp::verify() {
                          << " block arguments but function has " << numArgs
                          << " arguments";
 
-  // Check the signature terminator's operand counts against the function's
-  // declared arg/result counts.
-  auto sigOp = dyn_cast<SignatureOp>(getSignature().back().getTerminator());
-  if (!sigOp)
-    return success();
-
-  if (sigOp.getTypeOfArgs().size() != numArgs)
-    return emitOpError() << "signature has " << sigOp.getTypeOfArgs().size()
-                         << " argument types but function has " << numArgs
-                         << " arguments";
-
-  if (sigOp.getTypeOfResults().size() != numResults)
-    return emitOpError() << "signature has " << sigOp.getTypeOfResults().size()
-                         << " result types but function has " << numResults
-                         << " results";
-
   return success();
 }
 
@@ -978,10 +1007,6 @@ LogicalResult UnifiedFuncOp::verifyRegions() {
   if (!isa<SignatureOp>(getSignature().back().getTerminator()))
     return emitOpError() << "requires `hir.signature` terminator in "
                             "the signature";
-
-  // Check the body terminator.
-  if (!isa<ReturnOp>(getBody().back().getTerminator()))
-    return emitOpError() << "requires `hir.return` terminator in the body";
 
   return success();
 }

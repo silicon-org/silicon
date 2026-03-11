@@ -11,6 +11,8 @@
 // expected-note @below {{PhaseEvalLoopPass::runOnOperation()}}
 module {
   hir.func private @good.0() -> () {
+    hir.signature () -> ()
+  } {
     hir.return : () -> ()
   }
 
@@ -22,6 +24,9 @@ module {
 
   // expected-note @below {{hir.func @stuck.0 could not be lowered to MIR}}
   hir.func private @stuck.0(%T) -> (result) {
+    %0 = hir.type_of %T
+    hir.signature (%0) -> (%T)
+  } {
     %ti = hir.inferrable
     %0 = hir.constant_int 0 : %ti
     %1 = hir.coerce_type %0, %T

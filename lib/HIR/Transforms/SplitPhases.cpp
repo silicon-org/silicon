@@ -277,6 +277,16 @@ LogicalResult PhaseSplitter::run() {
       auto phaseFuncOp =
           FuncOp::create(builder, funcOp.getLoc(), name, privateAttr,
                          emptyArray, emptyArray, isModuleAttr);
+      // Create an empty signature region with a placeholder terminator.
+      // Block args and actual type operands are added later once the per-phase
+      // functions have their final arg/result shapes.
+      {
+        auto &sigBlock = phaseFuncOp.getSignature().emplaceBlock();
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToEnd(&sigBlock);
+        SignatureOp::create(builder, funcOp.getLoc(), ValueRange{},
+                            ValueRange{});
+      }
       if (phase != 0)
         phaseFuncOp.getBody().emplaceBlock();
       symbolTable.insert(phaseFuncOp);
@@ -969,6 +979,44 @@ LogicalResult PhaseSplitter::run() {
         phaseResultNames.push_back(builder.getStringAttr("ctx"));
     }
     split.funcOp.setResultNamesAttr(builder.getArrayAttr(phaseResultNames));
+
+    // Populate the signature region with type operands from the return op.
+    if (auto retOp = split.funcOp.getReturnOp()) {
+      auto &sigBlock = split.funcOp.getSignature().front();
+
+      // Add block args to the signature matching the body's entry block.
+      for (auto bodyArg : block.getArguments())
+        sigBlock.addArgument(bodyArg.getType(), bodyArg.getLoc());
+
+      OpBuilder sigBuilder(&sigBlock, sigBlock.begin());
+
+      // Clone the type operands from the return into the signature region.
+      IRMapping sigMapping;
+      for (auto [bodyArg, sigArg] :
+           llvm::zip(block.getArguments(), sigBlock.getArguments()))
+        sigMapping.map(bodyArg, sigArg);
+
+      SmallVector<Value> sigArgTypes;
+      for (auto typeVal : retOp.getTypeOfArgs()) {
+        Value resolved = resolveTypeIntoRegion(sigBuilder, typeVal, sigMapping);
+        if (!resolved)
+          return failure();
+        sigArgTypes.push_back(resolved);
+      }
+      SmallVector<Value> sigResultTypes;
+      for (auto typeVal : retOp.getTypeOfValues()) {
+        Value resolved = resolveTypeIntoRegion(sigBuilder, typeVal, sigMapping);
+        if (!resolved)
+          return failure();
+        sigResultTypes.push_back(resolved);
+      }
+
+      // Replace the placeholder signature terminator with one carrying types.
+      sigBlock.getTerminator()->erase();
+      sigBuilder.setInsertionPointToEnd(&sigBlock);
+      SignatureOp::create(sigBuilder, funcOp.getLoc(), sigArgTypes,
+                          sigResultTypes);
+    }
   }
 
   //===--------------------------------------------------------------------===//

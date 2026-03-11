@@ -61,16 +61,19 @@ hir.call @foo(%int_type) : (%int_type) -> (%int_type)
 hir.call @foo(%int_type, %c42_int) : (%int_type, %int_type) -> (%int_type, %int_type)
 
 // Test HIR function operations with symbol visibility
-hir.func @public_visibility1() -> () {}
-hir.func public @public_visibility2() -> () {}
-hir.func private @private_visibility() -> () {}
-hir.func nested @nested_visibility() -> () {}
+hir.func @public_visibility1() -> () { hir.signature () -> () } { hir.return : () -> () }
+hir.func public @public_visibility2() -> () { hir.signature () -> () } { hir.return : () -> () }
+hir.func private @private_visibility() -> () { hir.signature () -> () } { hir.return : () -> () }
+hir.func nested @nested_visibility() -> () { hir.signature () -> () } { hir.return : () -> () }
 
 // Test isModule attribute on func
-hir.func @FuncWithIsModule() -> () attributes {isModule} {}
+hir.func @FuncWithIsModule() -> () attributes {isModule} { hir.signature () -> () } { hir.return : () -> () }
 
 // Test return with operands
 hir.func @ReturnWithOperands() -> (result) {
+  %t = hir.int_type
+  hir.signature () -> (%t)
+} {
   %t = hir.int_type
   %0 = hir.constant_int 42 : %t
   hir.return %0 : () -> (%t)

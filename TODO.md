@@ -1,5 +1,9 @@
 # TODO
 
+- `resolveTypeIntoRegion` in SplitPhases cannot handle return type operands that transitively depend on non-entry-block values (e.g., phi block args from if/else merges).
+  The `in_range` example in `docs/examples/basics/operators.md` triggers this (tagged `silicon-todo` to skip doc testing).
+  This requires thorough investigation.
+
 ## Dialect Review: Missing Error Handling
 
 - **SplitPhases: silent skip when `calleeSplitFunc` is null.**
@@ -15,6 +19,7 @@
 ### Verifier error tests (`errors.mlir`)
 
 - **HIR**: missing tests for `SplitFuncOp` array-size mismatches, `MultiphaseFuncOp` `argIsFirst` size mismatch, `ReturnOp` `values`/`typeOfValues` size mismatch, `SignatureOp` outside valid parent, `NextPhaseOp` outside `hir.func`
+
 ### Pass error tests
 
 - **HIRToMIR**: remaining untested `emitBug` paths (non-constant uint width, excessive uint width, non-constant func_type args/results, non-constant call result type, return op typeOfArgs/typeOfValues mismatch between multiple returns); most are guarded by `shouldLower` and hard to trigger from IR

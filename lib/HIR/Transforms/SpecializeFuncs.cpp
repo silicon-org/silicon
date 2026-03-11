@@ -72,44 +72,58 @@ struct SpecializeFuncsPass
 /// opaque_unpack consuming the context arg.
 void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
                                               base::OpaqueAttr opaqueAttr) {
-  auto &block = func.getBody().front();
-  auto ctxArg = block.getArgument(block.getNumArguments() - 1);
+  // # Expand opaque context in both body and signature regions
+  //
+  // The body region gets the opaque unpacked into individual mir_constant ops
+  // (or a single mir_constant if no opaque_unpack exists). The signature region
+  // similarly has its own block args and may reference the context arg through
+  // opaque_unpack; we must replace those uses before erasing the arg.
 
-  // Find the opaque_unpack consuming the context arg directly.
-  hir::OpaqueUnpackOp unpackOp;
-  for (auto *user : ctxArg.getUsers()) {
-    if (auto u = dyn_cast<hir::OpaqueUnpackOp>(user)) {
-      unpackOp = u;
-      break;
+  auto expandInBlock = [&](Block &block) {
+    auto ctxArg = block.getArgument(block.getNumArguments() - 1);
+
+    // Find the opaque_unpack consuming the context arg directly.
+    hir::OpaqueUnpackOp unpackOp;
+    for (auto *user : ctxArg.getUsers()) {
+      if (auto u = dyn_cast<hir::OpaqueUnpackOp>(user)) {
+        unpackOp = u;
+        break;
+      }
     }
-  }
 
-  if (!unpackOp) {
-    LLVM_DEBUG(llvm::dbgs() << "  No opaque_unpack found, inserting "
-                               "hir.mir_constant and relying on "
-                               "canonicalization\n");
-    // Insert a mir_constant for the whole opaque and let canonicalization
-    // handle the unpack expansion.
-    OpBuilder builder(&block, block.begin());
-    auto constOp = hir::MIRConstantOp::create(builder, ctxArg.getLoc(),
-                                              cast<TypedAttr>(opaqueAttr));
-    ctxArg.replaceAllUsesWith(constOp.getResult());
-  } else {
-    // Replace each unpack result with an individual mir_constant.
-    OpBuilder builder(unpackOp);
-    for (auto [result, elem] :
-         llvm::zip(unpackOp.getResults(), opaqueAttr.getElements())) {
-      auto constOp = hir::MIRConstantOp::create(builder, unpackOp.getLoc(),
-                                                cast<TypedAttr>(elem));
-      result.replaceAllUsesWith(constOp.getResult());
+    if (!unpackOp) {
+      // Replace all uses of the context arg. In the body this inserts a
+      // mir_constant; in the signature the arg might simply be unused after
+      // we drop it from the signature op's typeOfArgs.
+      if (!ctxArg.use_empty()) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  No opaque_unpack found, inserting "
+                      "hir.mir_constant and relying on canonicalization\n");
+        OpBuilder builder(&block, block.begin());
+        auto constOp = hir::MIRConstantOp::create(builder, ctxArg.getLoc(),
+                                                  cast<TypedAttr>(opaqueAttr));
+        ctxArg.replaceAllUsesWith(constOp.getResult());
+      }
+    } else {
+      // Replace each unpack result with an individual mir_constant.
+      OpBuilder builder(unpackOp);
+      for (auto [result, elem] :
+           llvm::zip(unpackOp.getResults(), opaqueAttr.getElements())) {
+        auto constOp = hir::MIRConstantOp::create(builder, unpackOp.getLoc(),
+                                                  cast<TypedAttr>(elem));
+        result.replaceAllUsesWith(constOp.getResult());
+      }
+      unpackOp.erase();
     }
-    unpackOp.erase();
-  }
 
-  // Erase the context block arg.
-  block.eraseArgument(block.getNumArguments() - 1);
+    block.eraseArgument(block.getNumArguments() - 1);
+  };
+
+  expandInBlock(func.getBody().front());
+  expandInBlock(func.getSignature().front());
 
   // Drop the last typeOfArgs entry on the return op to match.
+  auto &block = func.getBody().front();
   if (auto returnOp = dyn_cast<hir::ReturnOp>(block.getTerminator())) {
     auto args = returnOp.getTypeOfArgs();
     if (!args.empty()) {
@@ -117,6 +131,11 @@ void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
       returnOp.getTypeOfArgsMutable().assign(newArgTypes);
     }
   }
+
+  // Drop the last typeOfArgs entry from the signature op.
+  auto sigOp = func.getSignatureOp();
+  SmallVector<Value> newSigArgTypes(sigOp.getTypeOfArgs().drop_back());
+  sigOp.getTypeOfArgsMutable().assign(newSigArgTypes);
 
   // Update argNames to match.
   SmallVector<Attribute> newArgNames(func.getArgNames().begin(),
@@ -563,12 +582,33 @@ void SpecializeFuncsPass::runOnOperation() {
     LLVM_DEBUG(llvm::dbgs() << "Stripping unused opaque arg from @"
                             << func.getSymName() << "\n");
 
-    // Erase the block arg.
+    // Erase the block arg from both body and signature regions. The body
+    // arg is already confirmed use-empty. The signature arg may still have
+    // users (e.g., opaque_unpack) that we need to erase first.
     block.eraseArgument(block.getNumArguments() - 1);
+    auto &sigBlock = func.getSignature().front();
+    if (sigBlock.getNumArguments() > 0) {
+      auto sigCtxArg = sigBlock.getArgument(sigBlock.getNumArguments() - 1);
+      // Erase ops in the signature that use this arg (in reverse order to
+      // handle use-def chains).
+      SmallVector<Operation *> opsToErase;
+      for (auto *user : sigCtxArg.getUsers())
+        opsToErase.push_back(user);
+      for (auto *op : llvm::reverse(opsToErase)) {
+        op->dropAllUses();
+        op->erase();
+      }
+      sigBlock.eraseArgument(sigBlock.getNumArguments() - 1);
+    }
 
-    // Drop the last typeOfArgs entry.
+    // Drop the last typeOfArgs entry from the return op.
     SmallVector<Value> newArgTypes(typeOfArgs.drop_back());
     retOp.getTypeOfArgsMutable().assign(newArgTypes);
+
+    // Drop the last typeOfArgs entry from the signature op.
+    auto sigOp = func.getSignatureOp();
+    SmallVector<Value> newSigArgTypes(sigOp.getTypeOfArgs().drop_back());
+    sigOp.getTypeOfArgsMutable().assign(newSigArgTypes);
 
     // Update argNames on the function.
     SmallVector<Attribute> newArgNames(func.getArgNames().begin(),

@@ -8,6 +8,10 @@
 // expected-error @below {{compiler bug: cycle detected during transitive specialization of @CycleA}}
 // expected-note @below {{on line}}
 hir.func private @CycleA(%x, %ctx) -> (result) {
+  %0 = hir.opaque_type
+  %1 = hir.opaque_type
+  hir.signature (%0, %1) -> (%0)
+} {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %opaque = hir.mir_constant #si.opaque<[#si.int<1>]> : !si.opaque
   %1 = hir.call @CycleB(%x, %opaque) : (%0, %0) -> (%0)
@@ -16,6 +20,10 @@ hir.func private @CycleA(%x, %ctx) -> (result) {
 }
 
 hir.func private @CycleB(%x, %ctx) -> (result) {
+  %0 = hir.opaque_type
+  %1 = hir.opaque_type
+  hir.signature (%0, %1) -> (%0)
+} {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %opaque = hir.mir_constant #si.opaque<[#si.int<2>]> : !si.opaque
   %1 = hir.call @CycleA(%x, %opaque) : (%0, %0) -> (%0)
@@ -24,6 +32,10 @@ hir.func private @CycleB(%x, %ctx) -> (result) {
 }
 
 hir.func private @CycleCaller.0b(%x, %ctx) -> (result) {
+  %0 = hir.opaque_type
+  %1 = hir.opaque_type
+  hir.signature (%0, %1) -> (%0)
+} {
   %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %opaque = hir.mir_constant #si.opaque<[#si.int<99>]> : !si.opaque
   %2 = hir.call @CycleA(%x, %opaque) : (%0, %0) -> (%0)

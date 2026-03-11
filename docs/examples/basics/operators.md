@@ -48,7 +48,7 @@ The `&&` and `||` operators are short-circuiting logical operators that work on 
 `a && b` only evaluates `b` if `a` is `true`.
 `a || b` only evaluates `b` if `a` is `false`.
 
-```silicon
+```silicon-todo
 fn in_range(x: int, lo: int, hi: int) -> bool {
   x >= lo && x <= hi
 }

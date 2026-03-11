@@ -36,7 +36,8 @@ hir.unified_func @Identity(%T: -1, %x: 0) -> (result: 0) {
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: hir.func private @SinglePhase.0() -> ()
-// CHECK-NEXT: func.call @dummyA
+// CHECK:      hir.signature () -> ()
+// CHECK:      func.call @dummyA
 // CHECK-NEXT: hir.return : () -> ()
 
 // CHECK-NOT: hir.unified_func
@@ -55,12 +56,12 @@ hir.unified_func @SinglePhase() -> () {
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: hir.func private @TwoUnrelatedPhases.0a() -> (ctx)
-// CHECK-NEXT: func.call @dummyA
+// CHECK:      func.call @dummyA
 // CHECK:      hir.opaque_pack()
 // CHECK:      hir.return {{.*}} : () -> ({{.*}})
 
 // CHECK-LABEL: hir.func private @TwoUnrelatedPhases.0b(%ctx) -> ()
-// CHECK-NEXT: hir.opaque_unpack %ctx
+// CHECK:      hir.opaque_unpack %ctx
 // CHECK:      func.call @dummyB
 // CHECK:      hir.return : ({{.*}}) -> ()
 
@@ -134,7 +135,7 @@ hir.unified_func @ValueUseAcrossPhases() -> () {
 // CHECK:      hir.return [[PACK]] : (%0) -> ([[OT]])
 
 // CHECK-LABEL: hir.func private @ConstArg.1(%b, %ctx) -> (result)
-// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:      [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
 // CHECK:      [[INT:%.+]] = hir.int_type
 // CHECK:      [[B0:%.+]] = hir.coerce_type %b, [[INT]]
 // CHECK:      [[R:%.+]] = hir.add {{.*}}, [[B0]] :
@@ -173,7 +174,7 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      hir.return [[PACK]] : (%0) -> ([[OT]])
 
 // CHECK-LABEL: hir.func private @ConstArgPassThrough.1(%b, %ctx) -> (result)
-// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:      [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
 // CHECK:      [[INT:%.+]] = hir.int_type
 // CHECK:      [[B0:%.+]] = hir.coerce_type %b, [[INT]]
 // CHECK:      hir.return {{.*}} : ([[INT]], {{.*}}) -> ({{.*}})
@@ -208,7 +209,7 @@ hir.unified_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      hir.return [[PACK]] : (%0) -> ([[OT]])
 
 // CHECK-LABEL: hir.func private @ThreePhase.1(%b, %ctx) -> (ctx)
-// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:      [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
 // CHECK:      [[INT:%.+]] = hir.int_type
 // CHECK:      [[B0:%.+]] = hir.coerce_type %b, [[INT]]
 // CHECK:      [[TMP:%.+]] = hir.add {{.*}}, [[B0]] :
@@ -217,7 +218,7 @@ hir.unified_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      hir.return [[PACK]] : ([[INT]], {{.*}}) -> ([[OT]])
 
 // CHECK-LABEL: hir.func private @ThreePhase.2(%c, %ctx) -> (result)
-// CHECK-NEXT: [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:      [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
 // CHECK:      [[INT:%.+]] = hir.int_type
 // CHECK:      [[C0:%.+]] = hir.coerce_type %c, [[INT]]
 // CHECK:      [[RES:%.+]] = hir.add {{.*}}, [[C0]] :
@@ -382,6 +383,10 @@ hir.unified_func @LeadingExternal(%a: -2, %c: 0) -> (result: 0) {
 // CHECK:         hir.opaque_pack
 // CHECK:         hir.return {{.*}} : ({{.*}}) -> ({{.*}})
 hir.func private @PreSplit.0(%a) -> (ctx) {
+  %t0 = hir.int_type
+  %t1 = hir.opaque_type
+  hir.signature (%t0) -> (%t1)
+} {
   %0 = hir.int_type
   %1 = hir.coerce_type %a, %0
   %2 = hir.type_of %1
@@ -396,6 +401,11 @@ hir.func private @PreSplit.0(%a) -> (ctx) {
 // CHECK:         hir.add
 // CHECK:         hir.return {{.*}} : ({{.*}}) -> ({{.*}})
 hir.func private @PreSplit.1(%b, %ctx) -> (result) {
+  %t0 = hir.int_type
+  %t1 = hir.opaque_type
+  %t2 = hir.int_type
+  hir.signature (%t0, %t1) -> (%t2)
+} {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.int_type
   %2 = hir.coerce_type %b, %1
@@ -461,6 +471,8 @@ hir.unified_func public @PublicVis() -> () {
 // CHECK:      hir.return [[PACK]] : (%0) -> ([[OT]])
 
 // CHECK-LABEL: hir.func private @DynReturn.1(%ctx) -> (result)
+// CHECK:      hir.signature
+// CHECK:      } {
 // CHECK:      [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
 // CHECK:      [[CTXTY2:%.+]] = hir.opaque_type
 // CHECK:      hir.return [[UNPACK]]#0 : ([[CTXTY2]]) -> ([[UNPACK]]#1)

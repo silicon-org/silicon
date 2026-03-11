@@ -9,6 +9,9 @@
 // expected-error @below {{phase evaluation did not converge after 1 iterations}}
 module {
   hir.func private @add42.0a() -> (ctx) {
+    %0 = hir.opaque_type
+    hir.signature () -> (%0)
+  } {
     %0 = hir.int_type
     %1 = hir.constant_int 42 : %0
     %2 = hir.opaque_pack(%0, %1)
@@ -18,6 +21,10 @@ module {
 
   // expected-note @below {{hir.func @add42.0b still present}}
   hir.func private @add42.0b(%x, %ctx) -> (result) {
+    %0 = hir.int_type
+    %1 = hir.opaque_type
+    hir.signature (%0, %1) -> (%0)
+  } {
     %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
     %2 = hir.coerce_type %x, %0
     %3 = hir.add %2, %1 : %0

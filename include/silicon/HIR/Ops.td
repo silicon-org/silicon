@@ -286,10 +286,12 @@ def FuncOp : HIROp<"func", [
     ArrayAttr:$resultNames,
     OptionalAttr<UnitAttr>:$isModule
   );
-  let regions = (region AnyRegion:$body);
+  let regions = (region MinSizedRegion<1>:$signature, MinSizedRegion<1>:$body);
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
+  let hasRegionVerifier = 1;
   let extraClassDeclaration = [{
+    SignatureOp getSignatureOp();
     ReturnOp getReturnOp();
   }];
 }
@@ -423,7 +425,7 @@ def UnifiedCallOp : HIROp<"unified_call", [
 
 def SignatureOp : HIROp<"signature", [
   AttrSizedOperandSegments,
-  ParentOneOf<["UnifiedFuncOp", "SplitFuncOp"]>,
+  ParentOneOf<["FuncOp", "UnifiedFuncOp", "SplitFuncOp"]>,
   Pure,
   Terminator,
 ]> {
@@ -435,6 +437,7 @@ def SignatureOp : HIROp<"signature", [
   let assemblyFormat = [{
     ` ` `(` $typeOfArgs `)` `->` `(` $typeOfResults `)` attr-dict
   }];
+  let hasVerifier = 1;
 }
 
 def SplitFuncOp : HIROp<"split_func", [

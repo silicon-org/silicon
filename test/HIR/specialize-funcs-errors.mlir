@@ -5,6 +5,10 @@
 // pack).
 
 hir.func private @BadCount.0b(%ctx) -> (result) {
+  %0 = hir.opaque_type
+  %1 = hir.opaque_type
+  hir.signature (%0) -> (%1)
+} {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.opaque_type
   hir.return %0 : (%1) -> (%0)
@@ -32,6 +36,10 @@ hir.multiphase_func @BadCount.0() -> (result) [
 // Error: evaluated_func result is not an opaque attribute.
 
 hir.func private @NotOpaque.0b(%ctx) -> (result) {
+  %0 = hir.opaque_type
+  %1 = hir.opaque_type
+  hir.signature (%0) -> (%1)
+} {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.opaque_type
   hir.return %0 : (%1) -> (%0)
