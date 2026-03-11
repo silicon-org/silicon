@@ -103,11 +103,10 @@ LogicalResult Context::convertFnItem(ast::FnItem &item) {
     if (!value)
       return failure();
 
-    // Return the result of the function body. The typeOfArgs is left empty
-    // here; CheckCalls will populate it from the declared signature types.
+    // Return the result of the function body.
     auto valueType = hir::getOrCreateTypeOf(builder, item.loc, value);
     hir::ReturnOp::create(builder, item.loc, ValueRange{value},
-                          ValueRange{valueType}, ValueRange{});
+                          ValueRange{valueType});
   }
 
   return success();

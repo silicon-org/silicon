@@ -324,8 +324,6 @@ static LogicalResult cloneSignatureIntoBody(UnifiedFuncOp funcOp) {
   }
 
   // Unify body return types with the declared return types from the signature.
-  // Also populate typeOfArgs from the declared argument types. Since the
-  // signature ops are now part of the body region, we can use them directly.
   bodyRegion.walk([&](ReturnOp returnOp) {
     OpBuilder builder(returnOp);
 
@@ -345,11 +343,6 @@ static LogicalResult cloneSignatureIntoBody(UnifiedFuncOp funcOp) {
       returnOp.getTypeOfValuesMutable().assign(newTypeOfValues);
     }
 
-    // Populate typeOfArgs from the declared argument types.
-    SmallVector<Value> newTypeOfArgs;
-    for (Value argType : clonedArgTypes)
-      newTypeOfArgs.push_back(argType);
-    returnOp.getTypeOfArgsMutable().assign(newTypeOfArgs);
   });
   return success();
 }

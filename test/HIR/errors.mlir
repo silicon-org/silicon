@@ -9,7 +9,7 @@ hir.unified_func @foo(%a: 0) -> () {
   %0 = hir.int_type
   hir.signature (%0) -> ()
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 // expected-error @below {{has 0 arguments, but @foo expects 1}}
 hir.unified_call @foo() : () -> () () -> () [] -> []
@@ -20,7 +20,7 @@ hir.unified_func @foo() -> (result: 0) {
   %0 = hir.int_type
   hir.signature () -> (%0)
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 // expected-error @below {{has 0 results, but @foo expects 1}}
 hir.unified_call @foo() : () -> () () -> () [] -> []
@@ -38,9 +38,9 @@ hir.unified_func @foo() -> () {
 
 // expected-error @below {{requires `hir.signature` terminator in the signature}}
 hir.unified_func @foo() -> () {
-  hir.return : () -> ()
+  hir.return -> ()
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 
 // -----
@@ -51,7 +51,7 @@ hir.unified_func @foo(%a: 0, %b: -1) -> (result: 0) {
   // expected-error @below {{has 1 argument types but parent function has 2 arguments}}
   hir.signature (%0) -> (%1)
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 
 // -----
@@ -62,7 +62,7 @@ hir.unified_func @foo(%a: 0) -> (x: 0, y: -1) {
   // expected-error @below {{has 1 result types but parent function has 2 results}}
   hir.signature (%0) -> (%1)
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 
 // -----
@@ -72,7 +72,7 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
   %1 = hir.int_type
   hir.signature (%0) -> (%1)
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 %int_type = hir.int_type
 %arg = hir.constant_int 42 : %int_type
@@ -86,7 +86,7 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
   %1 = hir.int_type
   hir.signature (%0) -> (%1)
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 %int_type = hir.int_type
 %arg = hir.constant_int 42 : %int_type
@@ -100,7 +100,7 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
   %1 = hir.int_type
   hir.signature (%0) -> (%1)
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 %int_type = hir.int_type
 %arg = hir.constant_int 42 : %int_type
@@ -114,7 +114,7 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
   %1 = hir.int_type
   hir.signature (%0) -> (%1)
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 %int_type = hir.int_type
 %arg = hir.constant_int 42 : %int_type
@@ -128,7 +128,7 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
   %1 = hir.int_type
   hir.signature (%0) -> (%1)
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 %int_type = hir.int_type
 %arg = hir.constant_int 42 : %int_type
@@ -142,7 +142,7 @@ hir.unified_func @foo(%a: 0) -> (result: 0) {
   %1 = hir.int_type
   hir.signature (%0) -> (%1)
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 %int_type = hir.int_type
 %arg = hir.constant_int 42 : %int_type
@@ -281,5 +281,5 @@ hir.func @return_values_mismatch() -> (a, b) {
   %t = hir.int_type
   %0 = hir.constant_int 42 : %t
   // expected-error @below {{has 1 values but parent function has 2 results}}
-  hir.return %0 : () -> (%t)
+  hir.return %0 -> (%t)
 }

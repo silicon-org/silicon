@@ -4,7 +4,7 @@ hir.func @UntypedArg(%a) -> () {
   // expected-error @below {{'hir.signature' op has 0 argument types but parent function has 1 arguments}}
   hir.signature () -> ()
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 
 // -----
@@ -25,7 +25,7 @@ hir.func @UnifyTypeMismatch() -> (result) {
   // expected-error @below {{failed to legalize operation 'hir.unify'}}
   %ty = hir.unify %int, %unit
   %c0 = hir.constant_int 0 : %ty
-  hir.return %c0 : () -> (%ty)
+  hir.return %c0 -> (%ty)
 }
 
 // -----
@@ -42,7 +42,7 @@ hir.func @NegativeUIntWidth() -> () {
   // expected-note @below {{}}
   // expected-error @below {{failed to legalize operation 'hir.uint_type'}}
   %ty = hir.uint_type %neg
-  hir.return : () -> ()
+  hir.return -> ()
 }
 
 // -----
@@ -62,5 +62,5 @@ hir.func @CoerceTypeMismatch(%a) -> (result) {
   // expected-note @below {{}}
   // expected-error @below {{failed to legalize operation 'hir.coerce_type'}}
   %r = hir.coerce_type %a, %int
-  hir.return %r : (%bool) -> (%int)
+  hir.return %r -> (%int)
 }

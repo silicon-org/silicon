@@ -705,8 +705,7 @@ LogicalResult PhaseSplitter::run() {
     // carries type information.
     builder.setInsertionPointToEnd(&split.funcOp.getBody().back());
     ReturnOp::create(builder, funcOp.getLoc(), split.returnValues,
-                     /*typeOfValues=*/ValueRange{},
-                     /*typeOfArgs=*/ValueRange{});
+                     /*typeOfValues=*/ValueRange{});
 
     // Replace all uses of values from earlier phases with additional block
     // arguments. This will be replaced with constants through function
@@ -822,8 +821,7 @@ LogicalResult PhaseSplitter::run() {
         prevReturnOp.getValues().take_front(prevOwnReturns));
     newReturnValues.push_back(packOp);
     ReturnOp::create(packBuilder, funcOp.getLoc(), newReturnValues,
-                     /*typeOfValues=*/ValueRange{},
-                     /*typeOfArgs=*/ValueRange{});
+                     /*typeOfValues=*/ValueRange{});
     prevReturnOp.erase();
   }
 

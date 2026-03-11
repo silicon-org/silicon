@@ -96,7 +96,7 @@ hir.unified_func @dummy() -> (x: 0, y: 0) {
   %1 = hir.int_type
   hir.signature () -> (%0, %1)
 } {
-  hir.return : () -> ()
+  hir.return -> ()
 }
 
 // CHECK-LABEL: @TypeOfCallResults

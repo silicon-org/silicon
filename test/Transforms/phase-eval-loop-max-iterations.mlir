@@ -16,7 +16,7 @@ module {
     %1 = hir.constant_int 42 : %0
     %2 = hir.opaque_pack(%0, %1)
     %3 = hir.opaque_type
-    hir.return %2 : () -> (%3)
+    hir.return %2 -> (%3)
   }
 
   // expected-note @below {{hir.func @add42.0b still present}}
@@ -29,7 +29,7 @@ module {
     %2 = hir.coerce_type %x, %0
     %3 = hir.add %2, %1 : %0
     %4 = hir.opaque_type
-    hir.return %3 : (%0, %4) -> (%0)
+    hir.return %3 -> (%0)
   }
 
   hir.split_func @add42(%x: 0) -> (result: 0) {

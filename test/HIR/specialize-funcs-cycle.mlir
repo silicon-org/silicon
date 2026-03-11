@@ -16,7 +16,7 @@ hir.func private @CycleA(%x, %ctx) -> (result) {
   %opaque = hir.mir_constant #si.opaque<[#si.int<1>]> : !si.opaque
   %1 = hir.call @CycleB(%x, %opaque) : (%0, %0) -> (%0)
   %2 = hir.opaque_type
-  hir.return %1 : (%0, %2) -> (%0)
+  hir.return %1 -> (%0)
 }
 
 hir.func private @CycleB(%x, %ctx) -> (result) {
@@ -28,7 +28,7 @@ hir.func private @CycleB(%x, %ctx) -> (result) {
   %opaque = hir.mir_constant #si.opaque<[#si.int<2>]> : !si.opaque
   %1 = hir.call @CycleA(%x, %opaque) : (%0, %0) -> (%0)
   %2 = hir.opaque_type
-  hir.return %1 : (%0, %2) -> (%0)
+  hir.return %1 -> (%0)
 }
 
 hir.func private @CycleCaller.0b(%x, %ctx) -> (result) {
@@ -40,7 +40,7 @@ hir.func private @CycleCaller.0b(%x, %ctx) -> (result) {
   %opaque = hir.mir_constant #si.opaque<[#si.int<99>]> : !si.opaque
   %2 = hir.call @CycleA(%x, %opaque) : (%0, %0) -> (%0)
   %3 = hir.opaque_type
-  hir.return %2 : (%0, %3) -> (%0)
+  hir.return %2 -> (%0)
 }
 
 mir.evaluated_func @CycleCaller.0a [#si.opaque<[#si.type<!si.int>, #si.int<5>]> : !si.opaque]

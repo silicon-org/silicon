@@ -13,7 +13,7 @@ module {
   hir.func private @good.0() -> () {
     hir.signature () -> ()
   } {
-    hir.return : () -> ()
+    hir.return -> ()
   }
 
   hir.split_func @good() -> () {
@@ -31,7 +31,7 @@ module {
     %0 = hir.constant_int 0 : %ti
     %1 = hir.coerce_type %0, %T
     %2 = hir.type_of %T
-    hir.return %1 : (%2) -> (%T)
+    hir.return %1 -> (%T)
   }
 
   hir.split_func @stuck(%T: 0) -> (result: 0) {

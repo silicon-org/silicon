@@ -314,21 +314,19 @@ def ReturnOp : HIROp<"return", [
   let summary = "return from an HIR function";
   let description = [{
     Terminates an `hir.func` or `hir.unified_func` body.  Carries the
-    return values alongside optional types (`typeOfValues`) *and* the
-    types of the enclosing function's block arguments (`typeOfArgs`).
+    return values alongside optional type operands (`typeOfValues`).
 
     After `SplitPhases`, per-phase functions use the signature region as
-    the source of truth for types; `typeOfValues` and `typeOfArgs` are
-    empty. In `unified_func` bodies, they are populated by codegen.
+    the source of truth for types; `typeOfValues` is empty.
+    In `unified_func` bodies, it is populated by codegen.
   }];
   let arguments = (ins
     Variadic<HIRAnyType>:$values,
-    Variadic<HIRAnyType>:$typeOfValues,
-    Variadic<HIRAnyType>:$typeOfArgs
+    Variadic<HIRAnyType>:$typeOfValues
   );
   let assemblyFormat = [{
     ($values^)?
-    `:` `(` $typeOfArgs `)` `->` `(` $typeOfValues `)`
+    `->` `(` $typeOfValues `)`
     attr-dict
   }];
   let hasVerifier = 1;

@@ -122,16 +122,6 @@ void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
   expandInBlock(func.getBody().front());
   expandInBlock(func.getSignature().front());
 
-  // Drop the last typeOfArgs entry on the return op to match.
-  auto &block = func.getBody().front();
-  if (auto returnOp = dyn_cast<hir::ReturnOp>(block.getTerminator())) {
-    auto args = returnOp.getTypeOfArgs();
-    if (!args.empty()) {
-      SmallVector<Value> newArgTypes(args.drop_back());
-      returnOp.getTypeOfArgsMutable().assign(newArgTypes);
-    }
-  }
-
   // Drop the last typeOfArgs entry from the signature op.
   auto sigOp = func.getSignatureOp();
   SmallVector<Value> newSigArgTypes(sigOp.getTypeOfArgs().drop_back());
@@ -687,15 +677,6 @@ void SpecializeFuncsPass::runOnOperation() {
         op->erase();
       }
       sigBlock.eraseArgument(sigBlock.getNumArguments() - 1);
-    }
-
-    // Drop the last typeOfArgs entry from the return op (if populated).
-    if (auto retOp = dyn_cast<hir::ReturnOp>(block.getTerminator())) {
-      auto retArgs = retOp.getTypeOfArgs();
-      if (!retArgs.empty()) {
-        SmallVector<Value> newArgTypes(retArgs.drop_back());
-        retOp.getTypeOfArgsMutable().assign(newArgTypes);
-      }
     }
 
     // Drop the last typeOfArgs entry from the signature op.
