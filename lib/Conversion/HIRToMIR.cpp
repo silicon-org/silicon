@@ -607,7 +607,9 @@ public:
     auto &entryBlock = func.getBody().front();
 
     // Read types from the signature region, which is the source of truth.
-    auto sigOp = func.getSignatureOp();
+    hir::consolidateSignatureTerminators(func.getSignature());
+    auto sigOp =
+        cast<hir::SignatureOp>(func.getSignature().back().getTerminator());
     SmallVector<Type> argTypes;
     for (auto typeVal : sigOp.getTypeOfArgs())
       argTypes.push_back(resolveHIRType(typeVal));

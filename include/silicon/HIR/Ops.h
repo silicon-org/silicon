@@ -35,6 +35,12 @@ inline bool isEffectivelyPure(mlir::Operation *op) {
   return mlir::isMemoryEffectFree(op) || mlir::isa<InferrableOp>(op);
 }
 
+/// Ensure there is exactly one `SignatureOp` terminator in the signature
+/// region. If multiple terminators exist, they are consolidated into a single
+/// exit block whose block arguments carry the typeOfArgs and typeOfResults
+/// values.
+void consolidateSignatureTerminators(mlir::Region &sig);
+
 /// Try to extract the type of a value as an SSA value by inspecting its
 /// defining op. Returns nullptr if the type cannot be determined without
 /// creating a new op.

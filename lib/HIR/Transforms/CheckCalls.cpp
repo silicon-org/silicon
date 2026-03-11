@@ -132,60 +132,6 @@ void CheckCallsPass::runOnOperation() {
     signalPassFailure();
 }
 
-/// Ensure there is exactly one `SignatureOp` terminator in the cloned
-/// signature region. If multiple terminators exist, they are consolidated into
-/// a single exit block whose block arguments carry the typeOfArgs and
-/// typeOfResults values.
-static void consolidateSignatureTerminators(Region &clonedSig) {
-  SmallVector<SignatureOp> sigTerminators;
-  for (auto &block : clonedSig)
-    if (auto sigOp = dyn_cast<SignatureOp>(block.getTerminator()))
-      sigTerminators.push_back(sigOp);
-  if (sigTerminators.size() <= 1)
-    return;
-
-  auto firstSigOp = sigTerminators.front();
-  unsigned numArgTypes = firstSigOp.getTypeOfArgs().size();
-  unsigned numResultTypes = firstSigOp.getTypeOfResults().size();
-
-  // Create the exit block with one block arg per typeOfArgs + typeOfResults.
-  auto *exitBlock = new Block();
-  clonedSig.push_back(exitBlock);
-  SmallVector<Type> blockArgTypes;
-  SmallVector<Location> blockArgLocs;
-  for (unsigned i = 0; i < numArgTypes; ++i) {
-    blockArgTypes.push_back(firstSigOp.getTypeOfArgs()[i].getType());
-    blockArgLocs.push_back(firstSigOp.getTypeOfArgs()[i].getLoc());
-  }
-  for (unsigned i = 0; i < numResultTypes; ++i) {
-    blockArgTypes.push_back(firstSigOp.getTypeOfResults()[i].getType());
-    blockArgLocs.push_back(firstSigOp.getTypeOfResults()[i].getLoc());
-  }
-  exitBlock->addArguments(blockArgTypes, blockArgLocs);
-
-  // Create the consolidated signature terminator in the exit block.
-  OpBuilder exitBuilder(firstSigOp->getContext());
-  exitBuilder.setInsertionPointToStart(exitBlock);
-  auto exitArgTypes = exitBlock->getArguments().take_front(numArgTypes);
-  auto exitResultTypes = exitBlock->getArguments().drop_front(numArgTypes);
-  SignatureOp::create(exitBuilder, firstSigOp.getLoc(),
-                      SmallVector<Value>(exitArgTypes),
-                      SmallVector<Value>(exitResultTypes));
-
-  // Replace each original terminator with a branch to the exit block.
-  for (auto sigOp : sigTerminators) {
-    OpBuilder builder(firstSigOp->getContext());
-    builder.setInsertionPoint(sigOp);
-    SmallVector<Value> branchArgs;
-    branchArgs.append(sigOp.getTypeOfArgs().begin(),
-                      sigOp.getTypeOfArgs().end());
-    branchArgs.append(sigOp.getTypeOfResults().begin(),
-                      sigOp.getTypeOfResults().end());
-    cf::BranchOp::create(builder, sigOp.getLoc(), exitBlock, branchArgs);
-    sigOp.erase();
-  }
-}
-
 /// Clone the signature region's blocks into the body region and wire up
 /// coerce_type and return type operands.
 ///

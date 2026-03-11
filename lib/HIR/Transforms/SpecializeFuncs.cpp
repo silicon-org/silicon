@@ -123,7 +123,9 @@ void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
   expandInBlock(func.getSignature().front());
 
   // Drop the last typeOfArgs entry from the signature op.
-  auto sigOp = func.getSignatureOp();
+  hir::consolidateSignatureTerminators(func.getSignature());
+  auto sigOp =
+      cast<hir::SignatureOp>(func.getSignature().back().getTerminator());
   SmallVector<Value> newSigArgTypes(sigOp.getTypeOfArgs().drop_back());
   sigOp.getTypeOfArgsMutable().assign(newSigArgTypes);
 
@@ -142,7 +144,7 @@ void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
   // entries in the signature with the actual type ops (cloned into the
   // signature region).
 
-  sigOp = func.getSignatureOp();
+  sigOp = cast<hir::SignatureOp>(func.getSignature().back().getTerminator());
   auto &bodyBlock = func.getBody().front();
 
   // Build a map from body block arg index to the type value from coerce_type.
@@ -623,7 +625,9 @@ void SpecializeFuncsPass::runOnOperation() {
       continue;
 
     // Check if the corresponding signature typeOfArgs entry is opaque_type.
-    auto sigOp = func.getSignatureOp();
+    hir::consolidateSignatureTerminators(func.getSignature());
+    auto sigOp =
+        cast<hir::SignatureOp>(func.getSignature().back().getTerminator());
     auto sigTypeOfArgs = sigOp.getTypeOfArgs();
     if (sigTypeOfArgs.size() != block.getNumArguments())
       continue;

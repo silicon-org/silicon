@@ -131,7 +131,10 @@ LogicalResult PhaseSplitter::run() {
   // use the call's result phase attribute to determine the actual phase, since
   // the phase analysis assigns all unified_call results to the call op's own
   // phase without considering callee-relative result shifts (e.g., `dyn fn`).
-  auto returnOp = funcOp.getReturnOp();
+  SmallVector<ReturnOp> allReturns;
+  funcOp.getBody().walk([&](ReturnOp r) { allReturns.push_back(r); });
+  assert(!allReturns.empty() && "unified_func must have at least one return");
+  auto returnOp = allReturns.front();
   auto declaredResultPhases = funcOp.getResultPhases();
   SmallVector<int16_t> effectiveResultPhases;
   bool hasReturnPhaseMismatch = false;
@@ -173,16 +176,14 @@ LogicalResult PhaseSplitter::run() {
   // Earlier-phase results get factored out before the split point, so they
   // must be the same SSA value in every return. (Trivially satisfied for
   // single-return functions.)
-  SmallVector<ReturnOp> returnOps;
-  funcOp.getBody().walk([&](ReturnOp r) { returnOps.push_back(r); });
-  if (returnOps.size() > 1) {
+  if (allReturns.size() > 1) {
     for (auto [idx, phase] : llvm::enumerate(effectiveResultPhases)) {
       if (phase >= 0)
         continue;
-      Value firstVal = returnOps[0].getValues()[idx];
-      for (unsigned i = 1; i < returnOps.size(); ++i) {
-        if (returnOps[i].getValues()[idx] != firstVal) {
-          emitError(returnOps[i].getLoc())
+      Value firstVal = allReturns[0].getValues()[idx];
+      for (unsigned i = 1; i < allReturns.size(); ++i) {
+        if (allReturns[i].getValues()[idx] != firstVal) {
+          emitError(allReturns[i].getLoc())
               << "earlier-phase result at position " << idx
               << " differs across returns; all returns must produce the "
                  "same value for const results";
@@ -807,22 +808,26 @@ LogicalResult PhaseSplitter::run() {
     // In the previous phase: replace trailing context return values with a
     // single opaque_pack.
     auto &prevSplit = splits[phase - 1 - minPhase];
-    auto prevReturnOp =
-        cast<ReturnOp>(prevSplit.funcOp.getBody().back().getTerminator());
     unsigned prevOwnReturns = numOwnReturns[phase - 1 - minPhase];
 
-    OpBuilder packBuilder(prevReturnOp);
-    SmallVector<Value> contextValues(
-        prevReturnOp.getValues().drop_front(prevOwnReturns));
-    auto packOp =
-        OpaquePackOp::create(packBuilder, funcOp.getLoc(), contextValues);
+    // Pack context values in each return of the previous phase function.
+    SmallVector<ReturnOp> prevReturns;
+    prevSplit.funcOp.getBody().walk(
+        [&](ReturnOp r) { prevReturns.push_back(r); });
+    for (auto prevReturnOp : prevReturns) {
+      OpBuilder packBuilder(prevReturnOp);
+      SmallVector<Value> contextValues(
+          prevReturnOp.getValues().drop_front(prevOwnReturns));
+      auto packOp =
+          OpaquePackOp::create(packBuilder, funcOp.getLoc(), contextValues);
 
-    SmallVector<Value> newReturnValues(
-        prevReturnOp.getValues().take_front(prevOwnReturns));
-    newReturnValues.push_back(packOp);
-    ReturnOp::create(packBuilder, funcOp.getLoc(), newReturnValues,
-                     /*typeOfValues=*/ValueRange{});
-    prevReturnOp.erase();
+      SmallVector<Value> newReturnValues(
+          prevReturnOp.getValues().take_front(prevOwnReturns));
+      newReturnValues.push_back(packOp);
+      ReturnOp::create(packBuilder, funcOp.getLoc(), newReturnValues,
+                       /*typeOfValues=*/ValueRange{});
+      prevReturnOp.erase();
+    }
   }
 
   //===--------------------------------------------------------------------===//
@@ -853,7 +858,12 @@ LogicalResult PhaseSplitter::run() {
     // Build resultNames: the phase matching the result phases gets the unified
     // func's result names; context returns get "ctx".
     SmallVector<Attribute> phaseResultNames;
-    if (auto retOp = split.funcOp.getReturnOp()) {
+    ReturnOp firstRetOp;
+    split.funcOp.getBody().walk([&](ReturnOp r) {
+      if (!firstRetOp)
+        firstRetOp = r;
+    });
+    if (firstRetOp) {
       unsigned ownReturns = numOwnReturns[phase - minPhase];
       // Check if this phase has user-visible results.
       for (auto [name, resultPhase] :
@@ -861,7 +871,7 @@ LogicalResult PhaseSplitter::run() {
         if (resultPhase == phase)
           phaseResultNames.push_back(name);
       }
-      if (retOp.getValues().size() > ownReturns)
+      if (firstRetOp.getValues().size() > ownReturns)
         phaseResultNames.push_back(builder.getStringAttr("ctx"));
     }
     split.funcOp.setResultNamesAttr(builder.getArrayAttr(phaseResultNames));
@@ -870,7 +880,9 @@ LogicalResult PhaseSplitter::run() {
     // Partition type operands by phase using argPhases and
     // effectiveResultPhases.
     {
-      auto unifiedSigOp = funcOp.getSignatureOp();
+      hir::consolidateSignatureTerminators(funcOp.getSignature());
+      auto unifiedSigOp = cast<hir::SignatureOp>(
+          funcOp.getSignature().back().getTerminator());
       auto unifiedArgPhases = funcOp.getArgPhases();
       auto &unifiedSigBlock = funcOp.getSignature().front();
       auto &sigBlock = split.funcOp.getSignature().front();
@@ -925,8 +937,13 @@ LogicalResult PhaseSplitter::run() {
       }
 
       // Context result gets opaque type.
-      if (auto retOp = split.funcOp.getReturnOp())
-        if (retOp.getValues().size() > sigResultTypes.size())
+      ReturnOp splitRetOp;
+      split.funcOp.getBody().walk([&](ReturnOp r) {
+        if (!splitRetOp)
+          splitRetOp = r;
+      });
+      if (splitRetOp)
+        if (splitRetOp.getValues().size() > sigResultTypes.size())
           sigResultTypes.push_back(
               OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult());
 

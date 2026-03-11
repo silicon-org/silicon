@@ -296,10 +296,6 @@ def FuncOp : HIROp<"func", [
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
   let hasRegionVerifier = 1;
-  let extraClassDeclaration = [{
-    SignatureOp getSignatureOp();
-    ReturnOp getReturnOp();
-  }];
 }
 
 def ReturnOp : HIROp<"return", [
@@ -394,10 +390,6 @@ def UnifiedFuncOp : HIROp<"unified_func", [
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
   let hasRegionVerifier = 1;
-  let extraClassDeclaration = [{
-    SignatureOp getSignatureOp();
-    ReturnOp getReturnOp();
-  }];
 }
 
 def UnifiedCallOp : HIROp<"unified_call", [
@@ -473,9 +465,6 @@ def SplitFuncOp : HIROp<"split_func", [
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
   let hasRegionVerifier = 1;
-  let extraClassDeclaration = [{
-    SignatureOp getSignatureOp();
-  }];
 }
 
 def MultiphaseFuncOp : HIROp<"multiphase_func", [

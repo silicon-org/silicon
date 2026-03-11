@@ -96,9 +96,6 @@ def FuncOp : MIROp<"func", [
   let regions = (region AnyRegion:$body);
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
-  let extraClassDeclaration = [{
-    ReturnOp getReturnOp();
-  }];
 }
 
 def BoolToI1Op : MIROp<"bool_to_i1", [Pure]> {

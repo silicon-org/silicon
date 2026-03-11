@@ -405,12 +405,6 @@ LogicalResult ReturnOp::verify() {
   return success();
 }
 
-ReturnOp FuncOp::getReturnOp() {
-  if (getBody().empty())
-    return {};
-  return dyn_cast<ReturnOp>(getBody().back().getTerminator());
-}
-
 //===----------------------------------------------------------------------===//
 // OpaqueUnpackOp
 //===----------------------------------------------------------------------===//
