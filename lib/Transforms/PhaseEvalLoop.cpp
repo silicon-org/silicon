@@ -98,14 +98,15 @@ void PhaseEvalLoopPass::runOnOperation() {
         }
       } else if (auto func = dyn_cast<hir::FuncOp>(op)) {
         // Only count HIR funcs that are actually lowerable: no
-        // opaque_unpack ops, no opaque_type in typeOfArgs, and no calls
-        // to MultiphaseFuncOp symbols (all indicate unresolved state).
+        // opaque_unpack ops, no opaque_type in signature typeOfArgs, and
+        // no calls to MultiphaseFuncOp symbols (all indicate unresolved
+        // state).
         bool blocked = false;
         func.walk([&](Operation *inner) {
           if (isa<hir::OpaqueUnpackOp>(inner))
             blocked = true;
-          if (auto ret = dyn_cast<hir::ReturnOp>(inner))
-            for (auto val : ret.getTypeOfArgs())
+          if (auto sig = dyn_cast<hir::SignatureOp>(inner))
+            for (auto val : sig.getTypeOfArgs())
               if (val.getDefiningOp<hir::OpaqueTypeOp>())
                 blocked = true;
           if (auto call = dyn_cast<hir::CallOp>(inner)) {
@@ -191,8 +192,8 @@ void PhaseEvalLoopPass::runOnOperation() {
         func.walk([&](Operation *inner) {
           if (isa<hir::OpaqueUnpackOp>(inner))
             blocked = true;
-          if (auto ret = dyn_cast<hir::ReturnOp>(inner))
-            for (auto val : ret.getTypeOfArgs())
+          if (auto sig = dyn_cast<hir::SignatureOp>(inner))
+            for (auto val : sig.getTypeOfArgs())
               if (val.getDefiningOp<hir::OpaqueTypeOp>())
                 blocked = true;
           if (auto call = dyn_cast<hir::CallOp>(inner)) {

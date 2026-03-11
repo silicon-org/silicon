@@ -143,6 +143,96 @@ void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
   if (!newArgNames.empty())
     newArgNames.pop_back();
   func.setArgNamesAttr(ArrayAttr::get(func.getContext(), newArgNames));
+
+  // # Resolve remaining opaque_type entries in the signature
+  //
+  // After expanding the opaque context, the body may have coerce_type ops that
+  // tell us the actual type of each block arg (e.g., `coerce_type %x, %type`
+  // where %type is now a mir_constant). Use these to replace opaque_type
+  // entries in the signature with the actual type ops (cloned into the
+  // signature region).
+
+  sigOp = func.getSignatureOp();
+  auto &bodyBlock = func.getBody().front();
+
+  // Build a map from body block arg index to the type value from coerce_type.
+  SmallVector<Value> argTypeFromBody(bodyBlock.getNumArguments(), Value());
+  for (auto arg : bodyBlock.getArguments()) {
+    for (auto *user : arg.getUsers()) {
+      if (auto coerce = dyn_cast<hir::CoerceTypeOp>(user)) {
+        if (coerce.getInput() == arg) {
+          argTypeFromBody[arg.getArgNumber()] = coerce.getTypeOperand();
+          break;
+        }
+      }
+    }
+  }
+
+  // Build a map from return value to the type value from coerce_type (for
+  // resolving opaque_type in typeOfResults).
+  SmallVector<Value> resultTypeFromBody;
+  if (auto retOp = dyn_cast<hir::ReturnOp>(bodyBlock.getTerminator())) {
+    for (auto val : retOp.getValues()) {
+      Value typeVal;
+      if (auto coerce = val.getDefiningOp<hir::CoerceTypeOp>())
+        typeVal = coerce.getTypeOperand();
+      resultTypeFromBody.push_back(typeVal);
+    }
+  }
+
+  // Replace opaque_type entries in typeOfArgs/typeOfResults with cloned type
+  // ops. Collect dead opaque_type ops for deferred erasure, since a single
+  // opaque_type may be shared across multiple signature entries.
+  SmallVector<Operation *> deadOps;
+
+  auto cloneTypeIntoSig = [&](Value bodyTypeVal) -> Value {
+    auto *typeDefOp = bodyTypeVal.getDefiningOp();
+    if (!typeDefOp)
+      return {};
+    OpBuilder sigBuilder(sigOp);
+    IRMapping mapping;
+    auto *cloned = sigBuilder.clone(*typeDefOp, mapping);
+    return cloned->getResult(cast<OpResult>(bodyTypeVal).getResultNumber());
+  };
+
+  bool sigChanged = false;
+  SmallVector<Value> newTypeOfArgs(sigOp.getTypeOfArgs());
+  for (unsigned i = 0; i < newTypeOfArgs.size(); ++i) {
+    auto opaqueOp = newTypeOfArgs[i].getDefiningOp<hir::OpaqueTypeOp>();
+    if (!opaqueOp)
+      continue;
+    if (i >= argTypeFromBody.size() || !argTypeFromBody[i])
+      continue;
+    if (auto cloned = cloneTypeIntoSig(argTypeFromBody[i])) {
+      newTypeOfArgs[i] = cloned;
+      deadOps.push_back(opaqueOp.getOperation());
+      sigChanged = true;
+    }
+  }
+  if (sigChanged)
+    sigOp.getTypeOfArgsMutable().assign(newTypeOfArgs);
+
+  sigChanged = false;
+  SmallVector<Value> newTypeOfResults(sigOp.getTypeOfResults());
+  for (unsigned i = 0; i < newTypeOfResults.size(); ++i) {
+    auto opaqueOpRes = newTypeOfResults[i].getDefiningOp<hir::OpaqueTypeOp>();
+    if (!opaqueOpRes)
+      continue;
+    if (i >= resultTypeFromBody.size() || !resultTypeFromBody[i])
+      continue;
+    if (auto cloned = cloneTypeIntoSig(resultTypeFromBody[i])) {
+      newTypeOfResults[i] = cloned;
+      deadOps.push_back(opaqueOpRes.getOperation());
+      sigChanged = true;
+    }
+  }
+  if (sigChanged)
+    sigOp.getTypeOfResultsMutable().assign(newTypeOfResults);
+
+  // Erase dead opaque_type ops only if they have no remaining uses.
+  for (auto *op : deadOps)
+    if (op->use_empty())
+      op->erase();
 }
 
 /// Walk the function body for hir.call ops that pass hir.mir_constant opaque
@@ -542,15 +632,13 @@ void SpecializeFuncsPass::runOnOperation() {
     if (!lastArg.use_empty())
       continue;
 
-    // Check if the corresponding typeOfArgs entry is opaque_type.
-    auto retOp = dyn_cast<hir::ReturnOp>(block.getTerminator());
-    if (!retOp)
+    // Check if the corresponding signature typeOfArgs entry is opaque_type.
+    auto sigOp = func.getSignatureOp();
+    auto sigTypeOfArgs = sigOp.getTypeOfArgs();
+    if (sigTypeOfArgs.size() != block.getNumArguments())
       continue;
-    auto typeOfArgs = retOp.getTypeOfArgs();
-    if (typeOfArgs.size() != block.getNumArguments())
-      continue;
-    auto lastTypeOfArg = typeOfArgs[block.getNumArguments() - 1];
-    if (!lastTypeOfArg.getDefiningOp<hir::OpaqueTypeOp>())
+    auto lastSigTypeOfArg = sigTypeOfArgs[block.getNumArguments() - 1];
+    if (!lastSigTypeOfArg.getDefiningOp<hir::OpaqueTypeOp>())
       continue;
 
     // Skip stripping if the function (or its parent MultiphaseFuncOp) has
@@ -601,13 +689,17 @@ void SpecializeFuncsPass::runOnOperation() {
       sigBlock.eraseArgument(sigBlock.getNumArguments() - 1);
     }
 
-    // Drop the last typeOfArgs entry from the return op.
-    SmallVector<Value> newArgTypes(typeOfArgs.drop_back());
-    retOp.getTypeOfArgsMutable().assign(newArgTypes);
+    // Drop the last typeOfArgs entry from the return op (if populated).
+    if (auto retOp = dyn_cast<hir::ReturnOp>(block.getTerminator())) {
+      auto retArgs = retOp.getTypeOfArgs();
+      if (!retArgs.empty()) {
+        SmallVector<Value> newArgTypes(retArgs.drop_back());
+        retOp.getTypeOfArgsMutable().assign(newArgTypes);
+      }
+    }
 
     // Drop the last typeOfArgs entry from the signature op.
-    auto sigOp = func.getSignatureOp();
-    SmallVector<Value> newSigArgTypes(sigOp.getTypeOfArgs().drop_back());
+    SmallVector<Value> newSigArgTypes(sigTypeOfArgs.drop_back());
     sigOp.getTypeOfArgsMutable().assign(newSigArgTypes);
 
     // Update argNames on the function.

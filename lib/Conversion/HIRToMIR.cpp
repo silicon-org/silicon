@@ -468,17 +468,15 @@ static bool shouldLower(hir::FuncOp func) {
       for (auto val : call.getTypeOfResults())
         if (!isResolvableType(val))
           ready = false;
-    } else if (auto ret = dyn_cast<hir::ReturnOp>(op)) {
-      for (auto val : ret.getTypeOfValues())
-        if (!isResolvableType(val))
-          ready = false;
+    } else if (auto sig = dyn_cast<hir::SignatureOp>(op)) {
       // An opaque_type in typeOfArgs indicates the function has an opaque
       // context argument that must be resolved through specialization before
-      // lowering. The zero-result opaque_unpack that originally guards this
-      // may have been removed by canonicalization, but the opaque_type in
-      // the return's typeOfArgs persists as a reliable signal.
-      for (auto val : ret.getTypeOfArgs())
-        if (val.getDefiningOp<hir::OpaqueTypeOp>())
+      // lowering. Result types may legitimately be opaque (for context packs).
+      for (auto val : sig.getTypeOfArgs())
+        if (!isResolvableType(val) || val.getDefiningOp<hir::OpaqueTypeOp>())
+          ready = false;
+      for (auto val : sig.getTypeOfResults())
+        if (!isResolvableType(val))
           ready = false;
     } else if (auto uintType = dyn_cast<hir::UIntTypeOp>(op)) {
       if (!uintType.getWidth().getDefiningOp<hir::ConstantIntOp>())
@@ -608,43 +606,20 @@ public:
 
     auto &entryBlock = func.getBody().front();
 
-    // Collect all return ops across all blocks. Multi-block functions (from
-    // if/else or short-circuiting) may have return ops in successor blocks.
-    SmallVector<hir::ReturnOp> returnOps;
-    func.getBody().walk([&](hir::ReturnOp op) { returnOps.push_back(op); });
-
-    // Verify all return ops use identical SSA values for their type operands.
-    // At this point in the pipeline all returns should agree on arg and result
-    // types; a mismatch indicates a compiler bug.
-    for (unsigned i = 1; i < returnOps.size(); ++i) {
-      if (returnOps[i].getTypeOfArgs() != returnOps[0].getTypeOfArgs())
-        return emitBug(returnOps[i].getLoc())
-               << "return op typeOfArgs mismatch with other return in @"
-               << func.getSymName();
-      if (returnOps[i].getTypeOfValues() != returnOps[0].getTypeOfValues())
-        return emitBug(returnOps[i].getLoc())
-               << "return op typeOfValues mismatch with other return in @"
-               << func.getSymName();
-    }
-
-    auto returnOp = returnOps.empty() ? hir::ReturnOp{} : returnOps.front();
+    // Read types from the signature region, which is the source of truth.
+    auto sigOp = func.getSignatureOp();
     SmallVector<Type> argTypes;
-    if (returnOp) {
-      for (auto typeVal : returnOp.getTypeOfArgs())
-        argTypes.push_back(resolveHIRType(typeVal));
-    }
+    for (auto typeVal : sigOp.getTypeOfArgs())
+      argTypes.push_back(resolveHIRType(typeVal));
     if (argTypes.size() != entryBlock.getNumArguments())
       return emitBug(func.getLoc())
-             << "return op typeOfArgs count (" << argTypes.size()
+             << "signature typeOfArgs count (" << argTypes.size()
              << ") does not match block argument count ("
              << entryBlock.getNumArguments() << ")";
 
-    // Determine result types from hir.return typeOfValues.
     SmallVector<Type> resultTypes;
-    if (returnOp) {
-      for (auto typeVal : returnOp.getTypeOfValues())
-        resultTypes.push_back(resolveHIRType(typeVal));
-    }
+    for (auto typeVal : sigOp.getTypeOfResults())
+      resultTypes.push_back(resolveHIRType(typeVal));
 
     // Create the new mir.func with materialized types.
     auto funcType = FunctionType::get(func.getContext(), argTypes, resultTypes);
