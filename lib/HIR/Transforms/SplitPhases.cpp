@@ -32,19 +32,19 @@ namespace hir {
 /// Resolve a value from one region into another by recursively cloning its
 /// defining op and all transitive operands. Values already in the mapping are
 /// returned directly (e.g., block arguments that have been pre-mapped).
-static Value resolveTypeIntoRegion(OpBuilder &builder, Value val,
-                                   IRMapping &mapping) {
+/// Returns null if a block argument is not in the mapping (cross-phase type
+/// dependency), allowing the caller to fall back to OpaqueTypeOp.
+static Value tryResolveTypeIntoRegion(OpBuilder &builder, Value val,
+                                      IRMapping &mapping) {
   if (auto mapped = mapping.lookupOrNull(val))
     return mapped;
   auto *defOp = val.getDefiningOp();
-  if (!defOp) {
-    emitBug(val.getLoc())
-        << "cannot resolve block argument into region; value has no "
-           "defining op and is not in the mapping";
+  if (!defOp)
     return {};
+  for (Value operand : defOp->getOperands()) {
+    if (!tryResolveTypeIntoRegion(builder, operand, mapping))
+      return {};
   }
-  for (Value operand : defOp->getOperands())
-    resolveTypeIntoRegion(builder, operand, mapping);
   auto *cloned = builder.clone(*defOp, mapping);
   return cloned->getResult(cast<OpResult>(val).getResultNumber());
 }
@@ -85,8 +85,6 @@ struct PhaseSplit {
   FuncOp funcOp;
   int16_t phase;
   SmallVector<Value> returnValues;
-  SmallVector<Value> returnTypeOperands;
-  SmallVector<Value> argTypeOperands;
 };
 
 /// A group of consecutive phases. A group ends when an externally visible
@@ -170,6 +168,29 @@ LogicalResult PhaseSplitter::run() {
   }
   if (hasReturnPhaseMismatch)
     return failure();
+
+  // Verify that earlier-phase results are identical across all returns.
+  // Earlier-phase results get factored out before the split point, so they
+  // must be the same SSA value in every return. (Trivially satisfied for
+  // single-return functions.)
+  SmallVector<ReturnOp> returnOps;
+  funcOp.getBody().walk([&](ReturnOp r) { returnOps.push_back(r); });
+  if (returnOps.size() > 1) {
+    for (auto [idx, phase] : llvm::enumerate(effectiveResultPhases)) {
+      if (phase >= 0)
+        continue;
+      Value firstVal = returnOps[0].getValues()[idx];
+      for (unsigned i = 1; i < returnOps.size(); ++i) {
+        if (returnOps[i].getValues()[idx] != firstVal) {
+          emitError(returnOps[i].getLoc())
+              << "earlier-phase result at position " << idx
+              << " differs across returns; all returns must produce the "
+                 "same value for const results";
+          return failure();
+        }
+      }
+    }
+  }
 
   // Extend the phase range based on the function's declared arg/result phases.
   // These may lie outside the range of computed op/value phases (e.g., a `dyn`
@@ -307,10 +328,6 @@ LogicalResult PhaseSplitter::run() {
     int16_t resultPhase = effectiveResultPhases[idx];
     splits[resultPhase - minPhase].returnValues.push_back(value);
   }
-  for (auto [idx, type] : llvm::enumerate(returnOp.getTypeOfValues())) {
-    int16_t resultPhase = effectiveResultPhases[idx];
-    splits[resultPhase - minPhase].returnTypeOperands.push_back(type);
-  }
   returnOp.erase();
 
   // Move all operations to phase 0 initially.
@@ -361,10 +378,6 @@ LogicalResult PhaseSplitter::run() {
     for (auto &[idx, ownArg] : replacements) {
       auto bodyArg = phase0Block.getArgument(idx);
       bodyArg.replaceAllUsesWith(ownArg);
-      for (auto &split : splits)
-        for (auto &typeOp : split.returnTypeOperands)
-          if (typeOp == bodyArg)
-            typeOp = ownArg;
     }
 
     // Erase old body block args in reverse order.
@@ -426,7 +439,7 @@ LogicalResult PhaseSplitter::run() {
           if (auto mpFunc = symbolTable.lookup<MultiphaseFuncOp>(name)) {
             numResults = mpFunc.getResultNames().size();
           } else if (auto func = symbolTable.lookup<FuncOp>(name)) {
-            numResults = func.getReturnOp().getValues().size();
+            numResults = func.getResultNames().size();
           } else {
             continue;
           }
@@ -677,81 +690,6 @@ LogicalResult PhaseSplitter::run() {
         splits[phase - minPhase].returnValues.size();
   }
 
-  //===--------------------------------------------------------------------===//
-  // Insert coerce_type Ops on Own Block Args
-  //
-  // For each phase function, insert an `hir.coerce_type` on every own block
-  // arg, annotating it with its type from the unified func's signature. This
-  // gives downstream passes (HIR-to-MIR) the type information needed to
-  // materialize concrete MLIR types. Cross-phase type operands are resolved
-  // later by the value threading loop below.
-  //===--------------------------------------------------------------------===//
-
-  {
-    auto sigOp = funcOp.getSignatureOp();
-    auto typeOfArgs = sigOp.getTypeOfArgs();
-    auto &sigBlock = funcOp.getSignature().front();
-
-    // Build per-phase list of unified arg indices for own args.
-    SmallVector<SmallVector<unsigned>> phaseOwnArgIndices(maxPhase - minPhase +
-                                                          1);
-    for (unsigned i = 0; i < funcOp.getArgPhases().size(); ++i) {
-      int16_t phase = static_cast<int16_t>(funcOp.getArgPhases()[i]);
-      phaseOwnArgIndices[phase - minPhase].push_back(i);
-    }
-
-    for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
-      auto &split = splits[phase - minPhase];
-      auto &block = split.funcOp.getBody().front();
-      auto &ownIndices = phaseOwnArgIndices[phase - minPhase];
-      if (ownIndices.empty())
-        continue;
-
-      // Build a per-phase mapping from signature values to body/split values.
-      // Signature block args map to unifiedArgValues; cloned op results are
-      // added as we go. A fresh mapping per phase ensures cloned ops are local.
-      IRMapping sigToBody;
-      for (auto [sigArg, bodyVal] :
-           llvm::zip(sigBlock.getArguments(), unifiedArgValues))
-        sigToBody.map(sigArg, bodyVal);
-
-      OpBuilder insertBuilder(&block, block.begin());
-      for (auto [localIdx, unifiedIdx] : llvm::enumerate(ownIndices)) {
-        Value ownArg = block.getArgument(localIdx);
-        Value sigTypeVal = typeOfArgs[unifiedIdx];
-
-        // Resolve the signature type value to a body/split value. This
-        // recursively clones the defining op and its transitive operands.
-        Value resolvedType =
-            resolveTypeIntoRegion(insertBuilder, sigTypeVal, sigToBody);
-        if (!resolvedType)
-          return failure();
-
-        auto coerceOp = CoerceTypeOp::create(insertBuilder, ownArg.getLoc(),
-                                             ownArg, resolvedType);
-        split.argTypeOperands.push_back(resolvedType);
-
-        // Replace uses of the own arg within this function with the coerced
-        // value. Exclude the coerce_type itself and scope to this function
-        // (cross-phase refs to this block arg exist from const arg movement).
-        ownArg.replaceUsesWithIf(coerceOp.getResult(), [&](OpOperand &use) {
-          if (use.getOwner() == coerceOp)
-            return false;
-          Operation *parent = use.getOwner();
-          while (parent && !isa<FuncOp>(parent))
-            parent = parent->getParentOp();
-          return parent == split.funcOp;
-        });
-
-        // Update returnValues entries that reference the own arg, since
-        // replaceUsesWithIf only modifies OpOperands, not standalone vectors.
-        for (auto &rv : split.returnValues)
-          if (rv == ownArg)
-            rv = coerceOp.getResult();
-      }
-    }
-  }
-
   // Add return operations to all phase functions and plumb values from earlier
   // phases to later phases. We iterate in reverse execution order (most-runtime
   // first, most-const last) so that thread-through adds values to later splits
@@ -762,20 +700,13 @@ LogicalResult PhaseSplitter::run() {
     auto &split = splits[phase - minPhase];
     closedFuncs.insert(split.funcOp);
 
-    // Add a return operation to this split. Use preserved type operands for
-    // "own" return values (from the original unified return), and fall back to
-    // getOrCreateTypeOf for context values added later by cross-phase
-    // threading.
+    // Add a return operation to this split with empty type operands. The
+    // signature region is the source of truth for types; ReturnOp no longer
+    // carries type information.
     builder.setInsertionPointToEnd(&split.funcOp.getBody().back());
-    SmallVector<Value> returnTypes;
-    for (auto [idx, val] : llvm::enumerate(split.returnValues)) {
-      if (idx < split.returnTypeOperands.size())
-        returnTypes.push_back(split.returnTypeOperands[idx]);
-      else
-        returnTypes.push_back(getOrCreateTypeOf(builder, funcOp.getLoc(), val));
-    }
-    ReturnOp::create(builder, funcOp.getLoc(), split.returnValues, returnTypes,
-                     split.argTypeOperands);
+    ReturnOp::create(builder, funcOp.getLoc(), split.returnValues,
+                     /*typeOfValues=*/ValueRange{},
+                     /*typeOfArgs=*/ValueRange{});
 
     // Replace all uses of values from earlier phases with additional block
     // arguments. This will be replaced with constants through function
@@ -874,14 +805,6 @@ LogicalResult PhaseSplitter::run() {
       block.getArgument(ownArgs + i).replaceAllUsesWith(unpackOp.getResult(i));
     block.eraseArguments(ownArgs, contextArgs);
 
-    // Update the return op's typeOfArgs: replace any entries for the old
-    // context args with a single opaque type for the bundled context arg.
-    auto retOp = cast<ReturnOp>(block.getTerminator());
-    SmallVector<Value> newArgTypes(retOp.getTypeOfArgs().take_front(ownArgs));
-    newArgTypes.push_back(
-        OpaqueTypeOp::create(unpackBuilder, funcOp.getLoc()).getResult());
-    retOp.getTypeOfArgsMutable().assign(newArgTypes);
-
     // In the previous phase: replace trailing context return values with a
     // single opaque_pack.
     auto &prevSplit = splits[phase - 1 - minPhase];
@@ -898,45 +821,10 @@ LogicalResult PhaseSplitter::run() {
     SmallVector<Value> newReturnValues(
         prevReturnOp.getValues().take_front(prevOwnReturns));
     newReturnValues.push_back(packOp);
-    SmallVector<Value> newReturnTypes(
-        prevReturnOp.getTypeOfValues().take_front(prevOwnReturns));
-    newReturnTypes.push_back(
-        OpaqueTypeOp::create(packBuilder, funcOp.getLoc()).getResult());
-    SmallVector<Value> argTypes(prevReturnOp.getTypeOfArgs());
     ReturnOp::create(packBuilder, funcOp.getLoc(), newReturnValues,
-                     newReturnTypes, argTypes);
+                     /*typeOfValues=*/ValueRange{},
+                     /*typeOfArgs=*/ValueRange{});
     prevReturnOp.erase();
-  }
-
-  //===--------------------------------------------------------------------===//
-  // Re-apply coerce_type Replacements
-  //
-  // The coerce_type insertion step above ran replaceUsesWithIf before the
-  // opaque pack bundling step. Opaque packs created later reference the raw
-  // block arg, leaving coerce_type dead. Re-apply the replacement so that
-  // opaque_pack operands (and any other remaining raw-arg uses) go through
-  // the coerced value.
-  //===--------------------------------------------------------------------===//
-
-  for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
-    auto &split = splits[phase - minPhase];
-    auto &block = split.funcOp.getBody().front();
-    unsigned ownArgs = numOwnArgs[phase - minPhase];
-    for (unsigned i = 0; i < ownArgs; ++i) {
-      Value ownArg = block.getArgument(i);
-      CoerceTypeOp coerceOp;
-      for (auto *user : ownArg.getUsers()) {
-        if (auto c = dyn_cast<CoerceTypeOp>(user)) {
-          coerceOp = c;
-          break;
-        }
-      }
-      if (!coerceOp)
-        continue;
-      ownArg.replaceUsesWithIf(coerceOp.getResult(), [&](OpOperand &use) {
-        return use.getOwner() != coerceOp;
-      });
-    }
   }
 
   //===--------------------------------------------------------------------===//
@@ -980,38 +868,71 @@ LogicalResult PhaseSplitter::run() {
     }
     split.funcOp.setResultNamesAttr(builder.getArrayAttr(phaseResultNames));
 
-    // Populate the signature region with type operands from the return op.
-    if (auto retOp = split.funcOp.getReturnOp()) {
+    // Populate the signature region from the unified func's signature.
+    // Partition type operands by phase using argPhases and
+    // effectiveResultPhases.
+    {
+      auto unifiedSigOp = funcOp.getSignatureOp();
+      auto unifiedArgPhases = funcOp.getArgPhases();
+      auto &unifiedSigBlock = funcOp.getSignature().front();
       auto &sigBlock = split.funcOp.getSignature().front();
+      auto &bodyBlock = split.funcOp.getBody().front();
 
-      // Add block args to the signature matching the body's entry block.
-      for (auto bodyArg : block.getArguments())
+      // Add block args matching the body's entry block.
+      for (auto bodyArg : bodyBlock.getArguments())
         sigBlock.addArgument(bodyArg.getType(), bodyArg.getLoc());
 
       OpBuilder sigBuilder(&sigBlock, sigBlock.begin());
-
-      // Clone the type operands from the return into the signature region.
       IRMapping sigMapping;
-      for (auto [bodyArg, sigArg] :
-           llvm::zip(block.getArguments(), sigBlock.getArguments()))
-        sigMapping.map(bodyArg, sigArg);
 
+      // Map unified sig block args -> per-phase sig block args for own args.
+      unsigned localArgIdx = 0;
+      for (unsigned i = 0; i < unifiedArgPhases.size(); ++i) {
+        if (static_cast<int16_t>(unifiedArgPhases[i]) == phase)
+          sigMapping.map(unifiedSigBlock.getArgument(i),
+                         sigBlock.getArgument(localArgIdx++));
+      }
+
+      // Clone own arg types from unified signature. For cross-phase type
+      // deps (where an operand references a block arg from another phase),
+      // fall back to OpaqueTypeOp.
       SmallVector<Value> sigArgTypes;
-      for (auto typeVal : retOp.getTypeOfArgs()) {
-        Value resolved = resolveTypeIntoRegion(sigBuilder, typeVal, sigMapping);
-        if (!resolved)
-          return failure();
-        sigArgTypes.push_back(resolved);
-      }
-      SmallVector<Value> sigResultTypes;
-      for (auto typeVal : retOp.getTypeOfValues()) {
-        Value resolved = resolveTypeIntoRegion(sigBuilder, typeVal, sigMapping);
-        if (!resolved)
-          return failure();
-        sigResultTypes.push_back(resolved);
+      for (unsigned i = 0; i < unifiedArgPhases.size(); ++i) {
+        if (static_cast<int16_t>(unifiedArgPhases[i]) == phase) {
+          Value resolved = tryResolveTypeIntoRegion(
+              sigBuilder, unifiedSigOp.getTypeOfArgs()[i], sigMapping);
+          if (!resolved)
+            resolved =
+                OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult();
+          sigArgTypes.push_back(resolved);
+        }
       }
 
-      // Replace the placeholder signature terminator with one carrying types.
+      // Context arg gets opaque type.
+      if (sigBlock.getNumArguments() > sigArgTypes.size())
+        sigArgTypes.push_back(
+            OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult());
+
+      // Clone own result types from unified signature.
+      SmallVector<Value> sigResultTypes;
+      for (auto [idx, resultPhase] : llvm::enumerate(effectiveResultPhases)) {
+        if (resultPhase == phase) {
+          Value resolved = tryResolveTypeIntoRegion(
+              sigBuilder, unifiedSigOp.getTypeOfResults()[idx], sigMapping);
+          if (!resolved)
+            resolved =
+                OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult();
+          sigResultTypes.push_back(resolved);
+        }
+      }
+
+      // Context result gets opaque type.
+      if (auto retOp = split.funcOp.getReturnOp())
+        if (retOp.getValues().size() > sigResultTypes.size())
+          sigResultTypes.push_back(
+              OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult());
+
+      // Replace placeholder SignatureOp.
       sigBlock.getTerminator()->erase();
       sigBuilder.setInsertionPointToEnd(&sigBlock);
       SignatureOp::create(sigBuilder, funcOp.getLoc(), sigArgTypes,

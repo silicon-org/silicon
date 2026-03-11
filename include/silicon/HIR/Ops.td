@@ -278,6 +278,12 @@ def FuncOp : HIROp<"func", [
     by `SplitPhases` from a `hir.unified_func`, or directly by codegen
     for functions that don't span multiple phases. Lowered to `mir.func`
     by the HIR-to-MIR conversion.
+
+    The `argNames` and `resultNames` attributes define exactly how many
+    arguments and results the function has. The signature region's
+    `hir.signature` op must have exactly that many `typeOfArgs` and
+    `typeOfResults` entries. The body's `hir.return` terminator must
+    have exactly `resultNames.size()` values.
   }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,
@@ -298,8 +304,8 @@ def FuncOp : HIROp<"func", [
 
 def ReturnOp : HIROp<"return", [
   AttrSizedOperandSegments,
-  PredOpTrait<"values and typeOfValues must have the same size",
-    CPred<"$values.size() == $typeOfValues.size()">>,
+  PredOpTrait<"typeOfValues must be empty or match values size",
+    CPred<"$typeOfValues.size() == 0 || $values.size() == $typeOfValues.size()">>,
   Pure,
   ReturnLike,
   Terminator,
@@ -308,12 +314,12 @@ def ReturnOp : HIROp<"return", [
   let summary = "return from an HIR function";
   let description = [{
     Terminates an `hir.func` or `hir.unified_func` body.  Carries the
-    return values alongside their types (`typeOfValues`) *and* the types
-    of the enclosing function's block arguments (`typeOfArgs`).
+    return values alongside optional types (`typeOfValues`) *and* the
+    types of the enclosing function's block arguments (`typeOfArgs`).
 
-    The `typeOfArgs` operands survive canonicalization/DCE even when the
-    corresponding block arguments are unused, providing a reliable source
-    of argument-type information for the HIR-to-MIR lowering.
+    After `SplitPhases`, per-phase functions use the signature region as
+    the source of truth for types; `typeOfValues` and `typeOfArgs` are
+    empty. In `unified_func` bodies, they are populated by codegen.
   }];
   let arguments = (ins
     Variadic<HIRAnyType>:$values,
