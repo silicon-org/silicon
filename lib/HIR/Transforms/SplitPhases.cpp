@@ -103,6 +103,25 @@ struct PhaseSplitter {
   PhaseAnalysis &analysis;
   SymbolTable &symbolTable;
   UnifiedFuncOp funcOp;
+
+  /// Per-phase split functions and their return values.
+  SmallVector<PhaseSplit> splits;
+
+  /// Effective result phases (max of declared and computed).
+  SmallVector<int16_t> effectiveResultPhases;
+
+  /// Phase range of the function.
+  int16_t minPhase = 0, maxPhase = 0;
+
+  /// Number of "own" block args and return values per phase, before
+  /// cross-phase threading adds context values.
+  SmallVector<unsigned> numOwnArgs;
+  SmallVector<unsigned> numOwnReturns;
+
+private:
+  /// Split the body region by distributing ops into per-phase functions,
+  /// threading cross-phase values, and bundling context into opaque packs.
+  LogicalResult splitBodyByPhase();
 };
 } // namespace
 
@@ -110,7 +129,6 @@ LogicalResult PhaseSplitter::run() {
   LLVM_DEBUG(llvm::dbgs() << "Splitting " << funcOp.getSymNameAttr() << "\n");
 
   // Determine the phase range, skipping INT16_MIN (floating constants).
-  int16_t minPhase = 0, maxPhase = 0;
   for (auto &[op, phase] : analysis.opPhases) {
     if (phase == INT16_MIN)
       continue;
@@ -136,7 +154,6 @@ LogicalResult PhaseSplitter::run() {
   assert(!allReturns.empty() && "unified_func must have at least one return");
   auto returnOp = allReturns.front();
   auto declaredResultPhases = funcOp.getResultPhases();
-  SmallVector<int16_t> effectiveResultPhases;
   bool hasReturnPhaseMismatch = false;
   for (auto [idx, value] : llvm::enumerate(returnOp.getValues())) {
     int16_t declared = static_cast<int16_t>(declaredResultPhases[idx]);
@@ -275,7 +292,7 @@ LogicalResult PhaseSplitter::run() {
 
   OpBuilder builder(funcOp);
   auto privateAttr = builder.getStringAttr("private");
-  SmallVector<PhaseSplit> splits(maxPhase - minPhase + 1);
+  splits.resize(maxPhase - minPhase + 1);
   for (int groupIdx = groups.size() - 1; groupIdx >= 0; --groupIdx) {
     auto &group = groups[groupIdx];
     bool isMulti = group.phases.size() > 1;
@@ -318,517 +335,8 @@ LogicalResult PhaseSplitter::run() {
     }
   }
 
-  // Handle the return operation. Each return value and its type operand are
-  // placed in the split matching its effective result phase. The effective
-  // phase accounts for cases where the return value is only available at a
-  // later phase than declared (e.g., a dyn arg forces the result later). If a
-  // value is defined in an earlier phase, cross-phase threading will create
-  // context returns and block args to forward it. The return op itself is
-  // erased since each phase will get its own.
-  for (auto [idx, value] : llvm::enumerate(returnOp.getValues())) {
-    int16_t resultPhase = effectiveResultPhases[idx];
-    splits[resultPhase - minPhase].returnValues.push_back(value);
-  }
-  returnOp.erase();
-
-  // Move all operations to phase 0 initially.
-  splits[0 - minPhase].funcOp.getBody().takeBody(funcOp.getBody());
-
-  // Track where each unified func arg ended up after shifted arg movement.
-  // Shifted args (phase != 0) map to their new block arg in the target phase
-  // function; phase-0 args map to the remaining block args in the phase-0
-  // function.
-  SmallVector<Value> unifiedArgValues(funcOp.getArgPhases().size());
-
-  // Move shifted-phase body block arguments to their respective phase
-  // functions. We create block args in each arg's target phase, replace all
-  // uses, and let cross-phase value threading handle multi-hop forwarding.
-  // This handles both const args (phase < 0) and dyn args (phase > 0).
-  {
-    auto &phase0Block = splits[0 - minPhase].funcOp.getBody().front();
-
-    // Collect shifted args and their phases first to avoid iterator
-    // invalidation.
-    SmallVector<std::pair<unsigned, int16_t>> shiftedArgs;
-    for (auto [idx, phase] : llvm::enumerate(funcOp.getArgPhases())) {
-      int16_t argPhase = static_cast<int16_t>(phase);
-      if (argPhase != 0)
-        shiftedArgs.push_back({idx, argPhase});
-    }
-    llvm::sort(shiftedArgs);
-
-    // Step 1: Create a block arg in each shifted arg's target phase function.
-    SmallVector<std::pair<unsigned, Value>> replacements;
-    SmallVector<unsigned> argsToErase;
-    for (auto [idx, argPhase] : shiftedArgs) {
-      auto bodyArg = phase0Block.getArgument(idx);
-      LLVM_DEBUG(llvm::dbgs() << "- Moving body arg " << idx << " to phase "
-                              << argPhase << "\n");
-      auto &targetBlock = splits[argPhase - minPhase].funcOp.getBody().front();
-      Value ownArg =
-          targetBlock.addArgument(bodyArg.getType(), bodyArg.getLoc());
-      unifiedArgValues[idx] = ownArg;
-      replacements.push_back({idx, ownArg});
-      argsToErase.push_back(idx);
-    }
-
-    // Step 2: Replace all uses of old body block args with the target-phase
-    // values. Cross-phase value threading will handle forwarding to other
-    // phases as needed. Also update returnTypeOperands, which hold Value
-    // handles that replaceAllUsesWith won't touch.
-    for (auto &[idx, ownArg] : replacements) {
-      auto bodyArg = phase0Block.getArgument(idx);
-      bodyArg.replaceAllUsesWith(ownArg);
-    }
-
-    // Erase old body block args in reverse order.
-    for (auto idx : llvm::reverse(argsToErase))
-      phase0Block.eraseArgument(idx);
-
-    // Fill in phase-0 args (those that remained in the phase-0 block).
-    unsigned phase0ArgIdx = 0;
-    for (unsigned i = 0; i < unifiedArgValues.size(); ++i) {
-      if (unifiedArgValues[i]) // already filled (shifted arg)
-        continue;
-      unifiedArgValues[i] = phase0Block.getArgument(phase0ArgIdx++);
-    }
-  }
-
-  // Decompose UnifiedCallOps into per-phase CallOps. Each per-phase call is
-  // registered in the analysis at the appropriate phase, so the distribution
-  // worklist moves it to the correct split function.
-  {
-    auto &phase0Body = splits[0 - minPhase].funcOp.getBody();
-    SmallVector<UnifiedCallOp> unifiedCalls;
-    phase0Body.walk([&](UnifiedCallOp op) { unifiedCalls.push_back(op); });
-
-    for (auto callOp : unifiedCalls) {
-      auto calleeName = callOp.getCallee();
-      auto argPhases = callOp.getArgPhases();
-      auto resultPhases = callOp.getResultPhases();
-
-      // The call's arg/result phase attributes are callee-relative; the
-      // absolute caller-frame phase is the call op's phase plus the attribute.
-      int16_t callOpPhase = analysis.opPhases.at(callOp);
-
-      // Look up the callee's split_func and build a phase-to-function mapping
-      // by walking its entries. MultiphaseFuncOps expand to their
-      // sub-functions.
-      auto calleeSplitFunc = symbolTable.lookup<SplitFuncOp>(calleeName);
-      if (!calleeSplitFunc)
-        continue;
-
-      // Build a list of call entries from the callee's split_func. Each
-      // entry produces exactly one call, whether it's a standalone FuncOp
-      // or a MultiphaseFuncOp. We do NOT expand MultiphaseFuncOps into
-      // their sub-functions — callers call the multiphase_func itself, and
-      // SpecializeFuncs handles the internal decomposition later.
-      struct CallEntry {
-        int16_t phase;
-        StringRef symbolName;
-        unsigned numResults;
-      };
-      SmallVector<CallEntry> splitEntries;
-      {
-        auto phaseNums = calleeSplitFunc.getPhaseNumbers();
-        auto phaseFuncRefs = calleeSplitFunc.getPhaseFuncs();
-
-        for (auto [entryPhase, funcRef] : llvm::zip(phaseNums, phaseFuncRefs)) {
-          auto name = cast<FlatSymbolRefAttr>(funcRef).getValue();
-          int16_t callerPhase = callOpPhase + entryPhase;
-          unsigned numResults;
-          if (auto mpFunc = symbolTable.lookup<MultiphaseFuncOp>(name)) {
-            numResults = mpFunc.getResultNames().size();
-          } else if (auto func = symbolTable.lookup<FuncOp>(name)) {
-            numResults = func.getResultNames().size();
-          } else {
-            continue;
-          }
-          splitEntries.push_back({callerPhase, name, numResults});
-        }
-      }
-      if (splitEntries.empty())
-        continue;
-
-      // Determine the caller-frame phase range from the split entries.
-      // This is more accurate than deriving it from arg/result phases
-      // alone, since the callee may have internal phases that extend
-      // beyond the visible arg/result phases (e.g., a `dyn fn` has
-      // internal body ops at phase 0 even though its args/results are at
-      // phase 1).
-      int16_t calleeMaxPhase = INT16_MIN;
-      for (auto &entry : splitEntries)
-        calleeMaxPhase = std::max(calleeMaxPhase, entry.phase);
-
-      OpBuilder callBuilder(callOp);
-      auto loc = callOp.getLoc();
-
-      // Update phases of existing type operands so they land in the correct
-      // split function during distribution. Use std::min since a single value
-      // may be shared across multiple phases (e.g., the same int_type used for
-      // both a const and a runtime argument); the earliest phase ensures the
-      // value is available everywhere it's needed, with value threading
-      // handling forwarding to later phases.
-      for (auto [type, phase] : llvm::zip(callOp.getTypeOfArgs(), argPhases)) {
-        int16_t p = callOpPhase + static_cast<int16_t>(phase);
-        if (auto *defOp = type.getDefiningOp()) {
-          auto &opPhase = analysis.opPhases[defOp];
-          opPhase = std::min(opPhase, p);
-          auto &valPhase = analysis.valuePhases[type];
-          valPhase = std::min(valPhase, p);
-        }
-      }
-      for (auto [type, phase] :
-           llvm::zip(callOp.getTypeOfResults(), resultPhases)) {
-        int16_t p = callOpPhase + static_cast<int16_t>(phase);
-        if (auto *defOp = type.getDefiningOp()) {
-          auto &opPhase = analysis.opPhases[defOp];
-          opPhase = std::min(opPhase, p);
-          auto &valPhase = analysis.valuePhases[type];
-          valPhase = std::min(valPhase, p);
-        }
-      }
-
-      // Partition arguments and their type operands by absolute phase.
-      DenseMap<int16_t, SmallVector<Value>> phaseArgs, phaseTypeOfArgs;
-      for (auto [arg, type, phase] : llvm::zip(
-               callOp.getArguments(), callOp.getTypeOfArgs(), argPhases)) {
-        int16_t abs = callOpPhase + static_cast<int16_t>(phase);
-        phaseArgs[abs].push_back(arg);
-        phaseTypeOfArgs[abs].push_back(type);
-      }
-
-      // Determine the phase that produces the unified_call's actual results.
-      // This is the maximum result phase, which may differ from
-      // calleeMaxPhase when dyn args extend the callee beyond its results.
-      int16_t maxResultPhase = INT16_MIN;
-      for (auto p : resultPhases)
-        maxResultPhase = std::max(
-            maxResultPhase,
-            static_cast<int16_t>(callOpPhase + static_cast<int16_t>(p)));
-
-      // Collect which result indices belong to which phase.
-      DenseSet<int16_t> resultPhaseSet;
-      for (auto p : resultPhases)
-        resultPhaseSet.insert(callOpPhase + static_cast<int16_t>(p));
-
-      // Chain calls from earliest phase to latest. Each call gets its own
-      // phase's arguments plus all results from the previous phase's call.
-      // The call at the result phase produces the unified_call's original
-      // result types; all other phases use opaque types derived from the
-      // precomputed entry result count.
-      SmallVector<Value> prevResults;
-      SmallVector<Value> unifiedCallReplacements;
-      for (auto &entry : splitEntries) {
-        int16_t phase = entry.phase;
-        SmallVector<Value> callArgs(phaseArgs[phase]);
-        SmallVector<Value> callTypeOfArgs(phaseTypeOfArgs[phase]);
-
-        // Thread results from the previous phase.
-        for (auto result : prevResults) {
-          callArgs.push_back(result);
-          auto opaqueType = OpaqueTypeOp::create(callBuilder, loc);
-          analysis.opPhases[opaqueType] = phase;
-          analysis.valuePhases[opaqueType.getResult()] = phase;
-          callTypeOfArgs.push_back(opaqueType.getResult());
-        }
-
-        // The result phase uses the original unified_call's result types.
-        // All other phases determine their result count from the entry's
-        // precomputed numResults.
-        bool isResultPhase = (phase == maxResultPhase);
-        SmallVector<Value> callTypeOfResults;
-        SmallVector<Type> resultTypes;
-        if (isResultPhase) {
-          callTypeOfResults.append(callOp.getTypeOfResults().begin(),
-                                   callOp.getTypeOfResults().end());
-          resultTypes.append(callOp.getResultTypes().begin(),
-                             callOp.getResultTypes().end());
-        }
-
-        // For non-result phases (and result phases that also forward context
-        // to later phases), add opaque result types for the entry's
-        // remaining results beyond the unified_call's own results.
-        if (!isResultPhase || phase != calleeMaxPhase) {
-          unsigned startIdx = isResultPhase ? callOp.getNumResults() : 0;
-          for (unsigned i = startIdx; i < entry.numResults; ++i) {
-            auto opaqueType = OpaqueTypeOp::create(callBuilder, loc);
-            analysis.opPhases[opaqueType] = phase;
-            analysis.valuePhases[opaqueType.getResult()] = phase;
-            callTypeOfResults.push_back(opaqueType.getResult());
-            resultTypes.push_back(AnyType::get(callBuilder.getContext()));
-          }
-        }
-
-        auto call = CallOp::create(callBuilder, loc, resultTypes,
-                                   callBuilder.getStringAttr(entry.symbolName),
-                                   callArgs, callTypeOfArgs, callTypeOfResults);
-        analysis.opPhases[call] = phase;
-        for (auto result : call.getResults())
-          analysis.valuePhases[result] = phase;
-
-        // Capture the results from the result phase as replacements for the
-        // original unified_call. Only context results (beyond the user results)
-        // should be threaded to the next phase.
-        if (isResultPhase) {
-          for (unsigned i = 0; i < callOp.getNumResults(); ++i)
-            unifiedCallReplacements.push_back(call.getResult(i));
-          prevResults.assign(call.getResults().begin() + callOp.getNumResults(),
-                             call.getResults().end());
-        } else {
-          prevResults.assign(call.getResults().begin(),
-                             call.getResults().end());
-        }
-      }
-
-      // Update any return values that reference the old unified call's results.
-      // These are not IR uses (the return op was already erased), so
-      // replaceAllUsesWith won't touch them. Return values may be in any split
-      // (depending on result phases), so check all of them.
-      for (auto &split : splits)
-        for (auto &rv : split.returnValues)
-          for (auto [oldResult, newResult] :
-               llvm::zip(callOp.getResults(), unifiedCallReplacements))
-            if (rv == oldResult)
-              rv = newResult;
-
-      callOp.replaceAllUsesWith(unifiedCallReplacements);
-      callOp.erase();
-    }
-  }
-
-  // Set up worklist to move operations into their respective phase functions.
-  // This is done after unified call decomposition so the worklist sees the new
-  // per-phase call ops.
-  SmallVector<std::tuple<int16_t, Block::iterator, Block::iterator>> worklist;
-  for (auto &block : llvm::reverse(splits[0 - minPhase].funcOp.getBody()))
-    worklist.push_back({0, block.begin(), block.end()});
-
-  // Move operations into their respective phase functions.
-  while (!worklist.empty()) {
-    auto &[phase, opIt, opEnd] = worklist.back();
-    if (opIt == opEnd) {
-      worklist.pop_back();
-      continue;
-    }
-
-    // If the current operation has been assigned to a different phase, move it
-    // to the appropriate phase function.
-    Operation *op = &*opIt;
-    ++opIt;
-    int16_t opPhase = analysis.opPhases.at(op);
-    if (opPhase == INT16_MIN)
-      opPhase = minPhase;
-    if (opPhase != phase) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "- Moving to phase " << opPhase << ": "
-                     << op->getName();
-        if (op->getNumResults() > 0)
-          llvm::dbgs() << " (" << op->getNumResults() << " results)";
-        llvm::dbgs() << "\n";
-      });
-      auto &split = splits[opPhase - minPhase];
-      auto *block = &split.funcOp.getBody().back();
-      op->moveBefore(block, block->end());
-    }
-
-    // If this is an `ExprOp`, push its nested operations onto the worklist,
-    // since those might move to a different phase as well.
-    if (auto exprOp = dyn_cast<ExprOp>(op)) {
-      LLVM_DEBUG(llvm::dbgs() << "- Descending into " << op->getName() << "\n");
-      for (auto &block : llvm::reverse(exprOp.getBody()))
-        worklist.push_back({opPhase, block.begin(), block.end()});
-    } else {
-      // TODO: Otherwise ensure that any nested operations have been assigned
-      // the same phase.
-    }
-  }
-
-  //===--------------------------------------------------------------------===//
-  // Dissolve ExprOps
-  //
-  // After phase splitting, ExprOps have served their purpose as phase
-  // annotation boundaries. Inline their bodies into the parent block and
-  // replace results with the yielded values.
-  //===--------------------------------------------------------------------===//
-
-  for (auto &split : splits) {
-    SmallVector<ExprOp> exprOps;
-    split.funcOp.walk<WalkOrder::PostOrder>(
-        [&](ExprOp op) { exprOps.push_back(op); });
-    for (auto exprOp : exprOps) {
-      auto &body = exprOp.getBody().front();
-      auto yieldOp = cast<YieldOp>(body.getTerminator());
-      for (auto [result, operand] :
-           llvm::zip(exprOp.getResults(), yieldOp.getOperands())) {
-        result.replaceAllUsesWith(operand);
-        // Update returnValues across ALL splits, not just the current one.
-        // An ExprOp result may have been stashed in a different split's
-        // returnValues (e.g., when the function's result phase differs from
-        // the ExprOp's phase due to a phaseShift).
-        for (auto &s : splits)
-          for (auto &rv : s.returnValues)
-            if (rv == result)
-              rv = operand;
-      }
-      yieldOp.erase();
-      auto *parentBlock = exprOp->getBlock();
-      parentBlock->getOperations().splice(exprOp->getIterator(),
-                                          body.getOperations());
-      exprOp.erase();
-    }
-  }
-
-  // Record the number of "own" block args and return values for each phase
-  // function before cross-phase threading adds context values. These counts
-  // are used afterward to bundle context values into opaque packs.
-  SmallVector<unsigned> numOwnArgs(maxPhase - minPhase + 1);
-  SmallVector<unsigned> numOwnReturns(maxPhase - minPhase + 1);
-  for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
-    numOwnArgs[phase - minPhase] =
-        splits[phase - minPhase].funcOp.getBody().front().getNumArguments();
-    numOwnReturns[phase - minPhase] =
-        splits[phase - minPhase].returnValues.size();
-  }
-
-  // Add return operations to all phase functions and plumb values from earlier
-  // phases to later phases. We iterate in reverse execution order (most-runtime
-  // first, most-const last) so that thread-through adds values to later splits
-  // before their return ops are emitted.
-  DenseMap<Value, Value> mapping;
-  SmallDenseSet<Operation *, 4> closedFuncs;
-  for (int16_t phase = maxPhase; phase >= minPhase; --phase) {
-    auto &split = splits[phase - minPhase];
-    closedFuncs.insert(split.funcOp);
-
-    // Add a return operation to this split with empty type operands. The
-    // signature region is the source of truth for types; ReturnOp no longer
-    // carries type information.
-    builder.setInsertionPointToEnd(&split.funcOp.getBody().back());
-    ReturnOp::create(builder, funcOp.getLoc(), split.returnValues,
-                     /*typeOfValues=*/ValueRange{});
-
-    // Replace all uses of values from earlier phases with additional block
-    // arguments. This will be replaced with constants through function
-    // specialization.
-    split.funcOp.walk([&](Operation *op) {
-      for (auto &operand : op->getOpOperands()) {
-        auto &value = mapping[operand.get()];
-        if (!value) {
-          // Get the `FuncOp` within which this value is defined.
-          auto *parentOp = operand.get().getParentBlock()->getParentOp();
-          while (!isa<FuncOp>(parentOp))
-            parentOp = parentOp->getParentOp();
-
-          // If the definition is inside the current split, simply use the value
-          // as-is. Otherwise add a block argument.
-          if (parentOp == split.funcOp) {
-            value = operand.get();
-          } else {
-            // Do a quick sanity check that we are not using a value from a
-            // later phase. This should be caught earlier and reported properly
-            // to the user.
-            if (closedFuncs.contains(parentOp)) {
-              emitBug(op->getLoc()) << "op uses value from later phase";
-              return;
-            }
-
-            // Pure ops (constants, type constructors, etc.) can be cloned
-            // into the current split instead of threading through block args.
-            // This keeps type constants like `hir.int_type` and
-            // `hir.uint_type` local to each phase, which is needed by the
-            // HIR-to-MIR lowering. The clone is recursive to handle ops like
-            // `uint_type(constant_int 42)` where the type op depends on
-            // other pure ops.
-            auto *defOp = operand.get().getDefiningOp();
-            if (defOp && isPurelyLocal(defOp)) {
-              LLVM_DEBUG({
-                llvm::dbgs() << "- Cloning into phase " << phase << ": "
-                             << defOp->getName() << "\n";
-              });
-              auto &block = split.funcOp.getBody().front();
-              OpBuilder cloneBuilder(&block, block.begin());
-              IRMapping cloneMapping;
-              clonePureOp(defOp, cloneBuilder, cloneMapping);
-              value = cloneMapping.lookup(operand.get());
-            } else {
-              // Add an argument to the current split function.
-              LLVM_DEBUG({
-                llvm::dbgs()
-                    << "- Creating arg in phase " << phase << " for value from "
-                    << operand.get().getDefiningOp()->getName() << "\n";
-              });
-              value = split.funcOp.getBody().front().addArgument(
-                  operand.get().getType(), operand.get().getLoc());
-
-              // Add the value as a result to the one-earlier phase function so
-              // it flows into the current phase as a block argument.
-              assert(phase > minPhase);
-              splits[phase - 1 - minPhase].returnValues.push_back(
-                  operand.get());
-            }
-          }
-        }
-        operand.set(value);
-      }
-    });
-    mapping.clear();
-  }
-
-  //===--------------------------------------------------------------------===//
-  // Bundle Context Values into Opaque Packs
-  //
-  // For each phase boundary, bundle the context values (added during
-  // cross-phase threading) into a single `hir.opaque_pack` at the source
-  // phase's return, and unpack them with `hir.opaque_unpack` at the target
-  // phase's entry. This ensures each phase boundary passes a single opaque
-  // bundle instead of individual values.
-  //===--------------------------------------------------------------------===//
-
-  auto anyType = AnyType::get(builder.getContext());
-  for (int16_t phase = minPhase + 1; phase <= maxPhase; ++phase) {
-    auto &split = splits[phase - minPhase];
-    auto &block = split.funcOp.getBody().front();
-    unsigned ownArgs = numOwnArgs[phase - minPhase];
-    unsigned totalArgs = block.getNumArguments();
-    unsigned contextArgs = totalArgs - ownArgs;
-
-    // In this phase: replace trailing context block args with a single opaque
-    // arg followed by an opaque_unpack. The opaque context arg feeds directly
-    // into the unpack without an intermediate coerce_type.
-    auto opaqueArg = block.addArgument(anyType, funcOp.getLoc());
-    OpBuilder unpackBuilder(&block, block.begin());
-    auto unpackOp = OpaqueUnpackOp::create(
-        unpackBuilder, funcOp.getLoc(), SmallVector<Type>(contextArgs, anyType),
-        opaqueArg);
-    for (unsigned i = 0; i < contextArgs; ++i)
-      block.getArgument(ownArgs + i).replaceAllUsesWith(unpackOp.getResult(i));
-    block.eraseArguments(ownArgs, contextArgs);
-
-    // In the previous phase: replace trailing context return values with a
-    // single opaque_pack.
-    auto &prevSplit = splits[phase - 1 - minPhase];
-    unsigned prevOwnReturns = numOwnReturns[phase - 1 - minPhase];
-
-    // Pack context values in each return of the previous phase function.
-    SmallVector<ReturnOp> prevReturns;
-    prevSplit.funcOp.getBody().walk(
-        [&](ReturnOp r) { prevReturns.push_back(r); });
-    for (auto prevReturnOp : prevReturns) {
-      OpBuilder packBuilder(prevReturnOp);
-      SmallVector<Value> contextValues(
-          prevReturnOp.getValues().drop_front(prevOwnReturns));
-      auto packOp =
-          OpaquePackOp::create(packBuilder, funcOp.getLoc(), contextValues);
-
-      SmallVector<Value> newReturnValues(
-          prevReturnOp.getValues().take_front(prevOwnReturns));
-      newReturnValues.push_back(packOp);
-      ReturnOp::create(packBuilder, funcOp.getLoc(), newReturnValues,
-                       /*typeOfValues=*/ValueRange{});
-      prevReturnOp.erase();
-    }
-  }
+  if (failed(splitBodyByPhase()))
+    return failure();
 
   //===--------------------------------------------------------------------===//
   // Set Argument and Result Names on Phase Functions
@@ -881,8 +389,8 @@ LogicalResult PhaseSplitter::run() {
     // effectiveResultPhases.
     {
       hir::consolidateSignatureTerminators(funcOp.getSignature());
-      auto unifiedSigOp = cast<hir::SignatureOp>(
-          funcOp.getSignature().back().getTerminator());
+      auto unifiedSigOp =
+          cast<hir::SignatureOp>(funcOp.getSignature().back().getTerminator());
       auto unifiedArgPhases = funcOp.getArgPhases();
       auto &unifiedSigBlock = funcOp.getSignature().front();
       auto &sigBlock = split.funcOp.getSignature().front();
@@ -1074,6 +582,456 @@ LogicalResult PhaseSplitter::run() {
   // so that callers processed later can look it up.
   symbolTable.erase(funcOp);
   symbolTable.insert(splitFuncOp);
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// splitBodyByPhase
+//
+// Handle the return operation, move the body to phase 0, shift block args,
+// decompose unified calls, distribute ops by phase, dissolve ExprOps, thread
+// cross-phase values, and bundle context into opaque packs.
+//===----------------------------------------------------------------------===//
+
+LogicalResult PhaseSplitter::splitBodyByPhase() {
+  // Handle the return operation. Each return value is placed in the split
+  // matching its effective result phase. The return op itself is erased since
+  // each phase will get its own.
+  SmallVector<ReturnOp> allReturns;
+  funcOp.getBody().walk([&](ReturnOp r) { allReturns.push_back(r); });
+  assert(!allReturns.empty() && "unified_func must have at least one return");
+  auto returnOp = allReturns.front();
+  for (auto [idx, value] : llvm::enumerate(returnOp.getValues())) {
+    int16_t resultPhase = effectiveResultPhases[idx];
+    splits[resultPhase - minPhase].returnValues.push_back(value);
+  }
+  returnOp.erase();
+
+  // Move all operations to phase 0 initially.
+  splits[0 - minPhase].funcOp.getBody().takeBody(funcOp.getBody());
+
+  // Track where each unified func arg ended up after shifted arg movement.
+  // Shifted args (phase != 0) map to their new block arg in the target phase
+  // function; phase-0 args map to the remaining block args in the phase-0
+  // function.
+  SmallVector<Value> unifiedArgValues(funcOp.getArgPhases().size());
+
+  // Move shifted-phase body block arguments to their respective phase
+  // functions. We create block args in each arg's target phase, replace all
+  // uses, and let cross-phase value threading handle multi-hop forwarding.
+  // This handles both const args (phase < 0) and dyn args (phase > 0).
+  {
+    auto &phase0Block = splits[0 - minPhase].funcOp.getBody().front();
+
+    // Collect shifted args and their phases first to avoid iterator
+    // invalidation.
+    SmallVector<std::pair<unsigned, int16_t>> shiftedArgs;
+    for (auto [idx, phase] : llvm::enumerate(funcOp.getArgPhases())) {
+      int16_t argPhase = static_cast<int16_t>(phase);
+      if (argPhase != 0)
+        shiftedArgs.push_back({idx, argPhase});
+    }
+    llvm::sort(shiftedArgs);
+
+    // Step 1: Create a block arg in each shifted arg's target phase function.
+    SmallVector<std::pair<unsigned, Value>> replacements;
+    SmallVector<unsigned> argsToErase;
+    for (auto [idx, argPhase] : shiftedArgs) {
+      auto bodyArg = phase0Block.getArgument(idx);
+      LLVM_DEBUG(llvm::dbgs() << "- Moving body arg " << idx << " to phase "
+                              << argPhase << "\n");
+      auto &targetBlock = splits[argPhase - minPhase].funcOp.getBody().front();
+      Value ownArg =
+          targetBlock.addArgument(bodyArg.getType(), bodyArg.getLoc());
+      unifiedArgValues[idx] = ownArg;
+      replacements.push_back({idx, ownArg});
+      argsToErase.push_back(idx);
+    }
+
+    // Step 2: Replace all uses of old body block args with the target-phase
+    // values. Cross-phase value threading will handle forwarding to other
+    // phases as needed.
+    for (auto &[idx, ownArg] : replacements) {
+      auto bodyArg = phase0Block.getArgument(idx);
+      bodyArg.replaceAllUsesWith(ownArg);
+    }
+
+    // Erase old body block args in reverse order.
+    for (auto idx : llvm::reverse(argsToErase))
+      phase0Block.eraseArgument(idx);
+
+    // Fill in phase-0 args (those that remained in the phase-0 block).
+    unsigned phase0ArgIdx = 0;
+    for (unsigned i = 0; i < unifiedArgValues.size(); ++i) {
+      if (unifiedArgValues[i]) // already filled (shifted arg)
+        continue;
+      unifiedArgValues[i] = phase0Block.getArgument(phase0ArgIdx++);
+    }
+  }
+
+  // Decompose UnifiedCallOps into per-phase CallOps. Each per-phase call is
+  // registered in the analysis at the appropriate phase, so the distribution
+  // worklist moves it to the correct split function.
+  {
+    auto &phase0Body = splits[0 - minPhase].funcOp.getBody();
+    SmallVector<UnifiedCallOp> unifiedCalls;
+    phase0Body.walk([&](UnifiedCallOp op) { unifiedCalls.push_back(op); });
+
+    for (auto callOp : unifiedCalls) {
+      auto calleeName = callOp.getCallee();
+      auto argPhases = callOp.getArgPhases();
+      auto resultPhases = callOp.getResultPhases();
+
+      // The call's arg/result phase attributes are callee-relative; the
+      // absolute caller-frame phase is the call op's phase plus the attribute.
+      int16_t callOpPhase = analysis.opPhases.at(callOp);
+
+      // Look up the callee's split_func and build a phase-to-function mapping
+      // by walking its entries. MultiphaseFuncOps expand to their
+      // sub-functions.
+      auto calleeSplitFunc = symbolTable.lookup<SplitFuncOp>(calleeName);
+      if (!calleeSplitFunc)
+        continue;
+
+      // Build a list of call entries from the callee's split_func. Each
+      // entry produces exactly one call, whether it's a standalone FuncOp
+      // or a MultiphaseFuncOp. We do NOT expand MultiphaseFuncOps into
+      // their sub-functions — callers call the multiphase_func itself, and
+      // SpecializeFuncs handles the internal decomposition later.
+      struct CallEntry {
+        int16_t phase;
+        StringRef symbolName;
+        unsigned numResults;
+      };
+      SmallVector<CallEntry> splitEntries;
+      {
+        auto phaseNums = calleeSplitFunc.getPhaseNumbers();
+        auto phaseFuncRefs = calleeSplitFunc.getPhaseFuncs();
+
+        for (auto [entryPhase, funcRef] : llvm::zip(phaseNums, phaseFuncRefs)) {
+          auto name = cast<FlatSymbolRefAttr>(funcRef).getValue();
+          int16_t callerPhase = callOpPhase + entryPhase;
+          unsigned numResults;
+          if (auto mpFunc = symbolTable.lookup<MultiphaseFuncOp>(name)) {
+            numResults = mpFunc.getResultNames().size();
+          } else if (auto func = symbolTable.lookup<FuncOp>(name)) {
+            numResults = func.getResultNames().size();
+          } else {
+            continue;
+          }
+          splitEntries.push_back({callerPhase, name, numResults});
+        }
+      }
+      if (splitEntries.empty())
+        continue;
+
+      // Determine the caller-frame phase range from the split entries.
+      int16_t calleeMaxPhase = INT16_MIN;
+      for (auto &entry : splitEntries)
+        calleeMaxPhase = std::max(calleeMaxPhase, entry.phase);
+
+      OpBuilder callBuilder(callOp);
+      auto loc = callOp.getLoc();
+
+      // Update phases of existing type operands so they land in the correct
+      // split function during distribution.
+      for (auto [type, phase] : llvm::zip(callOp.getTypeOfArgs(), argPhases)) {
+        int16_t p = callOpPhase + static_cast<int16_t>(phase);
+        if (auto *defOp = type.getDefiningOp()) {
+          auto &opPhase = analysis.opPhases[defOp];
+          opPhase = std::min(opPhase, p);
+          auto &valPhase = analysis.valuePhases[type];
+          valPhase = std::min(valPhase, p);
+        }
+      }
+      for (auto [type, phase] :
+           llvm::zip(callOp.getTypeOfResults(), resultPhases)) {
+        int16_t p = callOpPhase + static_cast<int16_t>(phase);
+        if (auto *defOp = type.getDefiningOp()) {
+          auto &opPhase = analysis.opPhases[defOp];
+          opPhase = std::min(opPhase, p);
+          auto &valPhase = analysis.valuePhases[type];
+          valPhase = std::min(valPhase, p);
+        }
+      }
+
+      // Partition arguments and their type operands by absolute phase.
+      DenseMap<int16_t, SmallVector<Value>> phaseArgs, phaseTypeOfArgs;
+      for (auto [arg, type, phase] : llvm::zip(
+               callOp.getArguments(), callOp.getTypeOfArgs(), argPhases)) {
+        int16_t abs = callOpPhase + static_cast<int16_t>(phase);
+        phaseArgs[abs].push_back(arg);
+        phaseTypeOfArgs[abs].push_back(type);
+      }
+
+      // Determine the phase that produces the unified_call's actual results.
+      int16_t maxResultPhase = INT16_MIN;
+      for (auto p : resultPhases)
+        maxResultPhase = std::max(
+            maxResultPhase,
+            static_cast<int16_t>(callOpPhase + static_cast<int16_t>(p)));
+
+      // Collect which result indices belong to which phase.
+      DenseSet<int16_t> resultPhaseSet;
+      for (auto p : resultPhases)
+        resultPhaseSet.insert(callOpPhase + static_cast<int16_t>(p));
+
+      // Chain calls from earliest phase to latest.
+      SmallVector<Value> prevResults;
+      SmallVector<Value> unifiedCallReplacements;
+      for (auto &entry : splitEntries) {
+        int16_t phase = entry.phase;
+        SmallVector<Value> callArgs(phaseArgs[phase]);
+        SmallVector<Value> callTypeOfArgs(phaseTypeOfArgs[phase]);
+
+        // Thread results from the previous phase.
+        for (auto result : prevResults) {
+          callArgs.push_back(result);
+          auto opaqueType = OpaqueTypeOp::create(callBuilder, loc);
+          analysis.opPhases[opaqueType] = phase;
+          analysis.valuePhases[opaqueType.getResult()] = phase;
+          callTypeOfArgs.push_back(opaqueType.getResult());
+        }
+
+        // The result phase uses the original unified_call's result types.
+        bool isResultPhase = (phase == maxResultPhase);
+        SmallVector<Value> callTypeOfResults;
+        SmallVector<Type> resultTypes;
+        if (isResultPhase) {
+          callTypeOfResults.append(callOp.getTypeOfResults().begin(),
+                                   callOp.getTypeOfResults().end());
+          resultTypes.append(callOp.getResultTypes().begin(),
+                             callOp.getResultTypes().end());
+        }
+
+        // For non-result phases (and result phases that also forward context
+        // to later phases), add opaque result types.
+        if (!isResultPhase || phase != calleeMaxPhase) {
+          unsigned startIdx = isResultPhase ? callOp.getNumResults() : 0;
+          for (unsigned i = startIdx; i < entry.numResults; ++i) {
+            auto opaqueType = OpaqueTypeOp::create(callBuilder, loc);
+            analysis.opPhases[opaqueType] = phase;
+            analysis.valuePhases[opaqueType.getResult()] = phase;
+            callTypeOfResults.push_back(opaqueType.getResult());
+            resultTypes.push_back(AnyType::get(callBuilder.getContext()));
+          }
+        }
+
+        auto call = CallOp::create(callBuilder, loc, resultTypes,
+                                   callBuilder.getStringAttr(entry.symbolName),
+                                   callArgs, callTypeOfArgs, callTypeOfResults);
+        analysis.opPhases[call] = phase;
+        for (auto result : call.getResults())
+          analysis.valuePhases[result] = phase;
+
+        if (isResultPhase) {
+          for (unsigned i = 0; i < callOp.getNumResults(); ++i)
+            unifiedCallReplacements.push_back(call.getResult(i));
+          prevResults.assign(call.getResults().begin() + callOp.getNumResults(),
+                             call.getResults().end());
+        } else {
+          prevResults.assign(call.getResults().begin(),
+                             call.getResults().end());
+        }
+      }
+
+      // Update any return values that reference the old unified call's results.
+      for (auto &split : splits)
+        for (auto &rv : split.returnValues)
+          for (auto [oldResult, newResult] :
+               llvm::zip(callOp.getResults(), unifiedCallReplacements))
+            if (rv == oldResult)
+              rv = newResult;
+
+      callOp.replaceAllUsesWith(unifiedCallReplacements);
+      callOp.erase();
+    }
+  }
+
+  // Set up worklist to move operations into their respective phase functions.
+  SmallVector<std::tuple<int16_t, Block::iterator, Block::iterator>> worklist;
+  for (auto &block : llvm::reverse(splits[0 - minPhase].funcOp.getBody()))
+    worklist.push_back({0, block.begin(), block.end()});
+
+  // Move operations into their respective phase functions.
+  while (!worklist.empty()) {
+    auto &[phase, opIt, opEnd] = worklist.back();
+    if (opIt == opEnd) {
+      worklist.pop_back();
+      continue;
+    }
+
+    Operation *op = &*opIt;
+    ++opIt;
+    int16_t opPhase = analysis.opPhases.at(op);
+    if (opPhase == INT16_MIN)
+      opPhase = minPhase;
+    if (opPhase != phase) {
+      LLVM_DEBUG({
+        llvm::dbgs() << "- Moving to phase " << opPhase << ": "
+                     << op->getName();
+        if (op->getNumResults() > 0)
+          llvm::dbgs() << " (" << op->getNumResults() << " results)";
+        llvm::dbgs() << "\n";
+      });
+      auto &split = splits[opPhase - minPhase];
+      auto *block = &split.funcOp.getBody().back();
+      op->moveBefore(block, block->end());
+    }
+
+    if (auto exprOp = dyn_cast<ExprOp>(op)) {
+      LLVM_DEBUG(llvm::dbgs() << "- Descending into " << op->getName() << "\n");
+      for (auto &block : llvm::reverse(exprOp.getBody()))
+        worklist.push_back({opPhase, block.begin(), block.end()});
+    } else {
+      // TODO: Otherwise ensure that any nested operations have been assigned
+      // the same phase.
+    }
+  }
+
+  //===--------------------------------------------------------------------===//
+  // Dissolve ExprOps
+  //===--------------------------------------------------------------------===//
+
+  for (auto &split : splits) {
+    SmallVector<ExprOp> exprOps;
+    split.funcOp.walk<WalkOrder::PostOrder>(
+        [&](ExprOp op) { exprOps.push_back(op); });
+    for (auto exprOp : exprOps) {
+      auto &body = exprOp.getBody().front();
+      auto yieldOp = cast<YieldOp>(body.getTerminator());
+      for (auto [result, operand] :
+           llvm::zip(exprOp.getResults(), yieldOp.getOperands())) {
+        result.replaceAllUsesWith(operand);
+        for (auto &s : splits)
+          for (auto &rv : s.returnValues)
+            if (rv == result)
+              rv = operand;
+      }
+      yieldOp.erase();
+      auto *parentBlock = exprOp->getBlock();
+      parentBlock->getOperations().splice(exprOp->getIterator(),
+                                          body.getOperations());
+      exprOp.erase();
+    }
+  }
+
+  // Record the number of "own" block args and return values per phase.
+  numOwnArgs.assign(maxPhase - minPhase + 1, 0);
+  numOwnReturns.assign(maxPhase - minPhase + 1, 0);
+  for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
+    numOwnArgs[phase - minPhase] =
+        splits[phase - minPhase].funcOp.getBody().front().getNumArguments();
+    numOwnReturns[phase - minPhase] =
+        splits[phase - minPhase].returnValues.size();
+  }
+
+  //===--------------------------------------------------------------------===//
+  // Cross-Phase Value Threading
+  //===--------------------------------------------------------------------===//
+
+  OpBuilder builder(funcOp);
+  DenseMap<Value, Value> mapping;
+  SmallDenseSet<Operation *, 4> closedFuncs;
+  for (int16_t phase = maxPhase; phase >= minPhase; --phase) {
+    auto &split = splits[phase - minPhase];
+    closedFuncs.insert(split.funcOp);
+
+    builder.setInsertionPointToEnd(&split.funcOp.getBody().back());
+    ReturnOp::create(builder, funcOp.getLoc(), split.returnValues,
+                     /*typeOfValues=*/ValueRange{});
+
+    split.funcOp.walk([&](Operation *op) {
+      for (auto &operand : op->getOpOperands()) {
+        auto &value = mapping[operand.get()];
+        if (!value) {
+          auto *parentOp = operand.get().getParentBlock()->getParentOp();
+          while (!isa<FuncOp>(parentOp))
+            parentOp = parentOp->getParentOp();
+
+          if (parentOp == split.funcOp) {
+            value = operand.get();
+          } else {
+            if (closedFuncs.contains(parentOp)) {
+              emitBug(op->getLoc()) << "op uses value from later phase";
+              return;
+            }
+
+            auto *defOp = operand.get().getDefiningOp();
+            if (defOp && isPurelyLocal(defOp)) {
+              LLVM_DEBUG({
+                llvm::dbgs() << "- Cloning into phase " << phase << ": "
+                             << defOp->getName() << "\n";
+              });
+              auto &block = split.funcOp.getBody().front();
+              OpBuilder cloneBuilder(&block, block.begin());
+              IRMapping cloneMapping;
+              clonePureOp(defOp, cloneBuilder, cloneMapping);
+              value = cloneMapping.lookup(operand.get());
+            } else {
+              LLVM_DEBUG({
+                llvm::dbgs()
+                    << "- Creating arg in phase " << phase << " for value from "
+                    << operand.get().getDefiningOp()->getName() << "\n";
+              });
+              value = split.funcOp.getBody().front().addArgument(
+                  operand.get().getType(), operand.get().getLoc());
+
+              assert(phase > minPhase);
+              splits[phase - 1 - minPhase].returnValues.push_back(
+                  operand.get());
+            }
+          }
+        }
+        operand.set(value);
+      }
+    });
+    mapping.clear();
+  }
+
+  //===--------------------------------------------------------------------===//
+  // Bundle Context Values into Opaque Packs
+  //===--------------------------------------------------------------------===//
+
+  auto anyType = AnyType::get(builder.getContext());
+  for (int16_t phase = minPhase + 1; phase <= maxPhase; ++phase) {
+    auto &split = splits[phase - minPhase];
+    auto &block = split.funcOp.getBody().front();
+    unsigned ownArgs = numOwnArgs[phase - minPhase];
+    unsigned totalArgs = block.getNumArguments();
+    unsigned contextArgs = totalArgs - ownArgs;
+
+    auto opaqueArg = block.addArgument(anyType, funcOp.getLoc());
+    OpBuilder unpackBuilder(&block, block.begin());
+    auto unpackOp = OpaqueUnpackOp::create(
+        unpackBuilder, funcOp.getLoc(), SmallVector<Type>(contextArgs, anyType),
+        opaqueArg);
+    for (unsigned i = 0; i < contextArgs; ++i)
+      block.getArgument(ownArgs + i).replaceAllUsesWith(unpackOp.getResult(i));
+    block.eraseArguments(ownArgs, contextArgs);
+
+    auto &prevSplit = splits[phase - 1 - minPhase];
+    unsigned prevOwnReturns = numOwnReturns[phase - 1 - minPhase];
+
+    SmallVector<ReturnOp> prevReturns;
+    prevSplit.funcOp.getBody().walk(
+        [&](ReturnOp r) { prevReturns.push_back(r); });
+    for (auto prevReturnOp : prevReturns) {
+      OpBuilder packBuilder(prevReturnOp);
+      SmallVector<Value> contextValues(
+          prevReturnOp.getValues().drop_front(prevOwnReturns));
+      auto packOp =
+          OpaquePackOp::create(packBuilder, funcOp.getLoc(), contextValues);
+
+      SmallVector<Value> newReturnValues(
+          prevReturnOp.getValues().take_front(prevOwnReturns));
+      newReturnValues.push_back(packOp);
+      ReturnOp::create(packBuilder, funcOp.getLoc(), newReturnValues,
+                       /*typeOfValues=*/ValueRange{});
+      prevReturnOp.erase();
+    }
+  }
+
   return success();
 }
 
