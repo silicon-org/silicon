@@ -52,6 +52,10 @@ struct PhaseAnalysis {
   mlir::DenseMap<mlir::Value, int16_t> valuePhases;
 
 private:
+  /// Run the forward phase walk on a single region, computing phases for all
+  /// ops and values. Used by `analyze()` on both body and signature.
+  void analyzeRegion(mlir::Region &region);
+
   /// Try to pull a value (and its transitive dependencies) to an earlier phase.
   /// Returns true if the pull succeeded.
   bool pullValueToPhase(mlir::Value value, int16_t targetPhase);

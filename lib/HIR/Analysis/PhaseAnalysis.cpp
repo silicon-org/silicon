@@ -21,11 +21,14 @@ void PhaseAnalysis::analyze() {
   LLVM_DEBUG(llvm::dbgs() << "Analyzing phases in " << funcOp.getSymNameAttr()
                           << "\n");
 
-  // Pre-populate valuePhases for all body block arguments.
+  // Pre-populate valuePhases for body and signature block arguments. Both
+  // regions have matching block args corresponding to the function arguments.
   auto bodyArgs = funcOp.getBody().getArguments();
+  auto sigArgs = funcOp.getSignature().getArguments();
   for (auto [idx, phase] : llvm::enumerate(funcOp.getArgPhases())) {
     int16_t argPhase = static_cast<int16_t>(phase);
     valuePhases[bodyArgs[idx]] = argPhase;
+    valuePhases[sigArgs[idx]] = argPhase;
     LLVM_DEBUG(if (argPhase != 0) llvm::dbgs()
                << "- Arg " << idx << " has phase " << argPhase << "\n");
   }
@@ -33,8 +36,15 @@ void PhaseAnalysis::analyze() {
   // Seed the function itself at phase 0.
   opPhases.insert({funcOp, 0});
 
-  // Walk the body in PreOrder, computing earliest available phases.
-  funcOp.getBody().walk<WalkOrder::PreOrder>([&](Operation *op) {
+  // Walk both regions in PreOrder, computing earliest available phases.
+  // Signature first so that type values are available if the body references
+  // them (not currently the case, but future-proof).
+  analyzeRegion(funcOp.getSignature());
+  analyzeRegion(funcOp.getBody());
+}
+
+void PhaseAnalysis::analyzeRegion(Region &region) {
+  region.walk<WalkOrder::PreOrder>([&](Operation *op) {
     auto *parentOp = op->getParentOp();
     int16_t parentPhase = opPhases.at(parentOp);
 
@@ -98,20 +108,24 @@ int16_t PhaseAnalysis::getValuePhase(Value value) const {
 
 LogicalResult PhaseAnalysis::checkCallArgPhases() {
   bool anyErrors = false;
-  funcOp.getBody().walk([&](UnifiedCallOp callOp) {
-    int16_t callOpPhase = opPhases.at(callOp);
-    for (auto [arg, phase] :
-         llvm::zip(callOp.getArguments(), callOp.getArgPhases())) {
-      int16_t required = callOpPhase + static_cast<int16_t>(phase);
-      int16_t available = getValuePhase(arg);
-      if (available > required) {
-        emitError(callOp.getLoc())
-            << "call argument requires phase " << required
-            << " but value is only available at phase " << available;
-        anyErrors = true;
+  auto checkRegion = [&](Region &region) {
+    region.walk([&](UnifiedCallOp callOp) {
+      int16_t callOpPhase = opPhases.at(callOp);
+      for (auto [arg, phase] :
+           llvm::zip(callOp.getArguments(), callOp.getArgPhases())) {
+        int16_t required = callOpPhase + static_cast<int16_t>(phase);
+        int16_t available = getValuePhase(arg);
+        if (available > required) {
+          emitError(callOp.getLoc())
+              << "call argument requires phase " << required
+              << " but value is only available at phase " << available;
+          anyErrors = true;
+        }
       }
-    }
-  });
+    });
+  };
+  checkRegion(funcOp.getSignature());
+  checkRegion(funcOp.getBody());
   return anyErrors ? failure() : success();
 }
 
@@ -127,16 +141,20 @@ LogicalResult PhaseAnalysis::checkCallArgPhases() {
 //===----------------------------------------------------------------------===//
 
 void PhaseAnalysis::pullPhases() {
-  funcOp.getBody().walk([&](UnifiedCallOp callOp) {
-    int16_t callOpPhase = opPhases.at(callOp);
-    for (auto [arg, phase] :
-         llvm::zip(callOp.getArguments(), callOp.getArgPhases())) {
-      int16_t required = callOpPhase + static_cast<int16_t>(phase);
-      int16_t available = getValuePhase(arg);
-      if (available > required)
-        pullValueToPhase(arg, required);
-    }
-  });
+  auto pullInRegion = [&](Region &region) {
+    region.walk([&](UnifiedCallOp callOp) {
+      int16_t callOpPhase = opPhases.at(callOp);
+      for (auto [arg, phase] :
+           llvm::zip(callOp.getArguments(), callOp.getArgPhases())) {
+        int16_t required = callOpPhase + static_cast<int16_t>(phase);
+        int16_t available = getValuePhase(arg);
+        if (available > required)
+          pullValueToPhase(arg, required);
+      }
+    });
+  };
+  pullInRegion(funcOp.getSignature());
+  pullInRegion(funcOp.getBody());
 }
 
 bool PhaseAnalysis::pullValueToPhase(Value value, int16_t targetPhase) {
@@ -203,30 +221,35 @@ bool PhaseAnalysis::pullValueToPhase(Value value, int16_t targetPhase) {
 }
 
 void PhaseAnalysis::refreshPhases() {
-  funcOp.getBody().walk<WalkOrder::PreOrder>([&](Operation *op) {
-    auto *parentOp = op->getParentOp();
-    int16_t parentPhase = opPhases.at(parentOp);
-    bool isTopLevel = isa<UnifiedFuncOp>(parentOp);
-    int16_t floor = isTopLevel ? INT16_MIN : parentPhase;
+  auto refreshRegion = [&](Region &region) {
+    region.walk<WalkOrder::PreOrder>([&](Operation *op) {
+      auto *parentOp = op->getParentOp();
+      int16_t parentPhase = opPhases.at(parentOp);
+      bool isTopLevel = isa<UnifiedFuncOp>(parentOp);
+      int16_t floor = isTopLevel ? INT16_MIN : parentPhase;
 
-    int16_t phase;
-    if (auto exprOp = dyn_cast<ExprOp>(op); exprOp && exprOp.getPhaseShift()) {
-      phase = parentPhase + exprOp.getPhaseShift();
-    } else if (!isa<ExprOp>(op) && hir::isEffectivelyPure(op)) {
-      phase = floor;
-      for (auto operand : op->getOperands())
-        phase = std::max(phase, getValuePhase(operand));
-    } else {
-      phase = parentPhase;
-    }
+      int16_t phase;
+      if (auto exprOp = dyn_cast<ExprOp>(op);
+          exprOp && exprOp.getPhaseShift()) {
+        phase = parentPhase + exprOp.getPhaseShift();
+      } else if (!isa<ExprOp>(op) && hir::isEffectivelyPure(op)) {
+        phase = floor;
+        for (auto operand : op->getOperands())
+          phase = std::max(phase, getValuePhase(operand));
+      } else {
+        phase = parentPhase;
+      }
 
-    // Keep the earlier of existing (possibly pulled) and recomputed phase.
-    auto &existing = opPhases[op];
-    phase = std::min(existing, phase);
-    existing = phase;
-    for (auto result : op->getResults())
-      valuePhases[result] = phase;
-  });
+      // Keep the earlier of existing (possibly pulled) and recomputed phase.
+      auto &existing = opPhases[op];
+      phase = std::min(existing, phase);
+      existing = phase;
+      for (auto result : op->getResults())
+        valuePhases[result] = phase;
+    });
+  };
+  refreshRegion(funcOp.getSignature());
+  refreshRegion(funcOp.getBody());
 }
 
 void PhaseAnalysis::recomputeRegionPhases(Region &region, int16_t floor) {
