@@ -1,8 +1,8 @@
 # TODO
 
-- `resolveTypeIntoRegion` in SplitPhases cannot handle return type operands that transitively depend on non-entry-block values (e.g., phi block args from if/else merges).
+- Multi-block signature regions (e.g., phi block args from if/else merges) may still fall back to OpaqueTypeOp.
   The `in_range` example in `docs/examples/basics/operators.md` triggers this (tagged `silicon-todo` to skip doc testing).
-  This requires thorough investigation.
+  Full distribution-based signature splitting (like the body) would preserve multi-block structure.
 
 ## Dialect Review: Missing Error Handling
 

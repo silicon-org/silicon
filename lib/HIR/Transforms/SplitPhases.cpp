@@ -29,26 +29,6 @@ namespace hir {
 } // namespace hir
 } // namespace silicon
 
-/// Resolve a value from one region into another by recursively cloning its
-/// defining op and all transitive operands. Values already in the mapping are
-/// returned directly (e.g., block arguments that have been pre-mapped).
-/// Returns null if a block argument is not in the mapping (cross-phase type
-/// dependency), allowing the caller to fall back to OpaqueTypeOp.
-static Value tryResolveTypeIntoRegion(OpBuilder &builder, Value val,
-                                      IRMapping &mapping) {
-  if (auto mapped = mapping.lookupOrNull(val))
-    return mapped;
-  auto *defOp = val.getDefiningOp();
-  if (!defOp)
-    return {};
-  for (Value operand : defOp->getOperands()) {
-    if (!tryResolveTypeIntoRegion(builder, operand, mapping))
-      return {};
-  }
-  auto *cloned = builder.clone(*defOp, mapping);
-  return cloned->getResult(cast<OpResult>(val).getResultNumber());
-}
-
 /// Check whether an op and all its transitive operands are pure (side-effect
 /// free). This is used to decide whether an op can be cloned into a split
 /// phase function instead of being threaded through as a block argument.
@@ -122,6 +102,11 @@ private:
   /// Split the body region by distributing ops into per-phase functions,
   /// threading cross-phase values, and bundling context into opaque packs.
   LogicalResult splitBodyByPhase();
+
+  /// Populate per-phase signature regions. For each phase function, resolve
+  /// arg and result types from the unified signature by cloning pure ops or
+  /// falling back to OpaqueTypeOp for cross-phase dependencies.
+  void splitSignatureByPhase();
 };
 } // namespace
 
@@ -383,85 +368,10 @@ LogicalResult PhaseSplitter::run() {
         phaseResultNames.push_back(builder.getStringAttr("ctx"));
     }
     split.funcOp.setResultNamesAttr(builder.getArrayAttr(phaseResultNames));
-
-    // Populate the signature region from the unified func's signature.
-    // Partition type operands by phase using argPhases and
-    // effectiveResultPhases.
-    {
-      hir::consolidateSignatureTerminators(funcOp.getSignature());
-      auto unifiedSigOp =
-          cast<hir::SignatureOp>(funcOp.getSignature().back().getTerminator());
-      auto unifiedArgPhases = funcOp.getArgPhases();
-      auto &unifiedSigBlock = funcOp.getSignature().front();
-      auto &sigBlock = split.funcOp.getSignature().front();
-      auto &bodyBlock = split.funcOp.getBody().front();
-
-      // Add block args matching the body's entry block.
-      for (auto bodyArg : bodyBlock.getArguments())
-        sigBlock.addArgument(bodyArg.getType(), bodyArg.getLoc());
-
-      OpBuilder sigBuilder(&sigBlock, sigBlock.begin());
-      IRMapping sigMapping;
-
-      // Map unified sig block args -> per-phase sig block args for own args.
-      unsigned localArgIdx = 0;
-      for (unsigned i = 0; i < unifiedArgPhases.size(); ++i) {
-        if (static_cast<int16_t>(unifiedArgPhases[i]) == phase)
-          sigMapping.map(unifiedSigBlock.getArgument(i),
-                         sigBlock.getArgument(localArgIdx++));
-      }
-
-      // Clone own arg types from unified signature. For cross-phase type
-      // deps (where an operand references a block arg from another phase),
-      // fall back to OpaqueTypeOp.
-      SmallVector<Value> sigArgTypes;
-      for (unsigned i = 0; i < unifiedArgPhases.size(); ++i) {
-        if (static_cast<int16_t>(unifiedArgPhases[i]) == phase) {
-          Value resolved = tryResolveTypeIntoRegion(
-              sigBuilder, unifiedSigOp.getTypeOfArgs()[i], sigMapping);
-          if (!resolved)
-            resolved =
-                OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult();
-          sigArgTypes.push_back(resolved);
-        }
-      }
-
-      // Context arg gets opaque type.
-      if (sigBlock.getNumArguments() > sigArgTypes.size())
-        sigArgTypes.push_back(
-            OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult());
-
-      // Clone own result types from unified signature.
-      SmallVector<Value> sigResultTypes;
-      for (auto [idx, resultPhase] : llvm::enumerate(effectiveResultPhases)) {
-        if (resultPhase == phase) {
-          Value resolved = tryResolveTypeIntoRegion(
-              sigBuilder, unifiedSigOp.getTypeOfResults()[idx], sigMapping);
-          if (!resolved)
-            resolved =
-                OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult();
-          sigResultTypes.push_back(resolved);
-        }
-      }
-
-      // Context result gets opaque type.
-      ReturnOp splitRetOp;
-      split.funcOp.getBody().walk([&](ReturnOp r) {
-        if (!splitRetOp)
-          splitRetOp = r;
-      });
-      if (splitRetOp)
-        if (splitRetOp.getValues().size() > sigResultTypes.size())
-          sigResultTypes.push_back(
-              OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult());
-
-      // Replace placeholder SignatureOp.
-      sigBlock.getTerminator()->erase();
-      sigBuilder.setInsertionPointToEnd(&sigBlock);
-      SignatureOp::create(sigBuilder, funcOp.getLoc(), sigArgTypes,
-                          sigResultTypes);
-    }
   }
+
+  // Populate per-phase signature regions.
+  splitSignatureByPhase();
 
   //===--------------------------------------------------------------------===//
   // Emit Structural Ops
@@ -1033,6 +943,98 @@ LogicalResult PhaseSplitter::splitBodyByPhase() {
   }
 
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// splitSignatureByPhase
+//
+// Populate per-phase signature regions from the unified signature. For each
+// phase function, we add sig block args matching the body, map the unified
+// sig block args to their per-phase counterparts, then resolve each type
+// operand (arg and result types) by cloning pure ops or falling back to
+// OpaqueTypeOp for cross-phase dependencies.
+//===----------------------------------------------------------------------===//
+
+void PhaseSplitter::splitSignatureByPhase() {
+  hir::consolidateSignatureTerminators(funcOp.getSignature());
+  auto unifiedSigOp =
+      cast<SignatureOp>(funcOp.getSignature().back().getTerminator());
+  auto unifiedArgPhases = funcOp.getArgPhases();
+  auto &unifiedSigBlock = funcOp.getSignature().front();
+
+  for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
+    auto &split = splits[phase - minPhase];
+    auto &sigBlock = split.funcOp.getSignature().front();
+    auto &bodyBlock = split.funcOp.getBody().front();
+
+    // Add block args matching the body's entry block.
+    for (auto bodyArg : bodyBlock.getArguments())
+      sigBlock.addArgument(bodyArg.getType(), bodyArg.getLoc());
+
+    OpBuilder sigBuilder(&sigBlock, sigBlock.begin());
+    IRMapping sigMapping;
+
+    // Map unified sig block args to per-phase sig block args for own args.
+    unsigned localArgIdx = 0;
+    for (unsigned i = 0; i < unifiedArgPhases.size(); ++i) {
+      if (static_cast<int16_t>(unifiedArgPhases[i]) == phase)
+        sigMapping.map(unifiedSigBlock.getArgument(i),
+                       sigBlock.getArgument(localArgIdx++));
+    }
+
+    // Resolve a type value from the unified signature into this phase's
+    // signature. Pure ops are cloned transitively; cross-phase block arg
+    // dependencies fall back to OpaqueTypeOp.
+    auto resolveType = [&](Value val) -> Value {
+      if (auto mapped = sigMapping.lookupOrNull(val))
+        return mapped;
+      auto *defOp = val.getDefiningOp();
+      if (!defOp)
+        return OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult();
+      if (isPurelyLocal(defOp)) {
+        clonePureOp(defOp, sigBuilder, sigMapping);
+        return sigMapping.lookup(val);
+      }
+      return OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult();
+    };
+
+    // Resolve arg types for this phase's own args.
+    SmallVector<Value> sigArgTypes;
+    for (unsigned i = 0; i < unifiedArgPhases.size(); ++i) {
+      if (static_cast<int16_t>(unifiedArgPhases[i]) == phase)
+        sigArgTypes.push_back(resolveType(unifiedSigOp.getTypeOfArgs()[i]));
+    }
+
+    // Context arg gets opaque type.
+    if (sigBlock.getNumArguments() > sigArgTypes.size())
+      sigArgTypes.push_back(
+          OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult());
+
+    // Resolve result types for this phase.
+    SmallVector<Value> sigResultTypes;
+    for (auto [idx, resultPhase] : llvm::enumerate(effectiveResultPhases)) {
+      if (resultPhase == phase)
+        sigResultTypes.push_back(
+            resolveType(unifiedSigOp.getTypeOfResults()[idx]));
+    }
+
+    // Context result gets opaque type.
+    ReturnOp splitRetOp;
+    split.funcOp.getBody().walk([&](ReturnOp r) {
+      if (!splitRetOp)
+        splitRetOp = r;
+    });
+    if (splitRetOp)
+      if (splitRetOp.getValues().size() > sigResultTypes.size())
+        sigResultTypes.push_back(
+            OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult());
+
+    // Replace the placeholder SignatureOp terminator.
+    sigBlock.getTerminator()->erase();
+    sigBuilder.setInsertionPointToEnd(&sigBlock);
+    SignatureOp::create(sigBuilder, funcOp.getLoc(), sigArgTypes,
+                        sigResultTypes);
+  }
 }
 
 namespace {
