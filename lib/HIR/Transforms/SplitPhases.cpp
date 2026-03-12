@@ -10,6 +10,7 @@
 #include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Passes.h"
 #include "silicon/Support/MLIR.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Value.h"
@@ -504,12 +505,68 @@ LogicalResult PhaseSplitter::run() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult PhaseSplitter::splitBodyByPhase() {
-  // Handle the return operation. Each return value is placed in the split
-  // matching its effective result phase. The return op itself is erased since
-  // each phase will get its own.
+  //===--------------------------------------------------------------------===//
+  // Exit Block Normalization
+  //
+  // If the body has multiple ReturnOps across different blocks, normalize to
+  // a single exit block. Each original return is replaced with a branch to
+  // the exit block, which holds the single canonical ReturnOp. This ensures
+  // the rest of the splitting logic only sees one return.
+  //===--------------------------------------------------------------------===//
+
   SmallVector<ReturnOp> allReturns;
   funcOp.getBody().walk([&](ReturnOp r) { allReturns.push_back(r); });
   assert(!allReturns.empty() && "unified_func must have at least one return");
+
+  if (allReturns.size() > 1) {
+    unsigned numResults = allReturns.front().getValues().size();
+    auto *exitBlock = new Block();
+    funcOp.getBody().push_back(exitBlock);
+
+    // Add block args matching the return operand count and types.
+    SmallVector<Type> argTypes;
+    SmallVector<Location> argLocs;
+    for (unsigned i = 0; i < numResults; ++i) {
+      argTypes.push_back(allReturns.front().getValues()[i].getType());
+      argLocs.push_back(allReturns.front().getValues()[i].getLoc());
+    }
+    exitBlock->addArguments(argTypes, argLocs);
+
+    // Replace each return with a branch to the exit block.
+    for (auto ret : allReturns) {
+      int16_t retPhase = analysis.opPhases.at(ret);
+      OpBuilder retBuilder(ret);
+      auto brOp = mlir::cf::BranchOp::create(retBuilder, ret.getLoc(),
+                                             exitBlock, ret.getValues());
+      analysis.opPhases[brOp] = retPhase;
+      ret.erase();
+    }
+
+    // Place the canonical return in the exit block.
+    OpBuilder exitBuilder(exitBlock, exitBlock->end());
+    ReturnOp::create(exitBuilder, funcOp.getLoc(), exitBlock->getArguments(),
+                     /*typeOfValues=*/ValueRange{});
+
+    // Update the phase analysis for the new exit block ops and args.
+    // Exit block args take the max phase of corresponding return operands
+    // across all branches (conservative: use phase 0 since returns are at
+    // phase 0).
+    for (auto arg : exitBlock->getArguments())
+      analysis.valuePhases[arg] = 0;
+    for (auto &op : *exitBlock) {
+      analysis.opPhases[&op] = 0;
+      for (auto result : op.getResults())
+        analysis.valuePhases[result] = 0;
+    }
+
+    // Re-collect returns after normalization.
+    allReturns.clear();
+    funcOp.getBody().walk([&](ReturnOp r) { allReturns.push_back(r); });
+  }
+
+  // Handle the return operation. Each return value is placed in the split
+  // matching its effective result phase. The return op itself is erased since
+  // each phase will get its own.
   auto returnOp = allReturns.front();
   for (auto [idx, value] : llvm::enumerate(returnOp.getValues())) {
     int16_t resultPhase = effectiveResultPhases[idx];

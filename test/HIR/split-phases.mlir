@@ -860,3 +860,35 @@ hir.unified_func @MixedConstDynArg(%a: -1, %b: 1) -> (result: 0) {
   %1 = hir.coerce_type %a, %0
   hir.return %1 -> (%0)
 }
+
+//===----------------------------------------------------------------------===//
+// Multi-return: the body has two returns across different blocks.
+// Exit block normalization merges them into a single return before splitting.
+
+// CHECK-LABEL: hir.func private @MultiReturn.0(%x) -> (result)
+// CHECK:      hir.signature
+// CHECK:      } {
+// CHECK:      cf.cond_br %{{.*}}, ^[[BB1:.*]], ^[[BB2:.*]]
+// CHECK:    ^[[BB1]]:
+// CHECK-NEXT: cf.br ^[[EXIT:.*]](
+// CHECK:    ^[[BB2]]:
+// CHECK-NEXT: cf.br ^[[EXIT]](
+// CHECK:    ^[[EXIT]](%{{.*}}: !hir.any):
+// CHECK-NEXT: hir.return %{{.*}} -> ()
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @MultiReturn(%x: 0) -> (result: 0)
+// CHECK:         hir.signature
+// CHECK:       0: @MultiReturn.0
+hir.unified_func @MultiReturn(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.signature (%0) -> (%0)
+} {
+  %cond = arith.constant true
+  %tx = hir.type_of %x
+  cf.cond_br %cond, ^bb1, ^bb2
+^bb1:
+  hir.return %x -> (%tx)
+^bb2:
+  hir.return %x -> (%tx)
+}
