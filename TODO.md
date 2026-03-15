@@ -1,8 +1,9 @@
 # TODO
 
-- Multi-block signature regions (e.g., phi block args from if/else merges) may still fall back to OpaqueTypeOp.
-  The `in_range` example in `docs/examples/basics/operators.md` triggers this (tagged `silicon-todo` to skip doc testing).
-  Full distribution-based signature splitting (like the body) would preserve multi-block structure.
+- The `in_range` example in `docs/examples/basics/operators.md` fails with `mir.return` type mismatch (`!hir.any` vs `!si.bool`).
+  Tagged `silicon-todo` to skip doc testing.
+  Root cause: the `&&` short-circuit produces a value typed `!hir.any` that doesn't get coerced to `!si.bool` before the MIR return.
+  Unrelated to multi-block signatures (which are now handled by phi tracing in `resolveTypeValue`).
 
 ## Dialect Review: Missing Error Handling
 

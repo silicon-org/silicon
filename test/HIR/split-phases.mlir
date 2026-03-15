@@ -862,6 +862,67 @@ hir.unified_func @MixedConstDynArg(%a: -1, %b: 1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Multi-block signature: the signature region has control flow (two paths that
+// both end with hir.signature). After consolidation, the type values become
+// phi block args. When all predecessors pass the same value, the phi is traced
+// through to the concrete type.
+
+// CHECK-LABEL: hir.func private @MultiBlockSig.0(%a) -> (result)
+// CHECK:      hir.int_type
+// CHECK:      hir.signature
+// CHECK:      } {
+// CHECK:      hir.type_of %a
+// CHECK:      hir.return {{.*}} -> ()
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @MultiBlockSig(%a: 0) -> (result: 0)
+// CHECK:         hir.signature
+// CHECK:       0: @MultiBlockSig.0
+hir.unified_func @MultiBlockSig(%a: 0) -> (result: 0) {
+  %cond = arith.constant true
+  %int_t = hir.int_type
+  cf.cond_br %cond, ^bb1, ^bb2
+^bb1:
+  hir.signature (%int_t) -> (%int_t)
+^bb2:
+  hir.signature (%int_t) -> (%int_t)
+} {
+  %tx = hir.type_of %a
+  hir.return %a -> (%tx)
+}
+
+//===----------------------------------------------------------------------===//
+// Multi-block signature with divergent types: two branches pass different type
+// values. The phi block args cannot be resolved, so they fall back to
+// OpaqueTypeOp.
+
+// CHECK-LABEL: hir.func private @MultiBlockSigDivergent.0(%a) -> (result)
+// CHECK:      hir.opaque_type
+// CHECK:      hir.opaque_type
+// CHECK:      hir.signature
+// CHECK:      } {
+// CHECK:      hir.type_of %a
+// CHECK:      hir.return {{.*}} -> ()
+
+// CHECK-NOT: hir.unified_func
+// CHECK-LABEL: hir.split_func @MultiBlockSigDivergent(%a: 0) -> (result: 0)
+// CHECK:         hir.signature
+// CHECK:       0: @MultiBlockSigDivergent.0
+hir.unified_func @MultiBlockSigDivergent(%a: 0) -> (result: 0) {
+  %cond = arith.constant true
+  %int_t = hir.int_type
+  %bool_t = hir.bool_type
+  cf.cond_br %cond, ^bb1, ^bb2
+^bb1:
+  hir.signature (%int_t) -> (%int_t)
+^bb2:
+  hir.signature (%bool_t) -> (%bool_t)
+} {
+  %tx = hir.type_of %a
+  hir.return %a -> (%tx)
+}
+
+//===----------------------------------------------------------------------===//
 // Multi-return: the body has two returns across different blocks.
 // Exit block normalization merges them into a single return before splitting.
 
