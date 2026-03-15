@@ -5,7 +5,9 @@
   This is the critical blocker for dependent `uint<N>` types through the unified MLIR form.
   See docs/design/cross-phase-types.md "Bug 1".
 - Frontend `int` literals can't unify with `uint<N>` parameters.
-  Need int-to-uint coercion for integer literals in function call arguments.
+  The frontend should emit `hir.constant_int` ops with an `hir.inferrable` type.
+  Type inference will then automatically determine the type of the literal.
+  If no type can be inferred but the `hir.inferrable` is used as a `hir.constant_int` type, make it an `int` type.
 - Type unification can't prove structural equivalence of `uint` types with different width operands.
   Need to teach InferTypes/CheckTypes to structurally compare `uint_type` ops by unifying their widths.
 - The `in_range` example in `docs/examples/basics/operators.md` fails with `mir.return` type mismatch (`!hir.any` vs `!si.bool`).

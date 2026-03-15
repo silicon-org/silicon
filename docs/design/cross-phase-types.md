@@ -334,12 +334,14 @@ Phase 0 receives N=8, phase 1 receives x: uint<8>.
 ### What Works Today
 
 1. **Dependent types using `type_type` directly** (the `@identity` pattern from `dependent-type.mlir`):
+
    ```mlir
    hir.unified_func @identity(%T: -1, %x: 0) -> (result: 0) {
      %type_type = hir.type_type
      hir.signature (%type_type, %T) -> (%T)
    }
    ```
+
    This works because `%T` is used directly in the `hir.signature` terminator without intermediate type-constructor ops.
 
 2. **All-int functions with const args** (`add-const.si`, `nested-calls.si`): These work because `int_type` takes no operands, so no block-arg references survive into cloned signature ops.
@@ -363,7 +365,7 @@ When splitting `fn id(const N: int, x: uint<N>)`, `SplitPhases` creates `@id.0` 
 Since `%N` is a block arg (not a constant), `shouldLower` correctly rejects `@id.0` — the `uint_type` can't be materialized without knowing `N`.
 
 The hand-crafted pre-split IR that works packs `%N` directly and defers `uint_type` computation to the next phase (where it gets specialized with a concrete value).
-SplitPhases should do the same: pack the *operands* of type constructors rather than the computed types.
+SplitPhases should do the same: pack the _operands_ of type constructors rather than the computed types.
 
 **Bug 2: Frontend `int` literals can't unify with `uint<N>`** (blocks all `.si` examples)
 
@@ -377,23 +379,25 @@ Similarly, nested calls like `inner(M, x)` where `x : uint<M>` and inner expects
 
 ### Complexity Spectrum
 
-| Level | Description | Works? | Blocker |
-|-------|-------------|--------|---------|
-| 1 | `int`-only const args | Yes | — |
-| 2 | Type-value passthrough (`@identity` pattern) | Yes | — |
-| 3 | `uint<N>` dependent types (MLIR, pre-split) | Yes | — |
-| 4 | Multi-phase type threading (MLIR, pre-split) | Yes | — |
-| 5 | `uint<N>` dependent types (MLIR, unified) | No | SplitPhases packing bug |
-| 6 | `uint<N>` dependent types (frontend `.si`) | No | Bugs 1 + 2 + 3 |
-| 7 | Computed type widths (`uint<N+N>`) | No | Type arithmetic not implemented |
-| 8 | Type-level function calls | No | Requires `const fn` type computation |
+| Level | Description                                  | Works? | Blocker                              |
+| ----- | -------------------------------------------- | ------ | ------------------------------------ |
+| 1     | `int`-only const args                        | Yes    | —                                    |
+| 2     | Type-value passthrough (`@identity` pattern) | Yes    | —                                    |
+| 3     | `uint<N>` dependent types (MLIR, pre-split)  | Yes    | —                                    |
+| 4     | Multi-phase type threading (MLIR, pre-split) | Yes    | —                                    |
+| 5     | `uint<N>` dependent types (MLIR, unified)    | No     | SplitPhases packing bug              |
+| 6     | `uint<N>` dependent types (frontend `.si`)   | No     | Bugs 1 + 2 + 3                       |
+| 7     | Computed type widths (`uint<N+N>`)           | No     | Type arithmetic not implemented      |
+| 8     | Type-level function calls                    | No     | Requires `const fn` type computation |
 
 ### Recommendations
 
 1. **Fix SplitPhases type packing** — when the const-phase function needs to pack type information, pack the raw operands (e.g., `%N`) instead of computed types (e.g., `uint_type %N`), and have the next phase reconstruct the types from the specialized constants.
    This is the critical blocker for the unified MLIR form.
 
-2. **Add `int`-to-`uint<N>` coercion** — either in the parser (detect when an integer literal is used in a `uint<N>` context) or in the type system (allow `int` to coerce to `uint<N>`).
+2. **Add `int`-to-`uint<N>` coercion** — The frontend should emit `hir.constant_int` ops with an `hir.inferrable` type.
+   Type inference will then automatically determine the type of the literal.
+   If no type can be inferred but the `hir.inferrable` is used as a `hir.constant_int` type, make it an `int` type.
 
 3. **Improve type unification** — teach the unifier to structurally compare `uint_type` ops by unifying their width operands, rather than requiring identical SSA values.
 
