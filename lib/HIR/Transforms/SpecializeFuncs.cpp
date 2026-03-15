@@ -183,8 +183,33 @@ void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
       return {};
     OpBuilder sigBuilder(sigOp);
     IRMapping mapping;
-    auto *cloned = sigBuilder.clone(*typeDefOp, mapping);
-    return cloned->getResult(cast<OpResult>(bodyTypeVal).getResultNumber());
+
+    // Map body block args to corresponding signature block args.
+    auto &sigBlock = func.getSignature().front();
+    for (auto [bodyArg, sigArg] :
+         llvm::zip(bodyBlock.getArguments(), sigBlock.getArguments()))
+      mapping.map(bodyArg, sigArg);
+
+    // Collect ops in topological order via post-order DFS, so that
+    // dependencies (e.g., mir_constant feeding uint_type) are cloned before
+    // their users.
+    SmallVector<Operation *> toClone;
+    SmallPtrSet<Operation *, 8> visited;
+    std::function<void(Operation *)> collectOps = [&](Operation *op) {
+      if (!visited.insert(op).second)
+        return;
+      for (auto operand : op->getOperands()) {
+        if (auto *defOp = operand.getDefiningOp())
+          collectOps(defOp);
+      }
+      toClone.push_back(op);
+    };
+    collectOps(typeDefOp);
+
+    for (auto *op : toClone)
+      sigBuilder.clone(*op, mapping);
+
+    return mapping.lookupOrDefault(bodyTypeVal);
   };
 
   bool sigChanged = false;

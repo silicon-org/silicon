@@ -456,3 +456,50 @@ hir.func private @DissolveUser(%x) -> (result) {
 // CHECK-LABEL: hir.func private @Dissolve.0b(%x) -> (result)
 // CHECK-LABEL: hir.func private @DissolveUser(%x) -> (result)
 // CHECK:         hir.call @Dissolve.0b(%x)
+
+//===----------------------------------------------------------------------===//
+// Dependent types: when a type op in the body depends on a mir_constant (e.g.,
+// `uint_type` consuming a `mir_constant`), cloneTypeIntoSig must recursively
+// clone the entire operand chain into the signature region.
+
+hir.func private @DepType.0b(%x, %ctx) -> (result) {
+  %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %2 = hir.uint_type %0
+  hir.signature (%2, %2) -> (%2)
+} {
+  %0, %1 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %2 = hir.uint_type %0
+  %3 = hir.coerce_type %x, %2
+  %4 = hir.add %3, %1 : %2
+  hir.return %4 -> (%2)
+}
+
+mir.evaluated_func @DepType.0a [#si.opaque<[#si.int<8>, #si.int<42>]> : !si.opaque]
+
+hir.split_func @DepType(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  hir.signature (%0) -> (%0)
+} [
+  0: @DepType.0
+]
+
+hir.multiphase_func @DepType.0(last x) -> (result) [
+  @DepType.0a,
+  @DepType.0b
+]
+
+// CHECK-NOT: hir.multiphase_func @DepType.0
+
+// The signature must have its own mir_constant and uint_type ops, not
+// references to body-region values.
+// CHECK-LABEL: hir.func private @DepType.0b(%x) -> (result)
+// CHECK:         hir.mir_constant #si.int<8>
+// CHECK:         hir.mir_constant #si.int<42>
+// CHECK:         hir.uint_type
+// CHECK:         hir.signature (%{{.*}}) -> (%{{.*}})
+// CHECK:       } {
+// CHECK:         hir.mir_constant #si.int<8>
+// CHECK:         hir.mir_constant #si.int<42>
+// CHECK:         hir.uint_type
+// CHECK:         hir.coerce_type
+// CHECK:         hir.add
