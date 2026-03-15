@@ -160,14 +160,19 @@ void SpecializeFuncsPass::expandOpaqueContext(hir::FuncOp func,
     }
   }
 
-  // Build a map from return value to the type value from coerce_type (for
-  // resolving opaque_type in typeOfResults).
+  // Build a map from return value to the type value (for resolving opaque_type
+  // in typeOfResults). First try coerce_type on the return value; fall back to
+  // the explicit type annotation from the return op's typeOfValues, which
+  // survives canonicalization even when coerce_type is folded away.
   SmallVector<Value> resultTypeFromBody;
   if (auto retOp = dyn_cast<hir::ReturnOp>(bodyBlock.getTerminator())) {
-    for (auto val : retOp.getValues()) {
+    auto typeOfValues = retOp.getTypeOfValues();
+    for (auto [i, val] : llvm::enumerate(retOp.getValues())) {
       Value typeVal;
       if (auto coerce = val.getDefiningOp<hir::CoerceTypeOp>())
         typeVal = coerce.getTypeOperand();
+      if (!typeVal && i < typeOfValues.size())
+        typeVal = typeOfValues[i];
       resultTypeFromBody.push_back(typeVal);
     }
   }

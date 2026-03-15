@@ -400,9 +400,16 @@ static bool isResolvableType(Value typeVal,
           hir::AnyfuncTypeOp, hir::OpaqueTypeOp>(defOp))
     return true;
 
-  // UIntTypeOp needs its width to be a constant integer.
-  if (auto uintOp = dyn_cast<hir::UIntTypeOp>(defOp))
-    return uintOp.getWidth().getDefiningOp<hir::ConstantIntOp>() != nullptr;
+  // UIntTypeOp needs its width to be a constant integer. This can be either
+  // an `hir.constant_int` or an `hir.mir_constant` with an int attribute
+  // (produced by SpecializeFuncs after interpreting an earlier phase).
+  if (auto uintOp = dyn_cast<hir::UIntTypeOp>(defOp)) {
+    auto width = uintOp.getWidth();
+    if (width.getDefiningOp<hir::ConstantIntOp>())
+      return true;
+    base::IntAttr widthAttr;
+    return matchPattern(width, m_Constant(&widthAttr));
+  }
 
   // FuncTypeOp needs all of its type operands to be resolvable.
   if (auto funcTypeOp = dyn_cast<hir::FuncTypeOp>(defOp)) {
@@ -479,7 +486,10 @@ static bool shouldLower(hir::FuncOp func) {
         if (!isResolvableType(val))
           ready = false;
     } else if (auto uintType = dyn_cast<hir::UIntTypeOp>(op)) {
-      if (!uintType.getWidth().getDefiningOp<hir::ConstantIntOp>())
+      auto width = uintType.getWidth();
+      base::IntAttr widthAttr;
+      if (!width.getDefiningOp<hir::ConstantIntOp>() &&
+          !matchPattern(width, m_Constant(&widthAttr)))
         ready = false;
     } else if (auto funcType = dyn_cast<hir::FuncTypeOp>(op)) {
       for (auto val : funcType.getTypeOfArgs())
@@ -527,8 +537,16 @@ static Type resolveHIRType(Value typeVal,
   if (isa<hir::OpaqueTypeOp>(defOp))
     return base::OpaqueType::get(ctx);
   if (auto uintOp = dyn_cast<hir::UIntTypeOp>(defOp)) {
-    if (auto widthOp = uintOp.getWidth().getDefiningOp<hir::ConstantIntOp>()) {
-      auto width = static_cast<int64_t>(widthOp.getValue().getValue());
+    auto widthVal = uintOp.getWidth();
+    // Check for hir.constant_int (not ConstantLike).
+    if (auto constOp = widthVal.getDefiningOp<hir::ConstantIntOp>()) {
+      auto width = static_cast<int64_t>(constOp.getValue().getValue());
+      return base::UIntType::get(ctx, width);
+    }
+    // Check for hir.mir_constant (ConstantLike, produced by SpecializeFuncs).
+    base::IntAttr widthAttr;
+    if (matchPattern(widthVal, m_Constant(&widthAttr))) {
+      auto width = static_cast<int64_t>(widthAttr.getValue());
       return base::UIntType::get(ctx, width);
     }
   }

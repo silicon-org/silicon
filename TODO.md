@@ -1,5 +1,13 @@
 # TODO
 
+- SplitPhases packs computed `uint_type %N` into the const-phase function body, preventing HIRToMIR from lowering it (non-constant width).
+  Should pack the raw `%N` value and defer type construction to the runtime phase.
+  This is the critical blocker for dependent `uint<N>` types through the unified MLIR form.
+  See docs/design/cross-phase-types.md "Bug 1".
+- Frontend `int` literals can't unify with `uint<N>` parameters.
+  Need int-to-uint coercion for integer literals in function call arguments.
+- Type unification can't prove structural equivalence of `uint` types with different width operands.
+  Need to teach InferTypes/CheckTypes to structurally compare `uint_type` ops by unifying their widths.
 - The `in_range` example in `docs/examples/basics/operators.md` fails with `mir.return` type mismatch (`!hir.any` vs `!si.bool`).
   Tagged `silicon-todo` to skip doc testing.
   Root cause: the `&&` short-circuit produces a value typed `!hir.any` that doesn't get coerced to `!si.bool` before the MIR return.
