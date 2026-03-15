@@ -265,7 +265,15 @@ static LogicalResult cloneSignatureIntoBody(UnifiedFuncOp funcOp) {
     auto coerceOp = CoerceTypeOp::create(insertBuilder, entryArg.getLoc(),
                                          entryArg, clonedArgTypes[idx]);
     entryArg.replaceUsesWithIf(coerceOp.getResult(), [&](OpOperand &use) {
-      return use.getOwner() != coerceOp;
+      auto *owner = use.getOwner();
+      if (owner == coerceOp)
+        return false;
+      // Don't replace uses in ops spliced from the signature region. These
+      // ops compute types from the raw block args and must keep using them.
+      if (owner->getBlock() == &bodyBlock &&
+          owner->isBeforeInBlock(&*coerceInsertPt))
+        return false;
+      return true;
     });
   }
 

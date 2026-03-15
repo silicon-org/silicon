@@ -231,6 +231,31 @@ hir.unified_func private @UIntBody(%a: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Dependent type from block arg: `uint_type` uses the block arg directly.
+// The spliced signature ops must keep using the raw block arg, not the
+// coerced version.
+
+// CHECK-LABEL: hir.unified_func private @DepUInt
+hir.unified_func private @DepUInt(%N: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.uint_type %N
+  %2 = hir.uint_type %N
+  hir.signature (%0, %1) -> (%2)
+} {
+  // CHECK:       {
+  // CHECK-DAG:     [[INT:%.+]] = hir.int_type
+  // CHECK-DAG:     [[U1:%.+]] = hir.uint_type %N
+  // CHECK-DAG:     [[U2:%.+]] = hir.uint_type %N
+  // CHECK:         hir.coerce_type %N, [[INT]]
+  // CHECK:         [[CX:%.+]] = hir.coerce_type %x, [[U1]]
+  // CHECK:         [[TYPEOF:%.+]] = hir.type_of [[CX]]
+  // CHECK:         [[UNI:%.+]] = hir.unify [[TYPEOF]], [[U2]]
+  // CHECK:         hir.return [[CX]] -> ([[UNI]])
+  %0 = hir.type_of %x
+  hir.return %x -> (%0)
+}
+
+//===----------------------------------------------------------------------===//
 // Duplicate calls: calling the same function twice with the same arguments.
 // This tests that return type unification works correctly when a callee's
 // signature is inlined multiple times. Previously, the hir.unify ops in return
