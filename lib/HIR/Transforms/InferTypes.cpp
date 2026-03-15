@@ -136,32 +136,58 @@ void InferTypesPass::runOnOperation() {
     if (domInfo.properlyDominates(eraseOp, keepOp))
       std::swap(keepOp, eraseOp);
 
-    // Ensure that all operands of the erased op dominate the op we keep, such
-    // that we can introduce unification ops for the operands in front of the op
-    // we keep.
-    if (!llvm::all_of(eraseOp->getOperands(), [&](auto value) {
+    // If all operands of the erased op dominate the op we keep, we can merge
+    // the two ops in place: insert operand unifications before the kept op,
+    // replace the erased op with the kept one.
+    if (llvm::all_of(eraseOp->getOperands(), [&](auto value) {
           return domInfo.properlyDominates(value, keepOp);
-        }))
+        })) {
+      LLVM_DEBUG(llvm::dbgs() << "Unifying " << *keepOp << " (kept) and "
+                              << *eraseOp << " (erased)\n");
+
+      OpBuilder builder(keepOp);
+      for (auto [keepArg, eraseArg] :
+           llvm::zip(keepOp->getOpOperands(), eraseOp->getOperands())) {
+        if (keepArg.get() == eraseArg)
+          continue;
+        auto unified =
+            UnifyOp::create(builder, unifyOp.getLoc(), eraseArg.getType(),
+                            keepArg.get(), eraseArg);
+        keepArg.set(unified);
+        worklist.push_back(unified);
+      }
+      eraseOp->replaceAllUsesWith(keepOp);
+      eraseOp->erase();
+      unifyOp.replaceAllUsesWith(keepOp);
+      unifyOp.erase();
       continue;
+    }
 
-    LLVM_DEBUG(llvm::dbgs() << "Unifying " << *keepOp << " (kept) and "
-                            << *eraseOp << " (erased)\n");
+    // Otherwise, the erased op's operands are defined after the kept op (e.g.,
+    // a const block computation feeding a uint_type). We can't merge in place,
+    // but we can decompose the type-level unification into operand-level
+    // unifications at the unify op's location, where both ops' operands are
+    // available. This turns `unify(T<a>, T<b>)` into `T<unify(a, b)>`.
+    LLVM_DEBUG(llvm::dbgs()
+               << "Decomposing " << unifyOp << " into operand unifications\n");
 
-    // Create unify ops for each of the operands.
-    OpBuilder builder(keepOp);
+    OpBuilder builder(unifyOp);
+    SmallVector<Value> newOperands;
     for (auto [keepArg, eraseArg] :
-         llvm::zip(keepOp->getOpOperands(), eraseOp->getOperands())) {
-      if (keepArg.get() == eraseArg)
+         llvm::zip(keepOp->getOperands(), eraseOp->getOperands())) {
+      if (keepArg == eraseArg) {
+        newOperands.push_back(keepArg);
         continue;
-      auto unified =
-          UnifyOp::create(builder, unifyOp.getLoc(), eraseArg.getType(),
-                          keepArg.get(), eraseArg);
-      keepArg.set(unified);
+      }
+      auto unified = UnifyOp::create(builder, unifyOp.getLoc(),
+                                     keepArg.getType(), keepArg, eraseArg);
+      newOperands.push_back(unified);
       worklist.push_back(unified);
     }
-    eraseOp->replaceAllUsesWith(keepOp);
-    eraseOp->erase();
-    unifyOp.replaceAllUsesWith(keepOp);
+    auto *newOp = builder.clone(*keepOp);
+    for (auto [newArg, newVal] : llvm::zip(newOp->getOpOperands(), newOperands))
+      newArg.set(newVal);
+    unifyOp.replaceAllUsesWith(newOp->getResult(0));
     unifyOp.erase();
   }
 }

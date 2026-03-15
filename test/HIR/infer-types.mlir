@@ -82,17 +82,44 @@ func.func @UnifyConcreteOps1() {
 
 // CHECK-LABEL: func @UnifyConcreteOps2
 func.func @UnifyConcreteOps2() {
-  // Cannot unify concrete types if the operands of don't dominate both types.
-  // CHECK: hir.int_type
-  // CHECK: hir.ref_type
-  // CHECK: hir.inferrable
-  // CHECK: hir.ref_type
+  // Even when the erased op's operands don't dominate the kept op, the
+  // decomposition creates operand-level unifications at the unify site.
+  // The inferrable gets resolved to int_type, producing ref_type(int_type).
+  // CHECK: [[T:%.+]] = hir.int_type
+  // CHECK: hir.ref_type [[T]]
+  // CHECK: hir.ref_type [[T]]
+  // CHECK: [[R:%.+]] = hir.ref_type [[T]]
+  // CHECK: call @use_type([[R]])
   %0 = hir.int_type
   %1 = hir.ref_type %0
   %2 = hir.inferrable
   %3 = hir.ref_type %2
   %4 = hir.unify %1, %3
   call @use_type(%4) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @DecomposeUintTypeUnify
+func.func @DecomposeUintTypeUnify() {
+  // When two uint_type ops have different width operands and the later one's
+  // operand doesn't dominate the earlier one, decompose into a width-level
+  // unification: `unify(uint<a>, uint<b>)` becomes `uint<unify(a, b)>`.
+  // CHECK: [[A:%.+]] = hir.constant_int
+  // CHECK: hir.uint_type [[A]]
+  // CHECK: [[B:%.+]] = hir.add
+  // CHECK: hir.uint_type [[B]]
+  // CHECK: [[U:%.+]] = hir.unify [[A]], [[B]]
+  // CHECK: [[R:%.+]] = hir.uint_type [[U]]
+  // CHECK: call @use_type([[R]])
+  %0 = hir.int_type
+  %1 = hir.constant_int 8 : %0
+  %2 = hir.uint_type %1
+  %3 = hir.constant_int 4 : %0
+  %4 = hir.constant_int 4 : %0
+  %5 = hir.add %3, %4 : %0
+  %6 = hir.uint_type %5
+  %7 = hir.unify %2, %6
+  call @use_type(%7) : (!hir.any) -> ()
   return
 }
 

@@ -104,7 +104,8 @@ pub fn main(x: uint<8>) -> uint<8> {
 **Expected:** `const { 4 + 4 }` evaluates to 8 at compile time.
 `identity(8, x)` is specialized.
 
-**Compiler result: CheckCalls PASSES**, but **fails at check-types** — two `uint` types with different width operands (from the cloned signature vs the body) can't be unified.
+**Compiler result: CheckCalls and check-types PASS** (InferTypes decomposes `unify(uint<a>, uint<b>)` into `uint<unify(a, b)>` when widths don't dominate).
+Fails later at SplitPhases/HIRToMIR — same as Example 1 (Bug 1: SplitPhases packs computed types instead of raw values).
 
 ## Example 6: Conditional Type Selection
 
@@ -372,10 +373,10 @@ SplitPhases should do the same: pack the _operands_ of type constructors rather 
 All frontend examples fail at `check-types` because integer literals are typed as `int`, and there's no coercion from `int` to `uint<N>`.
 For example, `id(8, 42)` passes `42 : int` where the signature expects `uint<N>`.
 
-**Bug 3: Type unification can't prove structural equivalence of `uint` types** (blocks nested/computed dependent types)
+**~~Bug 3~~ (FIXED): Type unification now decomposes structurally equivalent type ops**
 
-When a function body has `uint_type(coerce_type(%N))` from the cloned signature and `uint_type(%N)` from the original body, `check-types` fails because the unifier can't prove they have the same width.
-Similarly, nested calls like `inner(M, x)` where `x : uint<M>` and inner expects `uint<N>` fail because the unifier can't prove `M == N`.
+InferTypes now decomposes `unify(T<a>, T<b>)` into `T<unify(a, b)>` when the later op's operands don't dominate the earlier op.
+This handles cases like `unify(uint_type(add(4,4)), uint_type(constant_int(8)))` by creating a width-level unify that survives harmlessly past `check-types` (since `add` and `constant_int` aren't type constructors).
 
 ### Complexity Spectrum
 
@@ -386,7 +387,7 @@ Similarly, nested calls like `inner(M, x)` where `x : uint<M>` and inner expects
 | 3     | `uint<N>` dependent types (MLIR, pre-split)  | Yes    | —                                    |
 | 4     | Multi-phase type threading (MLIR, pre-split) | Yes    | —                                    |
 | 5     | `uint<N>` dependent types (MLIR, unified)    | No     | SplitPhases packing bug              |
-| 6     | `uint<N>` dependent types (frontend `.si`)   | No     | Bugs 1 + 2 + 3                       |
+| 6     | `uint<N>` dependent types (frontend `.si`)   | No     | Bugs 1 + 2                           |
 | 7     | Computed type widths (`uint<N+N>`)           | No     | Type arithmetic not implemented      |
 | 8     | Type-level function calls                    | No     | Requires `const fn` type computation |
 
@@ -399,6 +400,4 @@ Similarly, nested calls like `inner(M, x)` where `x : uint<M>` and inner expects
    Type inference will then automatically determine the type of the literal.
    If no type can be inferred but the `hir.inferrable` is used as a `hir.constant_int` type, make it an `int` type.
 
-3. **Improve type unification** — teach the unifier to structurally compare `uint_type` ops by unifying their width operands, rather than requiring identical SSA values.
-
-4. **Add test cases** — once SplitPhases is fixed, add `test/EndToEnd/dependent-type-uint.si` with examples 1, 3, 4, 8 from this document.
+3. **Add test cases** — once SplitPhases is fixed, add `test/EndToEnd/dependent-type-uint.si` with examples 1, 3, 4, 8 from this document.
