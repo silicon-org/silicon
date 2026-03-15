@@ -38,3 +38,12 @@ The open questions at the end of that document cover subtyping, coercion semanti
 See {{< page-link "/design/state" >}}.
 
 - **Register initialization vs. reset.** FPGA designs often distinguish between the initial value loaded at configuration time and the value driven by a reset signal. Should `reg` support both?
+
+### Arrays and Slicing
+
+See {{< page-link "/design/arbiter-example" >}} for a worked example that exercises arrays, slicing, and compile-time recursion.
+
+- **Array type syntax.** `[T; N]` with const-dependent sizes, following Rust convention.
+- **Bit vs. array indexing.** Should `v[i]` on a `uint<N>` extract a single bit (returning `bool`), while `a[i]` on `[T; N]` extracts an element? Or should the syntax be different for each?
+- **Slicing semantics.** `v[lo..hi]` with exclusive upper bound for both bit slicing on integers and element slicing on arrays.
+- **Array concatenation operator.** `a ++ b` to concatenate two arrays. How does this interact with bit concatenation (`cat`)?
