@@ -863,10 +863,14 @@ LogicalResult CoerceTypeOp::canonicalize(CoerceTypeOp op,
 // UnifyOp
 //===----------------------------------------------------------------------===//
 
-OpFoldResult UnifyOp::fold(FoldAdaptor adaptor) {
-  if (llvm::all_equal(getOperands()))
-    return getOperands().front();
-  return {};
+/// Canonicalize `unify %a, %a` → `%a`. This must be a canonicalization
+/// pattern rather than a fold, because UnifyOp is not `Pure` (it uses
+/// `MemRead` to prevent DCE), and folds on non-pure ops do not erase the op.
+LogicalResult UnifyOp::canonicalize(UnifyOp op, PatternRewriter &rewriter) {
+  if (!llvm::all_equal(op.getOperands()))
+    return failure();
+  rewriter.replaceOp(op, op.getLhs());
+  return success();
 }
 
 //===----------------------------------------------------------------------===//

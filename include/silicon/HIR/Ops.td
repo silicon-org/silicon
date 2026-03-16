@@ -246,18 +246,26 @@ def LetOp : HIROp<"let", []> {
 def UnifyOp : HIROp<"unify", [
   SameOperandsAndResultType,
   Commutative,
-  Pure,
+  MemoryEffects<[MemWrite]>,
 ]> {
   let summary = "unify two types during inference";
   let description = [{
     Constrains two type values to be equal, used by the type inference
-    pass. The result is the unified type. Folds away once both operands
-    are identical.
+    pass. The result is the unified type. Canonicalizes away once both
+    operands are identical.
+
+    Uses a `MemWrite` effect instead of `Pure` so that dead-code
+    elimination does not discard unused unify ops before InferTypes has
+    a chance to process them. For example, CheckCalls creates
+    `hir.unify %inferrable, %callee_type` to record that a literal's
+    type should match the callee's parameter type; with `Pure` (or
+    `MemRead`, which MLIR also considers trivially dead), DCE would
+    discard this constraint.
   }];
   let arguments = (ins HIRAnyType:$lhs, HIRAnyType:$rhs);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict";
-  let hasFolder = 1;
+  let hasCanonicalizeMethod = 1;
 }
 
 def StoreOp : HIROp<"store", []> {

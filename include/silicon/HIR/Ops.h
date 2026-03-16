@@ -28,11 +28,13 @@ namespace silicon {
 namespace hir {
 
 /// Check whether an op is effectively pure (side-effect free). This is the same
-/// as `mlir::isMemoryEffectFree`, but also treats `InferrableOp` as pure.
-/// `InferrableOp` cannot carry the `Pure` trait because that would allow CSE to
-/// merge distinct inferrables, but it is semantically side-effect free.
+/// as `mlir::isMemoryEffectFree`, but also treats `InferrableOp` and `UnifyOp`
+/// as pure. `InferrableOp` cannot carry the `Pure` trait because CSE would
+/// merge distinct inferrables. `UnifyOp` uses a `MemRead` effect to prevent DCE
+/// from discarding unused type constraints before InferTypes runs, but is
+/// semantically side-effect free for scheduling purposes.
 inline bool isEffectivelyPure(mlir::Operation *op) {
-  return mlir::isMemoryEffectFree(op) || mlir::isa<InferrableOp>(op);
+  return mlir::isMemoryEffectFree(op) || mlir::isa<InferrableOp, UnifyOp>(op);
 }
 
 /// Ensure there is exactly one `SignatureOp` terminator in the signature

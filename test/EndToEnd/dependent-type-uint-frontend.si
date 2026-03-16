@@ -1,0 +1,13 @@
+// RUN: silc --ir-mir %s | FileCheck %s
+
+// Test the end-to-end pipeline for dependent types from Silicon source. This
+// is the frontend equivalent of dependent-type-uint-unified.mlir, exercising
+// codegen → CheckCalls → InferTypes → SplitPhases → HIRToMIR → Interpret →
+// SpecializeFuncs. The key behavior being tested is that integer literals get
+// inferrable types in codegen, which InferTypes then resolves to the callee's
+// dependent parameter type (e.g., uint<N>).
+
+// CHECK: mir.evaluated_func {{.*}}@main.{{.*}} [#si.uint<8, 42> : !si.uint<8>]
+
+fn id(const N: int, x: uint<N>) -> uint<N> { x }
+pub fn main() -> uint<8> { id(8, 42) }
