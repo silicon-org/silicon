@@ -11,8 +11,6 @@
   Root cause: the `&&` short-circuit produces a value typed `!hir.any` that doesn't get coerced to `!si.bool` before the MIR return.
   Unrelated to multi-block signatures (which are now handled by phi tracing in `resolveTypeValue`).
 - Document how integer literal type inference works in docs/examples/.
-- Investigate why `getOrCreateTypeOf` would ever want to _not_ return an inferrable type directly.
-  Why would it ever want to return some default type for the value?
 
 ## Dialect Review: Missing Error Handling
 

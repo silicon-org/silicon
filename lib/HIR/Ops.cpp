@@ -1274,28 +1274,22 @@ Value hir::getTypeOf(Value value) {
 
 Value hir::getOrCreateTypeOf(OpBuilder &builder, Location loc, Value value) {
   if (auto type = getTypeOf(value)) {
-    // For constant_int with an inferrable type operand, return the inferrable
-    // directly. This lets context (e.g., a callee's uint<8> parameter)
-    // constrain the literal's type via unification. InferTypes has a fallback
-    // to assign int_type if no context constrains the inferrable, and
-    // CheckTypes guards against non-integer inferred types.
-    if (value.getDefiningOp<ConstantIntOp>() &&
-        type.getDefiningOp<InferrableOp>())
+    // If the type is an inferrable, return it directly. This lets context
+    // (e.g., a callee's uint<8> parameter) constrain the type via
+    // unification. InferTypes has fallbacks to assign default types to
+    // unconstrained inferrables, and CheckTypes guards against mismatches.
+    if (type.getDefiningOp<InferrableOp>())
       return type;
 
-    // For other inferrables, fall through to the default type for the value
-    // kind.
-    if (!type.getDefiningOp<InferrableOp>()) {
-      // Verify the type value is accessible at the current insertion point.
-      auto *insertBlock = builder.getInsertionBlock();
-      if (auto *defOp = type.getDefiningOp()) {
-        if (defOp->getBlock() && insertBlock &&
-            defOp->getBlock()->getParent() == insertBlock->getParent())
-          return type;
-      } else if (auto blockArg = dyn_cast<BlockArgument>(type)) {
-        if (blockArg.getOwner()->getParent() == insertBlock->getParent())
-          return type;
-      }
+    // Verify the type value is accessible at the current insertion point.
+    auto *insertBlock = builder.getInsertionBlock();
+    if (auto *defOp = type.getDefiningOp()) {
+      if (defOp->getBlock() && insertBlock &&
+          defOp->getBlock()->getParent() == insertBlock->getParent())
+        return type;
+    } else if (auto blockArg = dyn_cast<BlockArgument>(type)) {
+      if (blockArg.getOwner()->getParent() == insertBlock->getParent())
+        return type;
     }
   }
   if (value.getDefiningOp<ConstantIntOp>())
