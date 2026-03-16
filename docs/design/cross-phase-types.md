@@ -132,17 +132,34 @@ pub fn main(x: uint<16>) -> uint<16> {
 Phase -2 computes a value, phase -1 uses it to construct a type, phase 0 uses the result.
 Since this can't be expressed in the frontend (the frontend doesn't support `const const`), we test directly at the MLIR level.
 
+The Silicon source this corresponds to:
+
+```silicon
+fn foo(const const N: int, const x: uint<N>, y: uint<N>) -> uint<N> {
+  x + y
+}
+pub fn main() -> uint<8> { foo(8, 42, 100) }
+```
+
+Three phases, each doing distinct work:
+- Phase -2 (`foo.0`): receives `N=8`, packs it into context.
+- Phase -1 (`foo.1`): unpacks `N`, constructs `uint<N>`, coerces `x` to that type, packs both `N` and `x` into context.
+- Phase 0 (`foo.2`): unpacks `N` and `x`, constructs `uint<N>` for `y`, computes `x + y`.
+
+Key insight: in the unified form, CheckCalls inlines `foo`'s signature at the call site in `main`, creating unify ops between the literals' inferrable types and `uint_type(%N)` from the signature.
+This means by the time SplitPhases runs, literals like `42` and `100` already carry the correct dependent type `uint<N>` — no coercion is needed at call boundaries.
+
 ### Unified form
 
 ```mlir
-hir.unified_func @triple(%N: -2, %x: -1) -> (result: -1) {
-  %type_type = hir.type_type
+hir.unified_func @foo(%N: -2, %x: -1, %y: 0) -> (result: 0) {
   %int_type = hir.int_type
   %T = hir.uint_type %N
-  hir.signature (%int_type, %T) -> (%T)
+  hir.signature (%int_type, %T, %T) -> (%T)
 } {
   %T = hir.uint_type %N
-  hir.return %x -> (%T)
+  %sum = hir.add %x, %y : %T
+  hir.return %sum -> (%T)
 }
 
 hir.unified_func @main() -> (result: 0) {
@@ -150,128 +167,30 @@ hir.unified_func @main() -> (result: 0) {
   hir.signature () -> (%0)
 } {
   %int_type = hir.int_type
-  %type_type = hir.type_type
   %c8 = hir.constant_int 8 : %int_type
-  %c42 = hir.constant_int 42 : %int_type
   %t0 = hir.inferrable
   %t1 = hir.inferrable
   %t2 = hir.inferrable
-  %r = hir.unified_call @triple(%c8, %c42) : (%t0, %t1) -> (%t2) (!hir.any, !hir.any) -> !hir.any [-2, -1] -> [-1]
+  %t3 = hir.inferrable
+  %c42 = hir.constant_int 42 : %t1
+  %c100 = hir.constant_int 100 : %t2
+  %r = hir.unified_call @foo(%c8, %c42, %c100) : (%t0, %t1, %t2) -> (%t3) (!hir.any, !hir.any, !hir.any) -> !hir.any [-2, -1, 0] -> [0]
   %tr = hir.type_of %r
   hir.return %r -> (%tr)
 }
 ```
 
-**SplitPhases: WORKS.** Correctly splits into three phases.
-HIRToMIR lowers `uint_type %N` (block arg width) to `mir.uint_type`.
 The unified form fails at `check-types` because `uint_type(coerce_type(%N))` can't be proven equal to `uint_type(%N)`.
 
 ### Pre-split form (bypassing CheckCalls)
 
-To test the PhaseEvalLoop, we can provide pre-split IR that has already been through check-calls, infer-types, and split-phases:
+To test the PhaseEvalLoop, we provide pre-split IR that represents what check-calls, infer-types, and split-phases would produce.
+Note that `N` must be threaded through context across all phases so that later phases can reconstruct `uint<N>`.
+Callers must also derive the type from context and use it to type their literals (matching what CheckCalls + InferTypes would infer in the unified form).
 
-```mlir
-// triple phase -2: receives N (int), returns packed context
-hir.func private @triple.0(%N) -> (ctx) {
-  %0 = hir.int_type
-  %1 = hir.opaque_type
-  hir.signature (%0) -> (%1)
-} {
-  %0 = hir.int_type
-  %1 = hir.coerce_type %N, %0
-  %2 = hir.type_of %1
-  %3 = hir.opaque_pack(%1)
-  %4 = hir.opaque_type
-  hir.return %3 -> (%4)
-}
+See `test/EndToEnd/dependent-type-uint-3phase.mlir` for the full IR.
 
-// triple phase -1: receives x, context from phase -2; returns x
-hir.func private @triple.1(%x, %ctx) -> (result) {
-  %0 = hir.opaque_type
-  %1 = hir.opaque_type
-  %2 = hir.opaque_type
-  hir.signature (%0, %1) -> (%2)
-} {
-  %0 = hir.opaque_unpack %ctx : !hir.any
-  %1 = hir.uint_type %0
-  %2 = hir.coerce_type %x, %1
-  hir.return %2 -> (%1)
-}
-
-hir.split_func @triple(%N: -2, %x: -1) -> (result: -1) {
-  %0 = hir.int_type
-  %1 = hir.uint_type %N
-  hir.signature (%0, %1) -> (%1)
-} [
-  -2: @triple.0,
-  -1: @triple.1
-]
-
-// main phase 0a: calls triple phase -2 with N=8, packs ctx
-hir.func private @main.0a() -> (ctx) {
-  %0 = hir.opaque_type
-  hir.signature () -> (%0)
-} {
-  %0 = hir.int_type
-  %1 = hir.constant_int 8 : %0
-  %2 = hir.opaque_type
-  %3 = hir.call @triple.0(%1) : (%0) -> (%2)
-  %4 = hir.opaque_pack(%3)
-  %5 = hir.opaque_type
-  hir.return %4 -> (%5)
-}
-
-// main phase 0b: calls triple phase -1 with x=42 and packed ctx
-hir.func private @main.0b(%ctx) -> (ctx) {
-  %0 = hir.opaque_type
-  %1 = hir.opaque_type
-  hir.signature (%0) -> (%1)
-} {
-  %0 = hir.opaque_unpack %ctx : !hir.any
-  %1 = hir.int_type
-  %2 = hir.constant_int 42 : %1
-  %3 = hir.opaque_type
-  %4 = hir.opaque_type
-  %5:1 = hir.call @triple.1(%2, %0) : (%1, %3) -> (%4)
-  %6 = hir.opaque_pack(%5#0)
-  %7 = hir.opaque_type
-  hir.return %6 -> (%7)
-}
-
-// main phase 0c: unpacks the result
-hir.func private @main.0c(%ctx) -> (result) {
-  %0 = hir.opaque_type
-  %1 = hir.int_type
-  hir.signature (%0) -> (%1)
-} {
-  %0 = hir.opaque_unpack %ctx : !hir.any
-  %1 = hir.type_of %0
-  hir.return %0 -> (%1)
-}
-
-hir.split_func @main() -> (result: 0) {
-  %0 = hir.int_type
-  hir.signature () -> (%0)
-} [
-  0: @main.0
-]
-
-hir.multiphase_func @main.0() -> (result) [
-  @main.0a,
-  @main.0b,
-  @main.0c
-]
-```
-
-**PhaseEvalLoop: WORKS** with the pre-split form.
-See `test/EndToEnd/dependent-type-uint-3phase.mlir`.
-
-- Iteration 0: `@triple.0` and `@main.0a` are successfully lowered to MIR.
-  `@main.0a` is interpreted, producing `#si.opaque<[#si.opaque<[#si.int<8>]>]>`.
-- Iteration 1: `SpecializeFuncs` creates `@triple.1_0`, the specialized version with `mir_constant #si.int<8>` baked in.
-  The signature region correctly contains cloned `mir_constant` and `uint_type` ops (region isolation fixed).
-  `@triple.1_0` is lowered to MIR (HIRToMIR now accepts `mir_constant` as uint width).
-- Iteration 2: `@main.0b` is specialized and lowered. `@main.0c` is evaluated, producing `#si.int<42>`.
+**PhaseEvalLoop: WORKS** with the pre-split form, producing `#si.uint<8, 142>` (= 42 + 100).
 
 ## Example 8: Two Const Args, Same Dependent Type
 
