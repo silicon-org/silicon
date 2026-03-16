@@ -1,9 +1,9 @@
 # TODO
 
-- SplitPhases packs computed `uint_type %N` into the const-phase function body, preventing HIRToMIR from lowering it (non-constant width).
-  Should pack the raw `%N` value and defer type construction to the runtime phase.
-  This is the critical blocker for dependent `uint<N>` types through the unified MLIR form.
-  See docs/design/cross-phase-types.md "Bug 1".
+- cross-ex4.si, cross-ex8.si: `mir.return` type mismatch (`!si.uint<N>` vs `!si.opaque`) when a function calls another dependent-type function.
+  The return type in the MIR func doesn't match because the opaque signature types aren't properly resolved after specialization.
+- cross-ex5.si: `hir.unify` survives to HIRToMIR with different operands.
+  The `const { 4 + 4 }` expression creates a unify between the computed type and the expected type that InferTypes can't resolve.
 - Type unification can't prove structural equivalence of `uint` types with different width operands.
   Need to teach InferTypes/CheckTypes to structurally compare `uint_type` ops by unifying their widths.
 - The `in_range` example in `docs/examples/basics/operators.md` fails with `mir.return` type mismatch (`!hir.any` vs `!si.bool`).
@@ -33,7 +33,7 @@
 
 ### Pass error tests
 
-- **HIRToMIR**: remaining untested `emitBug` paths (non-constant uint width, excessive uint width, non-constant func_type args/results, non-constant call result type, return op typeOfArgs/typeOfValues mismatch between multiple returns); most are guarded by `shouldLower` and hard to trigger from IR
+- **HIRToMIR**: remaining untested `emitBug` paths (negative uint width, excessive uint width, non-constant func_type args/results, non-constant call result type, return op typeOfArgs/typeOfValues mismatch between multiple returns); most are guarded by `shouldLower` and hard to trigger from IR
 - **MIRToCIRCT**: empty error file, 8 `emitBug` paths untested
 - **PhaseEvalLoop**: no test for "still pending" multiphase_func note, sub-pipeline failure propagation
 - **SpecializeFuncs**: no test for void-result evaluated func chaining

@@ -471,6 +471,33 @@ hir.unified_func public @PublicVis() -> () {
 }
 
 //===----------------------------------------------------------------------===//
+// Dependent type from block arg: `uint_type %N` where %N is a const arg.
+// After splitting, the `uint_type` ends up in the const-phase function body
+// (with %N as a block arg), which is correct — HIRToMIR will lower it to
+// `mir.uint_type` for runtime type construction.
+
+// CHECK-LABEL: hir.func private @DepTypeBlockArg.0(%N) -> (ctx)
+// CHECK:         hir.uint_type
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @DepTypeBlockArg.1(%x, %ctx) -> (result)
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.return
+
+// CHECK-NOT: hir.unified_func @DepTypeBlockArg
+// CHECK-LABEL: hir.split_func private @DepTypeBlockArg(%N: -1, %x: 0) -> (result: 0)
+// CHECK:         hir.uint_type %N
+// CHECK:         hir.signature
+
+hir.unified_func private @DepTypeBlockArg(%N: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.uint_type %N
+  hir.signature (%0, %1) -> (%1)
+} {
+  %0 = hir.uint_type %N
+  %1 = hir.coerce_type %x, %0
+  hir.return %1 -> (%0)
+}
 
 //===----------------------------------------------------------------------===//
 // Shifted result phase: the return value lives at phase 0, but the declared

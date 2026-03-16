@@ -64,6 +64,14 @@ mir.func @Module(%x: !si.int) -> (result: !si.int) attributes {isModule} {
   mir.return %x : !si.int
 }
 
+// UInt type construction
+// CHECK-LABEL: mir.func @UIntType
+mir.func @UIntType(%width: !si.int) -> (result: !si.type) {
+  // CHECK: mir.uint_type %width
+  %0 = mir.uint_type %width
+  mir.return %0 : !si.type
+}
+
 // Opaque type and attribute
 unrealized_conversion_cast to !si.opaque
 unrealized_conversion_cast to index {attr = #si.opaque<[#si.int<42>, #si.type<!si.int>]>}

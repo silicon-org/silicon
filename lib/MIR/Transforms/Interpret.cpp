@@ -156,6 +156,11 @@ LogicalResult Interpreter::executeOp(Operation *op,
       return emitBug(op->getLoc())
              << "unsupported condition type " << operands[0];
     values[op->getResult(0)] = cond ? operands[1] : operands[2];
+  } else if (isa<mir::UIntTypeOp>(op)) {
+    auto widthAttr = cast<base::IntAttr>(operands[0]);
+    auto width = static_cast<int64_t>(widthAttr.getValue());
+    auto type = base::UIntType::get(op->getContext(), width);
+    values[op->getResult(0)] = base::TypeAttr::get(op->getContext(), type);
   } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
     for (auto [result, attr] : llvm::zip(castOp.getResults(), operands))
       values[result] = attr;

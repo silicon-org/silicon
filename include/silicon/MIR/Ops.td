@@ -160,6 +160,23 @@ def EvaluatedFuncOp : MIROp<"evaluated_func", [Symbol]> {
 // Opaque Bundles
 //===----------------------------------------------------------------------===//
 
+def UIntTypeOp : MIROp<"uint_type", [Pure]> {
+  let summary = "construct a uint type from a runtime width";
+  let description = [{
+    Takes an `!si.int` width operand and produces the corresponding
+    `!si.type` value `!si.uint<width>`. Used by phase -1 functions to
+    compute dependent types from const arguments before the type is
+    known as a constant.
+  }];
+  let arguments = (ins IntType:$width);
+  let results = (outs TypeType:$result);
+  let assemblyFormat = "$width attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Opaque Bundles
+//===----------------------------------------------------------------------===//
+
 def MIROpaquePackOp : MIROp<"opaque_pack", [Pure]> {
   let summary = "Pack multiple values into a single opaque bundle";
   let arguments = (ins Variadic<AnyType>:$operands);

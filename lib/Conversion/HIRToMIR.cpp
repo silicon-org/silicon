@@ -117,8 +117,13 @@ static LogicalResult convert(hir::UIntTypeOp op,
                              ConversionPatternRewriter &rewriter) {
   auto widthOperand = adaptor.getWidth();
   base::IntAttr widthAttr;
-  if (!matchPattern(widthOperand, m_Constant(&widthAttr)))
-    return emitBug(op.getLoc()) << "non-constant uint width";
+  if (!matchPattern(widthOperand, m_Constant(&widthAttr))) {
+    // Width is a runtime value — emit mir.uint_type to compute the type
+    // at runtime. The interpreter will evaluate this once the width becomes
+    // a constant after specialization.
+    rewriter.replaceOpWithNewOp<mir::UIntTypeOp>(op, widthOperand);
+    return success();
+  }
   const auto &width = widthAttr.getValue();
 
   // Make sure the width is zero or positive.
@@ -400,16 +405,10 @@ static bool isResolvableType(Value typeVal,
           hir::AnyfuncTypeOp, hir::OpaqueTypeOp>(defOp))
     return true;
 
-  // UIntTypeOp needs its width to be a constant integer. This can be either
-  // an `hir.constant_int` or an `hir.mir_constant` with an int attribute
-  // (produced by SpecializeFuncs after interpreting an earlier phase).
-  if (auto uintOp = dyn_cast<hir::UIntTypeOp>(defOp)) {
-    auto width = uintOp.getWidth();
-    if (width.getDefiningOp<hir::ConstantIntOp>())
-      return true;
-    base::IntAttr widthAttr;
-    return matchPattern(width, m_Constant(&widthAttr));
-  }
+  // UIntTypeOp can always be lowered: either to a mir.constant if the width
+  // is a constant, or to mir.uint_type if the width is a runtime value.
+  if (isa<hir::UIntTypeOp>(defOp))
+    return true;
 
   // FuncTypeOp needs all of its type operands to be resolvable.
   if (auto funcTypeOp = dyn_cast<hir::FuncTypeOp>(defOp)) {
@@ -485,12 +484,6 @@ static bool shouldLower(hir::FuncOp func) {
       for (auto val : sig.getTypeOfResults())
         if (!isResolvableType(val))
           ready = false;
-    } else if (auto uintType = dyn_cast<hir::UIntTypeOp>(op)) {
-      auto width = uintType.getWidth();
-      base::IntAttr widthAttr;
-      if (!width.getDefiningOp<hir::ConstantIntOp>() &&
-          !matchPattern(width, m_Constant(&widthAttr)))
-        ready = false;
     } else if (auto funcType = dyn_cast<hir::FuncTypeOp>(op)) {
       for (auto val : funcType.getTypeOfArgs())
         if (!isResolvableType(val))
@@ -549,6 +542,9 @@ static Type resolveHIRType(Value typeVal,
       auto width = static_cast<int64_t>(widthAttr.getValue());
       return base::UIntType::get(ctx, width);
     }
+    // Non-constant width: the result is a !si.type value (computed at runtime
+    // by mir.uint_type).
+    return base::TypeType::get(ctx);
   }
   if (auto funcTypeOp = dyn_cast<hir::FuncTypeOp>(defOp)) {
     SmallVector<Type> argTypes, resultTypes;
