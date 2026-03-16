@@ -1,5 +1,7 @@
 # TODO
 
+- Codegen should type integer literals as `inferrable` instead of `int_type`.
+  This blocks all `uint<N>` dependent types from `.si` source (cross-phase-types.md Bug 5).
 - cross-ex4.si, cross-ex8.si: `mir.return` type mismatch (`!si.uint<N>` vs `!si.opaque`) when a function calls another dependent-type function.
   The return type in the MIR func doesn't match because the opaque signature types aren't properly resolved after specialization.
 - cross-ex5.si: `hir.unify` survives to HIRToMIR with different operands.

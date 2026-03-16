@@ -41,9 +41,12 @@ hir.unified_func private @id(%N: -1, %x: 0) -> (result: 0) {
 }
 ```
 
-**Compiler result: WORKS end-to-end.**
-CheckCalls, InferTypes, and CheckTypes all pass; SplitPhases splits correctly; HIRToMIR lowers `uint_type %N` to `mir.uint_type`; the interpreter evaluates it after specialization.
-See `test/EndToEnd/dependent-type-uint-unified.mlir` and `tmp/cross-ex1.si`.
+**Compiler result: WORKS end-to-end from hand-crafted unified MLIR** (where the literal `42` is manually typed as `uint<N>`).
+See `test/EndToEnd/dependent-type-uint-unified.mlir`.
+
+**Fails from `.si` source** because the codegen creates `constant_int 42 : int_type` — the literal gets a concrete `int` type, not an inferrable.
+When CheckCalls unifies this with the callee's `uint_type(%N)`, the result is `unify(int_type, uint_type(...))` — two concrete types with different constructors that InferTypes can't resolve (Bug 5).
+See `tmp/cross-ex1.si`.
 
 ## Example 2: Computed Type Width
 
@@ -180,7 +183,9 @@ hir.unified_func @main() -> (result: 0) {
 }
 ```
 
-The unified form fails at `check-types` because `uint_type(coerce_type(%N))` can't be proven equal to `uint_type(%N)`.
+The unified form passes check-types (the earlier `uint_type(coerce_type(%N))` issue has been fixed).
+However, the `type_of %r` / `hir.return %r -> (%tr)` pattern in the hand-written main is not what the codegen produces — `getOrCreateTypeOf` resolves `type_of(unified_call_result)` to the call's type-of-results operand directly, so no `type_of` op is created.
+From `.si` source, the pipeline fails with Bug 5 (literal typed as `int` instead of inferrable).
 
 ### Pre-split form (bypassing CheckCalls)
 
@@ -259,14 +264,15 @@ See `tmp/cross-ex11.si`.
 
 ### What Works Today
 
-- **Simple dependent types** (`fn id(const N: int, x: uint<N>) -> uint<N>`) work end-to-end from unified form through the full pipeline (Examples 1, 11).
+- **Simple dependent types from hand-crafted MLIR** (`fn id(const N: int, x: uint<N>) -> uint<N>`) work end-to-end when the literal is manually typed as `uint<N>` in the unified form.
   See `test/EndToEnd/dependent-type-uint-unified.mlir`.
+- **PhaseEvalLoop with pre-split `uint<N>` dependent types**: See `test/EndToEnd/dependent-type-uint.mlir` and `test/EndToEnd/dependent-type-uint-3phase.mlir`.
+  These tests provide hand-crafted post-split IR with correctly typed literals, bypassing the codegen issue.
 - **Dependent types using `type_type` directly** (the `@identity` pattern): `%T` is used directly in `hir.signature` without intermediate type-constructor ops.
 - **All-int functions with const args** (`add-const.si`, `nested-calls.si`): `int_type` takes no operands, so no block-arg references survive into cloned signature ops.
-- **PhaseEvalLoop with pre-split `uint<N>` dependent types**: See `test/EndToEnd/dependent-type-uint.mlir` and `test/EndToEnd/dependent-type-uint-3phase.mlir`.
-- **Integer literal type inference**: `constant_int` ops keep their `inferrable` type, allowing unification with context (e.g., `uint<N>` from a callee signature).
 - **`mir.uint_type` for runtime type construction**: HIRToMIR lowers `hir.uint_type %N` with non-constant width to `mir.uint_type %N`.
   The interpreter evaluates this to `#si.type<!si.uint<N>>` once the width is specialized.
+- **Dyn + dependent types** (Example 11) work end-to-end from `.si` source.
 
 ### What's Broken
 
@@ -291,6 +297,14 @@ This is likely a missing type coercion or signature update in SpecializeFuncs wh
 `const fn` bodies with `if` expressions fail during phase splitting because the branches produce values across phase boundaries.
 SplitPhases doesn't yet handle block successors and region isolation for control flow in earlier-phase function bodies.
 
+**Bug 5: Codegen types integer literals as `int`, not inferrable** (blocks Examples 1, 4, 7, 8 from `.si` source)
+
+The codegen creates `constant_int 42 : int_type` for integer literals.
+When the literal is passed to a function parameter with a dependent type (e.g., `uint<N>`), CheckCalls creates `unify(int_type, uint_type(%N))` — two concrete types with different constructors that InferTypes can't resolve.
+The literal should have an inferrable type so that CheckCalls can constrain it from the callee's signature.
+This is why Examples 1, 4, 7, and 8 work from hand-crafted MLIR (where literals are manually typed) but fail from `.si` source.
+Fix: the codegen should create literals with inferrable types when the literal is used as a call argument, or `getOrCreateTypeOf` should return an inferrable for `constant_int` ops whose type hasn't been constrained yet.
+
 ### Complexity Spectrum
 
 | Level | Description                                  | Works? | Blocker                                    |
@@ -300,7 +314,7 @@ SplitPhases doesn't yet handle block successors and region isolation for control
 | 3     | `uint<N>` dependent types (MLIR, pre-split)  | Yes    | —                                          |
 | 4     | Multi-phase type threading (MLIR, pre-split) | Yes    | —                                          |
 | 5     | `uint<N>` dependent types (MLIR, unified)    | Yes    | —                                          |
-| 6     | `uint<N>` dependent types (frontend `.si`)   | Partly | Bug 2: nested specialization return types  |
+| 6     | `uint<N>` dependent types (frontend `.si`)   | No     | Bug 5: literal typed as `int`, not inferrable |
 | 7     | Nested const calls (`f(g(x), y)`)            | No     | Bug 1: phase-depth availability            |
 | 8     | `const fn` with control flow                 | No     | Bug 4: SplitPhases control flow            |
 | 9     | Computed type widths (`uint<N+N>`)           | No     | Type arithmetic not implemented            |
@@ -308,11 +322,15 @@ SplitPhases doesn't yet handle block successors and region isolation for control
 
 ### Recommendations
 
-1. **Fix SpecializeFuncs return type mismatch (Bug 2)** — when a specialized function's return type becomes concrete (e.g., `!si.uint<16>` instead of `!si.opaque`), the enclosing multiphase func's MIR function signature needs to be updated to match.
+1. **Fix codegen literal types (Bug 5)** — this is the most impactful fix, as it blocks all `uint<N>` dependent types from working end-to-end from `.si` source.
+   The codegen should create `constant_int 42 : %inferrable` for literals used as call arguments, so that CheckCalls can unify the inferrable with the callee's dependent parameter type.
+   Currently `getOrCreateTypeOf(constant_int)` returns the literal's explicit `int_type` operand; it should return an inferrable when the type hasn't been constrained yet.
+
+2. **Fix SpecializeFuncs return type mismatch (Bug 2)** — when a specialized function's return type becomes concrete (e.g., `!si.uint<16>` instead of `!si.opaque`), the enclosing multiphase func's MIR function signature needs to be updated to match.
    This blocks Examples 4 and 8 from working end-to-end.
 
-2. **Fix nested const-call phase depth (Bug 1)** — when a const call appears as an argument to another const parameter, its own arguments need to be available at a deeper phase.
+3. **Fix nested const-call phase depth (Bug 1)** — when a const call appears as an argument to another const parameter, its own arguments need to be available at a deeper phase.
    This blocks Examples 3, 6, 10. Possible approaches: auto-wrap trivially-const literals in `hir.expr` blocks, or allow SplitPhases to recognize that literals are phase-agnostic.
 
-3. **Fix SplitPhases control flow in `const fn` (Bug 4)** — `const fn` bodies with `if` expressions need proper phase splitting with block successor handling.
+4. **Fix SplitPhases control flow in `const fn` (Bug 4)** — `const fn` bodies with `if` expressions need proper phase splitting with block successor handling.
    This blocks Example 9.
