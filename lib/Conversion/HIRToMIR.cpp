@@ -45,6 +45,9 @@ struct HIRToMIRPass : public silicon::impl::HIRToMIRPassBase<HIRToMIRPass> {
 };
 } // namespace
 
+// Forward declaration; defined below in the FuncOp conversion section.
+static Type resolveHIRType(Value typeVal);
+
 //===----------------------------------------------------------------------===//
 // Constants
 //===----------------------------------------------------------------------===//
@@ -52,7 +55,15 @@ struct HIRToMIRPass : public silicon::impl::HIRToMIRPassBase<HIRToMIRPass> {
 static LogicalResult convert(hir::ConstantIntOp op,
                              hir::ConstantIntOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
-  auto attr = base::IntAttr::get(op.getContext(), op.getValue().getValue());
+  auto value = op.getValue().getValue();
+  // Use the type annotation to determine whether this is a uint<N> literal
+  // or a plain int literal.
+  auto type = resolveHIRType(op.getTypeOperand());
+  TypedAttr attr;
+  if (auto uintType = dyn_cast<base::UIntType>(type))
+    attr = base::UIntAttr::get(op.getContext(), uintType.getWidth(), value);
+  else
+    attr = base::IntAttr::get(op.getContext(), value);
   rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
   return success();
 }
@@ -257,7 +268,12 @@ static LogicalResult convert(hir::CoerceTypeOp op,
                                    "type inference should have resolved it";
   auto expectedType = typeAttr.getValue();
   auto actualType = adaptor.getInput().getType();
-  if (actualType != expectedType && !isa<hir::AnyType>(expectedType))
+  // Allow !si.int → !si.uint<N> coercion for integer literals whose type
+  // annotation resolved to uint<N> but whose value was produced as !si.int.
+  bool compatible =
+      actualType == expectedType || isa<hir::AnyType>(expectedType) ||
+      (isa<base::IntType>(actualType) && isa<base::UIntType>(expectedType));
+  if (!compatible)
     return emitBug(op.getLoc())
            << "coerce_type type mismatch: input has " << actualType
            << " but type operand says " << expectedType;

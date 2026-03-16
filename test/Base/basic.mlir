@@ -34,6 +34,10 @@ func.func @attrs() {
   %1 = mir.constant #si.type<!si.int>
   // CHECK: mir.constant #si.type<!si.uint<16>>
   %2 = mir.constant #si.type<!si.uint<16>>
+  // CHECK: mir.constant #si.uint<8, 42>
+  %u0 = mir.constant #si.uint<8, 42>
+  // CHECK: mir.constant #si.uint<16, 0>
+  %u1 = mir.constant #si.uint<16, 0>
   // CHECK: mir.constant #si.unit
   %3 = mir.constant #si.unit
   // CHECK: mir.constant #si.opaque<[]>

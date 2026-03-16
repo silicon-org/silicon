@@ -4,6 +4,10 @@
 // Test three-phase dependent type threading: phase -2 computes a value, phase
 // -1 uses it to construct a uint<N> type, phase 0 uses the result. This uses
 // pre-split IR to bypass the SplitPhases limitation.
+
+// Still XFAIL because the caller main.0b passes an int-typed literal where the
+// specialized callee expects uint<8>. Fixing this requires coercion at the
+// mir.call boundary or updating the caller literal type during specialization.
 //
 // Corresponds to Example 7 in docs/design/cross-phase-types.md.
 

@@ -1,5 +1,4 @@
 // RUN: silc --ir-mir %s | FileCheck %s
-// XFAIL: *
 
 // Test end-to-end pipeline from unified form through the full pass pipeline
 // for dependent types where `hir.uint_type %N` has a block arg width. This
@@ -10,7 +9,7 @@
 // id(const N: int, x: uint<N>) -> uint<N>
 //===----------------------------------------------------------------------===//
 
-// CHECK: mir.evaluated_func {{.*}}@main.{{.*}} [#si.int<42> : !si.int]
+// CHECK: mir.evaluated_func {{.*}}@main.{{.*}} [#si.uint<8, 42> : !si.uint<8>]
 
 hir.unified_func private @id(%N: -1, %x: 0) -> (result: 0) {
   %0 = hir.int_type

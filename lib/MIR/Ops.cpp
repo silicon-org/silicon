@@ -44,6 +44,10 @@ static bool getAttrAbbrev(llvm::raw_ostream &os, Attribute attr) {
         os << 'c' << attr.getValue();
         return true;
       })
+      .Case<UIntAttr>([&](auto attr) {
+        os << 'c' << attr.getValue();
+        return true;
+      })
       .Case<base::UnitAttr>([&](auto attr) {
         os << "unit";
         return true;
@@ -67,43 +71,54 @@ OpFoldResult ConstantOp::fold(FoldAdaptor adaptor) { return getValue(); }
 // since DynamicAPInt lacks bitwise operator overloads.
 //===----------------------------------------------------------------------===//
 
-/// Helper to extract IntAttr from both operands of a binary op adaptor.
+/// Helper to extract integer values from both operands of a binary op. Works
+/// with both IntAttr and UIntAttr.
 static std::optional<std::pair<llvm::DynamicAPInt, llvm::DynamicAPInt>>
 getConstantIntOperands(Attribute lhs, Attribute rhs) {
-  auto lhsAttr = dyn_cast_or_null<IntAttr>(lhs);
-  auto rhsAttr = dyn_cast_or_null<IntAttr>(rhs);
-  if (!lhsAttr || !rhsAttr)
+  if (!lhs || !rhs)
     return std::nullopt;
-  return std::make_pair(lhsAttr.getValue(), rhsAttr.getValue());
+  if (!isa<IntAttr, UIntAttr>(lhs) || !isa<IntAttr, UIntAttr>(rhs))
+    return std::nullopt;
+  return std::make_pair(getIntValue(lhs), getIntValue(rhs));
+}
+
+/// Create the appropriate integer constant attribute for a result type. Returns
+/// UIntAttr for uint<N> results, IntAttr otherwise.
+static Attribute makeIntResult(MLIRContext *ctx, Type resultType,
+                               const llvm::DynamicAPInt &value) {
+  if (auto uintType = dyn_cast<UIntType>(resultType))
+    return UIntAttr::get(ctx, uintType.getWidth(), value);
+  return IntAttr::get(ctx, value);
 }
 
 OpFoldResult AddOp::fold(FoldAdaptor adaptor) {
   if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
-    return IntAttr::get(getContext(), vals->first + vals->second);
+    return makeIntResult(getContext(), getType(), vals->first + vals->second);
   return {};
 }
 
 OpFoldResult SubOp::fold(FoldAdaptor adaptor) {
   if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
-    return IntAttr::get(getContext(), vals->first - vals->second);
+    return makeIntResult(getContext(), getType(), vals->first - vals->second);
   return {};
 }
 
 OpFoldResult MulOp::fold(FoldAdaptor adaptor) {
   if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
-    return IntAttr::get(getContext(), vals->first * vals->second);
+    return makeIntResult(getContext(), getType(), vals->first * vals->second);
   return {};
 }
 
 OpFoldResult DivOp::fold(FoldAdaptor adaptor) {
   if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
-    return IntAttr::get(getContext(), vals->first / vals->second);
+    return makeIntResult(getContext(), getType(), vals->first / vals->second);
   return {};
 }
 
 OpFoldResult ModOp::fold(FoldAdaptor adaptor) {
   if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs()))
-    return IntAttr::get(getContext(), mod(vals->first, vals->second));
+    return makeIntResult(getContext(), getType(),
+                         mod(vals->first, vals->second));
   return {};
 }
 
@@ -111,7 +126,7 @@ OpFoldResult AndOp::fold(FoldAdaptor adaptor) {
   if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs())) {
     int64_t result =
         static_cast<int64_t>(vals->first) & static_cast<int64_t>(vals->second);
-    return IntAttr::get(getContext(), llvm::DynamicAPInt(result));
+    return makeIntResult(getContext(), getType(), llvm::DynamicAPInt(result));
   }
   return {};
 }
@@ -120,7 +135,7 @@ OpFoldResult OrOp::fold(FoldAdaptor adaptor) {
   if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs())) {
     int64_t result =
         static_cast<int64_t>(vals->first) | static_cast<int64_t>(vals->second);
-    return IntAttr::get(getContext(), llvm::DynamicAPInt(result));
+    return makeIntResult(getContext(), getType(), llvm::DynamicAPInt(result));
   }
   return {};
 }
@@ -129,7 +144,7 @@ OpFoldResult XorOp::fold(FoldAdaptor adaptor) {
   if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs())) {
     int64_t result =
         static_cast<int64_t>(vals->first) ^ static_cast<int64_t>(vals->second);
-    return IntAttr::get(getContext(), llvm::DynamicAPInt(result));
+    return makeIntResult(getContext(), getType(), llvm::DynamicAPInt(result));
   }
   return {};
 }
@@ -138,7 +153,7 @@ OpFoldResult ShlOp::fold(FoldAdaptor adaptor) {
   if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs())) {
     int64_t result = static_cast<int64_t>(vals->first)
                      << static_cast<int64_t>(vals->second);
-    return IntAttr::get(getContext(), llvm::DynamicAPInt(result));
+    return makeIntResult(getContext(), getType(), llvm::DynamicAPInt(result));
   }
   return {};
 }
@@ -147,7 +162,7 @@ OpFoldResult ShrOp::fold(FoldAdaptor adaptor) {
   if (auto vals = getConstantIntOperands(adaptor.getLhs(), adaptor.getRhs())) {
     int64_t result =
         static_cast<int64_t>(vals->first) >> static_cast<int64_t>(vals->second);
-    return IntAttr::get(getContext(), llvm::DynamicAPInt(result));
+    return makeIntResult(getContext(), getType(), llvm::DynamicAPInt(result));
   }
   return {};
 }

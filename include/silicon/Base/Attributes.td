@@ -17,17 +17,14 @@ def DynamicAPIntParameter : AttrOrTypeParameter<"llvm::DynamicAPInt", ""> {
   let comparator = "$_lhs == $_rhs";
 }
 
-class BaseAttrDef<
-  string name,
-  list<Trait> traits = [],
-  string baseCppClass = "mlir::Attribute"
-> : AttrDef<BaseDialect, name, traits, baseCppClass> {
+class BaseAttrDef<string name, list<Trait> traits = [],
+                  string baseCppClass = "mlir::Attribute">
+    : AttrDef<BaseDialect, name, traits, baseCppClass> {
   let mnemonic = ?;
 }
 
-def BaseTypeAttr : BaseAttrDef<"Type", [
-  DeclareAttrInterfaceMethods<TypedAttrInterface>
-]> {
+def BaseTypeAttr
+    : BaseAttrDef<"Type", [DeclareAttrInterfaceMethods<TypedAttrInterface>]> {
   let mnemonic = "type";
   let summary = "a constant type value";
   let description = [{
@@ -43,9 +40,8 @@ def BaseTypeAttr : BaseAttrDef<"Type", [
   let assemblyFormat = "`<` $value `>`";
 }
 
-def IntAttr : BaseAttrDef<"Int", [
-  DeclareAttrInterfaceMethods<TypedAttrInterface>
-]> {
+def IntAttr
+    : BaseAttrDef<"Int", [DeclareAttrInterfaceMethods<TypedAttrInterface>]> {
   let mnemonic = "int";
   let summary = "a constant integer value";
   let description = [{
@@ -60,9 +56,8 @@ def IntAttr : BaseAttrDef<"Int", [
   let assemblyFormat = "`<` $value `>`";
 }
 
-def BaseUnitAttr : BaseAttrDef<"Unit", [
-  DeclareAttrInterfaceMethods<TypedAttrInterface>
-]> {
+def BaseUnitAttr
+    : BaseAttrDef<"Unit", [DeclareAttrInterfaceMethods<TypedAttrInterface>]> {
   let mnemonic = "unit";
   let summary = "a constant unit value";
   let description = [{
@@ -73,9 +68,8 @@ def BaseUnitAttr : BaseAttrDef<"Unit", [
   let assemblyFormat = "";
 }
 
-def SiBoolAttr : BaseAttrDef<"Bool", [
-  DeclareAttrInterfaceMethods<TypedAttrInterface>
-]> {
+def SiBoolAttr
+    : BaseAttrDef<"Bool", [DeclareAttrInterfaceMethods<TypedAttrInterface>]> {
   let mnemonic = "bool";
   let summary = "a constant boolean value";
   let description = [{
@@ -88,14 +82,25 @@ def SiBoolAttr : BaseAttrDef<"Bool", [
   let assemblyFormat = "`<` $value `>`";
 }
 
-def OpaqueAttr : BaseAttrDef<"Opaque", [
-  DeclareAttrInterfaceMethods<TypedAttrInterface>
-]> {
+def UIntAttr
+    : BaseAttrDef<"UInt", [DeclareAttrInterfaceMethods<TypedAttrInterface>]> {
+  let mnemonic = "uint";
+  let summary = "a constant unsigned integer value";
+  let description = [{
+    An attribute representing a constant unsigned integer value with a
+    specific bit width. This is the constant form of `si.uint<N>`.
+
+    Example: `#si.uint<8, 42>` represents the value 42 as a `!si.uint<8>`.
+  }];
+  let parameters = (ins "int64_t":$width, DynamicAPIntParameter:$value);
+  let assemblyFormat = "`<` $width `,` $value `>`";
+}
+
+def OpaqueAttr
+    : BaseAttrDef<"Opaque", [DeclareAttrInterfaceMethods<TypedAttrInterface>]> {
   let mnemonic = "opaque";
   let summary = "opaque bundle of values passed between phases";
-  let parameters = (ins
-    OptionalArrayRefParameter<"mlir::Attribute">:$elements
-  );
+  let parameters = (ins OptionalArrayRefParameter<"mlir::Attribute">:$elements);
   let assemblyFormat = [{
     `<` `[` (`]`) : ($elements^ `]`)? `>`
   }];

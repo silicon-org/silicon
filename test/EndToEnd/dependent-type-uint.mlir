@@ -1,5 +1,4 @@
 // RUN: silicon-opt --phase-eval-loop %s | FileCheck %s
-// XFAIL: *
 
 // Test dependent types where a const argument N determines a uint<N> type.
 // This uses pre-split IR to bypass the SplitPhases limitation where
@@ -12,7 +11,7 @@
 // Example 1: id(const N: int, x: uint<N>) -> uint<N>
 //===----------------------------------------------------------------------===//
 
-// CHECK: mir.evaluated_func {{.*}}@main_ex1.0b [#si.int<42> : !si.int]
+// CHECK: mir.evaluated_func {{.*}}@main_ex1.0b [#si.uint<8, 42> : !si.uint<8>]
 
 // id phase -1: receives N, packs it for type computation in the next phase.
 hir.func private @id.0(%N) -> (ctx) {
@@ -98,7 +97,7 @@ hir.multiphase_func @main_ex1.0() -> (result) [
 // Example 8: typed_add(const N: int, a: uint<N>, b: uint<N>) -> uint<N>
 //===----------------------------------------------------------------------===//
 
-// CHECK: mir.evaluated_func {{.*}}@main_ex8.0b [#si.int<30> : !si.int]
+// CHECK: mir.evaluated_func {{.*}}@main_ex8.0b [#si.uint<8, 30> : !si.uint<8>]
 
 // typed_add phase -1: receives N, packs it.
 hir.func private @typed_add.0(%N) -> (ctx) {

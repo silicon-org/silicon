@@ -15,3 +15,14 @@
 
 #define GET_ATTRDEF_CLASSES
 #include "silicon/Base/Attributes.h.inc"
+
+namespace silicon::base {
+
+/// Extract the integer value from an IntAttr or UIntAttr.
+inline llvm::DynamicAPInt getIntValue(mlir::Attribute attr) {
+  if (auto intAttr = mlir::dyn_cast<IntAttr>(attr))
+    return intAttr.getValue();
+  return mlir::cast<UIntAttr>(attr).getValue();
+}
+
+} // namespace silicon::base

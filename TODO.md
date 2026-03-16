@@ -2,9 +2,9 @@
 
 - cross-ex4.si, cross-ex8.si: `mir.return` type mismatch (`!si.uint<N>` vs `!si.opaque`) when a function calls another dependent-type function.
   The return type in the MIR func doesn't match because the opaque signature types aren't properly resolved after specialization.
-- EndToEnd dependent-type-uint tests (XFAIL): `mir.call` verifier catches type mismatch in specialized functions.
-  SpecializeFuncs creates `@triple.1_0` / `@typed_add.1_1` with concrete types but doesn't update the calling mir.call's argument types.
-  Un-XFAIL these once the specialization pass correctly updates call signatures.
+- EndToEnd dependent-type-uint-3phase (XFAIL): the caller passes an int-typed literal where the specialized callee expects `!si.uint<N>`.
+  The constant in `main.0b` is typed as `int` (not `uint<N>`), so it doesn't benefit from the UIntAttr conversion.
+  Fixing requires coercion at the `mir.call` boundary or updating caller literal types during specialization.
 - cross-ex5.si: `hir.unify` survives to HIRToMIR with different operands.
   The `const { 4 + 4 }` expression creates a unify between the computed type and the expected type that InferTypes can't resolve.
   We can't symbolically prove equivalence, but we want the canonicalizer to be able to at least resolve constant expressions down to simple constants that will then unify.

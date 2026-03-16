@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/Base/Attributes.h"
+#include "silicon/Base/Types.h"
 #include "silicon/MIR/Ops.h"
 #include "silicon/MIR/Passes.h"
 #include "silicon/Support/MLIR.h"
@@ -74,8 +75,8 @@ LogicalResult Interpreter::executeOp(Operation *op,
   } else if (isa<mir::AddOp, mir::SubOp, mir::MulOp, mir::DivOp, mir::ModOp,
                  mir::AndOp, mir::OrOp, mir::XorOp, mir::ShlOp, mir::ShrOp>(
                  op)) {
-    auto lhs = cast<base::IntAttr>(operands[0]).getValue();
-    auto rhs = cast<base::IntAttr>(operands[1]).getValue();
+    auto lhs = base::getIntValue(operands[0]);
+    auto rhs = base::getIntValue(operands[1]);
     DynamicAPInt value;
     if (isa<mir::AddOp>(op))
       value = lhs + rhs;
@@ -111,12 +112,17 @@ LogicalResult Interpreter::executeOp(Operation *op,
                << "shift amount " << rhs << " is out of range [0, 64)";
       value = DynamicAPInt(int64_t(lhs) >> int64_t(rhs));
     }
-    values[op->getResult(0)] = base::IntAttr::get(op->getContext(), value);
+    // Produce UIntAttr when the result type is uint<N>, IntAttr otherwise.
+    if (auto uintType = dyn_cast<base::UIntType>(op->getResult(0).getType()))
+      values[op->getResult(0)] =
+          base::UIntAttr::get(op->getContext(), uintType.getWidth(), value);
+    else
+      values[op->getResult(0)] = base::IntAttr::get(op->getContext(), value);
   } else if (isa<mir::EqOp, mir::NeqOp, mir::LtOp, mir::GtOp, mir::GeqOp,
                  mir::LeqOp>(op)) {
     // Comparison ops produce BoolAttr results.
-    auto lhs = cast<base::IntAttr>(operands[0]).getValue();
-    auto rhs = cast<base::IntAttr>(operands[1]).getValue();
+    auto lhs = base::getIntValue(operands[0]);
+    auto rhs = base::getIntValue(operands[1]);
     bool result = false;
     if (isa<mir::EqOp>(op))
       result = lhs == rhs;
@@ -157,8 +163,7 @@ LogicalResult Interpreter::executeOp(Operation *op,
              << "unsupported condition type " << operands[0];
     values[op->getResult(0)] = cond ? operands[1] : operands[2];
   } else if (isa<mir::UIntTypeOp>(op)) {
-    auto widthAttr = cast<base::IntAttr>(operands[0]);
-    auto width = static_cast<int64_t>(widthAttr.getValue());
+    auto width = static_cast<int64_t>(base::getIntValue(operands[0]));
     auto type = base::UIntType::get(op->getContext(), width);
     values[op->getResult(0)] = base::TypeAttr::get(op->getContext(), type);
   } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
