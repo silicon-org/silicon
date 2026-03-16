@@ -41,10 +41,10 @@ hir.unified_func private @id(%N: -1, %x: 0) -> (result: 0) {
 }
 ```
 
-**Compiler result: CheckCalls PASSES** (dominance bug fixed), but **fails at check-types** with `type mismatch: uint is not compatible with int` because the integer literal `42` has type `int`, not `uint<8>`.
+**Compiler result: CheckCalls, InferTypes, and CheckTypes all PASS** (integer literal `42` now infers type `uint<N>` from context).
+Fails at SplitPhases/HIRToMIR — `@id.0` contains `uint_type %N` (block arg width) which HIRToMIR can't lower (Bug 1).
 
 At the MLIR level with pre-split IR (bypassing SplitPhases), the full pipeline works — see `test/EndToEnd/dependent-type-uint.mlir`.
-At the unified MLIR level, SplitPhases produces `@id.0` with `uint_type %N` (block arg width), which HIRToMIR can't lower.
 
 ## Example 2: Computed Type Width
 
@@ -72,8 +72,9 @@ pub fn main() -> uint<8> { use_width(compute_width(3, 5), 42) }
 **Expected:** `compute_width(3, 5)` evaluates to 8 at compile time.
 `use_width(8, 42)` specializes with W=8.
 
-**Compiler result: CheckCalls PASSES**, but **fails at check-types** — the integer literal `42` has type `int`, not `uint<W>`.
-Parsing succeeds and correctly wraps `compute_width(3, 5)` in an `hir.expr` block.
+**Compiler result: CheckCalls, InferTypes, and CheckTypes all PASS.**
+**Fails at SplitPhases** with `call argument requires phase -2 but value is only available at phase -1` — the literal args `3` and `5` inside `compute_width(3, 5)` are at main's body phase (-1 relative to the `use_width` const arg), but `compute_width`'s parameters are at phase -1 of `compute_width`, which is phase -2 from main's perspective.
+This is a phase-depth issue: nested const calls in const-arg position require their own arguments to be available two phases early.
 
 ## Example 4: Nested Specialization with Dependent Types
 
@@ -88,7 +89,8 @@ pub fn main() -> uint<16> { outer(16, 100) }
 **Expected:** Both `inner` and `outer` are specialized.
 The type `uint<16>` propagates through both levels.
 
-**Compiler result: CheckCalls PASSES**, but **fails at check-types** — `uint` types with different width operands (`%M` vs `%N`) can't be proven equal, and integer literals have type `int` instead of `uint<M>`.
+**Compiler result: CheckCalls, InferTypes, and CheckTypes all PASS.**
+**Fails at SplitPhases/HIRToMIR** — same as Example 1 (Bug 1: `@outer.0` contains `uint_type %M` with block arg width).
 
 ## Example 5: Const Block Producing a Type Width
 
@@ -124,7 +126,8 @@ pub fn main(x: uint<16>) -> uint<16> {
 **Expected:** `select_width(true, 8)` evaluates to 16.
 `typed_op(16, x)` is `uint<16> -> uint<16>`.
 
-**Compiler result: CheckCalls PASSES**, but **fails at check-types** — integer literal type mismatch.
+**Compiler result: CheckCalls, InferTypes, and CheckTypes all PASS.**
+**Fails at SplitPhases** with `call argument requires phase -2 but value is only available at phase -1` — same phase-depth issue as Example 3: `select_width(true, 8)` is a nested const call whose arguments need to be two phases early.
 
 ## Example 7: Three-Phase Type Threading (MLIR)
 
@@ -284,7 +287,8 @@ pub fn main() -> uint<8> { typed_add(8, 10, 20) }
 **Expected:** Both `a` and `b` get type `uint<8>`.
 Result is `30 : !si.uint<8>`.
 
-**Compiler result: CheckCalls PASSES**, but **fails at check-types** — integer literal type mismatch.
+**Compiler result: CheckCalls, InferTypes, and CheckTypes all PASS.**
+**Fails at SplitPhases/HIRToMIR** — same as Example 1 (Bug 1: `@typed_add.0` contains `uint_type %N` with block arg width).
 
 At the MLIR level with pre-split IR, the full pipeline works and produces `#si.int<30>` — see `test/EndToEnd/dependent-type-uint.mlir` (Example 8 section).
 
@@ -303,7 +307,8 @@ pub fn main(x: uint<16>) -> uint<16> { process(pick_width(true), x) }
 **Expected:** `pick_width(true)` runs at compile time (phase -2), returns 16.
 `process(16, x)` specializes.
 
-**Compiler result: CheckCalls PASSES**, but **fails at check-types** — integer literal and uint type mismatch.
+**Compiler result: Fails at SplitPhases** with `compiler bug: op uses value from later phase` and region isolation errors.
+The `const fn` body contains an `if` expression whose branches produce values across phase boundaries, which SplitPhases can't handle yet.
 
 ## Example 10: Chained Const Functions
 
@@ -316,7 +321,8 @@ pub fn main() -> uint<16> { make(double(8), 100) }
 **Expected:** `double(8)` evaluates to 16.
 `make(16, 100)` specializes.
 
-**Compiler result: CheckCalls PASSES**, but **fails at check-types** — integer literal type mismatch.
+**Compiler result: CheckCalls, InferTypes, and CheckTypes all PASS.**
+**Fails at SplitPhases** with `call argument requires phase -2 but value is only available at phase -1` — same phase-depth issue as Examples 3 and 6: `double(8)` is a nested const call whose argument needs to be two phases early.
 
 ## Example 11: Dyn + Dependent Type
 
@@ -328,7 +334,8 @@ pub dyn fn main(x: uint<8>) -> uint<8> { deferred_id(8, x) }
 **Expected:** `deferred_id` is dyn-shifted.
 Phase 0 receives N=8, phase 1 receives x: uint<8>.
 
-**Compiler result: CheckCalls PASSES**, but **fails at check-types** — two `uint` types with different width operands can't be unified.
+**Compiler result: CheckCalls, InferTypes, and CheckTypes all PASS.**
+**Fails at SplitPhases/HIRToMIR** — same as Example 1 (Bug 1: `@deferred_id.0` contains `uint_type %N` with block arg width).
 
 ## Summary of Findings
 
@@ -358,6 +365,8 @@ Phase 0 receives N=8, phase 1 receives x: uint<8>.
 
 7. **HIRToMIR with specialized `uint<N>`**: `shouldLower`, `isResolvableType`, and `resolveHIRType` all accept both `hir.constant_int` and `hir.mir_constant` as uint width sources.
 
+8. **Integer literal type inference**: `constant_int` ops keep their `inferrable` type, allowing unification with context (e.g., `uint<N>` from a callee signature). All frontend `.si` examples now pass through CheckCalls, InferTypes, and CheckTypes. The remaining blocker for these examples is Bug 1 (SplitPhases packing).
+
 ### What's Broken
 
 **Bug 1: SplitPhases packs computed types instead of raw values** (blocks `uint<N>` from unified form through the full pipeline)
@@ -368,36 +377,41 @@ Since `%N` is a block arg (not a constant), `shouldLower` correctly rejects `@id
 The hand-crafted pre-split IR that works packs `%N` directly and defers `uint_type` computation to the next phase (where it gets specialized with a concrete value).
 SplitPhases should do the same: pack the _operands_ of type constructors rather than the computed types.
 
-**Bug 2: Frontend `int` literals can't unify with `uint<N>`** (blocks all `.si` examples)
+**Bug 2: Nested const calls require deeper phase availability** (blocks Examples 3, 6, 10)
 
-All frontend examples fail at `check-types` because integer literals are typed as `int`, and there's no coercion from `int` to `uint<N>`.
-For example, `id(8, 42)` passes `42 : int` where the signature expects `uint<N>`.
+When a const call like `compute_width(3, 5)` is used as a const argument to another function (e.g., `use_width(compute_width(3, 5), 42)`), the arguments to the inner call need to be available at phase -2 from the caller's perspective (one level for `use_width`'s const arg, another for `compute_width`'s const args).
+Currently, literal values in the function body are only available at phase -1 (one step earlier than body phase 0), so the compiler rejects them.
+This needs either automatic `const { ... }` wrapping of literal arguments in nested const-call positions, or the ability for `hir.expr` to auto-lower literals that are trivially const.
 
-**~~Bug 3~~ (FIXED): Type unification now decomposes structurally equivalent type ops**
+**Bug 3: SplitPhases can't split `const fn` bodies with control flow** (blocks Example 9)
 
-InferTypes now decomposes `unify(T<a>, T<b>)` into `T<unify(a, b)>` when the later op's operands don't dominate the earlier op.
-This handles cases like `unify(uint_type(add(4,4)), uint_type(constant_int(8)))` by creating a width-level unify that survives harmlessly past `check-types` (since `add` and `constant_int` aren't type constructors).
+`const fn` bodies with `if` expressions fail during phase splitting because the branches produce values across phase boundaries.
+SplitPhases doesn't yet handle block successors and region isolation for control flow in earlier-phase function bodies.
 
 ### Complexity Spectrum
 
-| Level | Description                                  | Works? | Blocker                              |
-| ----- | -------------------------------------------- | ------ | ------------------------------------ |
-| 1     | `int`-only const args                        | Yes    | —                                    |
-| 2     | Type-value passthrough (`@identity` pattern) | Yes    | —                                    |
-| 3     | `uint<N>` dependent types (MLIR, pre-split)  | Yes    | —                                    |
-| 4     | Multi-phase type threading (MLIR, pre-split) | Yes    | —                                    |
-| 5     | `uint<N>` dependent types (MLIR, unified)    | No     | SplitPhases packing bug              |
-| 6     | `uint<N>` dependent types (frontend `.si`)   | No     | Bugs 1 + 2                           |
-| 7     | Computed type widths (`uint<N+N>`)           | No     | Type arithmetic not implemented      |
-| 8     | Type-level function calls                    | No     | Requires `const fn` type computation |
+| Level | Description                                  | Works? | Blocker                                    |
+| ----- | -------------------------------------------- | ------ | ------------------------------------------ |
+| 1     | `int`-only const args                        | Yes    | —                                          |
+| 2     | Type-value passthrough (`@identity` pattern) | Yes    | —                                          |
+| 3     | `uint<N>` dependent types (MLIR, pre-split)  | Yes    | —                                          |
+| 4     | Multi-phase type threading (MLIR, pre-split) | Yes    | —                                          |
+| 5     | `uint<N>` dependent types (MLIR, unified)    | No     | Bug 1: SplitPhases packing                 |
+| 6     | `uint<N>` dependent types (frontend `.si`)   | No     | Bug 1                                      |
+| 7     | Nested const calls (`f(g(x), y)`)            | No     | Bug 2: phase-depth availability            |
+| 8     | `const fn` with control flow                 | No     | Bug 3: SplitPhases control flow            |
+| 9     | Computed type widths (`uint<N+N>`)           | No     | Type arithmetic not implemented            |
+| 10    | Type-level function calls                    | No     | Requires `const fn` type computation       |
 
 ### Recommendations
 
-1. **Fix SplitPhases type packing** — when the const-phase function needs to pack type information, pack the raw operands (e.g., `%N`) instead of computed types (e.g., `uint_type %N`), and have the next phase reconstruct the types from the specialized constants.
-   This is the critical blocker for the unified MLIR form.
+1. **Fix SplitPhases type packing (Bug 1)** — when the const-phase function needs to pack type information, pack the raw operands (e.g., `%N`) instead of computed types (e.g., `uint_type %N`), and have the next phase reconstruct the types from the specialized constants.
+   This is the critical blocker for Examples 1, 4, 5, 8, 11 — all of which now pass type checking.
 
-2. **Add `int`-to-`uint<N>` coercion** — The frontend should emit `hir.constant_int` ops with an `hir.inferrable` type.
-   Type inference will then automatically determine the type of the literal.
-   If no type can be inferred but the `hir.inferrable` is used as a `hir.constant_int` type, make it an `int` type.
+2. **Fix nested const-call phase depth (Bug 2)** — when a const call appears as an argument to another const parameter, its own arguments need to be available at a deeper phase.
+   This blocks Examples 3, 6, 10. Possible approaches: auto-wrap trivially-const literals in `hir.expr` blocks, or allow SplitPhases to recognize that literals are phase-agnostic.
 
-3. **Add test cases** — once SplitPhases is fixed, add `test/EndToEnd/dependent-type-uint.si` with examples 1, 3, 4, 8 from this document.
+3. **Fix SplitPhases control flow in `const fn` (Bug 3)** — `const fn` bodies with `if` expressions need proper phase splitting with block successor handling.
+   This blocks Example 9.
+
+4. **Add test cases** — once Bug 1 is fixed, add `test/EndToEnd/dependent-type-uint.si` with examples 1, 4, 5, 8, 11 from this document.

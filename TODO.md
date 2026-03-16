@@ -11,6 +11,9 @@
   Root cause: the `&&` short-circuit produces a value typed `!hir.any` that doesn't get coerced to `!si.bool` before the MIR return.
   Unrelated to multi-block signatures (which are now handled by phi tracing in `resolveTypeValue`).
 - Document how integer literal type inference works in docs/examples/.
+- HIR needs a `hir.constant` op that can materialize any of the `#si.*` constant attributes.
+  Use that op to materialize most constants that have a fully-known type and/or value; this would replace constant-like ops such as `hir.int_type`, `hir.unit_type`, etc.
+  We'd still need `hir.constant_int` to construct an integer literal with an inferrable type.
 
 ## Dialect Review: Missing Error Handling
 
