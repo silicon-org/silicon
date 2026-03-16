@@ -1,0 +1,12 @@
+// RUN: silc --ir-mir %s | FileCheck %s
+
+// Test dependent types with binary operations (Example 8 from
+// cross-phase-types.md). The return type `uint<N>` depends on the const arg N,
+// and the return value comes from `a + b` (an hir.add op with a resultType
+// operand). After SplitPhases, the phase-0 signature must derive arg and result
+// types from the opaque context, not fall back to standalone opaque_type.
+
+// CHECK: mir.evaluated_func {{.*}}@main.{{.*}} [#si.uint<8, 30> : !si.uint<8>]
+
+fn typed_add(const N: int, a: uint<N>, b: uint<N>) -> uint<N> { a + b }
+pub fn main() -> uint<8> { typed_add(8, 10, 20) }

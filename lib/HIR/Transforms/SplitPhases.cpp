@@ -1075,6 +1075,14 @@ LogicalResult PhaseSplitter::splitBodyByPhase() {
 // typeOfResults (partitioned by effectiveResultPhases). Pure ops are cloned
 // transitively; unresolvable values (e.g., phi block args from multi-block
 // signatures) fall back to OpaqueTypeOp.
+//
+// For phases with cross-phase context (phase > minPhase), type values that
+// depend on earlier-phase values (e.g., `uint_type(%N)` where `%N` comes from
+// a const arg) cannot be resolved from the unified signature alone. In these
+// cases, we create a parallel `opaque_unpack` in the signature on the context
+// block arg, and derive the type values from the body's `coerce_type` ops and
+// return value type operands, cloning them into the signature with a mapping
+// from body opaque_unpack results to signature opaque_unpack results.
 //===----------------------------------------------------------------------===//
 
 void PhaseSplitter::reconstructSignatures() {
@@ -1128,11 +1136,131 @@ void PhaseSplitter::reconstructSignatures() {
                               visited);
     };
 
+    // # Cross-Phase Signature Type Derivation
+    //
+    // For phases with a cross-phase context (phase > minPhase), the body has
+    // an `opaque_unpack` that extracts cross-phase values from the context
+    // arg. We create a matching `opaque_unpack` in the signature and build a
+    // body-to-sig mapping. When the unified signature's type resolution fails
+    // (falls back to OpaqueTypeOp because a type depends on an earlier-phase
+    // value), we instead derive the type from the body:
+    //
+    // - Arg types: from the body's `coerce_type %arg, %type_val` ops
+    // - Result types: from the return values' defining ops' type operands
+    //   (e.g., `add`'s resultType, `coerce_type`'s typeOperand, `call`'s
+    //   typeOfResults)
+    //
+    // The cloned type ops in the sig then correctly reference sig
+    // opaque_unpack results. When SpecializeFuncs later expands the opaque
+    // context, these become concrete `mir_constant` values, producing correct
+    // types in the final MIR function signature.
+
+    OpaqueUnpackOp bodyUnpackOp;
+    IRMapping bodyToSig;
+    if (phase > minPhase) {
+      // Find the body's opaque_unpack consuming the context arg.
+      for (auto &op : bodyBlock) {
+        if (auto u = dyn_cast<OpaqueUnpackOp>(&op)) {
+          bodyUnpackOp = u;
+          break;
+        }
+      }
+      if (bodyUnpackOp && bodyUnpackOp.getNumResults() > 0) {
+        // Create a matching opaque_unpack in the signature.
+        auto ctxSigArg = sigBlock->getArgument(sigBlock->getNumArguments() - 1);
+        auto sigUnpackOp = OpaqueUnpackOp::create(
+            sigBuilder, funcOp.getLoc(),
+            SmallVector<Type>(bodyUnpackOp.getNumResults(),
+                              AnyType::get(sigBuilder.getContext())),
+            ctxSigArg);
+
+        // Map body opaque_unpack results to sig opaque_unpack results, and
+        // body own args to sig own args.
+        for (unsigned i = 0; i < bodyUnpackOp.getNumResults(); ++i)
+          bodyToSig.map(bodyUnpackOp.getResult(i), sigUnpackOp.getResult(i));
+        unsigned ownArgCount = numOwnArgs[phase - minPhase];
+        for (unsigned i = 0; i < ownArgCount; ++i)
+          bodyToSig.map(bodyBlock.getArgument(i), sigBlock->getArgument(i));
+      }
+    }
+
+    // Clone a type op tree from the body into the signature, using the
+    // body-to-sig mapping for cross-phase values (opaque_unpack results and
+    // block args).
+    auto cloneBodyTypeIntoSig = [&](Value bodyTypeVal) -> Value {
+      if (auto mapped = bodyToSig.lookupOrNull(bodyTypeVal))
+        return mapped;
+      auto *typeDefOp = bodyTypeVal.getDefiningOp();
+      if (!typeDefOp)
+        return {};
+      SmallVector<Operation *> toClone;
+      SmallPtrSet<Operation *, 8> visited;
+      std::function<void(Operation *)> collectOps = [&](Operation *op) {
+        if (!visited.insert(op).second)
+          return;
+        for (auto operand : op->getOperands()) {
+          if (auto *defOp = operand.getDefiningOp())
+            if (!bodyToSig.contains(operand))
+              collectOps(defOp);
+        }
+        toClone.push_back(op);
+      };
+      collectOps(typeDefOp);
+      IRMapping cloneMapping(bodyToSig);
+      for (auto *op : toClone) {
+        if (!cloneMapping.contains(op->getResult(0)))
+          sigBuilder.clone(*op, cloneMapping);
+      }
+      return cloneMapping.lookupOrDefault(bodyTypeVal);
+    };
+
+    // Extract the type-level SSA value describing a body value's HIR type.
+    auto getBodyTypeOfValue = [](Value val) -> Value {
+      auto *defOp = val.getDefiningOp();
+      if (!defOp)
+        return {};
+      if (auto coerce = dyn_cast<CoerceTypeOp>(defOp))
+        return coerce.getTypeOperand();
+      // All HIRBinaryOp subclasses have (lhs, rhs, resultType) operands.
+      if (isa<AddOp, SubOp, MulOp, DivOp, ModOp, AndOp, OrOp, XorOp, ShlOp,
+              ShrOp, EqOp, NeqOp, LtOp, GtOp, GeqOp, LeqOp>(defOp))
+        return defOp->getOperand(2);
+      if (auto call = dyn_cast<CallOp>(defOp)) {
+        auto idx = cast<OpResult>(val).getResultNumber();
+        auto typeOfResults = call.getTypeOfResults();
+        if (idx < typeOfResults.size())
+          return typeOfResults[idx];
+      }
+      return {};
+    };
+
     // Build typeOfArgs: resolve own arg types, opaque for context.
     SmallVector<Value> typeOfArgs;
+    unsigned ownArgIdx = 0;
     for (auto [idx, argPhase] : llvm::enumerate(funcOp.getArgPhases())) {
-      if (static_cast<int16_t>(argPhase) == phase)
-        typeOfArgs.push_back(resolveType(sigTypeOfArgs[idx]));
+      if (static_cast<int16_t>(argPhase) != phase)
+        continue;
+      Value resolved = resolveType(sigTypeOfArgs[idx]);
+
+      // If resolution fell back to opaque_type and we have a body
+      // opaque_unpack, derive the type from the body's coerce_type instead.
+      if (bodyUnpackOp && resolved.getDefiningOp<OpaqueTypeOp>() &&
+          ownArgIdx < numOwnArgs[phase - minPhase]) {
+        auto bodyArg = bodyBlock.getArgument(ownArgIdx);
+        for (auto *user : bodyArg.getUsers()) {
+          auto coerce = dyn_cast<CoerceTypeOp>(user);
+          if (coerce && coerce.getInput() == bodyArg) {
+            if (auto sigType = cloneBodyTypeIntoSig(coerce.getTypeOperand())) {
+              resolved.getDefiningOp()->erase();
+              resolved = sigType;
+            }
+            break;
+          }
+        }
+      }
+
+      typeOfArgs.push_back(resolved);
+      ++ownArgIdx;
     }
     if (bodyBlock.getNumArguments() > typeOfArgs.size())
       typeOfArgs.push_back(
@@ -1140,15 +1268,34 @@ void PhaseSplitter::reconstructSignatures() {
 
     // Build typeOfResults: resolve own result types, opaque for context.
     SmallVector<Value> typeOfResults;
-    for (auto [idx, resultPhase] : llvm::enumerate(effectiveResultPhases)) {
-      if (resultPhase == phase)
-        typeOfResults.push_back(resolveType(sigTypeOfResults[idx]));
-    }
     ReturnOp bodyRetOp;
     split.funcOp.getBody().walk([&](ReturnOp r) {
       if (!bodyRetOp)
         bodyRetOp = r;
     });
+    unsigned ownResultIdx = 0;
+    for (auto [idx, resultPhase] : llvm::enumerate(effectiveResultPhases)) {
+      if (resultPhase != phase)
+        continue;
+      Value resolved = resolveType(sigTypeOfResults[idx]);
+
+      // If resolution fell back to opaque_type, derive from the body's
+      // return value type operand.
+      if (bodyUnpackOp && resolved.getDefiningOp<OpaqueTypeOp>() && bodyRetOp &&
+          ownResultIdx < bodyRetOp.getValues().size()) {
+        Value bodyType =
+            getBodyTypeOfValue(bodyRetOp.getValues()[ownResultIdx]);
+        if (bodyType) {
+          if (auto sigType = cloneBodyTypeIntoSig(bodyType)) {
+            resolved.getDefiningOp()->erase();
+            resolved = sigType;
+          }
+        }
+      }
+
+      typeOfResults.push_back(resolved);
+      ++ownResultIdx;
+    }
     if (bodyRetOp && bodyRetOp.getValues().size() > typeOfResults.size())
       typeOfResults.push_back(
           OpaqueTypeOp::create(sigBuilder, funcOp.getLoc()).getResult());
@@ -1185,6 +1332,28 @@ void PhaseSplitter::populateReturnTypeOfValues() {
     for (auto [sigArg, bodyArg] :
          llvm::zip(sigBlock.getArguments(), bodyBlock.getArguments()))
       mapping.map(sigArg, bodyArg);
+
+    // Map sig opaque_unpack results to existing body opaque_unpack results.
+    // Without this, cloning the sig's type ops (which may reference sig
+    // opaque_unpack results) would create duplicate opaque_unpack ops in the
+    // body.
+    if (phase > minPhase) {
+      OpaqueUnpackOp sigUnpack, bodyUnpack;
+      for (auto &op : sigBlock)
+        if (auto u = dyn_cast<OpaqueUnpackOp>(&op)) {
+          sigUnpack = u;
+          break;
+        }
+      for (auto &op : bodyBlock)
+        if (auto u = dyn_cast<OpaqueUnpackOp>(&op)) {
+          bodyUnpack = u;
+          break;
+        }
+      if (sigUnpack && bodyUnpack)
+        for (auto [sigRes, bodyRes] :
+             llvm::zip(sigUnpack.getResults(), bodyUnpack.getResults()))
+          mapping.map(sigRes, bodyRes);
+    }
 
     split.funcOp.getBody().walk([&](ReturnOp retOp) {
       SmallVector<Value> typeOfValues;

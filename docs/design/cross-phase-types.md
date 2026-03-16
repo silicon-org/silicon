@@ -86,8 +86,8 @@ pub fn main() -> uint<16> { outer(16, 100) }
 **Expected:** Both `inner` and `outer` are specialized.
 The type `uint<16>` propagates through both levels.
 
-**Compiler result: CheckCalls, InferTypes, CheckTypes, SplitPhases, and HIRToMIR all PASS.**
-**Fails** at SpecializeFuncs/MIR: `mir.return` type mismatch — the specialized inner call returns `!si.uint<16>` but the enclosing multiphase func expects `!si.opaque` (Bug 2).
+**WORKS** end-to-end.
+See `test/EndToEnd/dependent-type-uint-nested.si`.
 
 ## Example 5: Const Block Producing a Type Width
 
@@ -203,11 +203,8 @@ pub fn main() -> uint<8> { typed_add(8, 10, 20) }
 **Expected:** Both `a` and `b` get type `uint<8>`.
 Result is `30 : !si.uint<8>`.
 
-**Compiler result: CheckCalls, InferTypes, CheckTypes, SplitPhases, and HIRToMIR all PASS.**
-**Fails** at SpecializeFuncs/MIR: `mir.return` type mismatch — the specialized function returns `!si.uint<8>` but the enclosing multiphase func expects `!si.opaque`.
-Same bug as Example 4 (Bug 2).
-
-At the MLIR level with pre-split IR, the full pipeline works and produces `#si.int<30>` — see `test/EndToEnd/dependent-type-uint.mlir` (Example 8 section).
+**WORKS** end-to-end.
+See `test/EndToEnd/dependent-type-uint-add.si` and `test/EndToEnd/dependent-type-uint.mlir` (Example 8 section).
 
 ## Example 9: Const Fn Computing a Type Width
 
@@ -275,11 +272,11 @@ When a const call like `compute_width(3, 5)` is used as a const argument to anot
 Currently, literal values in the function body are only available at phase -1 (one step earlier than body phase 0), so the compiler rejects them.
 This needs either automatic `const { ... }` wrapping of literal arguments in nested const-call positions, or the ability for `hir.expr` to auto-lower literals that are trivially const.
 
-**Bug 2: SpecializeFuncs return type mismatch with nested specializations** (blocks Examples 4, 8)
+**Bug 2: FIXED — SpecializeFuncs return type mismatch with nested specializations** (was blocking Examples 4, 8)
 
-When a specialized function calls another specialized function (e.g., `outer` calls `inner`), the inner call's return type is concrete (e.g., `!si.uint<16>`) but the enclosing multiphase func's MIR function expects `!si.opaque`.
-The `mir.return` verifier catches this type mismatch.
-This is likely a missing type coercion or signature update in SpecializeFuncs when chaining nested specializations.
+Root cause was in SplitPhases: `reconstructSignatures` fell back to standalone `opaque_type` for signature type values that depended on earlier-phase values (e.g., `uint_type(%N)` where `%N` is a const arg).
+Fix: SplitPhases now creates a parallel `opaque_unpack` in the signature for phases with cross-phase context, and derives arg/result types from the body's `coerce_type` ops and return value type operands.
+Examples 4 and 8 now work end-to-end.
 
 **Bug 3: Unresolved unify with const block type widths** (blocks Example 5)
 
@@ -300,15 +297,16 @@ SplitPhases doesn't yet handle block successors and region isolation for control
 | 4     | Multi-phase type threading (MLIR, pre-split) | Yes    | —                                          |
 | 5     | `uint<N>` dependent types (MLIR, unified)    | Yes    | —                                          |
 | 6     | `uint<N>` dependent types (frontend `.si`)   | Yes    | —                                          |
-| 7     | Nested const calls (`f(g(x), y)`)            | No     | Bug 1: phase-depth availability            |
-| 8     | `const fn` with control flow                 | No     | Bug 4: SplitPhases control flow            |
-| 9     | Computed type widths (`uint<N+N>`)           | No     | Type arithmetic not implemented            |
-| 10    | Type-level function calls                    | No     | Requires `const fn` type computation       |
+| 7     | Nested specialization with dependent types   | Yes    | —                                          |
+| 8     | Two args sharing dependent type + binary ops | Yes    | —                                          |
+| 9     | Nested const calls (`f(g(x), y)`)            | No     | Bug 1: phase-depth availability            |
+| 10    | `const fn` with control flow                 | No     | Bug 4: SplitPhases control flow            |
+| 11    | Computed type widths (`uint<N+N>`)           | No     | Type arithmetic not implemented            |
+| 12    | Type-level function calls                    | No     | Requires `const fn` type computation       |
 
 ### Recommendations
 
-1. **Fix SpecializeFuncs return type mismatch (Bug 2)** — when a specialized function's return type becomes concrete (e.g., `!si.uint<16>` instead of `!si.opaque`), the enclosing multiphase func's MIR function signature needs to be updated to match.
-   This blocks Examples 4 and 8 from working end-to-end.
+1. ~~**Fix SpecializeFuncs return type mismatch (Bug 2)**~~ — DONE. Fixed in SplitPhases by deriving dependent types from the body's opaque context.
 
 2. **Fix nested const-call phase depth (Bug 1)** — when a const call appears as an argument to another const parameter, its own arguments need to be available at a deeper phase.
    This blocks Examples 3, 6, 10. Possible approaches: auto-wrap trivially-const literals in `hir.expr` blocks, or allow SplitPhases to recognize that literals are phase-agnostic.

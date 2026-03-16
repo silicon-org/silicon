@@ -474,15 +474,21 @@ hir.unified_func public @PublicVis() -> () {
 // Dependent type from block arg: `uint_type %N` where %N is a const arg.
 // After splitting, the `uint_type` ends up in the const-phase function body
 // (with %N as a block arg), which is correct — HIRToMIR will lower it to
-// `mir.uint_type` for runtime type construction.
+// `mir.uint_type` for runtime type construction. The phase-0 signature uses
+// opaque_unpack on the context arg to derive the dependent arg/result types.
 
 // CHECK-LABEL: hir.func private @DepTypeBlockArg.0(%N) -> (ctx)
 // CHECK:         hir.uint_type
 // CHECK:         hir.return
 
 // CHECK-LABEL: hir.func private @DepTypeBlockArg.1(%x, %ctx) -> (result)
-// CHECK:         hir.opaque_unpack %ctx
-// CHECK:         hir.return
+// CHECK:         [[UNPACK:%.+]] = hir.opaque_unpack %ctx
+// CHECK:         hir.opaque_type
+// CHECK:         hir.signature ([[UNPACK]], {{%.+}}) -> ([[UNPACK]])
+// CHECK:       } {
+// CHECK:         [[BUNPACK:%.+]] = hir.opaque_unpack %ctx
+// CHECK:         hir.coerce_type %x, [[BUNPACK]]
+// CHECK:         hir.return {{%.+}} -> ([[BUNPACK]])
 
 // CHECK-NOT: hir.unified_func @DepTypeBlockArg
 // CHECK-LABEL: hir.split_func private @DepTypeBlockArg(%N: -1, %x: 0) -> (result: 0)
@@ -497,6 +503,41 @@ hir.unified_func private @DepTypeBlockArg(%N: -1, %x: 0) -> (result: 0) {
   %0 = hir.uint_type %N
   %1 = hir.coerce_type %x, %0
   hir.return %1 -> (%0)
+}
+
+//===----------------------------------------------------------------------===//
+// Dependent type with binary op: typed_add pattern (Example 8 from
+// cross-phase-types.md). The return value is `add %a, %b : %T` where %T
+// depends on the const arg N. The phase-0 signature must derive both arg and
+// result types from the opaque context, not fall back to standalone opaque_type.
+
+// CHECK-LABEL: hir.func private @TypedAdd.0(%N) -> (ctx)
+// CHECK:         hir.uint_type %N
+// CHECK:         hir.opaque_pack
+
+// CHECK-LABEL: hir.func private @TypedAdd.1(%a, %b, %ctx) -> (result)
+// CHECK:         [[T:%.+]] = hir.opaque_unpack %ctx
+// CHECK:         hir.opaque_type
+// CHECK:         hir.signature ([[T]], [[T]], {{%.+}}) -> ([[T]])
+// CHECK:       } {
+// CHECK:         [[BT:%.+]] = hir.opaque_unpack %ctx
+// CHECK:         hir.coerce_type %a, [[BT]]
+// CHECK:         hir.coerce_type %b, [[BT]]
+// CHECK:         hir.add
+// CHECK:         hir.return
+
+// CHECK-NOT: hir.unified_func @TypedAdd
+// CHECK-LABEL: hir.split_func private @TypedAdd(%N: -1, %a: 0, %b: 0) -> (result: 0)
+hir.unified_func private @TypedAdd(%N: -1, %a: 0, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.uint_type %N
+  hir.signature (%0, %1, %1) -> (%1)
+} {
+  %0 = hir.uint_type %N
+  %1 = hir.coerce_type %a, %0
+  %2 = hir.coerce_type %b, %0
+  %3 = hir.add %1, %2 : %0
+  hir.return %3 -> (%0)
 }
 
 //===----------------------------------------------------------------------===//

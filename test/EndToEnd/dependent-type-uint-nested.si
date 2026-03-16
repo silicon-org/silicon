@@ -1,0 +1,12 @@
+// RUN: silc --ir-mir %s | FileCheck %s
+
+// Test nested specialization with dependent types (Example 4 from
+// cross-phase-types.md). Both `inner` and `outer` have dependent return types
+// (`uint<N>` / `uint<M>`). The SpecializeFuncs pass must correctly propagate
+// concrete types through the nested call chain after opaque expansion.
+
+// CHECK: mir.evaluated_func {{.*}}@main.{{.*}} [#si.uint<16, 100> : !si.uint<16>]
+
+fn inner(const N: int, x: uint<N>) -> uint<N> { x }
+fn outer(const M: int, x: uint<M>) -> uint<M> { inner(M, x) }
+pub fn main() -> uint<16> { outer(16, 100) }
