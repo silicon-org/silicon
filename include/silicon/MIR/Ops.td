@@ -119,7 +119,9 @@ def ReturnOp : MIROp<"return", [Pure, ReturnLike, Terminator]> {
   let hasVerifier = 1;
 }
 
-def CallOp : MIROp<"call"> {
+def CallOp : MIROp<"call", [
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+]> {
   let summary = "call an MIR function";
   let arguments = (ins
     FlatSymbolRefAttr:$callee,

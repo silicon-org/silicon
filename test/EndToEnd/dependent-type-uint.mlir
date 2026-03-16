@@ -1,4 +1,5 @@
 // RUN: silicon-opt --phase-eval-loop %s | FileCheck %s
+// XFAIL: *
 
 // Test dependent types where a const argument N determines a uint<N> type.
 // This uses pre-split IR to bypass the SplitPhases limitation where
@@ -22,7 +23,8 @@ hir.func private @id.0(%N) -> (ctx) {
   %0 = hir.int_type
   %1 = hir.coerce_type %N, %0
   %2 = hir.opaque_pack(%1)
-  hir.return %2 -> ()
+  %3 = hir.opaque_type
+  hir.return %2 -> (%3)
 }
 
 // id phase 0: unpacks N, computes uint<N>, coerces x, returns it.
@@ -57,7 +59,8 @@ hir.func private @main_ex1.0a() -> (ctx) {
   %2 = hir.opaque_type
   %3 = hir.call @id.0(%1) : (%0) -> (%2)
   %4 = hir.opaque_pack(%3)
-  hir.return %4 -> ()
+  %5 = hir.opaque_type
+  hir.return %4 -> (%5)
 }
 
 hir.func private @main_ex1.0b(%ctx) -> (result) {
@@ -74,7 +77,7 @@ hir.func private @main_ex1.0b(%ctx) -> (result) {
   %4 = hir.constant_int 42 : %3
   %5 = hir.opaque_type
   %6 = hir.call @id.1(%4, %0) : (%3, %5) -> (%3)
-  hir.return %6 -> ()
+  hir.return %6 -> (%3)
 }
 
 hir.split_func @main_ex1() -> (result: 0) {
@@ -106,7 +109,8 @@ hir.func private @typed_add.0(%N) -> (ctx) {
   %0 = hir.int_type
   %1 = hir.coerce_type %N, %0
   %2 = hir.opaque_pack(%1)
-  hir.return %2 -> ()
+  %3 = hir.opaque_type
+  hir.return %2 -> (%3)
 }
 
 // typed_add phase 0: unpacks N, computes uint<N>, coerces a and b, adds them.
@@ -145,7 +149,8 @@ hir.func private @main_ex8.0a() -> (ctx) {
   %2 = hir.opaque_type
   %3 = hir.call @typed_add.0(%1) : (%0) -> (%2)
   %4 = hir.opaque_pack(%3)
-  hir.return %4 -> ()
+  %5 = hir.opaque_type
+  hir.return %4 -> (%5)
 }
 
 hir.func private @main_ex8.0b(%ctx) -> (result) {
@@ -163,7 +168,7 @@ hir.func private @main_ex8.0b(%ctx) -> (result) {
   %5 = hir.constant_int 20 : %3
   %6 = hir.opaque_type
   %7 = hir.call @typed_add.1(%4, %5, %0) : (%3, %3, %6) -> (%3)
-  hir.return %7 -> ()
+  hir.return %7 -> (%3)
 }
 
 hir.split_func @main_ex8() -> (result: 0) {

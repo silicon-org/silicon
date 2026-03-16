@@ -283,3 +283,27 @@ hir.func @return_values_mismatch() -> (a, b) {
   // expected-error @below {{has 1 values but parent function has 2 results}}
   hir.return %0 -> (%t)
 }
+
+// -----
+
+// typeOfValues count mismatch with values (too few typeOfValues).
+hir.unified_func @return_typeofvalues_too_few() -> (result: 0) {
+  %0 = hir.int_type
+  hir.signature () -> (%0)
+} {
+  %0 = hir.int_type
+  %1 = hir.constant_int 42 : %0
+  // expected-error @below {{typeOfValues must match values size}}
+  "hir.return"(%1) <{operandSegmentSizes = array<i32: 1, 0>}> : (!hir.any) -> ()
+}
+
+// -----
+
+// typeOfValues count mismatch with values (too many typeOfValues).
+hir.unified_func @return_typeofvalues_too_many() -> () {
+  hir.signature () -> ()
+} {
+  %0 = hir.int_type
+  // expected-error @below {{typeOfValues must match values size}}
+  "hir.return"(%0) <{operandSegmentSizes = array<i32: 0, 1>}> : (!hir.any) -> ()
+}

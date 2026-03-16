@@ -2,8 +2,12 @@
 
 - cross-ex4.si, cross-ex8.si: `mir.return` type mismatch (`!si.uint<N>` vs `!si.opaque`) when a function calls another dependent-type function.
   The return type in the MIR func doesn't match because the opaque signature types aren't properly resolved after specialization.
+- EndToEnd dependent-type-uint tests (XFAIL): `mir.call` verifier catches type mismatch in specialized functions.
+  SpecializeFuncs creates `@triple.1_0` / `@typed_add.1_1` with concrete types but doesn't update the calling mir.call's argument types.
+  Un-XFAIL these once the specialization pass correctly updates call signatures.
 - cross-ex5.si: `hir.unify` survives to HIRToMIR with different operands.
   The `const { 4 + 4 }` expression creates a unify between the computed type and the expected type that InferTypes can't resolve.
+  We can't symbolically prove equivalence, but we want the canonicalizer to be able to at least resolve constant expressions down to simple constants that will then unify.
 - Type unification can't prove structural equivalence of `uint` types with different width operands.
   Need to teach InferTypes/CheckTypes to structurally compare `uint_type` ops by unifying their widths.
 - The `in_range` example in `docs/examples/basics/operators.md` fails with `mir.return` type mismatch (`!hir.any` vs `!si.bool`).
@@ -14,6 +18,7 @@
 - HIR needs a `hir.constant` op that can materialize any of the `#si.*` constant attributes.
   Use that op to materialize most constants that have a fully-known type and/or value; this would replace constant-like ops such as `hir.int_type`, `hir.unit_type`, etc.
   We'd still need `hir.constant_int` to construct an integer literal with an inferrable type.
+- Change syntax from `hir.return %a, %b -> (%a.ty, %b.ty)` to `hir.return %a, %b : %a.ty, %b.ty`
 
 ## Dialect Review: Missing Error Handling
 

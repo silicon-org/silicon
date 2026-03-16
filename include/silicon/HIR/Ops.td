@@ -300,8 +300,8 @@ def FuncOp : HIROp<"func", [
 
 def ReturnOp : HIROp<"return", [
   AttrSizedOperandSegments,
-  PredOpTrait<"typeOfValues must be empty or match values size",
-    CPred<"$typeOfValues.size() == 0 || $values.size() == $typeOfValues.size()">>,
+  PredOpTrait<"typeOfValues must match values size",
+    CPred<"$values.size() == $typeOfValues.size()">>,
   Pure,
   ReturnLike,
   Terminator,
@@ -310,11 +310,10 @@ def ReturnOp : HIROp<"return", [
   let summary = "return from an HIR function";
   let description = [{
     Terminates an `hir.func` or `hir.unified_func` body.  Carries the
-    return values alongside optional type operands (`typeOfValues`).
+    return values alongside their type operands (`typeOfValues`).
 
-    After `SplitPhases`, per-phase functions use the signature region as
-    the source of truth for types; `typeOfValues` is empty.
-    In `unified_func` bodies, it is populated by codegen.
+    The `typeOfValues` list must match the `values` list in size: each
+    return value has a corresponding type-level value describing its type.
   }];
   let arguments = (ins
     Variadic<HIRAnyType>:$values,

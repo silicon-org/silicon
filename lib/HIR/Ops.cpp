@@ -317,6 +317,11 @@ LogicalResult YieldOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ReturnOp::verify() {
+  // Belt-and-suspenders check alongside the PredOpTrait.
+  if (getTypeOfValues().size() != getValues().size())
+    return emitOpError() << "has " << getValues().size() << " values but "
+                         << getTypeOfValues().size() << " typeOfValues";
+
   auto *parentOp = (*this)->getParentOp();
 
   if (auto funcOp = dyn_cast<FuncOp>(parentOp)) {
@@ -326,6 +331,12 @@ LogicalResult ReturnOp::verify() {
       return emitOpError() << "has " << getValues().size()
                            << " values but parent function has " << numResults
                            << " results";
+
+    // Triple correspondence: values <-> typeOfValues <-> resultNames.
+    if (getTypeOfValues().size() != numResults)
+      return emitOpError() << "has " << getTypeOfValues().size()
+                           << " typeOfValues but parent function has "
+                           << numResults << " results";
   }
 
   // UnifiedFuncOp parents have their return operands populated incrementally

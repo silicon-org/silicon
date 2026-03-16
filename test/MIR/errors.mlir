@@ -84,3 +84,69 @@ mir.func @wrong_return_type() -> (x: !si.bool) {
   %0 = "mir.constant"() <{value = #si.int<1>}> : () -> !si.int
   "mir.return"(%0) : (!si.int) -> ()
 }) : () -> ()
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// CallOp: wrong argument count
+//===----------------------------------------------------------------------===//
+
+mir.func @callee(%x: !si.int) -> (result: !si.int) {
+  mir.return %x : !si.int
+}
+
+mir.func @call_wrong_arg_count() -> () {
+  // expected-error @below {{'mir.call' op has 0 arguments but callee @callee expects 1}}
+  mir.call @callee() : () -> !si.int
+  mir.return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// CallOp: wrong argument type
+//===----------------------------------------------------------------------===//
+
+mir.func @callee_int(%x: !si.int) -> (result: !si.int) {
+  mir.return %x : !si.int
+}
+
+mir.func @call_wrong_arg_type() -> () {
+  %b = mir.constant #si.bool<true> : !si.bool
+  // expected-error @below {{'mir.call' op argument #0 has type '!si.bool' but callee @callee_int expects '!si.int'}}
+  mir.call @callee_int(%b) : (!si.bool) -> !si.int
+  mir.return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// CallOp: wrong result count
+//===----------------------------------------------------------------------===//
+
+mir.func @callee_no_result() -> () {
+  mir.return
+}
+
+mir.func @call_wrong_result_count() -> () {
+  // expected-error @below {{'mir.call' op has 1 results but callee @callee_no_result expects 0}}
+  %r = mir.call @callee_no_result() : () -> !si.int
+  mir.return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// CallOp: wrong result type
+//===----------------------------------------------------------------------===//
+
+mir.func @callee_returns_int() -> (result: !si.int) {
+  %c = mir.constant #si.int<1> : !si.int
+  mir.return %c : !si.int
+}
+
+mir.func @call_wrong_result_type() -> () {
+  // expected-error @below {{'mir.call' op result #0 has type '!si.bool' but callee @callee_returns_int expects '!si.int'}}
+  %r = mir.call @callee_returns_int() : () -> !si.bool
+  mir.return
+}

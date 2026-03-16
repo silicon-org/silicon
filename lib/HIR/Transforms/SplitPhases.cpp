@@ -166,6 +166,10 @@ private:
   /// func's original signature. Pure ops are cloned transitively; unresolvable
   /// values fall back to OpaqueTypeOp.
   void reconstructSignatures();
+
+  /// Walk each phase function's returns and populate typeOfValues from the
+  /// signature's typeOfResults, cloning type ops into the body region.
+  void populateReturnTypeOfValues();
 };
 } // namespace
 
@@ -382,6 +386,7 @@ LogicalResult PhaseSplitter::run() {
   if (failed(splitBodyByPhase()))
     return failure();
   reconstructSignatures();
+  populateReturnTypeOfValues();
 
   //===--------------------------------------------------------------------===//
   // Set Argument and Result Names on Phase Functions
@@ -1150,6 +1155,75 @@ void PhaseSplitter::reconstructSignatures() {
 
     sigBuilder.setInsertionPointToEnd(sigBlock);
     SignatureOp::create(sigBuilder, funcOp.getLoc(), typeOfArgs, typeOfResults);
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// populateReturnTypeOfValues
+//
+// After signatures are reconstructed, walk each phase function's returns and
+// populate their typeOfValues from the signature's typeOfResults. This clones
+// the signature's type ops into the body region so that each return value has
+// a corresponding type-level value.
+//===----------------------------------------------------------------------===//
+
+void PhaseSplitter::populateReturnTypeOfValues() {
+  for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
+    auto &split = splits[phase - minPhase];
+
+    // Get the signature's typeOfResults.
+    SignatureOp sigOp;
+    split.funcOp.getSignature().walk([&](SignatureOp op) { sigOp = op; });
+    if (!sigOp)
+      continue;
+    auto sigResultTypes = sigOp.getTypeOfResults();
+
+    // Build a mapping from signature block args to body block args.
+    auto &sigBlock = split.funcOp.getSignature().front();
+    auto &bodyBlock = split.funcOp.getBody().front();
+    IRMapping mapping;
+    for (auto [sigArg, bodyArg] :
+         llvm::zip(sigBlock.getArguments(), bodyBlock.getArguments()))
+      mapping.map(sigArg, bodyArg);
+
+    split.funcOp.getBody().walk([&](ReturnOp retOp) {
+      SmallVector<Value> typeOfValues;
+      OpBuilder bodyBuilder(retOp);
+
+      for (auto sigResultType : sigResultTypes) {
+        // Clone the type op (and its transitive dependencies) into the body.
+        auto *typeDefOp = sigResultType.getDefiningOp();
+        if (!typeDefOp) {
+          // Block arg — already mapped.
+          typeOfValues.push_back(mapping.lookupOrDefault(sigResultType));
+          continue;
+        }
+
+        // Post-order DFS clone of the defining op chain.
+        SmallVector<Operation *> toClone;
+        SmallPtrSet<Operation *, 8> visited;
+        std::function<void(Operation *)> collectOps = [&](Operation *op) {
+          if (!visited.insert(op).second)
+            return;
+          for (auto operand : op->getOperands()) {
+            if (auto *defOp = operand.getDefiningOp())
+              if (defOp->getParentRegion() == &split.funcOp.getSignature())
+                collectOps(defOp);
+          }
+          toClone.push_back(op);
+        };
+        collectOps(typeDefOp);
+
+        IRMapping cloneMapping(mapping);
+        for (auto *op : toClone) {
+          if (!cloneMapping.contains(op->getResult(0)))
+            bodyBuilder.clone(*op, cloneMapping);
+        }
+        typeOfValues.push_back(cloneMapping.lookupOrDefault(sigResultType));
+      }
+
+      retOp.getTypeOfValuesMutable().assign(typeOfValues);
+    });
   }
 }
 

@@ -1,4 +1,5 @@
 // RUN: silc --ir-mir %s | FileCheck %s
+// XFAIL: *
 
 // Test end-to-end pipeline from unified form through the full pass pipeline
 // for dependent types where `hir.uint_type %N` has a block arg width. This

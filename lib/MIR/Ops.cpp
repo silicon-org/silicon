@@ -12,6 +12,7 @@
 #include "silicon/MIR/Ops.h"
 #include "silicon/Support/AsmParser.h"
 #include "silicon/Support/MLIR.h"
+#include "mlir/IR/SymbolTable.h"
 
 using namespace mlir;
 using namespace silicon;
@@ -371,6 +372,59 @@ LogicalResult FuncOp::verify() {
     return emitOpError() << "resultNames has " << getResultNames().size()
                          << " entries but function has "
                          << funcType.getNumResults() << " results";
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// CallOp
+//===----------------------------------------------------------------------===//
+
+/// Verify that a mir.call's arguments and results match the callee signature.
+LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto calleeAttr = getCalleeAttr();
+  FunctionType funcType;
+
+  if (auto func = symbolTable.lookupNearestSymbolFrom<FuncOp>(getOperation(),
+                                                              calleeAttr)) {
+    funcType = func.getFunctionType();
+  } else if (auto evalFunc =
+                 symbolTable.lookupNearestSymbolFrom<EvaluatedFuncOp>(
+                     getOperation(), calleeAttr)) {
+    // evaluated_func has no function_type; we can't check types.
+    return success();
+  } else {
+    // Callee not found (may have been lowered further); succeed silently.
+    return success();
+  }
+
+  // Check argument count.
+  if (getArguments().size() != funcType.getNumInputs())
+    return emitOpError() << "has " << getArguments().size()
+                         << " arguments but callee " << calleeAttr
+                         << " expects " << funcType.getNumInputs();
+
+  // Check argument types.
+  for (auto [i, arg, expected] :
+       llvm::enumerate(getArguments(), funcType.getInputs()))
+    if (arg.getType() != expected)
+      return emitOpError() << "argument #" << i << " has type " << arg.getType()
+                           << " but callee " << calleeAttr << " expects "
+                           << expected;
+
+  // Check result count.
+  if (getNumResults() != funcType.getNumResults())
+    return emitOpError() << "has " << getNumResults() << " results but callee "
+                         << calleeAttr << " expects "
+                         << funcType.getNumResults();
+
+  // Check result types.
+  for (auto [i, result, expected] :
+       llvm::enumerate(getResults(), funcType.getResults()))
+    if (result.getType() != expected)
+      return emitOpError() << "result #" << i << " has type "
+                           << result.getType() << " but callee " << calleeAttr
+                           << " expects " << expected;
 
   return success();
 }
