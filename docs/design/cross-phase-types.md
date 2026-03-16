@@ -104,7 +104,7 @@ pub fn main(x: uint<8>) -> uint<8> {
 `identity(8, x)` is specialized.
 
 **Compiler result: CheckCalls and CheckTypes PASS.**
-**Fails** at HIRToMIR: `hir.unify` survives with different operands — the `const { 4 + 4 }` expression creates a unification between computed and expected types that InferTypes can't resolve (Bug 3).
+**Fails** at HIRToMIR: `hir.unify` survives with different operands — the `const { 4 + 4 }` expression creates a unification between computed and expected types that InferTypes can't resolve (Bug 2).
 
 ## Example 6: Conditional Type Selection
 
@@ -221,7 +221,7 @@ pub fn main(x: uint<16>) -> uint<16> { process(pick_width(true), x) }
 **Expected:** `pick_width(true)` runs at compile time (phase -2), returns 16.
 `process(16, x)` specializes.
 
-**Compiler result: Fails at SplitPhases** with `compiler bug: op uses value from later phase` and region isolation errors (Bug 4).
+**Compiler result: Fails at SplitPhases** with `compiler bug: op uses value from later phase` and region isolation errors (Bug 3).
 
 ## Example 10: Chained Const Functions
 
@@ -272,17 +272,11 @@ When a const call like `compute_width(3, 5)` is used as a const argument to anot
 Currently, literal values in the function body are only available at phase -1 (one step earlier than body phase 0), so the compiler rejects them.
 This needs either automatic `const { ... }` wrapping of literal arguments in nested const-call positions, or the ability for `hir.expr` to auto-lower literals that are trivially const.
 
-**Bug 2: FIXED — SpecializeFuncs return type mismatch with nested specializations** (was blocking Examples 4, 8)
-
-Root cause was in SplitPhases: `reconstructSignatures` fell back to standalone `opaque_type` for signature type values that depended on earlier-phase values (e.g., `uint_type(%N)` where `%N` is a const arg).
-Fix: SplitPhases now creates a parallel `opaque_unpack` in the signature for phases with cross-phase context, and derives arg/result types from the body's `coerce_type` ops and return value type operands.
-Examples 4 and 8 now work end-to-end.
-
-**Bug 3: Unresolved unify with const block type widths** (blocks Example 5)
+**Bug 2: Unresolved unify with const block type widths** (blocks Example 5)
 
 `const { 4 + 4 }` produces a type unification between the computed and expected types that InferTypes can't resolve, causing `hir.unify` to survive to HIRToMIR.
 
-**Bug 4: SplitPhases can't split `const fn` bodies with control flow** (blocks Example 9)
+**Bug 3: SplitPhases can't split `const fn` bodies with control flow** (blocks Example 9)
 
 `const fn` bodies with `if` expressions fail during phase splitting because the branches produce values across phase boundaries.
 SplitPhases doesn't yet handle block successors and region isolation for control flow in earlier-phase function bodies.
@@ -300,16 +294,14 @@ SplitPhases doesn't yet handle block successors and region isolation for control
 | 7     | Nested specialization with dependent types   | Yes    | —                                          |
 | 8     | Two args sharing dependent type + binary ops | Yes    | —                                          |
 | 9     | Nested const calls (`f(g(x), y)`)            | No     | Bug 1: phase-depth availability            |
-| 10    | `const fn` with control flow                 | No     | Bug 4: SplitPhases control flow            |
+| 10    | `const fn` with control flow                 | No     | Bug 3: SplitPhases control flow            |
 | 11    | Computed type widths (`uint<N+N>`)           | No     | Type arithmetic not implemented            |
 | 12    | Type-level function calls                    | No     | Requires `const fn` type computation       |
 
 ### Recommendations
 
-1. ~~**Fix SpecializeFuncs return type mismatch (Bug 2)**~~ — DONE. Fixed in SplitPhases by deriving dependent types from the body's opaque context.
-
-2. **Fix nested const-call phase depth (Bug 1)** — when a const call appears as an argument to another const parameter, its own arguments need to be available at a deeper phase.
+1. **Fix nested const-call phase depth (Bug 1)** — when a const call appears as an argument to another const parameter, its own arguments need to be available at a deeper phase.
    This blocks Examples 3, 6, 10. Possible approaches: auto-wrap trivially-const literals in `hir.expr` blocks, or allow SplitPhases to recognize that literals are phase-agnostic.
 
-3. **Fix SplitPhases control flow in `const fn` (Bug 4)** — `const fn` bodies with `if` expressions need proper phase splitting with block successor handling.
+2. **Fix SplitPhases control flow in `const fn` (Bug 3)** — `const fn` bodies with `if` expressions need proper phase splitting with block successor handling.
    This blocks Example 9.
