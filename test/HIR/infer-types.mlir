@@ -182,6 +182,36 @@ func.func @InferConstantInt() {
   return
 }
 
+// CHECK-LABEL: func @InferConstantIntFromContext
+func.func @InferConstantIntFromContext() {
+  // When a constant_int has an inferrable type operand and that inferrable is
+  // unified with a uint_type, the inferrable resolves to uint_type.
+  // CHECK: [[INT:%.+]] = hir.int_type
+  // CHECK: [[W:%.+]] = hir.constant_int 8 : [[INT]]
+  // CHECK: [[UINT:%.+]] = hir.uint_type [[W]]
+  // CHECK: hir.constant_int 42 : [[UINT]]
+  %int = hir.int_type
+  %w = hir.constant_int 8 : %int
+  %uint = hir.uint_type %w
+  %inf = hir.inferrable
+  %v = hir.constant_int 42 : %inf
+  %u = hir.unify %inf, %uint
+  call @use_value(%v) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @InferConstantIntDefault
+func.func @InferConstantIntDefault() {
+  // When a constant_int has an inferrable type operand with no constraints,
+  // the fallback assigns int_type.
+  // CHECK: [[TY:%.+]] = hir.int_type
+  // CHECK: hir.constant_int 42 : [[TY]]
+  %inf = hir.inferrable
+  %v = hir.constant_int 42 : %inf
+  call @use_value(%v) : (!hir.any) -> ()
+  return
+}
+
 // CHECK-LABEL: func @CloneCrossBlock
 func.func @CloneCrossBlock(%arg0: i1) {
   // When a concrete op is in a branch but the inferrable is in the dominator,

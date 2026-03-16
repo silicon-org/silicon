@@ -13,11 +13,11 @@ fn main() -> int { }
 // -----
 
 // Omitting the return type on a function that returns a value.
-// expected-error @below {{type mismatch}}
+// expected-error @below {{integer literal is not compatible with type `()`}}
 fn main() { 42 }
 
 // -----
 
 // Using a non-bool condition in an `if` expression.
-// expected-error @below {{type mismatch}}
+// expected-error @below {{integer literal is not compatible with type `bool`}}
 fn main() -> int { if 42 { 1 } else { 2 } }

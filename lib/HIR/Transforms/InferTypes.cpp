@@ -190,4 +190,16 @@ void InferTypesPass::runOnOperation() {
     unifyOp.replaceAllUsesWith(newOp->getResult(0));
     unifyOp.erase();
   }
+
+  // Fall back to int_type for any constant_int ops whose type operand is still
+  // an unconstrained inferrable. This handles literals like `42` that appear
+  // without any context to constrain their type.
+  getOperation()->walk([&](ConstantIntOp op) {
+    if (auto inferrable = op.getTypeOperand().getDefiningOp<InferrableOp>()) {
+      OpBuilder builder(inferrable);
+      auto intType = IntTypeOp::create(builder, inferrable.getLoc());
+      inferrable.replaceAllUsesWith(intType.getResult());
+      inferrable.erase();
+    }
+  });
 }

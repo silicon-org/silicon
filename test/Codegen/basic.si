@@ -148,13 +148,13 @@ fn precAddBeforeShl(a: int, b: int, c: int) -> int { a << b + c }
 // CHECK-LABEL: hir.unified_func private @precShlBeforeRel
 // CHECK: [[T:%.+]] = hir.shl %b, %c
 // CHECK: hir.lt %a, [[T]]
-fn precShlBeforeRel(a: int, b: int, c: int) -> int { a < b << c }
+fn precShlBeforeRel(a: int, b: int, c: int) -> bool { a < b << c }
 
 // Ensure `<` binds tighter than `==`: `a == b < c` is `eq(a, lt(b, c))`.
 // CHECK-LABEL: hir.unified_func private @precRelBeforeEq
 // CHECK: [[T:%.+]] = hir.lt %b, %c
 // CHECK: hir.eq %a, [[T]]
-fn precRelBeforeEq(a: int, b: int, c: int) -> int { a == b < c }
+fn precRelBeforeEq(a: int, b: int, c: int) -> bool { a == b < c }
 
 // Ensure `&` binds tighter than `^`: `a ^ b & c` is `xor(a, and(b, c))`.
 // CHECK-LABEL: hir.unified_func private @precAndBeforeXor
@@ -201,8 +201,7 @@ fn callWithArgs(x: int, y: int) -> int { testAdd(x, y) }
 // CHECK: [[T:%.+]] = hir.int_type
 // CHECK: [[INFER:%.+]] = hir.inferrable
 // CHECK: [[V:%.+]] = hir.constant_int 42 : [[INFER]]
-// CHECK: [[VTYPE:%.+]] = hir.int_type
-// CHECK: hir.unify [[T]], [[VTYPE]]
+// CHECK: hir.unify [[T]], [[INFER]]
 // CHECK: hir.return [[V]]
 fn letBinding() -> int {
   let x: int = 42;
@@ -211,7 +210,8 @@ fn letBinding() -> int {
 
 // Ensure let bindings without a type annotation produce no unify op.
 // CHECK-LABEL: hir.unified_func private @letBindingNoType
-// CHECK: [[V:%.+]] = hir.constant_int 7 :
+// CHECK: [[INF:%.+]] = hir.inferrable
+// CHECK: [[V:%.+]] = hir.constant_int 7 : [[INF]]
 // CHECK-NOT: hir.unify
 // CHECK: hir.return [[V]]
 fn letBindingNoType() -> int {

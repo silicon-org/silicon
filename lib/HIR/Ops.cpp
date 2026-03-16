@@ -1274,10 +1274,17 @@ Value hir::getTypeOf(Value value) {
 
 Value hir::getOrCreateTypeOf(OpBuilder &builder, Location loc, Value value) {
   if (auto type = getTypeOf(value)) {
-    // When the type operand is inferrable, fall through to the default type
-    // for the value kind. This ensures that e.g. constant_int gets int_type
-    // rather than the raw inferrable, which would allow the literal to take
-    // on any type from context (including incompatible types like unit).
+    // For constant_int with an inferrable type operand, return the inferrable
+    // directly. This lets context (e.g., a callee's uint<8> parameter)
+    // constrain the literal's type via unification. InferTypes has a fallback
+    // to assign int_type if no context constrains the inferrable, and
+    // CheckTypes guards against non-integer inferred types.
+    if (value.getDefiningOp<ConstantIntOp>() &&
+        type.getDefiningOp<InferrableOp>())
+      return type;
+
+    // For other inferrables, fall through to the default type for the value
+    // kind.
     if (!type.getDefiningOp<InferrableOp>()) {
       // Verify the type value is accessible at the current insertion point.
       auto *insertBlock = builder.getInsertionBlock();

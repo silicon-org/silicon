@@ -105,6 +105,21 @@ void CheckTypesPass::runOnOperation() {
     anyErrors = true;
   });
 
+  // Check that integer literals have not been unified with non-integer types.
+  // This catches cases like `fn foo() -> unit { 42 }` where context constrains
+  // the literal to an incompatible type.
+  getOperation()->walk([&](ConstantIntOp op) {
+    auto typeVal = op.getTypeOperand();
+    if (!isConcreteTypeConstructor(typeVal))
+      return;
+    if (isa<IntTypeOp, UIntTypeOp>(typeVal.getDefiningOp()))
+      return;
+    auto desc = describeTypeValue(typeVal);
+    emitError(op.getLoc()) << "integer literal is not compatible with type "
+                           << desc;
+    anyErrors = true;
+  });
+
   if (anyErrors)
     signalPassFailure();
 }

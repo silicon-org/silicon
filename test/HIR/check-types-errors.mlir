@@ -151,3 +151,16 @@ func.func @FuncTypeVsInt() {
   call @use_type(%2) : (!hir.any) -> ()
   return
 }
+
+// -----
+
+func.func private @use_value(%arg0: !hir.any)
+
+// Integer literal with a non-integer type (e.g., unit).
+func.func @IntLiteralWithUnitType() {
+  %0 = hir.unit_type
+  // expected-error @below {{integer literal is not compatible with type `()`}}
+  %1 = hir.constant_int 42 : %0
+  call @use_value(%1) : (!hir.any) -> ()
+  return
+}
