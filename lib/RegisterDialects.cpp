@@ -10,6 +10,7 @@
 #include "silicon/HIR/Dialect.h"
 #include "silicon/MIR/Dialect.h"
 #include "silicon/RegisterAll.h"
+#include "silicon/UIR/Dialect.h"
 #include "circt/Dialect/Comb/CombDialect.h"
 #include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
@@ -33,4 +34,5 @@ void silicon::registerAllDialects(mlir::DialectRegistry &registry) {
   registry.insert<silicon::base::BaseDialect>();
   registry.insert<silicon::hir::HIRDialect>();
   registry.insert<silicon::mir::MIRDialect>();
+  registry.insert<silicon::uir::UIRDialect>();
 }

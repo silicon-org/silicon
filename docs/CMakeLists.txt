@@ -17,6 +17,7 @@ endmacro()
 collect_doc(internals/dialects/Base.md ${SILICON_BINARY_DIR}/include/silicon/Base/Dialect.md)
 collect_doc(internals/dialects/HIR.md ${SILICON_BINARY_DIR}/include/silicon/HIR/Dialect.md)
 collect_doc(internals/dialects/MIR.md ${SILICON_BINARY_DIR}/include/silicon/MIR/Dialect.md)
+collect_doc(internals/dialects/UIR.md ${SILICON_BINARY_DIR}/include/silicon/UIR/Dialect.md)
 
 # Passes
 collect_doc(internals/passes/HIR.md ${SILICON_BINARY_DIR}/include/silicon/HIR/Passes.md)

@@ -6,6 +6,7 @@ add_subdirectory(MIR)
 add_subdirectory(Support)
 add_subdirectory(Syntax)
 add_subdirectory(Transforms)
+add_subdirectory(UIR)
 
 add_silicon_library(SiliconRegisterDialects
   RegisterDialects.cpp
@@ -22,6 +23,7 @@ add_silicon_library(SiliconRegisterDialects
   SiliconBase
   SiliconHIR
   SiliconMIR
+  SiliconUIR
 )
 
 add_silicon_library(SiliconRegisterPasses
