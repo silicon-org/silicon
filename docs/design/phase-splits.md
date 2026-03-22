@@ -172,6 +172,34 @@ The phase splitting pass moves each op to its phase function and removes the emp
 The HIR operations `hir.opaque_type`, `hir.opaque_pack`, and `hir.opaque_unpack` allow multiple SSA values to be packed into and unpacked from a single SSA value.
 This allows functions to bundle op internal state that needs to flow between execution phases.
 
+### How splitting consumes the phase map
+
+The phase analysis (see `docs/design/phase-inference.md`) produces a `DenseMap<Operation*, int16_t>` mapping each op to its assigned phase.
+The splitting pass uses this map as follows:
+
+1. **Determine phase range.**
+   Scan the phase map for the distinct phases present.
+   Create a split function (`hir.func`) for each phase.
+
+2. **Place ops.**
+   Move each op into the split function for its assigned phase.
+   Trivially materializable ops (phase `-∞`) are cloned into each phase that uses them.
+
+3. **Compute cross-phase context.**
+   For each value defined at phase P and used at phase Q (where Q > P), the value must be threaded through every phase boundary between P and Q.
+   Specifically, it is added to the opaque context returned by phase P, carried through phases P+1, P+2, ..., Q-1, and received by phase Q.
+   This can be computed as a post-processing step: for each phase boundary, collect the set of values that are live across it.
+
+4. **Decompose unified calls.**
+   A `hir.unified_call @foo(a, b, c)` becomes separate `hir.call` ops — one for each of the callee's split phases.
+   Each split call is placed into the caller's split function for the corresponding phase.
+   This is key: the split calls don't all stay in one location — they are distributed across the caller's phase functions, forming distinct programs that can be compiled and executed iteratively.
+   Each call is extended with opaque context arguments and results.
+   Call sites don't see the individual values flowing between callee phases; only the opaque context structure remains.
+
+5. **Wire up context.**
+   Generate `hir.opaque_pack` at each phase boundary to bundle outgoing values, and `hir.opaque_unpack` at the receiving phase to extract them.
+
 In this example, `@foo.0` is a multiphase function without any arguments for the first phase.
 This means that `@foo.0a` can be fully evaluated at compile time and `@foo.0b` can be specialized with the result, even if the input is compiled to a library.
 
@@ -433,7 +461,15 @@ Before splitting a unified function into separate phases, the compiler must dete
 The phase analysis operates on the unified IR and assigns an integer phase to every op and value in a unified function.
 The SplitPhases pass then uses these assignments to group ops into per-phase functions.
 
-The analysis runs in three stages: a forward pass that computes earliest available phases, a backward pass that pulls values to earlier phases where required by call constraints, and a forward refresh that propagates the effects of any pulls.
+> [!NOTE]
+> The phase analysis is being redesigned.
+> See `docs/design/phase-inference.md` for the new algorithm, which replaces the three-stage approach described below with a single top-down DFS that pushes phases from parents to children.
+> The new analysis is implemented as a `PhaseAnalysis` struct with a `LogicalResult run()` method.
+> It populates a `DenseMap<Operation*, int16_t>` phase map and emits user-facing diagnostics directly via `mlir::emitError()` on failure.
+> The `SplitPhases` pass constructs the analysis, checks success/failure, and uses the phase map for splitting.
+> A separate `AnnotatePhases` test pass writes the phase map as op attributes for testing phase assignment independently of splitting.
+
+The analysis currently runs in three stages: a forward pass that computes earliest available phases, a backward pass that pulls values to earlier phases where required by call constraints, and a forward refresh that propagates the effects of any pulls.
 
 > [!WARNING]
 > This section describes how the analysis is currently implemented.

@@ -614,6 +614,84 @@ scf.for %i = 0 to %n {
 return %hits
 ```
 
+## FlattenCF: Structured CF to Block-Based CF
+
+After phase splitting, each split function is single-phase.
+The structured control flow ops from the `uir` dialect (`uir.if`, `uir.loop`, `uir.match`) can now be safely lowered to block-based CF (`cf.br`, `cf.cond_br`) and basic blocks.
+This is done by the **FlattenCF** pass, which runs after SplitPhases and before PhaseEvalLoop.
+
+See `docs/design/unified-dialect.md` for the full `uir` dialect design and op definitions.
+
+### `uir.if` → conditional branches + merge block
+
+```mlir
+// Before (structured):
+%r, %r_ty = uir.if %cond : %r_ty {
+  %a = hir.add %x, %c42 : %x_ty
+  uir.yield %a : %x_ty
+} else {
+  %b = hir.add %y, %c1 : %y_ty
+  uir.yield %b : %y_ty
+}
+
+// After (block-based):
+%cond_i1 = hir.coerce_to_i1 %cond
+cf.cond_br %cond_i1, ^then, ^else
+^then:
+  %a = hir.add %x, %c42 : %x_ty
+  cf.br ^merge(%a, %x_ty)
+^else:
+  %b = hir.add %y, %c1 : %y_ty
+  cf.br ^merge(%b, %y_ty)
+^merge(%r: !hir.any, %r_ty_out: !hir.any):
+  ...
+```
+
+When a branch has `uir.return`, it branches to the function's return block instead of the merge block.
+When all branches exit early, no merge block is emitted.
+
+### `uir.loop` → back-edge + exit block
+
+```mlir
+// Before (structured):
+%r, %r_ty = uir.loop : %r_ty {
+  %done = ...
+  uir.if %done {
+    uir.break %value : %v_ty
+  }
+  uir.yield
+}
+
+// After (block-based):
+cf.br ^loop_header
+^loop_header:
+  %done = ...
+  %done_i1 = hir.coerce_to_i1 %done
+  cf.cond_br %done_i1, ^loop_exit(%value, %v_ty), ^loop_body
+^loop_body:
+  ...
+  cf.br ^loop_header
+^loop_exit(%r: !hir.any, %r_ty_out: !hir.any):
+  ...
+```
+
+`uir.break` becomes a `cf.br` to the loop exit block.
+`uir.continue` (or `uir.yield` in the loop body) becomes a `cf.br` to the loop header.
+
+### `uir.return` → branch to return block
+
+`uir.return` inside a structured CF region becomes `cf.br ^return_block(...)`, targeting the function's canonical return block which holds the `hir.return`.
+
+### `uir.unreachable` → dead block elimination
+
+The unreachable block is simply not emitted — it has no predecessors after the structured ops are lowered.
+
+### `uir.expr` / `uir.pin` → dissolved
+
+`uir.expr` ops are inlined (contents moved to parent block) since phase grouping is no longer needed after splitting.
+`uir.pin` ops are removed (they're just phase markers, no runtime effect).
+Both are dissolved by SplitPhases, not FlattenCF — they should not survive to this point.
+
 ## Dyn Control Flow: CFG to Dataflow
 
 After all const control flow has been resolved (loops unrolled via replicate expansion, const ifs eliminated), the remaining control flow operates on values at the final phase.
@@ -741,9 +819,10 @@ The user never writes enable signals — the compiler derives them entirely from
 The full pipeline from source to hardware:
 
 ```
-Parse → AST → HIR (unified_func)
-→ InferTypes, CheckCalls
-→ SplitPhases (produces replicate ops, hits vector collection)
+Parse → AST → UIR + HIR (uir.func, uir.if, uir.loop, ...)
+→ CheckCalls, InferTypes, CheckTypes
+→ SplitPhases (phase inference, splitting, dissolves uir.expr/uir.pin)
+→ FlattenCF (uir.if → cf.cond_br, uir.loop → cf.br, ...)
 → PhaseEvalLoop:
     → HIRToMIR
     → Canonicalize, CSE

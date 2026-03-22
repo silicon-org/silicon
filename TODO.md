@@ -55,6 +55,12 @@
 - Add codegen test for `const { expr }` producing `hir.expr` with `phaseShift=-1` in `test/Codegen/basic.si`
 - Add `isModule` test cases to `test/MIR/interpret.mlir`, `test/HIR/specialize-funcs.mlir`, and `test/Transforms/phase-eval-loop.mlir`
 
+## Language Cleanup
+
+- Remove `const fn` / `dyn fn` support from parser and codegen.
+  These don't bring distinct semantics beyond arg/result modifiers and `const { ... }` / `dyn { ... }` blocks.
+  See docs/design/phase-inference.md for the rationale.
+
 ## Postponed Long-Term Fixes
 
 - MIRToCIRCT: `!si.int` is temporarily mapped to `i64`; once bitwidth inference exists, this should be an error diagnostic instead
