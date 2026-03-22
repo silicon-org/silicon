@@ -140,6 +140,88 @@ static LogicalResult lowerIfOp(IfOp ifOp) {
 }
 
 //===----------------------------------------------------------------------===//
+// uir.loop lowering
+//===----------------------------------------------------------------------===//
+
+/// Lower a uir.loop op into a loop header block + exit block.
+///
+/// The loop body is spliced into the parent region. All `uir.yield` and
+/// `uir.continue` terminators become `cf.br ^header`. All `uir.break`
+/// terminators become `cf.br ^exit(values)`. `uir.return` terminators
+/// become `hir.return`.
+static LogicalResult lowerLoopOp(LoopOp loopOp) {
+  auto loc = loopOp.getLoc();
+  auto anyTy = hir::AnyType::get(loopOp.getContext());
+  auto *parentRegion = loopOp->getBlock()->getParent();
+  unsigned numResults = loopOp.getNumResults();
+
+  // Split the current block after the loop op.
+  auto *currentBlock = loopOp->getBlock();
+  auto *contBlock = currentBlock->splitBlock(loopOp->getNextNode());
+
+  // Create the exit block with args for the loop's value results.
+  auto *exitBlock = new Block();
+  for (unsigned i = 0; i < numResults; ++i)
+    exitBlock->addArgument(anyTy, loc);
+
+  // Splice the loop body into the parent region. The first block of the
+  // body becomes the loop header.
+  auto *headerBlock = &loopOp.getBody().front();
+  parentRegion->getBlocks().splice(Region::iterator(contBlock),
+                                   loopOp.getBody().getBlocks());
+
+  // Branch from the current block to the loop header.
+  OpBuilder builder(loopOp.getContext());
+  builder.setInsertionPointToEnd(currentBlock);
+  cf::BranchOp::create(builder, loc, headerBlock);
+
+  // Walk all blocks that came from the body and replace UIR terminators.
+  // We iterate from headerBlock to contBlock (exclusive).
+  for (auto it = Region::iterator(headerBlock),
+            end = Region::iterator(contBlock);
+       it != end; ++it) {
+    auto *term = it->getTerminator();
+
+    if (auto yieldOp = dyn_cast<YieldOp>(term)) {
+      // yield = continue to next iteration.
+      builder.setInsertionPoint(term);
+      cf::BranchOp::create(builder, loc, headerBlock);
+      term->erase();
+    } else if (auto continueOp = dyn_cast<ContinueOp>(term)) {
+      builder.setInsertionPoint(term);
+      cf::BranchOp::create(builder, loc, headerBlock);
+      term->erase();
+    } else if (auto breakOp = dyn_cast<BreakOp>(term)) {
+      // break = exit loop with values.
+      builder.setInsertionPoint(term);
+      cf::BranchOp::create(builder, loc, exitBlock, breakOp.getValues());
+      term->erase();
+    } else if (auto returnOp = dyn_cast<ReturnOp>(term)) {
+      builder.setInsertionPoint(term);
+      hir::ReturnOp::create(builder, loc, returnOp.getValues(),
+                            returnOp.getTypeOfValues());
+      term->erase();
+    }
+  }
+
+  // Insert exit block before continuation.
+  parentRegion->getBlocks().insert(Region::iterator(contBlock), exitBlock);
+
+  // Replace uses of the loop's results with exit block arguments.
+  for (unsigned i = 0; i < numResults; ++i)
+    loopOp.getResult(i).replaceAllUsesWith(exitBlock->getArgument(i));
+
+  // Exit block falls through to continuation.
+  builder.setInsertionPointToEnd(exitBlock);
+  cf::BranchOp::create(builder, loc, contBlock);
+
+  // Erase the loop op (body region is now empty).
+  loopOp.erase();
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Dead block cleanup
 //===----------------------------------------------------------------------===//
 
@@ -171,13 +253,21 @@ struct FlattenCFPass : uir::impl::FlattenCFPassBase<FlattenCFPass> {
   void runOnOperation() override {
     auto moduleOp = getOperation();
 
-    // Collect all uir.if ops in post-order (innermost first).
+    // Lower ifs first (innermost first via walk's post-order), then loops.
+    // Ifs inside loop bodies get lowered before the enclosing loop.
     SmallVector<IfOp> ifOps;
     moduleOp->walk([&](IfOp op) { ifOps.push_back(op); });
-
-    // Lower each if op.
     for (auto ifOp : ifOps) {
       if (failed(lowerIfOp(ifOp))) {
+        signalPassFailure();
+        return;
+      }
+    }
+
+    SmallVector<LoopOp> loopOps;
+    moduleOp->walk([&](LoopOp op) { loopOps.push_back(op); });
+    for (auto loopOp : loopOps) {
+      if (failed(lowerLoopOp(loopOp))) {
         signalPassFailure();
         return;
       }
