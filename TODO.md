@@ -21,7 +21,10 @@
 
 See `docs/design/phase-inference.md`, `docs/design/unified-dialect.md`, and `docs/design/control-flow.md` (FlattenCF section).
 
-- Introduce `uir` dialect: `Dialect.td`, `Ops.td`, registration in `silc` and `silicon-opt`
+**Migration strategy:** During migration from HIR to UIR ops, existing tests may break.
+Eagerly mark failing tests as `XFAIL: *` and add a TODO entry to fix them.
+Once your changes work and are committed, revisit all XFAILed tests added to the TODO and fix them to prevent accumulation of tech debt.
+
 - Move `unified_func` → `uir.func`, `unified_call` → `uir.call`, `split_func` → `uir.split_func`
 - Move `hir.expr` → `uir.expr` (add `pin` keyword for floating vs pinned distinction)
 - Move `hir.yield` → `uir.yield`

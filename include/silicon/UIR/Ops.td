@@ -265,4 +265,130 @@ def PinOp : UIROp<"pin", []> {
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Unified Functions
+//===----------------------------------------------------------------------===//
+
+include "mlir/IR/OpAsmInterface.td"
+
+def SignatureOp : UIROp<"signature", [
+  AttrSizedOperandSegments,
+  ParentOneOf<["FuncOp", "SplitFuncOp"]>,
+  Pure,
+  Terminator,
+]> {
+  let summary = "terminator for a UIR function's signature region";
+  let description = [{
+    Terminates the signature region of a `uir.func` or `uir.split_func`.
+    Carries the type-level values for each argument and result.
+    Mirrors `hir.signature` but lives in the UIR dialect to avoid
+    cross-dialect parent dependencies.
+  }];
+  let arguments = (ins
+    Variadic<HIRAnyType>:$typeOfArgs,
+    Variadic<HIRAnyType>:$typeOfResults
+  );
+  let assemblyFormat = [{
+    ` ` `(` $typeOfArgs `)` `->` `(` $typeOfResults `)` attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def FuncOp : UIROp<"func", [
+  IsolatedFromAbove,
+  Symbol,
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
+]> {
+  let summary = "unified function spanning multiple phases";
+  let description = [{
+    A function whose body spans multiple phases, before phase splitting.
+    Mirrors `hir.unified_func` in the UIR dialect.
+
+    The function has a signature region (terminated by `uir.signature`)
+    and a body region. Both share the same entry block arguments,
+    corresponding to the function's declared arguments.
+
+    Argument and result phase offsets are determined by `const`/`dyn`
+    modifiers on the function's parameters and return type.
+  }];
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<StrAttr>:$sym_visibility,
+    DenseI32ArrayAttr:$argPhases,
+    DenseI32ArrayAttr:$resultPhases,
+    ArrayAttr:$argNames,
+    ArrayAttr:$resultNames,
+    OptionalAttr<UnitAttr>:$isModule
+  );
+  let regions = (region
+    MinSizedRegion<1>:$signature,
+    MinSizedRegion<1>:$body
+  );
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+  let hasRegionVerifier = 1;
+}
+
+def CallOp : UIROp<"call", [
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+]> {
+  let summary = "call to a unified function";
+  let description = [{
+    A call not yet split into phases. Mirrors `hir.unified_call` in the
+    UIR dialect. Carries the full set of arguments for all phases.
+
+    SplitPhases decomposes this into per-phase `hir.call` ops using the
+    callee's `uir.split_func` witness.
+  }];
+  let arguments = (ins
+    FlatSymbolRefAttr:$callee,
+    Variadic<AnyType>:$arguments,
+    Variadic<HIRAnyType>:$typeOfArgs,
+    Variadic<HIRAnyType>:$typeOfResults,
+    DenseI32ArrayAttr:$argPhases,
+    DenseI32ArrayAttr:$resultPhases
+  );
+  let results = (outs Variadic<AnyType>:$results);
+  let assemblyFormat = [{
+    $callee `(` $arguments `)` `:`
+    `(` $typeOfArgs `)` `->` `(` $typeOfResults `)`
+    functional-type($arguments, results)
+    $argPhases `->` $resultPhases
+    attr-dict
+  }];
+}
+
+def SplitFuncOp : UIROp<"split_func", [
+  IsolatedFromAbove,
+  Symbol,
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
+]> {
+  let summary = "witness recording how a unified function was split";
+  let description = [{
+    Records the result of splitting a `uir.func` into separate per-phase
+    functions. Preserves the original function's signature (for library
+    callers) and maps phase numbers to the generated per-phase `hir.func`
+    ops.
+
+    Its sole purpose is to allow `uir.call` ops to be decomposed into
+    per-phase `hir.call` ops without re-running phase inference on the
+    callee.
+  }];
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<StrAttr>:$sym_visibility,
+    ArrayAttr:$argNames,
+    DenseI32ArrayAttr:$argPhases,
+    ArrayAttr:$resultNames,
+    DenseI32ArrayAttr:$resultPhases,
+    DenseI32ArrayAttr:$phaseNumbers,
+    ArrayAttr:$phaseFuncs
+  );
+  let regions = (region MinSizedRegion<1>:$signature);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+  let hasRegionVerifier = 1;
+}
+
 #endif // SILICON_UIR_OPS_TD

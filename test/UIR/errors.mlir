@@ -71,3 +71,44 @@ func.func @expr_floating_with_shift(%ty: !hir.any) {
     "uir.yield"() {operandSegmentSizes = array<i32: 0, 0>} : () -> ()
   }) {phaseShift = -1 : si32} : (!hir.any) -> !hir.any
 }
+
+// -----
+
+// Verify that uir.signature checks arg count against parent.
+uir.func @sig_arg_mismatch(%a: 0) -> () {
+  // expected-error @below {{has 0 argument types but parent function has 1 arguments}}
+  uir.signature () -> ()
+} {
+  uir.return -> ()
+}
+
+// -----
+
+// Verify that uir.func rejects mismatched argNames/argPhases.
+// expected-error @below {{argNames has 2 entries but function has 1 arguments}}
+"uir.func"() ({
+  "uir.signature"() {operandSegmentSizes = array<i32: 0, 0>} : () -> ()
+}, {
+  "uir.return"() {operandSegmentSizes = array<i32: 0, 0>} : () -> ()
+}) {sym_name = "bad", argPhases = array<i32: 0>, resultPhases = array<i32>, argNames = ["a", "b"], resultNames = []} : () -> ()
+
+// -----
+
+// Verify that uir.call rejects non-existent callee.
+uir.func @call_bad_callee(%a: 0) -> (result: 0) {
+  uir.signature (%a) -> (%a)
+} {
+  // expected-error @below {{'nonexistent' does not reference a valid function}}
+  %r = uir.call @nonexistent(%a) : (%a) -> (%a) (!hir.any) -> !hir.any [0] -> [0]
+  uir.return %r -> (%a)
+}
+
+// -----
+
+// Verify that uir.signature cannot appear in function body.
+uir.func @sig_in_body(%a: 0) -> () {
+  uir.signature (%a) -> ()
+} {
+  // expected-error @below {{cannot appear in function body}}
+  uir.signature (%a) -> ()
+}

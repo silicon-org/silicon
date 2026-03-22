@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "silicon/HIR/Types.h"
+#include "silicon/Support/AsmParser.h"
 #include "silicon/UIR/Ops.h"
 #include "mlir/IR/OpImplementation.h"
 
@@ -355,6 +356,432 @@ void PinOp::print(OpAsmPrinter &p) {
 LogicalResult PinOp::verify() {
   if (getInputs().size() != getOutputs().size())
     return emitOpError("input count must match output count");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// SignatureOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult SignatureOp::verify() {
+  auto *parentOp = (*this)->getParentOp();
+  unsigned numArgs, numResults;
+
+  if (auto func = dyn_cast<FuncOp>(parentOp)) {
+    numArgs = func.getArgNames().size();
+    numResults = func.getResultNames().size();
+  } else if (auto func = dyn_cast<SplitFuncOp>(parentOp)) {
+    numArgs = func.getArgNames().size();
+    numResults = func.getResultNames().size();
+  } else {
+    return success();
+  }
+
+  if (getTypeOfArgs().size() != numArgs)
+    return emitOpError() << "has " << getTypeOfArgs().size()
+                         << " argument types but parent function has "
+                         << numArgs << " arguments";
+
+  if (getTypeOfResults().size() != numResults)
+    return emitOpError() << "has " << getTypeOfResults().size()
+                         << " result types but parent function has "
+                         << numResults << " results";
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// FuncOp
+//===----------------------------------------------------------------------===//
+
+// # Custom Parser for FuncOp
+//
+// The assembly format is:
+//   uir.func @name(%arg: phase, ...) -> (result: phase, ...) {
+//     <signature region>
+//   } {
+//     <body region>
+//   }
+
+ParseResult FuncOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto &props = result.getOrAddProperties<FuncOp::Properties>();
+  auto *ctx = parser.getContext();
+  auto builder = OpBuilder(ctx);
+  auto anyType = hir::AnyType::get(ctx);
+
+  // Parse optional visibility.
+  StringAttr visAttr;
+  if (parseSymbolVisibility(parser, visAttr))
+    return failure();
+  if (visAttr)
+    props.sym_visibility = visAttr;
+
+  // Parse symbol name.
+  StringAttr nameAttr;
+  if (parser.parseSymbolName(nameAttr))
+    return failure();
+  props.sym_name = nameAttr;
+
+  // Parse argument list: (%name: phase, ...).
+  SmallVector<OpAsmParser::Argument> args;
+  SmallVector<Attribute> argNames;
+  SmallVector<int32_t> argPhases;
+  if (parser.parseLParen())
+    return failure();
+  if (failed(parser.parseOptionalRParen())) {
+    do {
+      auto &arg = args.emplace_back();
+      arg.type = anyType;
+      if (parser.parseArgument(arg) || parser.parseColon())
+        return failure();
+      int32_t phase;
+      if (parser.parseInteger(phase))
+        return failure();
+      argNames.push_back(builder.getStringAttr(arg.ssaName.name.drop_front()));
+      argPhases.push_back(phase);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRParen())
+      return failure();
+  }
+  props.argNames = builder.getArrayAttr(argNames);
+  props.argPhases = builder.getDenseI32ArrayAttr(argPhases);
+
+  // Parse result list: -> (name: phase, ...).
+  SmallVector<Attribute> resultNames;
+  SmallVector<int32_t> resultPhases;
+  if (parser.parseArrow() || parser.parseLParen())
+    return failure();
+  if (failed(parser.parseOptionalRParen())) {
+    do {
+      std::string name;
+      int32_t phase;
+      if (parser.parseKeywordOrString(&name) || parser.parseColon() ||
+          parser.parseInteger(phase))
+        return failure();
+      resultNames.push_back(builder.getStringAttr(name));
+      resultPhases.push_back(phase);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRParen())
+      return failure();
+  }
+  props.resultNames = builder.getArrayAttr(resultNames);
+  props.resultPhases = builder.getDenseI32ArrayAttr(resultPhases);
+
+  // Parse optional attributes.
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
+  // Parse signature and body regions, both sharing the inline arg definitions.
+  auto *sigRegion = result.addRegion();
+  if (parser.parseRegion(*sigRegion, args))
+    return failure();
+  auto *bodyRegion = result.addRegion();
+  if (parser.parseRegion(*bodyRegion, args))
+    return failure();
+
+  return success();
+}
+
+void FuncOp::print(OpAsmPrinter &p) {
+  p << ' ';
+  printSymbolVisibility(p, *this, getSymVisibilityAttr());
+  p.printSymbolName(getSymName());
+
+  // Print argument list with phases.
+  p << '(';
+  auto argPhases = getArgPhases();
+  if (!getBody().empty()) {
+    auto args = getBody().front().getArguments();
+    for (size_t i = 0, e = args.size(); i < e; ++i) {
+      if (i)
+        p << ", ";
+      p.printRegionArgument(args[i], {}, /*omitType=*/true);
+      p << ": " << argPhases[i];
+    }
+  }
+  p << ')';
+
+  // Print result list with phases.
+  p << " -> (";
+  auto resultNames = getResultNames();
+  auto resultPhases = getResultPhases();
+  for (size_t i = 0, e = resultNames.size(); i < e; ++i) {
+    if (i)
+      p << ", ";
+    p << cast<StringAttr>(resultNames[i]).getValue() << ": " << resultPhases[i];
+  }
+  p << ")";
+
+  // Print optional attributes, excluding properties we've already printed.
+  p.printOptionalAttrDictWithKeyword(
+      (*this)->getAttrs(),
+      {getSymNameAttrName(), getSymVisibilityAttrName(), getArgNamesAttrName(),
+       getArgPhasesAttrName(), getResultNamesAttrName(),
+       getResultPhasesAttrName()});
+
+  // Print signature and body regions without entry block arguments.
+  p << ' ';
+  p.printRegion(getSignature(), /*printEntryBlockArgs=*/false);
+  p << ' ';
+  p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
+}
+
+LogicalResult FuncOp::verify() {
+  auto numArgs = getArgPhases().size();
+  auto numResults = getResultPhases().size();
+
+  if (getArgNames().size() != numArgs)
+    return emitOpError() << "argNames has " << getArgNames().size()
+                         << " entries but function has " << numArgs
+                         << " arguments";
+
+  if (getResultNames().size() != numResults)
+    return emitOpError() << "resultNames has " << getResultNames().size()
+                         << " entries but function has " << numResults
+                         << " results";
+
+  // Check block arguments in both regions.
+  if (getSignature().front().getNumArguments() != numArgs)
+    return emitOpError() << "signature region has "
+                         << getSignature().front().getNumArguments()
+                         << " block arguments but function has " << numArgs
+                         << " arguments";
+
+  if (getBody().front().getNumArguments() != numArgs)
+    return emitOpError() << "body region has "
+                         << getBody().front().getNumArguments()
+                         << " block arguments but function has " << numArgs
+                         << " arguments";
+
+  return success();
+}
+
+LogicalResult FuncOp::verifyRegions() {
+  // Make sure there are no signature terminators in the body region.
+  for (auto &block : getBody())
+    if (isa<SignatureOp>(block.getTerminator()))
+      return block.getTerminator()->emitOpError()
+             << "cannot appear in function body";
+  return success();
+}
+
+void FuncOp::getAsmBlockArgumentNames(Region &region,
+                                      OpAsmSetValueNameFn setNameFn) {
+  if ((&region != &getSignature() && &region != &getBody()) || region.empty())
+    return;
+  auto argNames = getArgNames();
+  for (auto [name, arg] : llvm::zip(argNames, region.front().getArguments()))
+    setNameFn(arg, cast<StringAttr>(name).getValue());
+}
+
+//===----------------------------------------------------------------------===//
+// SplitFuncOp
+//===----------------------------------------------------------------------===//
+
+// # Custom Parser for SplitFuncOp
+//
+// The assembly format is:
+//   uir.split_func @name(%arg: phase, ...) -> (result: phase, ...) {
+//     <signature region>
+//   } [phase: @sym, ...]
+
+ParseResult SplitFuncOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto &props = result.getOrAddProperties<SplitFuncOp::Properties>();
+  auto *ctx = parser.getContext();
+  auto builder = OpBuilder(ctx);
+
+  // Parse optional visibility.
+  StringAttr visAttr;
+  if (parseSymbolVisibility(parser, visAttr))
+    return failure();
+  if (visAttr)
+    props.sym_visibility = visAttr;
+
+  // Parse symbol name.
+  StringAttr nameAttr;
+  if (parser.parseSymbolName(nameAttr))
+    return failure();
+  props.sym_name = nameAttr;
+
+  // Parse argument list: (%name: phase, ...).
+  auto anyType = hir::AnyType::get(ctx);
+  SmallVector<OpAsmParser::Argument> args;
+  SmallVector<Attribute> argNames;
+  SmallVector<int32_t> argPhases;
+  if (parser.parseLParen())
+    return failure();
+  if (failed(parser.parseOptionalRParen())) {
+    do {
+      auto &arg = args.emplace_back();
+      arg.type = anyType;
+      if (parser.parseArgument(arg) || parser.parseColon())
+        return failure();
+      int32_t phase;
+      if (parser.parseInteger(phase))
+        return failure();
+      argNames.push_back(builder.getStringAttr(arg.ssaName.name.drop_front()));
+      argPhases.push_back(phase);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRParen())
+      return failure();
+  }
+  props.argNames = builder.getArrayAttr(argNames);
+  props.argPhases = builder.getDenseI32ArrayAttr(argPhases);
+
+  // Parse result list: -> (name: phase, ...).
+  SmallVector<Attribute> resultNames;
+  SmallVector<int32_t> resultPhases;
+  if (parser.parseArrow() || parser.parseLParen())
+    return failure();
+  if (failed(parser.parseOptionalRParen())) {
+    do {
+      std::string name;
+      int32_t phase;
+      if (parser.parseKeywordOrString(&name) || parser.parseColon() ||
+          parser.parseInteger(phase))
+        return failure();
+      resultNames.push_back(builder.getStringAttr(name));
+      resultPhases.push_back(phase);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRParen())
+      return failure();
+  }
+  props.resultNames = builder.getArrayAttr(resultNames);
+  props.resultPhases = builder.getDenseI32ArrayAttr(resultPhases);
+
+  // Parse signature region with the inline arguments as entry block args.
+  auto *region = result.addRegion();
+  if (parser.parseRegion(*region, args))
+    return failure();
+
+  // Parse phase map: [phase: @sym, ...].
+  SmallVector<int32_t> phaseNumbers;
+  SmallVector<Attribute> phaseFuncs;
+  if (parser.parseLSquare())
+    return failure();
+  if (failed(parser.parseOptionalRSquare())) {
+    do {
+      int32_t phase;
+      FlatSymbolRefAttr sym;
+      if (parser.parseInteger(phase) || parser.parseColon() ||
+          parser.parseAttribute(sym))
+        return failure();
+      phaseNumbers.push_back(phase);
+      phaseFuncs.push_back(sym);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRSquare())
+      return failure();
+  }
+  props.phaseNumbers = builder.getDenseI32ArrayAttr(phaseNumbers);
+  props.phaseFuncs = builder.getArrayAttr(phaseFuncs);
+
+  return success();
+}
+
+void SplitFuncOp::print(OpAsmPrinter &p) {
+  p << ' ';
+  printSymbolVisibility(p, *this, getSymVisibilityAttr());
+  p.printSymbolName(getSymName());
+
+  // Print argument list with phases.
+  p << '(';
+  auto argPhases = getArgPhases();
+  if (!getSignature().empty()) {
+    auto args = getSignature().front().getArguments();
+    for (size_t i = 0, e = args.size(); i < e; ++i) {
+      if (i)
+        p << ", ";
+      p.printRegionArgument(args[i], {}, /*omitType=*/true);
+      p << ": " << argPhases[i];
+    }
+  }
+  p << ')';
+
+  // Print result list.
+  p << " -> (";
+  auto resultNames = getResultNames();
+  auto resultPhases = getResultPhases();
+  for (size_t i = 0, e = resultNames.size(); i < e; ++i) {
+    if (i)
+      p << ", ";
+    p << cast<StringAttr>(resultNames[i]).getValue() << ": " << resultPhases[i];
+  }
+  p << ") ";
+
+  // Print signature region without entry block arguments.
+  p.printRegion(getSignature(), /*printEntryBlockArgs=*/false);
+
+  // Print phase map.
+  p << " [";
+  auto phaseNumbers = getPhaseNumbers();
+  auto phaseFuncs = getPhaseFuncs();
+  for (size_t i = 0, e = phaseNumbers.size(); i < e; ++i) {
+    if (i)
+      p << ',';
+    p.printNewline();
+    p << "  " << phaseNumbers[i] << ": ";
+    p.printAttribute(phaseFuncs[i]);
+  }
+  p.printNewline();
+  p << ']';
+}
+
+LogicalResult SplitFuncOp::verify() {
+  if (getArgPhases().size() != getArgNames().size())
+    return emitOpError() << "argPhases has " << getArgPhases().size()
+                         << " entries but function has " << getArgNames().size()
+                         << " arguments";
+
+  if (getResultPhases().size() != getResultNames().size())
+    return emitOpError() << "resultPhases has " << getResultPhases().size()
+                         << " entries but function has "
+                         << getResultNames().size() << " results";
+
+  if (getPhaseNumbers().size() != getPhaseFuncs().size())
+    return emitOpError() << "phaseNumbers has " << getPhaseNumbers().size()
+                         << " entries but phaseFuncs has "
+                         << getPhaseFuncs().size() << " entries";
+
+  return success();
+}
+
+LogicalResult SplitFuncOp::verifyRegions() {
+  // Make sure signature region is terminated by SignatureOp.
+  if (getSignature().empty())
+    return success();
+  auto &block = getSignature().front();
+  if (!isa<SignatureOp>(block.getTerminator()))
+    return block.getTerminator()->emitOpError()
+           << "expected 'uir.signature' terminator in signature region";
+  return success();
+}
+
+void SplitFuncOp::getAsmBlockArgumentNames(Region &region,
+                                           OpAsmSetValueNameFn setNameFn) {
+  if (&region != &getSignature() || region.empty())
+    return;
+  auto argNames = getArgNames();
+  for (auto [name, arg] : llvm::zip(argNames, region.front().getArguments()))
+    setNameFn(arg, cast<StringAttr>(name).getValue());
+}
+
+//===----------------------------------------------------------------------===//
+// CallOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  // Verify that the callee exists. We accept both uir.func and uir.split_func
+  // as callees, since a callee may already be split when the caller is
+  // verified.
+  auto callee = (*this)->getAttrOfType<FlatSymbolRefAttr>("callee");
+  if (!callee)
+    return emitOpError("requires a 'callee' symbol reference attribute");
+
+  auto *calleeOp = symbolTable.lookupNearestSymbolFrom(getOperation(), callee);
+  if (!calleeOp)
+    return emitOpError() << "'" << callee.getValue()
+                         << "' does not reference a valid function";
+
   return success();
 }
 

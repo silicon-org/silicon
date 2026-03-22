@@ -15,6 +15,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/IR/OpDefinition.h"
 
 // Pull in the generated op definitions.
 #define GET_OP_CLASSES

@@ -184,3 +184,49 @@ func.func @pin_multiple(%a: !hir.any, %b: !hir.any) {
   %r1, %r2 = uir.pin %a, %b, 0 : !hir.any, !hir.any
   func.return
 }
+
+// # Unified Functions
+
+// CHECK-LABEL: uir.func @simple_func
+uir.func @simple_func(%x: 0, %y: 0) -> (result: 0) {
+  uir.signature (%x, %y) -> (%x)
+} {
+  uir.return %x -> (%x)
+}
+
+// CHECK-LABEL: uir.func @const_arg
+uir.func @const_arg(%N: -1, %x: 0) -> (result: 0) {
+  uir.signature (%N, %x) -> (%x)
+} {
+  uir.return %x -> (%x)
+}
+
+// CHECK-LABEL: uir.func @no_args
+uir.func @no_args() -> () {
+  uir.signature () -> ()
+} {
+  uir.return -> ()
+}
+
+// CHECK-LABEL: uir.func @with_module
+uir.func @with_module(%x: 0) -> (result: 0) attributes {isModule} {
+  uir.signature (%x) -> (%x)
+} {
+  uir.return %x -> (%x)
+}
+
+// CHECK-LABEL: uir.split_func @split_witness
+uir.split_func @split_witness(%a: -1, %b: 0) -> (result: 0) {
+  uir.signature (%a, %b) -> (%b)
+} [
+  -1: @split_witness.0,
+  0: @split_witness.1
+]
+
+// CHECK-LABEL: uir.func @caller
+uir.func @caller(%a: 0) -> (result: 0) {
+  uir.signature (%a) -> (%a)
+} {
+  %r = uir.call @simple_func(%a, %a) : (%a, %a) -> (%a) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+  uir.return %r -> (%a)
+}
