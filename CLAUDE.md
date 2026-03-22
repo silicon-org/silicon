@@ -84,3 +84,4 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - Every behaviour and code path of a pass or conversion must be covered in a corresponding lit test; every error message a pass can generate must be covered in an error lit test
 - Never commit code for which `check-silicon` does not pass cleanly; if necessary, mark a test as XFAIL and add a TODO.md item to fix it later
 - Prefer focused per-pass lit tests over integration tests; we want to precisely check the behavior of individual passes, and have tests cover as little of the compiler pipeline as possible.
+- Once you have implemented and tested a feature according to some design doc or description, launch a subagent to critically review the impl against the design, find mismatches or missing details, and propose additional tests to thoroughly exercise the impl according to the spec
