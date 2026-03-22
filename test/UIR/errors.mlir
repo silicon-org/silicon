@@ -61,3 +61,13 @@ func.func @loop_empty_body() {
   "uir.loop"() ({
   }) : () -> ()
 }
+
+// -----
+
+// Verify that floating uir.expr cannot have non-zero phaseShift.
+func.func @expr_floating_with_shift(%ty: !hir.any) {
+  // expected-error @below {{floating expression (no 'pin') must have phaseShift = 0}}
+  %r = "uir.expr"(%ty) ({
+    "uir.yield"() {operandSegmentSizes = array<i32: 0, 0>} : () -> ()
+  }) {phaseShift = -1 : si32} : (!hir.any) -> !hir.any
+}

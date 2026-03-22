@@ -204,4 +204,65 @@ def LoopOp : UIROp<"loop", [
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Phase Grouping
+//===----------------------------------------------------------------------===//
+
+def ExprOp : UIROp<"expr", [
+  RecursiveMemoryEffects,
+  SingleBlock,
+]> {
+  let summary = "block expression with optional phase pin";
+  let description = [{
+    Groups a sequence of ops into a single expression. The body region
+    must be terminated by `uir.yield`.
+
+    A `uir.expr` can be **floating** or **pinned**:
+    - **Floating** (`uir.expr { ... }`): the expression's phase comes
+      from its consumer (demand-driven).
+    - **Pinned** (`uir.expr pin { ... }` or `uir.expr pin -1 { ... }`):
+      the expression is fixed at `p(enclosing_block) + phaseShift`.
+      Used for `const { ... }` / `dyn { ... }` blocks.
+
+    Like `uir.if`, carries result type operands and produces type
+    results alongside value results.
+
+    For codegen and phase inference details, see
+    `docs/design/phase-inference.md`.
+  }];
+  let arguments = (ins
+    OptionalAttr<UnitAttr>:$pin,
+    DefaultValuedAttr<SI32Attr, "0">:$phaseShift,
+    Variadic<HIRAnyType>:$resultTypes
+  );
+  let results = (outs Variadic<HIRAnyType>:$results);
+  let regions = (region MinSizedRegion<1>:$body);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+def PinOp : UIROp<"pin", []> {
+  let summary = "pin values at a phase offset";
+  let description = [{
+    Pins one or more values at a phase offset relative to the enclosing
+    block. Lightweight alternative to `uir.expr` when no region is
+    needed (clean use-def chain, no disconnected side effects).
+
+    Used for:
+    - `let` bindings: `uir.pin %val, 0 : !hir.any`
+    - `const { expr }` after inlining: `uir.pin %val, -1 : !hir.any`
+    - `dyn { expr }` after inlining: `uir.pin %val, 1 : !hir.any`
+
+    Not marked `Pure` to prevent CSE from merging distinct pins (same
+    rationale as `hir.inferrable`).
+  }];
+  let arguments = (ins
+    Variadic<HIRAnyType>:$inputs,
+    SI32Attr:$phaseOffset
+  );
+  let results = (outs Variadic<HIRAnyType>:$outputs);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
 #endif // SILICON_UIR_OPS_TD

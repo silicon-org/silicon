@@ -124,3 +124,63 @@ func.func @nested_if_in_loop(%cond: !hir.any, %a: !hir.any, %b: !hir.any, %ty: !
   }
   func.return
 }
+
+// # Phase Grouping
+
+// CHECK-LABEL: @expr_floating
+func.func @expr_floating(%a: !hir.any, %ty: !hir.any) {
+  %r = uir.expr : %ty {
+    uir.yield %a : %ty
+  }
+  func.return
+}
+
+// CHECK-LABEL: @expr_floating_void
+func.func @expr_floating_void(%a: !hir.any) {
+  uir.expr {
+    uir.yield
+  }
+  func.return
+}
+
+// CHECK-LABEL: @expr_pinned
+func.func @expr_pinned(%a: !hir.any, %ty: !hir.any) {
+  %r = uir.expr pin : %ty {
+    uir.yield %a : %ty
+  }
+  func.return
+}
+
+// CHECK-LABEL: @expr_pinned_const
+func.func @expr_pinned_const(%a: !hir.any, %ty: !hir.any) {
+  %r = uir.expr pin -1 : %ty {
+    uir.yield %a : %ty
+  }
+  func.return
+}
+
+// CHECK-LABEL: @expr_pinned_dyn
+func.func @expr_pinned_dyn(%a: !hir.any, %ty: !hir.any) {
+  %r = uir.expr pin 1 : %ty {
+    uir.yield %a : %ty
+  }
+  func.return
+}
+
+// CHECK-LABEL: @pin_single
+func.func @pin_single(%val: !hir.any) {
+  %r = uir.pin %val, 0 : !hir.any
+  func.return
+}
+
+// CHECK-LABEL: @pin_const
+func.func @pin_const(%val: !hir.any) {
+  %r = uir.pin %val, -1 : !hir.any
+  func.return
+}
+
+// CHECK-LABEL: @pin_multiple
+func.func @pin_multiple(%a: !hir.any, %b: !hir.any) {
+  %r1, %r2 = uir.pin %a, %b, 0 : !hir.any, !hir.any
+  func.return
+}
