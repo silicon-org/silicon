@@ -36,4 +36,5 @@ add_silicon_library(SiliconRegisterPasses
   SiliconConversion
   SiliconHIRTransforms
   SiliconTransforms
+  SiliconUIRTransforms
 )

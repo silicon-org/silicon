@@ -6,14 +6,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SILICON_UIR_UIR_TD
-#define SILICON_UIR_UIR_TD
+#pragma once
 
-include "silicon/UIR/Dialect.td"
-include "silicon/UIR/Ops.td"
-include "silicon/UIR/Passes.td"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/Pass/Pass.h"
 
-include "mlir/IR/OpBase.td"
-include "mlir/Pass/PassBase.td"
+namespace silicon {
+namespace uir {
 
-#endif // SILICON_UIR_UIR_TD
+#define GEN_PASS_DECL
+#define GEN_PASS_REGISTRATION
+#include "silicon/UIR/Passes.h.inc"
+
+} // namespace uir
+} // namespace silicon

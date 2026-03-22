@@ -9,3 +9,5 @@ add_silicon_dialect_library(SiliconUIR
   MLIRControlFlowInterfaces
   MLIRSideEffectInterfaces
 )
+
+add_subdirectory(Transforms)
