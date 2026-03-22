@@ -133,4 +133,75 @@ def UnreachableOp : UIROp<"unreachable", [
   let assemblyFormat = [{ attr-dict }];
 }
 
+//===----------------------------------------------------------------------===//
+// Structured Control Flow
+//===----------------------------------------------------------------------===//
+
+def IfOp : UIROp<"if", [
+  RecursiveMemoryEffects,
+]> {
+  let summary = "structured if/else expression";
+  let description = [{
+    A structured if/else expression with two regions: `then` and `else`.
+    Each region has a single block terminated by `uir.yield` or an
+    early-exit op (`uir.return`, `uir.break`, `uir.continue`,
+    `uir.unreachable`).
+
+    The condition is a `!si.bool` operand. The op produces variadic
+    results and carries result type operands. Inside each region,
+    `hir.unify` ops connect the yielded value's type to the
+    corresponding result type operand.
+
+    If some regions exit early, only the yielding regions contribute
+    results. If all regions exit early, the op produces no results and
+    the subsequent op must be `uir.unreachable`.
+
+    The `else` region may be omitted for if-without-else, in which case
+    the op produces no results.
+
+    For phase inference rules, see `docs/design/phase-inference.md`.
+    For FlattenCF lowering, see `docs/design/control-flow.md`.
+  }];
+  let arguments = (ins
+    HIRAnyType:$condition,
+    Variadic<HIRAnyType>:$resultTypes
+  );
+  let results = (outs Variadic<HIRAnyType>:$results);
+  let regions = (region
+    MinSizedRegion<1>:$thenRegion,
+    AnyRegion:$elseRegion
+  );
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+def LoopOp : UIROp<"loop", [
+  RecursiveMemoryEffects,
+  SingleBlock,
+]> {
+  let summary = "structured loop expression";
+  let description = [{
+    A structured loop expression with one region: the loop body.
+    The body has a single block terminated by `uir.yield` (which means
+    "continue to next iteration"). `uir.break` inside the body (possibly
+    nested in a `uir.if`) exits the loop with values.
+
+    The op produces variadic results and carries result type operands.
+    `uir.break` carries type operands unified with the loop's result
+    type operands.
+
+    `while` and `for` loops desugar to `uir.loop`.
+
+    For phase inference rules, see `docs/design/phase-inference.md`.
+    For FlattenCF lowering, see `docs/design/control-flow.md`.
+  }];
+  let arguments = (ins
+    Variadic<HIRAnyType>:$resultTypes
+  );
+  let results = (outs Variadic<HIRAnyType>:$results);
+  let regions = (region MinSizedRegion<1>:$body);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
 #endif // SILICON_UIR_OPS_TD

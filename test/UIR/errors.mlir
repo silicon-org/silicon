@@ -31,3 +31,33 @@ func.func @return_mismatch(%a: !hir.any, %ty: !hir.any) {
   // expected-error @below {{failed to verify that typeOfValues must match values size}}
   "uir.return"(%a, %a, %ty) {operandSegmentSizes = array<i32: 2, 1>} : (!hir.any, !hir.any, !hir.any) -> ()
 }
+
+// -----
+
+// Verify that uir.if without else cannot have results.
+func.func @if_no_else_with_results(%cond: !hir.any, %ty: !hir.any) {
+  // expected-error @below {{if without 'else' cannot produce results}}
+  %r = "uir.if"(%cond, %ty) ({
+    uir.yield
+  }, {
+  }) : (!hir.any, !hir.any) -> !hir.any
+}
+
+// -----
+
+// Verify that uir.if then region must have at least one block.
+func.func @if_then_empty(%cond: !hir.any) {
+  // expected-error @below {{region #0 ('thenRegion') failed to verify constraint: region with at least 1 blocks}}
+  "uir.if"(%cond) ({
+  }, {
+  }) : (!hir.any) -> ()
+}
+
+// -----
+
+// Verify that uir.loop body must have at least one block.
+func.func @loop_empty_body() {
+  // expected-error @below {{region #0 ('body') failed to verify constraint: region with at least 1 blocks}}
+  "uir.loop"() ({
+  }) : () -> ()
+}
