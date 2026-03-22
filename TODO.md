@@ -17,6 +17,40 @@
   We'd still need `hir.constant_int` to construct an integer literal with an inferrable type.
 - Change syntax from `hir.return %a, %b -> (%a.ty, %b.ty)` to `hir.return %a, %b : %a.ty, %b.ty`
 
+## Phase Inference Redesign
+
+See `docs/design/phase-inference.md`, `docs/design/unified-dialect.md`, and `docs/design/control-flow.md` (FlattenCF section).
+
+- Introduce `uir` dialect: `Dialect.td`, `Ops.td`, registration in `silc` and `silicon-opt`
+- Move `unified_func` → `uir.func`, `unified_call` → `uir.call`, `split_func` → `uir.split_func`
+- Move `hir.expr` → `uir.expr` (add `pin` keyword for floating vs pinned distinction)
+- Move `hir.yield` → `uir.yield`
+- Add `uir.pin` op (lightweight phase pinning without region)
+- Add `uir.if` op (structured if/else with `then`/`else` regions)
+- Add `uir.loop` op (structured loop; `while`/`for` desugar to it)
+- Add `uir.break`, `uir.continue` ops (loop early-exit terminators)
+- Add `uir.return` op (structured early return from function, distinct from `hir.return`)
+- Add `uir.unreachable` op (marks dead code after exhaustive early exits)
+- Add result type operands and type results to `uir.if`, `uir.expr`, `uir.loop`
+- Add type operands to `uir.yield` and `uir.break` (`: %ty` syntax)
+- Codegen: emit `uir.if` instead of `cf.cond_br` + merge blocks for if/else
+- Codegen: emit `uir.loop` instead of `cf.br` back-edges for while/loop
+- Codegen: emit `uir.return` for early returns inside structured CF (+ `uir.unreachable` after)
+- Codegen: emit `uir.expr`/`uir.pin` for `const { ... }` / `dyn { ... }` / `let` bindings
+- Codegen: create `hir.inferrable` for region op result types, `hir.unify` inside regions at yield
+- Codegen: inlinability check after emitting `uir.expr` (inline trivial, replace with `uir.pin`)
+- Implement `PhaseAnalysis` DFS (top-down latest push, bottom-up earliest for pure ops)
+- Implement `AnnotatePhases` test pass (writes phase map as attributes for lit tests)
+- Rewrite `SplitPhases` to use `PhaseAnalysis` phase map instead of old three-stage approach
+- InferTypes: recursive region traversal (walk into `uir.if`/`uir.expr`/`uir.loop` regions)
+- InferTypes: optimistic hoisting of type op trees out of regions for cross-boundary RAUW
+- CheckCalls: recursive region traversal to find calls inside structured CF
+- CheckTypes: recursive region traversal, check `uir.yield`/`uir.break` type consistency
+- Implement `FlattenCF` pass (`uir.if` → `cf.cond_br`, `uir.loop` → `cf.br`, etc.)
+- Pipeline: insert `FlattenCF` between `SplitPhases` and `PhaseEvalLoop`
+- User-facing phase error diagnostics using const/dyn vocabulary (no numeric phases)
+- Error DFS: propagate required phase downward, report at leaves, annotate calls on the way back
+
 ## Dialect Review: Missing Error Handling
 
 - **SplitPhases: silent skip when `calleeSplitFunc` is null.**
