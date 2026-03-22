@@ -16,6 +16,7 @@
 #include "silicon/Syntax/Names.h"
 #include "silicon/Syntax/Parser.h"
 #include "silicon/Transforms/Passes.h"
+#include "silicon/UIR/Passes.h"
 #include "mlir/Bytecode/BytecodeReader.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/OwningOpRef.h"
@@ -120,6 +121,9 @@ static void populatePasses(PassManager &pm) {
 
   // Split functions into phases based on constness.
   pm.addPass(hir::createSplitPhasesPass());
+
+  // Flatten structured CF (uir.if, uir.loop) to block-based CF.
+  pm.addPass(uir::createFlattenCFPass());
   addCleanup(pm);
 
   if (opt.loweringMode == LoweringMode::HIR)
