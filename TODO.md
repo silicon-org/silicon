@@ -21,28 +21,34 @@
 
 See `docs/design/phase-inference.md`, `docs/design/unified-dialect.md`, and `docs/design/control-flow.md` (FlattenCF section).
 
-**Migration strategy:** During migration from HIR to UIR ops, existing tests may break.
-Eagerly mark failing tests as `XFAIL: *` and add a TODO entry to fix them.
-Once your changes work and are committed, revisit all XFAILed tests added to the TODO and fix them to prevent accumulation of tech debt.
+**Migration strategy:** Build new passes additively alongside the old ones.
+Old passes continue working on `hir.unified_func` and flat CF; new passes consume `uir.*` ops.
+Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
 
-- Move `unified_func` → `uir.func`, `unified_call` → `uir.call`, `split_func` → `uir.split_func`
-- Move `hir.expr` → `uir.expr` (add `pin` keyword for floating vs pinned distinction)
-- Move `hir.yield` → `uir.yield`
-- Codegen: emit `uir.if` instead of `cf.cond_br` + merge blocks for if/else
-- Codegen: emit `uir.loop` instead of `cf.br` back-edges for while/loop
-- Codegen: emit `uir.return` for early returns inside structured CF (+ `uir.unreachable` after)
-- Codegen: emit `uir.expr`/`uir.pin` for `const { ... }` / `dyn { ... }` / `let` bindings
-- Codegen: create `hir.inferrable` for region op result types, `hir.unify` inside regions at yield
-- Codegen: inlinability check after emitting `uir.expr` (inline trivial, replace with `uir.pin`)
-- Implement `PhaseAnalysis` DFS (top-down latest push, bottom-up earliest for pure ops)
-- Implement `AnnotatePhases` test pass (writes phase map as attributes for lit tests)
-- Rewrite `SplitPhases` to use `PhaseAnalysis` phase map instead of old three-stage approach
-- InferTypes: recursive region traversal (walk into `uir.if`/`uir.expr`/`uir.loop` regions)
-- InferTypes: optimistic hoisting of type op trees out of regions for cross-boundary RAUW
-- CheckCalls: recursive region traversal to find calls inside structured CF
-- CheckTypes: recursive region traversal, check `uir.yield`/`uir.break` type consistency
-- User-facing phase error diagnostics using const/dyn vocabulary (no numeric phases)
-- Error DFS: propagate required phase downward, report at leaves, annotate calls on the way back
+- Phase 1: new passes (additive, no churn, testable via `silicon-opt`)
+  - Implement `PhaseAnalysis2` DFS (top-down latest push, bottom-up earliest for pure ops)
+  - Implement `TestPhaseAnalysis2` test pass (writes phase map as attributes for lit tests)
+  - Implement new `SplitPhases2` pass consuming `uir.func` → `hir.func` + `uir.split_func`
+  - User-facing phase error diagnostics using const/dyn vocabulary (no numeric phases)
+  - Error DFS: propagate required phase downward, report at leaves, annotate calls on the way back
+- Phase 2: extend existing passes for region support (additive, old paths stay intact)
+  - InferTypes: walk into `uir.if`/`uir.expr`/`uir.loop` regions in addition to flat blocks
+  - InferTypes: optimistic hoisting of type op trees out of regions for cross-boundary RAUW
+  - CheckCalls: walk into regions to find calls inside structured CF
+  - CheckTypes: walk into regions, check `uir.yield`/`uir.break` type consistency
+- Phase 3: switch codegen and pipeline (one atomic change, mark failing tests `XFAIL: *`)
+  - Codegen: emit `uir.if` instead of `cf.cond_br` + merge blocks for if/else
+  - Codegen: emit `uir.loop` instead of `cf.br` back-edges for while/loop
+  - Codegen: emit `uir.return` for early returns inside structured CF (+ `uir.unreachable` after)
+  - Codegen: emit `uir.expr`/`uir.pin` for `const { ... }` / `dyn { ... }` / `let` bindings
+  - Codegen: create `hir.inferrable` for region op result types, `hir.unify` inside regions at yield
+  - Codegen: inlinability check after emitting `uir.expr` (inline trivial, replace with `uir.pin`)
+  - Pipeline: swap old `SplitPhases` → new `SplitPhases`, verify all tests pass
+- Phase 4: cleanup (remove old code)
+  - Remove old `SplitPhases` pass
+  - Remove old `TestPhaseAnalysis` pass and `PhaseAnalysis`
+  - Delete `hir.unified_func`, `hir.unified_call`, `hir.split_func`, `hir.expr`, `hir.yield`
+  - Fix remaining XFAILed tests
 
 ## Dialect Review: Missing Error Handling
 
