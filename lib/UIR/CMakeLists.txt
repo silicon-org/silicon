@@ -3,6 +3,7 @@ add_silicon_dialect_library(SiliconUIR
   Ops.cpp
 
   LINK_LIBS PUBLIC
+  SiliconHIR
   SiliconSupport
   MLIRIR
   MLIRControlFlowInterfaces

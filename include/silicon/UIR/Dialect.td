@@ -30,9 +30,9 @@ def UIRDialect : Dialect {
     See `docs/design/unified-dialect.md` for the full design.
   }];
 
-  // UIR ops reference !hir.any in their tablegen constraints, but don't
-  // programmatically create HIR types or Base attributes at runtime.
-  // No dependentDialects needed.
+  // UIR ops use !hir.any as operand/result types. The HIR dialect must be
+  // loaded so that !hir.any can be parsed and created.
+  let dependentDialects = ["silicon::hir::HIRDialect"];
 }
 
 #endif // SILICON_UIR_DIALECT_TD

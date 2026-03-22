@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/HIR/Dialect.h"
 #include "silicon/UIR/Dialect.h"
 #include "silicon/UIR/Ops.h"
 #include "mlir/IR/DialectImplementation.h"
