@@ -21,8 +21,48 @@ class UIROp<string mnemonic, list<Trait> traits = []> :
   Op<UIRDialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
+// Op Doc Groups
+//===----------------------------------------------------------------------===//
+
+def RegionTerminators : OpDocGroup {
+  let summary = "Region terminators";
+  let description = [{
+    Terminators for regions inside structured CF and expression ops.
+    Each structured region must end with exactly one of these.
+  }];
+}
+
+def StructuredControlFlow : OpDocGroup {
+  let summary = "Structured control flow";
+  let description = [{
+    Ops representing control flow as nested regions, preserving the
+    expression tree structure for phase inference. Consumed by FlattenCF
+    after phase splitting.
+  }];
+}
+
+def PhaseGrouping : OpDocGroup {
+  let summary = "Phase grouping";
+  let description = [{
+    Ops for grouping expressions and pinning phases during phase
+    inference. Consumed by SplitPhases.
+  }];
+}
+
+def UnifiedFunctions : OpDocGroup {
+  let summary = "Unified functions";
+  let description = [{
+    Ops for representing functions that span multiple phases and their
+    call sites. Consumed by SplitPhases, which decomposes them into
+    per-phase `hir.func` and `hir.call` ops.
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Region Terminators
 //===----------------------------------------------------------------------===//
+
+let opDocGroup = RegionTerminators in {
 
 def YieldOp : UIROp<"yield", [
   AttrSizedOperandSegments,
@@ -133,9 +173,13 @@ def UnreachableOp : UIROp<"unreachable", [
   let assemblyFormat = [{ attr-dict }];
 }
 
+} // let opDocGroup = RegionTerminators
+
 //===----------------------------------------------------------------------===//
 // Structured Control Flow
 //===----------------------------------------------------------------------===//
+
+let opDocGroup = StructuredControlFlow in {
 
 def IfOp : UIROp<"if", [
   RecursiveMemoryEffects,
@@ -204,9 +248,13 @@ def LoopOp : UIROp<"loop", [
   let hasVerifier = 1;
 }
 
+} // let opDocGroup = StructuredControlFlow
+
 //===----------------------------------------------------------------------===//
 // Phase Grouping
 //===----------------------------------------------------------------------===//
+
+let opDocGroup = PhaseGrouping in {
 
 def ExprOp : UIROp<"expr", [
   RecursiveMemoryEffects,
@@ -265,11 +313,15 @@ def PinOp : UIROp<"pin", []> {
   let hasVerifier = 1;
 }
 
+} // let opDocGroup = PhaseGrouping
+
 //===----------------------------------------------------------------------===//
 // Unified Functions
 //===----------------------------------------------------------------------===//
 
 include "mlir/IR/OpAsmInterface.td"
+
+let opDocGroup = UnifiedFunctions in {
 
 def SignatureOp : UIROp<"signature", [
   AttrSizedOperandSegments,
@@ -390,5 +442,7 @@ def SplitFuncOp : UIROp<"split_func", [
   let hasVerifier = 1;
   let hasRegionVerifier = 1;
 }
+
+} // let opDocGroup = UnifiedFunctions
 
 #endif // SILICON_UIR_OPS_TD
