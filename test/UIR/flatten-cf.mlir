@@ -1,6 +1,8 @@
 // RUN: silicon-opt %s --flatten-cf | FileCheck %s
 
-// # FlattenCF: uir.if lowering
+//===----------------------------------------------------------------------===//
+// uir.if lowering
+//===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func.func @if_both_yield
 // CHECK-SAME:    (%[[COND:.*]]: !hir.any, %[[A:.*]]: !hir.any, %[[B:.*]]: !hir.any, %[[TY:.*]]: !hir.any)
@@ -128,7 +130,9 @@ func.func @if_result_used_after(%cond: !hir.any, %a: !hir.any, %b: !hir.any, %ty
   func.return %s : !hir.any
 }
 
-// # FlattenCF: uir.loop lowering
+//===----------------------------------------------------------------------===//
+// uir.loop lowering
+//===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func.func @loop_break
 // CHECK-SAME:    (%[[COND:.*]]: !hir.any, %[[VAL:.*]]: !hir.any, %[[TY:.*]]: !hir.any)
@@ -285,6 +289,295 @@ func.func @loop_result_used(%cond: !hir.any, %val: !hir.any, %ty: !hir.any) -> !
   func.return %r : !hir.any
 }
 
+//===----------------------------------------------------------------------===//
+// uir.return lowering
+//===----------------------------------------------------------------------===//
+
+// uir.return inside structured CF becomes hir.return. We use hir.func here
+// since hir.return requires its parent to be hir.func or hir.unified_func.
+
+// CHECK-LABEL: hir.func @if_both_return
+// CHECK:         cf.cond_br %{{.*}}, ^[[THEN:.*]], ^[[ELSE:.*]]
+// CHECK:       ^[[THEN]]:
+// CHECK-NEXT:    hir.return
+// CHECK:       ^[[ELSE]]:
+// CHECK-NEXT:    hir.return
+hir.func @if_both_return(%cond, %a, %ty) -> (result) {
+  hir.signature (%cond, %a, %ty) -> (%ty)
+} {
+  uir.if %cond {
+    uir.return %a -> (%ty)
+  } else {
+    uir.return %a -> (%ty)
+  }
+  uir.unreachable
+}
+
+// CHECK-LABEL: hir.func @if_one_return_one_yield
+// CHECK:         cf.cond_br %{{.*}}, ^[[THEN:.*]], ^[[ELSE:.*]]
+// CHECK:       ^[[THEN]]:
+// CHECK-NEXT:    hir.return
+// CHECK:       ^[[ELSE]]:
+// CHECK-NEXT:    cf.br ^[[MERGE:.*]](%{{.*}} : !hir.any)
+// CHECK:       ^[[MERGE]](%[[R:.*]]: !hir.any):
+// CHECK-NEXT:    cf.br ^[[CONT:.*]]
+// CHECK:       ^[[CONT]]:
+// CHECK-NEXT:    hir.return %[[R]] -> (%{{.*}})
+hir.func @if_one_return_one_yield(%cond, %a, %b, %ty) -> (result) {
+  hir.signature (%cond, %a, %b, %ty) -> (%ty)
+} {
+  %r = uir.if %cond : %ty {
+    uir.return %a -> (%ty)
+  } else {
+    uir.yield %b : %ty
+  }
+  hir.return %r -> (%ty)
+}
+
+// CHECK-LABEL: hir.func @return_in_loop
+// CHECK:         cf.br ^[[HEADER:.*]]
+// CHECK:       ^[[HEADER]]:
+// CHECK:         cf.cond_br %{{.*}}, ^[[IFTHEN:.*]], ^[[IFCONT:.*]]
+// CHECK:       ^[[IFTHEN]]:
+// CHECK-NEXT:    hir.return
+// CHECK:       ^[[IFCONT]]:
+// CHECK-NEXT:    cf.br ^[[HEADER]]
+hir.func @return_in_loop(%cond, %val, %ty) -> (result) {
+  hir.signature (%cond, %val, %ty) -> (%ty)
+} {
+  uir.loop {
+    uir.if %cond {
+      uir.return %val -> (%ty)
+    }
+    uir.yield
+  }
+  hir.return %val -> (%ty)
+}
+
+//===----------------------------------------------------------------------===//
+// if with mixed yield/break inside loop
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @if_yield_and_break_in_loop
+// CHECK:         cf.br ^[[HEADER:.*]]
+// CHECK:       ^[[HEADER]]:
+// CHECK:         cf.cond_br %{{.*}}, ^[[THEN:.*]], ^[[ELSE:.*]]
+// CHECK:       ^[[THEN]]:
+// CHECK-NEXT:    cf.br ^[[EXIT:.*]]({{.*}} : !hir.any)
+// CHECK:       ^[[ELSE]]:
+// CHECK-NEXT:    cf.br ^[[MERGE:.*]]
+// CHECK:       ^[[MERGE]]:
+// CHECK-NEXT:    cf.br ^[[IFCONT:.*]]
+// CHECK:       ^[[IFCONT]]:
+// CHECK-NEXT:    cf.br ^[[HEADER]]
+// CHECK:       ^[[EXIT]](%[[R:.*]]: !hir.any):
+// CHECK-NEXT:    cf.br ^[[AFTER:.*]]
+// CHECK:       ^[[AFTER]]:
+// CHECK-NEXT:    return %[[R]] : !hir.any
+func.func @if_yield_and_break_in_loop(%cond: !hir.any, %val: !hir.any, %ty: !hir.any) -> !hir.any {
+  %r = uir.loop : %ty {
+    uir.if %cond {
+      uir.break %val : %ty
+    } else {
+      uir.yield
+    }
+    uir.yield
+  }
+  func.return %r : !hir.any
+}
+
+//===----------------------------------------------------------------------===//
+// multiple break ops from different branches
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @multiple_breaks
+// CHECK:         cf.br ^[[HEADER:.*]]
+// CHECK:       ^[[HEADER]]:
+// CHECK:         cf.cond_br %{{.*}}, ^[[THEN:.*]], ^[[ELSE:.*]]
+// CHECK:       ^[[THEN]]:
+// CHECK-NEXT:    cf.br ^[[EXIT:.*]](%[[A:.*]] : !hir.any)
+// CHECK:       ^[[ELSE]]:
+// CHECK-NEXT:    cf.br ^[[EXIT]](%[[B:.*]] : !hir.any)
+// CHECK:       ^[[EXIT]](%[[R:.*]]: !hir.any):
+// CHECK-NEXT:    cf.br ^[[AFTER:.*]]
+// CHECK:       ^[[AFTER]]:
+// CHECK-NEXT:    return %[[R]] : !hir.any
+func.func @multiple_breaks(%cond: !hir.any, %a: !hir.any, %b: !hir.any, %ty: !hir.any) -> !hir.any {
+  %r = uir.loop : %ty {
+    uir.if %cond {
+      uir.break %a : %ty
+    } else {
+      uir.break %b : %ty
+    }
+    uir.unreachable
+  }
+  func.return %r : !hir.any
+}
+
+//===----------------------------------------------------------------------===//
+// loop with multiple results
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @loop_multiple_results
+// CHECK:         cf.br ^[[HEADER:.*]]
+// CHECK:       ^[[HEADER]]:
+// CHECK:         cf.cond_br %{{.*}}, ^[[BREAK:.*]], ^[[CONT:.*]]
+// CHECK:       ^[[BREAK]]:
+// CHECK-NEXT:    cf.br ^[[EXIT:.*]](%{{.*}}, %{{.*}} : !hir.any, !hir.any)
+// CHECK:       ^[[CONT]]:
+// CHECK-NEXT:    cf.br ^[[HEADER]]
+// CHECK:       ^[[EXIT]](%[[R1:.*]]: !hir.any, %[[R2:.*]]: !hir.any):
+// CHECK-NEXT:    cf.br ^[[AFTER:.*]]
+// CHECK:       ^[[AFTER]]:
+// CHECK-NEXT:    return %[[R1]], %[[R2]] : !hir.any, !hir.any
+func.func @loop_multiple_results(%cond: !hir.any, %a: !hir.any, %b: !hir.any,
+                                  %ty1: !hir.any, %ty2: !hir.any) -> (!hir.any, !hir.any) {
+  %r1, %r2 = uir.loop : %ty1, %ty2 {
+    uir.if %cond {
+      uir.break %a, %b : %ty1, %ty2
+    }
+    uir.yield
+  }
+  func.return %r1, %r2 : !hir.any, !hir.any
+}
+
+//===----------------------------------------------------------------------===//
+// deeply nested loop > if > loop > if > break
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @deeply_nested
+// CHECK:         cf.br ^[[OUTER:.*]]
+// CHECK:       ^[[OUTER]]:
+// CHECK:         cf.cond_br
+// CHECK:         cf.br ^[[INNER:.*]]
+// CHECK:       ^[[INNER]]:
+// CHECK:         cf.cond_br
+func.func @deeply_nested(%c1: !hir.any, %c2: !hir.any) {
+  uir.loop {
+    uir.if %c1 {
+      uir.loop {
+        uir.if %c2 {
+          uir.break
+        }
+        uir.yield
+      }
+      uir.yield
+    }
+    uir.yield
+  }
+  func.return
+}
+
+//===----------------------------------------------------------------------===//
+// immediate-exit loop (body is just uir.break)
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @immediate_break_loop
+// CHECK:         cf.br ^[[HEADER:.*]]
+// CHECK:       ^[[HEADER]]:
+// CHECK-NEXT:    cf.br ^[[EXIT:.*]](%{{.*}} : !hir.any)
+// CHECK:       ^[[EXIT]](%[[R:.*]]: !hir.any):
+// CHECK-NEXT:    cf.br ^[[AFTER:.*]]
+// CHECK:       ^[[AFTER]]:
+// CHECK-NEXT:    return %[[R]] : !hir.any
+func.func @immediate_break_loop(%val: !hir.any, %ty: !hir.any) -> !hir.any {
+  %r = uir.loop : %ty {
+    uir.break %val : %ty
+  }
+  func.return %r : !hir.any
+}
+
+//===----------------------------------------------------------------------===//
+// infinite loop (just uir.yield, no break)
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @infinite_loop
+// CHECK:         cf.br ^[[HEADER:.*]]
+// CHECK:       ^[[HEADER]]:
+// CHECK-NEXT:    cf.br ^[[HEADER]]
+func.func @infinite_loop() {
+  uir.loop {
+    uir.yield
+  }
+  func.return
+}
+
+//===----------------------------------------------------------------------===//
+// while-loop desugaring pattern
+//===----------------------------------------------------------------------===//
+
+// The then-branch yields from the if (continue body), and the else-branch
+// breaks out of the loop. After the if, uir.yield continues to the next
+// iteration (only reachable from the then-path through the merge block).
+
+// CHECK-LABEL: func.func @while_loop_pattern
+// CHECK:         cf.br ^[[HEADER:.*]]
+// CHECK:       ^[[HEADER]]:
+// CHECK:         cf.cond_br %{{.*}}, ^[[BODY:.*]], ^[[BREAKPATH:.*]]
+// CHECK:       ^[[BODY]]:
+// CHECK-NEXT:    cf.br ^[[MERGE:.*]]
+// CHECK:       ^[[BREAKPATH]]:
+// CHECK-NEXT:    cf.br ^[[EXIT:.*]]
+// CHECK:       ^[[MERGE]]:
+// CHECK-NEXT:    cf.br ^[[LOOPYIELD:.*]]
+// CHECK:       ^[[LOOPYIELD]]:
+// CHECK-NEXT:    cf.br ^[[HEADER]]
+// CHECK:       ^[[EXIT]]:
+// CHECK-NEXT:    cf.br ^[[AFTER:.*]]
+// CHECK:       ^[[AFTER]]:
+// CHECK-NEXT:    return
+func.func @while_loop_pattern(%cond: !hir.any) {
+  uir.loop {
+    uir.if %cond {
+      uir.yield
+    } else {
+      uir.break
+    }
+    uir.yield
+  }
+  func.return
+}
+
+//===----------------------------------------------------------------------===//
+// uir.expr and uir.pin dissolved
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func.func @expr_dissolved
+// CHECK-NOT:     uir.expr
+// CHECK:         return %{{.*}} : !hir.any
+func.func @expr_dissolved(%a: !hir.any, %ty: !hir.any) -> !hir.any {
+  %r = uir.expr : %ty {
+    uir.yield %a : %ty
+  }
+  func.return %r : !hir.any
+}
+
+// CHECK-LABEL: func.func @expr_pinned_dissolved
+// CHECK-NOT:     uir.expr
+// CHECK:         return %{{.*}} : !hir.any
+func.func @expr_pinned_dissolved(%a: !hir.any, %ty: !hir.any) -> !hir.any {
+  %r = uir.expr pin -1 : %ty {
+    uir.yield %a : %ty
+  }
+  func.return %r : !hir.any
+}
+
+// CHECK-LABEL: func.func @pin_dissolved
+// CHECK-NOT:     uir.pin
+// CHECK:         return %{{.*}} : !hir.any
+func.func @pin_dissolved(%a: !hir.any) -> !hir.any {
+  %r = uir.pin %a, 0 : !hir.any
+  func.return %r : !hir.any
+}
+
+// CHECK-LABEL: func.func @pin_multi_dissolved
+// CHECK-NOT:     uir.pin
+// CHECK:         return %{{.*}}, %{{.*}} : !hir.any, !hir.any
+func.func @pin_multi_dissolved(%a: !hir.any, %b: !hir.any) -> (!hir.any, !hir.any) {
+  %r1, %r2 = uir.pin %a, %b, -1 : !hir.any, !hir.any
+  func.return %r1, %r2 : !hir.any, !hir.any
+}
+
 // Verify no UIR ops survive.
 // CHECK-NOT: uir.if
 // CHECK-NOT: uir.loop
@@ -292,3 +585,5 @@ func.func @loop_result_used(%cond: !hir.any, %val: !hir.any, %ty: !hir.any) -> !
 // CHECK-NOT: uir.break
 // CHECK-NOT: uir.continue
 // CHECK-NOT: uir.unreachable
+// CHECK-NOT: uir.expr
+// CHECK-NOT: uir.pin

@@ -224,7 +224,7 @@ uir.loop {
   } else {
     uir.break
   }
-  uir.unreachable
+  uir.yield
 }
 
 // for i in 0..n { body }  (const loop, unrolled at compile time)
@@ -237,7 +237,7 @@ uir.loop {
   } else {
     uir.break
   }
-  uir.unreachable
+  uir.yield
 }
 ```
 

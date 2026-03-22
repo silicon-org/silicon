@@ -16,6 +16,9 @@
   Use that op to materialize most constants that have a fully-known type and/or value; this would replace constant-like ops such as `hir.int_type`, `hir.unit_type`, etc.
   We'd still need `hir.constant_int` to construct an integer literal with an inferrable type.
 - Change syntax from `hir.return %a, %b -> (%a.ty, %b.ty)` to `hir.return %a, %b : %a.ty, %b.ty`
+- Rewrite FlattenCF to process regions from outer to inner, iterating over the ops once and inlining structured CF ops as it goes along.
+  Once a structured CF op is inlined, its blocks and regions are inserted ahead of that op, such that the linear region/block scan will naturally visit the newly-inlined region.
+  For inspiration, look at how the SCF-to-CF lowering in MLIR does things.
 
 ## Phase Inference Redesign
 

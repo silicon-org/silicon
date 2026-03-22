@@ -6,11 +6,16 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// # FlattenCF: Lower Structured UIR Control Flow to Block-Based CF
+// # FlattenCF: Lower Structured UIR Ops to Block-Based CF
 //
-// Converts uir.if, uir.loop, and their terminators (uir.yield, uir.break,
-// uir.continue, uir.return, uir.unreachable) into cf.br, cf.cond_br, and
-// hir.return. Processes ops innermost-first (post-order) so that each
+// Converts structured UIR ops into flat block-based IR:
+// - uir.if, uir.loop, and their terminators (uir.yield, uir.break,
+//   uir.continue, uir.return, uir.unreachable) into cf.br, cf.cond_br,
+//   and hir.return.
+// - uir.expr is inlined into the parent block.
+// - uir.pin is replaced by its inputs (identity removal).
+//
+// Control flow ops are processed innermost-first (post-order) so that each
 // lowering step handles only one level of structured CF.
 //
 //===----------------------------------------------------------------------===//
@@ -222,6 +227,48 @@ static LogicalResult lowerLoopOp(LoopOp loopOp) {
 }
 
 //===----------------------------------------------------------------------===//
+// uir.expr lowering
+//===----------------------------------------------------------------------===//
+
+/// Lower a uir.expr op by inlining its body into the parent block.
+///
+/// The expr's results are replaced with the yield's values. The yield and
+/// expr ops are erased.
+static LogicalResult lowerExprOp(ExprOp exprOp) {
+  auto &body = exprOp.getBody();
+  assert(body.hasOneBlock() && "expr body must have a single block");
+
+  auto *parentBlock = exprOp->getBlock();
+  auto &bodyBlock = body.front();
+  auto yieldOp = cast<YieldOp>(bodyBlock.getTerminator());
+
+  // Replace expr results with yield values.
+  for (auto [result, value] :
+       llvm::zip(exprOp.getResults(), yieldOp.getValues()))
+    result.replaceAllUsesWith(value);
+
+  // Inline the body ops (except the yield) before the expr op.
+  yieldOp->erase();
+  parentBlock->getOperations().splice(exprOp->getIterator(),
+                                      bodyBlock.getOperations());
+
+  exprOp->erase();
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// uir.pin lowering
+//===----------------------------------------------------------------------===//
+
+/// Lower a uir.pin op by replacing its outputs with its inputs.
+static LogicalResult lowerPinOp(PinOp pinOp) {
+  for (auto [output, input] : llvm::zip(pinOp.getOutputs(), pinOp.getInputs()))
+    output.replaceAllUsesWith(input);
+  pinOp->erase();
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Dead block cleanup
 //===----------------------------------------------------------------------===//
 
@@ -252,6 +299,27 @@ struct FlattenCFPass : uir::impl::FlattenCFPassBase<FlattenCFPass> {
 
   void runOnOperation() override {
     auto moduleOp = getOperation();
+
+    // Dissolve phase grouping ops first. These are structural markers that
+    // SplitPhases used for phase analysis; after splitting they have no
+    // runtime effect and just need to be inlined/removed.
+    SmallVector<ExprOp> exprOps;
+    moduleOp->walk([&](ExprOp op) { exprOps.push_back(op); });
+    for (auto exprOp : exprOps) {
+      if (failed(lowerExprOp(exprOp))) {
+        signalPassFailure();
+        return;
+      }
+    }
+
+    SmallVector<PinOp> pinOps;
+    moduleOp->walk([&](PinOp op) { pinOps.push_back(op); });
+    for (auto pinOp : pinOps) {
+      if (failed(lowerPinOp(pinOp))) {
+        signalPassFailure();
+        return;
+      }
+    }
 
     // Lower ifs first (innermost first via walk's post-order), then loops.
     // Ifs inside loop bodies get lowered before the enclosing loop.

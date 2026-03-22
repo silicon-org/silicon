@@ -639,22 +639,24 @@ See `docs/design/unified-dialect.md` for the full `uir` dialect design and op de
 cf.cond_br %cond_i1, ^then, ^else
 ^then:
   %a = hir.add %x, %c42 : %x_ty
-  cf.br ^merge(%a, %x_ty)
+  cf.br ^merge(%a)
 ^else:
   %b = hir.add %y, %c1 : %y_ty
-  cf.br ^merge(%b, %y_ty)
-^merge(%r: !hir.any, %r_ty_out: !hir.any):
+  cf.br ^merge(%b)
+^merge(%r: !hir.any):
   ...
 ```
 
-When a branch has `uir.return`, it branches to the function's return block instead of the merge block.
+Only value results flow through the merge block — the if's `resultTypes` operands are already SSA values visible outside.
+
+When a branch has `uir.return`, it becomes `hir.return` directly (each early return is its own return terminator).
 When all branches exit early, no merge block is emitted.
 
 ### `uir.loop` → back-edge + exit block
 
 ```mlir
 // Before (structured):
-%r, %r_ty = uir.loop : %r_ty {
+%r = uir.loop : %r_ty {
   %done = ...
   uir.if %done {
     uir.break %value : %v_ty
@@ -665,22 +667,21 @@ When all branches exit early, no merge block is emitted.
 // After (block-based):
 cf.br ^loop_header
 ^loop_header:
-  %done = ...
-  %done_i1 = hir.coerce_to_i1 %done
-  cf.cond_br %done_i1, ^loop_exit(%value, %v_ty), ^loop_body
-^loop_body:
+  // (body ops, including lowered uir.if → cf.cond_br)
   ...
-  cf.br ^loop_header
-^loop_exit(%r: !hir.any, %r_ty_out: !hir.any):
+  cf.br ^loop_header          // from uir.yield (continue)
+^loop_exit(%r: !hir.any):     // from uir.break
   ...
 ```
 
-`uir.break` becomes a `cf.br` to the loop exit block.
-`uir.continue` (or `uir.yield` in the loop body) becomes a `cf.br` to the loop header.
+Only value results flow through the exit block — the loop's `resultTypes` operands are already visible outside.
+`uir.break` becomes `cf.br ^loop_exit(values)`.
+`uir.continue` (or `uir.yield` in the loop body) becomes `cf.br ^loop_header`.
 
-### `uir.return` → branch to return block
+### `uir.return` → `hir.return`
 
-`uir.return` inside a structured CF region becomes `cf.br ^return_block(...)`, targeting the function's canonical return block which holds the `hir.return`.
+`uir.return` inside a structured CF region becomes `hir.return` directly.
+Each early return is its own return terminator in its block — no shared return block.
 
 ### `uir.unreachable` → dead block elimination
 
@@ -689,8 +690,8 @@ The unreachable block is simply not emitted — it has no predecessors after the
 ### `uir.expr` / `uir.pin` → dissolved
 
 `uir.expr` ops are inlined (contents moved to parent block) since phase grouping is no longer needed after splitting.
-`uir.pin` ops are removed (they're just phase markers, no runtime effect).
-Both are dissolved by SplitPhases, not FlattenCF — they should not survive to this point.
+`uir.pin` ops are removed by replacing outputs with inputs (identity removal).
+FlattenCF handles both, ensuring no UIR ops survive.
 
 ## Dyn Control Flow: CFG to Dataflow
 
