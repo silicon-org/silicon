@@ -18,5 +18,8 @@ namespace uir {
 #define GEN_PASS_REGISTRATION
 #include "silicon/UIR/Passes.h.inc"
 
+/// Register the test-only --test-phase-analysis2 pass.
+void registerTestPhaseAnalysis2Pass();
+
 } // namespace uir
 } // namespace silicon

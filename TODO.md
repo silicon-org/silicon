@@ -19,6 +19,7 @@
 - Rewrite FlattenCF to process regions from outer to inner, iterating over the ops once and inlining structured CF ops as it goes along.
   Once a structured CF op is inlined, its blocks and regions are inserted ahead of that op, such that the linear region/block scan will naturally visit the newly-inlined region.
   For inspiration, look at how the SCF-to-CF lowering in MLIR does things.
+- Improve UIR op parsing/printing (e.g. uir.call, maybe others) to not print the implied `!hir.any` type
 
 ## Phase Inference Redesign
 
@@ -29,11 +30,10 @@ Old passes continue working on `hir.unified_func` and flat CF; new passes consum
 Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
 
 - Phase 1: new passes (additive, no churn, testable via `silicon-opt`)
-  - Implement `PhaseAnalysis2` DFS (top-down latest push, bottom-up earliest for pure ops)
-  - Implement `TestPhaseAnalysis2` test pass (writes phase map as attributes for lit tests)
   - Implement new `SplitPhases2` pass consuming `uir.func` → `hir.func` + `uir.split_func`
   - User-facing phase error diagnostics using const/dyn vocabulary (no numeric phases)
-  - Error DFS: propagate required phase downward, report at leaves, annotate calls on the way back
+  - PhaseAnalysis2: add `LoopOp` verifier that body `uir.yield` must have zero values (continue semantics).
+    Without this, a yield with values inside a loop body causes an out-of-bounds access in the analysis.
 - Phase 2: extend existing passes for region support (additive, old paths stay intact)
   - InferTypes: walk into `uir.if`/`uir.expr`/`uir.loop` regions in addition to flat blocks
   - InferTypes: optimistic hoisting of type op trees out of regions for cross-boundary RAUW

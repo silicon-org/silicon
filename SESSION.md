@@ -66,3 +66,18 @@
   - Design doc mismatch: `docs/design/control-flow.md` line 683 says `uir.return` should become `cf.br ^return_block(...)`, but the implementation emits `hir.return` directly. Both are correct since after block splicing the `hir.return` ends up in a direct child block of the function. The design doc's approach would deduplicate return blocks but adds complexity.
   - Design doc mismatch: `docs/design/unified-dialect.md` while-loop desugaring uses `uir.unreachable` after a `uir.if` where one branch yields and the other breaks. This is incorrect — the yield path flows through the if and reaches the code after it, so `uir.yield` (continue next iteration) should be used instead.
   - Design doc mismatch: `docs/design/control-flow.md` shows merge block receiving both value AND type operands from yield (`cf.br ^merge(%a, %x_ty)`), but the implementation only passes values. The type operands are SSA values already visible outside the if's region, so they don't need to flow through the merge block.
+- PhaseAnalysis2 implementation notes (2026-03-22):
+  - Block processing is uniform: signature and body blocks are processed identically, terminators dispatch to their target (func for return/signature, loop for break/continue, parent for yield).
+  - Result constraints are tracked in a map keyed by region-bearing op (if/loop/expr), populated before entering regions. `uir.signature` and `uir.return` read argPhases/resultPhases from the enclosing `uir.func` directly (no pre-population needed).
+  - `processValue` does not emit errors for block arg constraint violations; `checkValueConstraint` is used at consumers (terminators, call args) for clean error attribution.
+  - Call result phases are set explicitly with offsets instead of going through `resolveOp`, avoiding a fragile double-write pattern.
+  - Deferred: type operand `latest` constraints (return/yield/break/call typeOfValues should be `p(value) - 1` per design doc, currently `blockPhase`/`callPhase`). Will tighten when InferTypes/CheckCalls adapt for UIR.
+  - Deferred: multi-result call ordering (first-consumer-wins DFS may produce suboptimal errors).
+  - Deferred: const/dyn vocabulary in error messages (currently numeric phases).
+- PhaseAnalysis2 value-based DFS refactor (2026-03-22):
+  - Refactored from op-based `processDFS(Operation*, latest)` to value-based `resolveValue(Value, latest)`.
+  - Two maps: `actualPhase` (resolved), `latestConstraint` (tightest consumer demand). `opPhases` is secondary for test pass.
+  - Constraint propagation is uniform for all ops (pure and non-pure). Pure ops get post-order earliest scheduling as optimization.
+  - Pinned ops (pins, pinned exprs, zero-use statements) have authoritative phases set by `processBlock`. When reached via DFS, their existing phase is returned without tightening. Detected via: `latestConstraint` not set + `actualPhase` already set.
+  - Calls tighten incrementally via `callPhase = min(old, latest - resultOffset)` per result consumer. Re-descends into args on tightening.
+  - `resolveOp` handles both pinned ops (from processBlock) and floating region-bearing ops (from resolveValue). Uses tightening check (`opPhases[op] <= phase → skip`).

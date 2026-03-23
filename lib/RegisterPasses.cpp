@@ -30,6 +30,7 @@ void silicon::registerAllPasses() {
   silicon::hir::registerTestPhaseAnalysisPass();
   silicon::mir::registerPasses();
   silicon::uir::registerPasses();
+  silicon::uir::registerTestPhaseAnalysis2Pass();
   silicon::registerConversionPasses();
   silicon::registerTransformsPasses();
 }
