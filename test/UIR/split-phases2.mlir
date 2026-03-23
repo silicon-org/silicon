@@ -82,6 +82,25 @@ uir.func @InternalPhase() -> () {
 }
 
 //===----------------------------------------------------------------------===//
+// Multiple args at the same phase: both %a and %b at phase -1.
+// Only %a is used as the return value; %b is unused in the body.
+
+// CHECK-LABEL: hir.func private @TwoArgsOnePhase.0(%a, %b) -> (ctx)
+// CHECK:         hir.opaque_pack(%a)
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @TwoArgsOnePhase.1(%ctx) -> (result)
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.return
+uir.func @TwoArgsOnePhase(%a: -1, %b: -1) -> (result: 0) {
+  %type_type = hir.type_type
+  uir.signature (%type_type, %type_type) -> (%type_type)
+} {
+  %type_type2 = hir.type_type
+  uir.return %a -> (%type_type2)
+}
+
+//===----------------------------------------------------------------------===//
 // Cross-phase expr result: a value computed at phase -1 (inside const block)
 // is used at phase 0. The value must flow through opaque context.
 
@@ -93,6 +112,7 @@ uir.func @InternalPhase() -> () {
 // CHECK-LABEL: hir.func private @ExprCrossPhase.0b(%ctx) -> (result)
 // CHECK:         hir.opaque_unpack %ctx
 // CHECK:         hir.return
+
 uir.func @ExprCrossPhase() -> (result: 0) {
   %type_type = hir.type_type
   uir.signature () -> (%type_type)

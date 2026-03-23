@@ -101,6 +101,9 @@ private:
   /// Cloned unified signature, moved into the split_func witness.
   Region clonedUnifiedSig;
 
+  /// Lookup table: hir::FuncOp → phase number (built lazily).
+  DenseMap<Operation *, int16_t> funcToPhase;
+
   /// Get the PhaseSplit for a given phase number.
   PhaseSplit &splitFor(int16_t phase) {
     assert(phase >= minPhase && phase <= maxPhase);
@@ -262,9 +265,10 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
 
   // Move shifted block args to their phase functions first, before capturing
   // return values (so that RAUW updates the return op's operands).
-  // Process in reverse order so that erasing block args doesn't invalidate
-  // indices.
-  for (int idx = argPhases.size() - 1; idx >= 0; --idx) {
+  // First pass: create new args in target phases (forward order for correct
+  // arg ordering in the target function).
+  SmallVector<std::pair<unsigned, Value>> argsToErase;
+  for (unsigned idx = 0; idx < argPhases.size(); ++idx) {
     int16_t phase = static_cast<int16_t>(argPhases[idx]);
     if (phase == 0)
       continue;
@@ -273,8 +277,11 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
     auto newArg = targetBlock->addArgument(anyTy, funcOp.getLoc());
     auto oldArg = entryBlock.getArgument(idx);
     oldArg.replaceAllUsesWith(newArg);
-    entryBlock.eraseArgument(idx);
+    argsToErase.push_back({idx, oldArg});
   }
+  // Second pass: erase old args in reverse order to preserve indices.
+  for (auto it = argsToErase.rbegin(); it != argsToErase.rend(); ++it)
+    entryBlock.eraseArgument(it->first);
 
   // Now capture return values (the return op's operands have been updated by
   // the RAUW above, so cross-phase references are already resolved to the
@@ -334,24 +341,16 @@ void PhaseSplitter2::distributeOps(Block &block) {
       continue;
     int16_t phase = it->second;
 
-    // Floating constants (INT16_MIN) go to minPhase.
+    // Floating constants (INT16_MIN) stay in place. The cross-phase fixup
+    // clones them into each phase that uses them.
     if (phase == INT16_MIN)
-      phase = minPhase;
+      continue;
 
-    // uir.expr moves as a whole to its assigned phase (like if/loop).
-    // Dissolution happens later, inlining the body into the parent block.
-    // All ops inside the expr body are at the expr's phase, so moving
-    // the whole expr is correct.
-
-    // Descend into structured CF regions to find nested expr/pin.
-    if (auto ifOp = dyn_cast<IfOp>(op)) {
-      distributeOps(ifOp.getThenRegion().front());
-      if (!ifOp.getElseRegion().empty())
-        distributeOps(ifOp.getElseRegion().front());
-    }
-    if (auto loopOp = dyn_cast<LoopOp>(op)) {
-      distributeOps(loopOp.getBody().front());
-    }
+    // uir.expr, uir.if, and uir.loop all move as whole units to their
+    // assigned phase. Their internal ops are at the same or shifted phase
+    // (for pinned expr), and dissolution/FlattenCF handles them after
+    // distribution. We do NOT descend into their regions here to avoid
+    // corrupting the nested structure.
 
     // TODO: Decompose uir.call into per-phase hir.call ops on-the-fly.
 
@@ -440,13 +439,20 @@ void PhaseSplitter2::dissolveExprsAndPins() {
 /// Determine which phase function a value belongs to. Returns the phase
 /// number, or INT16_MIN if the value is not in any phase function.
 int16_t PhaseSplitter2::findValuePhase(Value value) {
+  // Build lookup map on first call.
+  if (funcToPhase.empty()) {
+    for (int16_t p = minPhase; p <= maxPhase; ++p)
+      if (splitFor(p).funcOp)
+        funcToPhase[splitFor(p).funcOp] = p;
+  }
+
   // For block args, check the parent region's parent op.
   if (auto blockArg = dyn_cast<BlockArgument>(value)) {
     auto *parentOp = blockArg.getOwner()->getParentOp();
     if (auto func = dyn_cast<hir::FuncOp>(parentOp)) {
-      for (int16_t p = minPhase; p <= maxPhase; ++p)
-        if (splitFor(p).funcOp == func)
-          return p;
+      auto it = funcToPhase.find(func);
+      if (it != funcToPhase.end())
+        return it->second;
     }
     return INT16_MIN;
   }
@@ -457,10 +463,8 @@ int16_t PhaseSplitter2::findValuePhase(Value value) {
   auto parentFunc = defOp->getParentOfType<hir::FuncOp>();
   if (!parentFunc)
     return INT16_MIN;
-  for (int16_t p = minPhase; p <= maxPhase; ++p)
-    if (splitFor(p).funcOp == parentFunc)
-      return p;
-  return INT16_MIN;
+  auto it = funcToPhase.find(parentFunc);
+  return it != funcToPhase.end() ? it->second : INT16_MIN;
 }
 
 /// After all ops are distributed, scan each phase function for values defined
@@ -866,18 +870,21 @@ struct SplitPhases2Pass
     // Topological sort via post-order DFS. Detect cycles.
     SmallVector<unsigned> order;
     SmallVector<uint8_t> state(numFuncs, 0); // 0=unvisited, 1=visiting, 2=done
-    bool hasCycle = false;
+    SmallVector<unsigned> cycleNodes;
 
     std::function<void(unsigned)> visit = [&](unsigned idx) {
-      if (state[idx] == 2)
+      if (state[idx] == 2 || !cycleNodes.empty())
         return;
       if (state[idx] == 1) {
-        hasCycle = true;
+        cycleNodes.push_back(idx);
         return;
       }
       state[idx] = 1;
-      for (auto calleeIdx : edges[idx])
+      for (auto calleeIdx : edges[idx]) {
         visit(calleeIdx);
+        if (!cycleNodes.empty())
+          return;
+      }
       state[idx] = 2;
       order.push_back(idx);
     };
@@ -885,14 +892,9 @@ struct SplitPhases2Pass
     for (unsigned i = 0; i < numFuncs; ++i)
       visit(i);
 
-    if (hasCycle) {
-      // Emit error on the first function involved in a cycle.
-      for (unsigned i = 0; i < numFuncs; ++i) {
-        if (state[i] == 1) {
-          funcs[i].first.emitError("recursive call cycle detected");
-          break;
-        }
-      }
+    if (!cycleNodes.empty()) {
+      auto &cycleFunc = funcs[cycleNodes[0]].first;
+      cycleFunc.emitError("recursive call cycle detected");
       return signalPassFailure();
     }
 
