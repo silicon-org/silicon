@@ -32,8 +32,6 @@ Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
 - Phase 1: new passes (additive, no churn, testable via `silicon-opt`)
   - Implement new `SplitPhases2` pass consuming `uir.func` → `hir.func` + `uir.split_func`
   - User-facing phase error diagnostics using const/dyn vocabulary (no numeric phases)
-  - PhaseAnalysis2: add `LoopOp` verifier that body `uir.yield` must have zero values (continue semantics).
-    Without this, a yield with values inside a loop body causes an out-of-bounds access in the analysis.
 - Phase 2: extend existing passes for region support (additive, old paths stay intact)
   - InferTypes: walk into `uir.if`/`uir.expr`/`uir.loop` regions in addition to flat blocks
   - InferTypes: optimistic hoisting of type op trees out of regions for cross-boundary RAUW

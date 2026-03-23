@@ -197,6 +197,19 @@ LogicalResult LoopOp::verify() {
   return success();
 }
 
+LogicalResult LoopOp::verifyRegions() {
+  // A yield inside the loop body means "continue to next iteration" and must
+  // not carry values. Use uir.break to exit the loop with values.
+  auto *terminator = getBody().front().getTerminator();
+  if (auto yieldOp = dyn_cast<YieldOp>(terminator)) {
+    if (yieldOp.getValues().size() != 0)
+      return yieldOp.emitOpError(
+          "inside loop body must have no values (use 'uir.break' to exit with "
+          "values)");
+  }
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // ExprOp
 //===----------------------------------------------------------------------===//

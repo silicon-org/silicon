@@ -246,6 +246,7 @@ def LoopOp : UIROp<"loop", [
   let regions = (region MinSizedRegion<1>:$body);
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
+  let hasRegionVerifier = 1;
 }
 
 } // let opDocGroup = StructuredControlFlow

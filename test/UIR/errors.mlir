@@ -105,6 +105,19 @@ uir.func @call_bad_callee(%a: 0) -> (result: 0) {
 
 // -----
 
+// Verify that uir.yield inside loop body must have no values.
+uir.func @loop_yield_with_values(%a: 0) -> () {
+  uir.signature (%a) -> ()
+} {
+  uir.loop {
+    // expected-error @below {{inside loop body must have no values (use 'uir.break' to exit with values)}}
+    uir.yield %a : %a
+  }
+  uir.return -> ()
+}
+
+// -----
+
 // Verify that uir.signature cannot appear in function body.
 uir.func @sig_in_body(%a: 0) -> () {
   uir.signature (%a) -> ()
