@@ -338,10 +338,10 @@ void PhaseSplitter2::distributeOps(Block &block) {
     if (phase == INT16_MIN)
       phase = minPhase;
 
-    // Descend into expr regions to distribute their children first.
-    if (auto exprOp = dyn_cast<ExprOp>(op)) {
-      distributeOps(exprOp.getBody().front());
-    }
+    // uir.expr moves as a whole to its assigned phase (like if/loop).
+    // Dissolution happens later, inlining the body into the parent block.
+    // All ops inside the expr body are at the expr's phase, so moving
+    // the whole expr is correct.
 
     // Descend into structured CF regions to find nested expr/pin.
     if (auto ifOp = dyn_cast<IfOp>(op)) {
@@ -389,10 +389,20 @@ void PhaseSplitter2::dissolveExprsAndPins() {
       auto &exprBody = exprOp.getBody().front();
       auto yieldOp = cast<YieldOp>(exprBody.getTerminator());
 
-      // Replace expr results with yield values.
+      // Replace expr results with yield values, including tracked returns.
       for (auto [result, yieldVal] :
-           llvm::zip(exprOp.getResults(), yieldOp.getValues()))
+           llvm::zip(exprOp.getResults(), yieldOp.getValues())) {
         result.replaceAllUsesWith(yieldVal);
+        // Also update tracked return values/types.
+        for (auto &s : splits) {
+          for (auto &rv : s.returnValues)
+            if (rv == result)
+              rv = yieldVal;
+          for (auto &rv : s.returnTypeOfValues)
+            if (rv == result)
+              rv = yieldVal;
+        }
+      }
 
       // Erase the yield, then inline the body into the parent block.
       yieldOp.erase();
@@ -407,8 +417,17 @@ void PhaseSplitter2::dissolveExprsAndPins() {
     body.walk([&](PinOp op) { pins.push_back(op); });
     for (auto pinOp : pins) {
       for (auto [output, input] :
-           llvm::zip(pinOp.getOutputs(), pinOp.getInputs()))
+           llvm::zip(pinOp.getOutputs(), pinOp.getInputs())) {
         output.replaceAllUsesWith(input);
+        for (auto &s : splits) {
+          for (auto &rv : s.returnValues)
+            if (rv == output)
+              rv = input;
+          for (auto &rv : s.returnTypeOfValues)
+            if (rv == output)
+              rv = input;
+        }
+      }
       pinOp.erase();
     }
   }

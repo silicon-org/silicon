@@ -80,3 +80,28 @@ uir.func @InternalPhase() -> () {
   func.call @dummyB() : () -> ()
   uir.return -> ()
 }
+
+//===----------------------------------------------------------------------===//
+// Cross-phase expr result: a value computed at phase -1 (inside const block)
+// is used at phase 0. The value must flow through opaque context.
+
+// CHECK-LABEL: hir.func private @ExprCrossPhase.0a() -> (ctx)
+// CHECK:         func.call @dummyA
+// CHECK:         hir.opaque_pack
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @ExprCrossPhase.0b(%ctx) -> (result)
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.return
+uir.func @ExprCrossPhase() -> (result: 0) {
+  %type_type = hir.type_type
+  uir.signature () -> (%type_type)
+} {
+  %type_type = hir.type_type
+  %v = uir.expr pin -1 : %type_type {
+    func.call @dummyA() : () -> ()
+    %r = hir.int_type
+    uir.yield %r : %r
+  }
+  uir.return %v -> (%type_type)
+}
