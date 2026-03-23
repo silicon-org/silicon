@@ -484,9 +484,6 @@ void PhaseSplitter2::fixupCrossPhaseRefs() {
       markIfCrossPhase(val, phase);
   }
 
-  if (valueTargetPhases.empty())
-    return;
-
   // For each phase boundary, collect values that need to cross it.
   DenseMap<int16_t, SmallVector<Value>> boundaryValues;
 
@@ -523,10 +520,13 @@ void PhaseSplitter2::fixupCrossPhaseRefs() {
   // Track value → unpacked replacement at each phase.
   DenseMap<int16_t, DenseMap<Value, Value>> phaseValueMapping;
 
+  // Always create opaque context between every consecutive pair of phase
+  // functions, even if no values cross the boundary. The design doc requires
+  // this: "All except for the last function are expected to return one
+  // additional, opaque result containing internal values that flow to the
+  // next split function."
   for (int16_t p = minPhase; p < maxPhase; ++p) {
     auto &values = boundaryValues[p];
-    if (values.empty())
-      continue;
 
     auto &srcSplit = splitFor(p);
     auto &dstSplit = splitFor(p + 1);
@@ -553,12 +553,13 @@ void PhaseSplitter2::fixupCrossPhaseRefs() {
     // Create block arg + opaque_unpack at start of destination phase body.
     auto &dstBlock = dstSplit.funcOp.getBody().front();
     auto ctxArg = dstBlock.addArgument(anyTy, loc);
-    OpBuilder dstBuilder(&dstBlock, dstBlock.begin());
-    auto unpackOp = hir::OpaqueUnpackOp::create(
-        dstBuilder, loc, SmallVector<Type>(values.size(), anyTy), ctxArg);
-
-    for (auto [i, val] : llvm::enumerate(values))
-      phaseValueMapping[p + 1][val] = unpackOp.getResult(i);
+    if (!values.empty()) {
+      OpBuilder dstBuilder(&dstBlock, dstBlock.begin());
+      auto unpackOp = hir::OpaqueUnpackOp::create(
+          dstBuilder, loc, SmallVector<Type>(values.size(), anyTy), ctxArg);
+      for (auto [i, val] : llvm::enumerate(values))
+        phaseValueMapping[p + 1][val] = unpackOp.getResult(i);
+    }
   }
 
   // Replace all cross-phase uses with unpacked values.

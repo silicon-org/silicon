@@ -47,3 +47,36 @@ uir.func @TwoPhase(%T: -1, %x: 0) -> (result: 0) {
 } {
   uir.return %x -> (%T)
 }
+
+//===----------------------------------------------------------------------===//
+// Internal phases via uir.expr: a const { ... } block creates an internal
+// phase -1 within a function whose args/results are all at phase 0.
+// This produces a multiphase_func grouping two sub-phases under phase 0.
+
+// CHECK-LABEL: hir.func private @InternalPhase.0a() -> (ctx)
+// CHECK:         func.call @dummyA
+// CHECK:         hir.opaque_pack()
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @InternalPhase.0b(%ctx) -> ()
+// CHECK:         func.call @dummyB
+// CHECK:         hir.return
+
+// CHECK-LABEL: uir.split_func @InternalPhase() -> ()
+// CHECK:       0: @InternalPhase.0
+
+// CHECK-LABEL: hir.multiphase_func @InternalPhase.0() -> ()
+// CHECK:       @InternalPhase.0a
+// CHECK:       @InternalPhase.0b
+uir.func @InternalPhase() -> () {
+  uir.signature () -> ()
+} {
+  %type_type = hir.type_type
+  %v = uir.expr pin -1 : %type_type {
+    func.call @dummyA() : () -> ()
+    %r = hir.int_type
+    uir.yield %r : %r
+  }
+  func.call @dummyB() : () -> ()
+  uir.return -> ()
+}
