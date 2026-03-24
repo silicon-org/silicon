@@ -101,6 +101,11 @@ private:
   /// Cloned unified signature, moved into the split_func witness.
   Region clonedUnifiedSig;
 
+  /// Saved type value handles from the unified sig's terminator. After merging
+  /// sig ops into the body, these Values track through distribution and fixup.
+  SmallVector<Value> savedSigTypeOfArgs;
+  SmallVector<Value> savedSigTypeOfResults;
+
   /// Lookup table: hir::FuncOp → phase number (built lazily).
   DenseMap<Operation *, int16_t> funcToPhase;
 
@@ -264,6 +269,48 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
   auto argPhases = funcOp.getArgPhases();
   auto anyTy = hir::AnyType::get(funcOp.getContext());
 
+  // # Merge Unified Signature Ops into Body
+  //
+  // The unified sig region contains type-computing ops (constructors, calls,
+  // etc.) with phases assigned by PhaseAnalysis2. We merge them into the body
+  // so they get the same distribution + fixup treatment. This avoids the need
+  // for a separate sig-specific distribution pass.
+  //
+  // Before merging, save the type value handles from the sig terminator.
+  // After merging, these Values track through distribution and fixup.
+  {
+    auto &sigBlock = funcOp.getSignature().front();
+    auto sigTerminator = cast<uir::SignatureOp>(sigBlock.getTerminator());
+
+    // Save type value handles.
+    savedSigTypeOfArgs.assign(sigTerminator.getTypeOfArgs().begin(),
+                              sigTerminator.getTypeOfArgs().end());
+    savedSigTypeOfResults.assign(sigTerminator.getTypeOfResults().begin(),
+                                 sigTerminator.getTypeOfResults().end());
+
+    // Erase the sig terminator (keep the type-computing ops).
+    sigTerminator.erase();
+
+    // Remap sig block args to body block args (they represent the same
+    // function args). Also update saved type values that reference sig
+    // block args.
+    for (auto [sigArg, bodyArg] :
+         llvm::zip(sigBlock.getArguments(), entryBlock.getArguments())) {
+      sigArg.replaceAllUsesWith(bodyArg);
+      // Update saved type values that ARE the sig block arg.
+      for (auto &v : savedSigTypeOfArgs)
+        if (v == sigArg)
+          v = bodyArg;
+      for (auto &v : savedSigTypeOfResults)
+        if (v == sigArg)
+          v = bodyArg;
+    }
+
+    // Splice sig ops into the body entry block, before the first body op.
+    entryBlock.getOperations().splice(entryBlock.begin(),
+                                      sigBlock.getOperations());
+  }
+
   // Move shifted block args to their phase functions first, before capturing
   // return values (so that RAUW updates the return op's operands).
   // First pass: create new args in target phases (forward order for correct
@@ -278,6 +325,13 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
     auto newArg = targetBlock->addArgument(anyTy, funcOp.getLoc());
     auto oldArg = entryBlock.getArgument(idx);
     oldArg.replaceAllUsesWith(newArg);
+    // Update saved sig type values that reference this shifted arg.
+    for (auto &v : savedSigTypeOfArgs)
+      if (v == oldArg)
+        v = newArg;
+    for (auto &v : savedSigTypeOfResults)
+      if (v == oldArg)
+        v = newArg;
     argsToErase.push_back({idx, oldArg});
   }
   // Second pass: erase old args in reverse order to preserve indices.
@@ -844,16 +898,67 @@ void PhaseSplitter2::fixupCrossPhaseRefs() {
           rv = replacement;
     }
   }
+
+  // Update saved sig type values: if a saved Value ended up in a different
+  // phase than where it's needed for sig reconstruction, replace it with
+  // the local equivalent from the phase mapping.
+  auto argPhases = funcOp.getArgPhases();
+  for (auto [uIdx, ap] : llvm::enumerate(argPhases)) {
+    int16_t phase = static_cast<int16_t>(ap);
+    auto &val = savedSigTypeOfArgs[uIdx];
+    auto it = phaseValueMapping[phase].find(val);
+    if (it != phaseValueMapping[phase].end())
+      val = it->second;
+  }
+  auto resultPhasesArr = funcOp.getResultPhases();
+  for (auto [uIdx, rp] : llvm::enumerate(resultPhasesArr)) {
+    int16_t phase = static_cast<int16_t>(rp);
+    auto &val = savedSigTypeOfResults[uIdx];
+    auto it = phaseValueMapping[phase].find(val);
+    if (it != phaseValueMapping[phase].end())
+      val = it->second;
+  }
 }
 
 //===----------------------------------------------------------------------===//
 // Signature Reconstruction
 //===----------------------------------------------------------------------===//
 
-/// Build `hir.signature` ops for each phase function.
+/// Clone an op tree from a phase function body into the corresponding
+/// signature region, using the body→sig mapping for cross-phase values.
+/// Returns the cloned value corresponding to `bodyVal`.
+static Value cloneTypeOpIntoSig(Value bodyVal, OpBuilder &sigBuilder,
+                                IRMapping &bodyToSig) {
+  // If already mapped (block arg, unpack result, or previously cloned).
+  if (auto mapped = bodyToSig.lookupOrNull(bodyVal))
+    return mapped;
+
+  auto *defOp = bodyVal.getDefiningOp();
+  if (!defOp)
+    return {}; // Block arg not in mapping — shouldn't happen.
+
+  // Recursively clone operands first.
+  for (auto operand : defOp->getOperands()) {
+    if (!bodyToSig.contains(operand))
+      cloneTypeOpIntoSig(operand, sigBuilder, bodyToSig);
+  }
+
+  // Clone the op itself.
+  auto *clonedOp = sigBuilder.clone(*defOp, bodyToSig);
+  (void)clonedOp;
+  return bodyToSig.lookup(bodyVal);
+}
+
+/// Build `hir.signature` ops for each phase function. The unified sig ops
+/// were merged into the body before distribution, so type values are now in
+/// the per-phase bodies. We reconstruct sigs by cloning type op trees from
+/// the body using a body→sig mapping.
 void PhaseSplitter2::reconstructSignatures() {
   auto anyTy = hir::AnyType::get(funcOp.getContext());
   auto loc = funcOp.getLoc();
+
+  auto argPhases = funcOp.getArgPhases();
+  auto resultPhases = funcOp.getResultPhases();
 
   for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
     auto &split = splitFor(phase);
@@ -861,31 +966,82 @@ void PhaseSplitter2::reconstructSignatures() {
       continue;
 
     auto &sigBlock = split.funcOp.getSignature().front();
-    OpBuilder sigBuilder(&sigBlock, sigBlock.end());
-
     auto &bodyBlock = split.funcOp.getBody().front();
     unsigned numBodyArgs = bodyBlock.getNumArguments();
 
-    // Add block args to the signature block to match the body.
+    // Clear any existing sig content and add block args matching body.
+    while (!sigBlock.empty())
+      sigBlock.front().erase();
+    while (sigBlock.getNumArguments() > 0)
+      sigBlock.eraseArgument(0);
     for (unsigned i = 0; i < numBodyArgs; ++i)
       sigBlock.addArgument(anyTy, loc);
 
-    // For now, use opaque_type for all arg/result types. This is a
-    // simplification; proper signature reconstruction will derive type
-    // values from the unified signature or the opaque context.
-    // TODO: Derive type values from the unified signature for own args,
-    // and from the opaque context for cross-phase args.
-    SmallVector<Value> sigTypeOfArgs;
-    for (unsigned i = 0; i < numBodyArgs; ++i) {
-      auto opaqueType = hir::OpaqueTypeOp::create(sigBuilder, loc);
-      sigTypeOfArgs.push_back(opaqueType.getResult());
+    OpBuilder sigBuilder(&sigBlock, sigBlock.end());
+
+    // Build body→sig IRMapping.
+    IRMapping bodyToSig;
+    for (unsigned i = 0; i < numBodyArgs; ++i)
+      bodyToSig.map(bodyBlock.getArgument(i), sigBlock.getArgument(i));
+
+    // If context arg exists, create a parallel opaque_unpack in the sig.
+    if (phase > minPhase) {
+      for (auto &op : bodyBlock) {
+        auto bodyUnpack = dyn_cast<hir::OpaqueUnpackOp>(&op);
+        if (!bodyUnpack)
+          continue;
+        auto sigUnpack = hir::OpaqueUnpackOp::create(
+            sigBuilder, loc,
+            SmallVector<Type>(bodyUnpack.getNumResults(), anyTy),
+            sigBlock.getArgument(numBodyArgs - 1));
+        for (unsigned i = 0; i < bodyUnpack.getNumResults(); ++i)
+          bodyToSig.map(bodyUnpack.getResult(i), sigUnpack.getResult(i));
+        break; // Only the first unpack is the context unpack.
+      }
     }
 
-    SmallVector<Value> sigTypeOfResults;
-    for (unsigned i = 0; i < split.returnValues.size(); ++i) {
-      auto opaqueType = hir::OpaqueTypeOp::create(sigBuilder, loc);
-      sigTypeOfResults.push_back(opaqueType.getResult());
+    // Build typeOfArgs: for each own arg at this phase, clone its type
+    // from the body. Context args get opaque_type.
+    SmallVector<Value> sigTypeOfArgs;
+    unsigned ownArgIdx = 0;
+    for (auto [uIdx, ap] : llvm::enumerate(argPhases)) {
+      if (static_cast<int16_t>(ap) != phase)
+        continue;
+      // The saved type value for this unified arg. After merging into the
+      // body, it's been distributed and possibly threaded through context.
+      Value typeVal = savedSigTypeOfArgs[uIdx];
+      Value sigType = cloneTypeOpIntoSig(typeVal, sigBuilder, bodyToSig);
+      if (!sigType) {
+        // Fallback: should not happen for correct input.
+        sigType = hir::OpaqueTypeOp::create(sigBuilder, loc).getResult();
+      }
+      sigTypeOfArgs.push_back(sigType);
+      ++ownArgIdx;
     }
+    // Context arg type.
+    if (numBodyArgs > ownArgIdx)
+      sigTypeOfArgs.push_back(
+          hir::OpaqueTypeOp::create(sigBuilder, loc).getResult());
+
+    // Build typeOfResults: for each own result at this phase, clone its
+    // type from the body's returnTypeOfValues. Context result gets opaque.
+    SmallVector<Value> sigTypeOfResults;
+    unsigned ownResultIdx = 0;
+    for (auto [uIdx, rp] : llvm::enumerate(effectiveResultPhases)) {
+      if (rp != phase)
+        continue;
+      // Use returnTypeOfValues which was captured from the UIR return.
+      Value typeVal = split.returnTypeOfValues[ownResultIdx];
+      Value sigType = cloneTypeOpIntoSig(typeVal, sigBuilder, bodyToSig);
+      if (!sigType)
+        sigType = hir::OpaqueTypeOp::create(sigBuilder, loc).getResult();
+      sigTypeOfResults.push_back(sigType);
+      ++ownResultIdx;
+    }
+    // Context result type (if not last phase).
+    if (split.returnValues.size() > ownResultIdx)
+      sigTypeOfResults.push_back(
+          hir::OpaqueTypeOp::create(sigBuilder, loc).getResult());
 
     hir::SignatureOp::create(sigBuilder, loc, sigTypeOfArgs, sigTypeOfResults);
   }

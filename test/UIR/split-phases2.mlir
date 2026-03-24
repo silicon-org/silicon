@@ -29,11 +29,19 @@ uir.func @SinglePhase() -> () {
 // Two-phase function: const arg at phase -1, result at phase 0.
 // The type value %T from phase -1 must flow through opaque context.
 
+// Signature for phase -1: %T's type is hir.type_type (trivially materializable).
 // CHECK-LABEL: hir.func private @TwoPhase.0(%T) -> (ctx)
+// CHECK:         hir.type_type
+// CHECK:         hir.opaque_type
+// CHECK:         hir.signature
 // CHECK:         hir.opaque_pack
 // CHECK:         hir.return
 
+// Signature for phase 0: %x's type comes from context (%T = unpack result).
 // CHECK-LABEL: hir.func private @TwoPhase.1(%x, %ctx) -> (result)
+// CHECK:         %[[T:.+]] = hir.opaque_unpack %ctx
+// CHECK:         hir.opaque_type
+// CHECK:         hir.signature (%[[T]], %{{.+}}) -> (%[[T]])
 // CHECK:         hir.opaque_unpack %ctx
 // CHECK:         hir.return
 
