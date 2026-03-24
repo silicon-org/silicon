@@ -148,3 +148,111 @@ uir.func @ExprCrossPhase() -> (result: 0) {
   }
   uir.return %v -> (%type_type)
 }
+
+//===----------------------------------------------------------------------===//
+// Additional callees for call decomposition tests.
+
+// A callee with 3 args at different phases.
+uir.func @ThreeArgCallee(%a: -2, %b: -1, %c: 0) -> (r: 0) {
+  %tt = hir.type_type
+  uir.signature (%tt, %tt, %tt) -> (%tt)
+} {
+  %tt = hir.type_type
+  uir.return %c -> (%tt)
+}
+
+// A callee with 3 results (all at phase 0).
+uir.func @ThreeResultCallee(%x: 0) -> (r1: 0, r2: 0, r3: 0) {
+  %tt = hir.type_type
+  uir.signature (%tt) -> (%tt, %tt, %tt)
+} {
+  %tt = hir.type_type
+  uir.return %x, %x, %x -> (%tt, %tt, %tt)
+}
+
+//===----------------------------------------------------------------------===//
+// Call with zero args, zero results: void call to void callee.
+
+// CHECK-LABEL: hir.func private @CallVoid.0() -> ()
+// CHECK:         hir.call @SinglePhase.0()
+// CHECK:         hir.return
+uir.func @CallVoid() -> () {
+  uir.signature () -> ()
+} {
+  uir.call @SinglePhase() : () -> () () -> () [] -> []
+  uir.return -> ()
+}
+
+//===----------------------------------------------------------------------===//
+// Call with 3 args at different phases: tests partitioning args across 3
+// split entries and chaining opaque context through them.
+
+// CHECK-LABEL: hir.func private @CallThreeArgs.0a() -> (ctx)
+// CHECK:         hir.call @ThreeArgCallee.0(
+// CHECK:         hir.opaque_pack(
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @CallThreeArgs.0b(%ctx) -> (ctx)
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.call @ThreeArgCallee.1(
+// CHECK:         hir.opaque_pack(
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @CallThreeArgs.0c(%ctx) -> ()
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.call @ThreeArgCallee.2(
+// CHECK:         hir.return
+uir.func @CallThreeArgs() -> () {
+  uir.signature () -> ()
+} {
+  %tt = hir.type_type
+  %a = hir.int_type
+  %b = hir.int_type
+  %c = hir.int_type
+  %r = uir.call @ThreeArgCallee(%a, %b, %c) : (%tt, %tt, %tt) -> (%tt) (!hir.any, !hir.any, !hir.any) -> !hir.any [-2, -1, 0] -> [0]
+  uir.return -> ()
+}
+
+//===----------------------------------------------------------------------===//
+// Call with 3 results: tests that multiple results are correctly handled.
+
+// CHECK-LABEL: hir.func private @CallThreeResults.0() -> ()
+// CHECK:         hir.call @ThreeResultCallee.0(
+// CHECK-SAME:    -> (
+// CHECK:         hir.return
+uir.func @CallThreeResults() -> () {
+  uir.signature () -> ()
+} {
+  %tt = hir.type_type
+  %x = hir.int_type
+  %r1, %r2, %r3 = uir.call @ThreeResultCallee(%x) : (%tt) -> (%tt, %tt, %tt) (!hir.any) -> (!hir.any, !hir.any, !hir.any) [0] -> [0, 0, 0]
+  uir.return -> ()
+}
+
+//===----------------------------------------------------------------------===//
+// Nested calls: result of one call feeds directly into another call's arg.
+// @TwoPhase(%T: -1, %x: 0) -> (result: 0)
+// We call @TwoPhase twice, feeding the result of the first into the second.
+
+// CHECK-LABEL: hir.func private @NestedCalls.0a() -> (ctx)
+// CHECK:         hir.call @TwoPhase.0(
+// CHECK:         hir.call @TwoPhase.0(
+// CHECK:         hir.opaque_pack(
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @NestedCalls.0b(%ctx) -> ()
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.call @TwoPhase.1(
+// CHECK:         hir.call @TwoPhase.1(
+// CHECK:         hir.return
+uir.func @NestedCalls() -> () {
+  uir.signature () -> ()
+} {
+  %tt = hir.type_type
+  %T1 = hir.int_type
+  %x1 = hir.int_type
+  %r1 = uir.call @TwoPhase(%T1, %x1) : (%tt, %T1) -> (%T1) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  %T2 = hir.int_type
+  %r2 = uir.call @TwoPhase(%T2, %r1) : (%tt, %T2) -> (%T2) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  uir.return -> ()
+}
