@@ -355,23 +355,26 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
   // Now capture return values (the return op's operands have been updated by
   // the RAUW above, so cross-phase references are already resolved to the
   // new block args in the target phase functions).
-  auto returnOp = cast<ReturnOp>(entryBlock.getTerminator());
+  // If the body ends with `uir.unreachable` (all paths return early inside
+  // structured CF), there are no top-level return values to capture.
   auto resultPhases = funcOp.getResultPhases();
   effectiveResultPhases.clear();
   for (auto p : resultPhases)
     effectiveResultPhases.push_back(static_cast<int16_t>(p));
 
-  for (auto [i, value] : llvm::enumerate(returnOp.getValues())) {
-    int16_t phase = effectiveResultPhases[i];
-    splitFor(phase).returnValues.push_back(value);
+  if (auto returnOp = dyn_cast<ReturnOp>(entryBlock.getTerminator())) {
+    for (auto [i, value] : llvm::enumerate(returnOp.getValues())) {
+      int16_t phase = effectiveResultPhases[i];
+      splitFor(phase).returnValues.push_back(value);
+    }
+    for (auto [i, typeVal] : llvm::enumerate(returnOp.getTypeOfValues())) {
+      int16_t phase = effectiveResultPhases[i];
+      splitFor(phase).returnTypeOfValues.push_back(typeVal);
+    }
+    // Erase the unified return op (we'll create hir.return ops later).
+    returnOp.erase();
   }
-  for (auto [i, typeVal] : llvm::enumerate(returnOp.getTypeOfValues())) {
-    int16_t phase = effectiveResultPhases[i];
-    splitFor(phase).returnTypeOfValues.push_back(typeVal);
-  }
-
-  // Erase the unified return op (we'll create hir.return ops later).
-  returnOp.erase();
+  // If the terminator is uir.unreachable, it stays (no return values).
 
   // Distribute ops to their phase functions.
   distributeOps(entryBlock);
@@ -1068,14 +1071,20 @@ void PhaseSplitter2::reconstructSignatures() {
 
     // Build typeOfResults: for each own result at this phase, clone its
     // type from the body's returnTypeOfValues. Context result gets opaque.
+    // If the body has no top-level return (e.g., all paths return inside
+    // structured CF), use the saved sig result types instead.
     SmallVector<Value> sigTypeOfResults;
     unsigned ownResultIdx = 0;
     for (auto [uIdx, rp] : llvm::enumerate(effectiveResultPhases)) {
       if (rp != phase)
         continue;
-      // Use returnTypeOfValues which was captured from the UIR return.
-      Value typeVal = split.returnTypeOfValues[ownResultIdx];
-      Value sigType = resolveTypeForSig(typeVal);
+      Value sigType;
+      if (ownResultIdx < split.returnTypeOfValues.size()) {
+        sigType = resolveTypeForSig(split.returnTypeOfValues[ownResultIdx]);
+      }
+      if (!sigType && uIdx < savedSigTypeOfResults.size()) {
+        sigType = resolveTypeForSig(savedSigTypeOfResults[uIdx]);
+      }
       if (!sigType)
         sigType = hir::OpaqueTypeOp::create(sigBuilder, loc).getResult();
       sigTypeOfResults.push_back(sigType);
@@ -1094,7 +1103,9 @@ void PhaseSplitter2::reconstructSignatures() {
 // Return Op Creation
 //===----------------------------------------------------------------------===//
 
-/// Create `hir.return` terminators for each phase function.
+/// Create `hir.return` terminators for each phase function. Skip if the
+/// block already has a terminator (e.g., `uir.unreachable` from early
+/// returns inside structured CF).
 void PhaseSplitter2::createReturnOps() {
   for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
     auto &split = splitFor(phase);
@@ -1102,6 +1113,9 @@ void PhaseSplitter2::createReturnOps() {
       continue;
 
     auto &block = split.funcOp.getBody().front();
+    if (!block.empty() && block.back().hasTrait<OpTrait::IsTerminator>())
+      continue;
+
     OpBuilder builder(&block, block.end());
     hir::ReturnOp::create(builder, funcOp.getLoc(), split.returnValues,
                           split.returnTypeOfValues);

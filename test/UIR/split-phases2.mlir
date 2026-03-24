@@ -529,3 +529,126 @@ uir.func @CallSixPhase() -> () {
   %r1, %r2, %r3 = uir.call @SixPhase(%a, %b, %c) : (%tt, %tt, %tt) -> (%tt, %tt, %tt) (!hir.any, !hir.any, !hir.any) -> (!hir.any, !hir.any, !hir.any) [-3, -1, 1] -> [-2, 0, 2]
   uir.return -> ()
 }
+
+//===----------------------------------------------------------------------===//
+// Structured CF survival: uir.if at phase 0 moves as a whole into the
+// per-phase function. Then/else regions and yield are preserved.
+
+// CHECK-LABEL: hir.func private @IfSurvival.0() -> ()
+// CHECK:       } {
+// CHECK:         uir.if %{{.+}} {
+// CHECK:           func.call @dummyA
+// CHECK:           uir.yield
+// CHECK:         } else {
+// CHECK:           func.call @dummyB
+// CHECK:           uir.yield
+// CHECK:         }
+// CHECK:         hir.return
+uir.func @IfSurvival() -> () {
+  uir.signature () -> ()
+} {
+  %cond = hir.int_type
+  uir.if %cond {
+    func.call @dummyA() : () -> ()
+    uir.yield
+  } else {
+    func.call @dummyB() : () -> ()
+    uir.yield
+  }
+  uir.return -> ()
+}
+
+//===----------------------------------------------------------------------===//
+// Structured CF with results: uir.if produces a value via yield.
+
+// CHECK-LABEL: hir.func private @IfWithResult.0() -> (result)
+// CHECK:       } {
+// CHECK:         uir.if %{{.+}} : %{{.+}} {
+// CHECK:           %[[A:.+]] = hir.int_type
+// CHECK:           uir.yield %[[A]] : %[[A]]
+// CHECK:         } else {
+// CHECK:           %[[B:.+]] = hir.int_type
+// CHECK:           uir.yield %[[B]] : %[[B]]
+// CHECK:         }
+// CHECK:         hir.return
+uir.func @IfWithResult() -> (result: 0) {
+  %tt = hir.type_type
+  uir.signature () -> (%tt)
+} {
+  %cond = hir.int_type
+  %tt = hir.type_type
+  %r = uir.if %cond : %tt {
+    %a = hir.int_type
+    uir.yield %a : %a
+  } else {
+    %b = hir.int_type
+    uir.yield %b : %b
+  }
+  uir.return %r -> (%tt)
+}
+
+//===----------------------------------------------------------------------===//
+// Loop survival: uir.loop with uir.break inside a nested uir.if.
+
+// CHECK-LABEL: hir.func private @LoopSurvival.0() -> ()
+// CHECK:       } {
+// CHECK:         uir.loop {
+// CHECK:           uir.if %{{.+}} {
+// CHECK:             uir.break
+// CHECK:           }
+// CHECK:           uir.yield
+// CHECK:         }
+// CHECK:         hir.return
+uir.func @LoopSurvival() -> () {
+  uir.signature () -> ()
+} {
+  %cond = hir.int_type
+  uir.loop {
+    uir.if %cond {
+      uir.break
+    }
+    uir.yield
+  }
+  uir.return -> ()
+}
+
+//===----------------------------------------------------------------------===//
+// Pin dissolution: uir.pin outputs are replaced by inputs.
+
+// CHECK-LABEL: hir.func private @PinDissolution.0() -> (result)
+// CHECK:       } {
+// CHECK-NOT:     uir.pin
+// CHECK:         %[[V:.+]] = hir.int_type
+// CHECK:         hir.return %[[V]]
+uir.func @PinDissolution() -> (result: 0) {
+  %tt = hir.type_type
+  uir.signature () -> (%tt)
+} {
+  %v = hir.int_type
+  %tt = hir.type_type
+  %pinned = uir.pin %v, 0 : !hir.any
+  uir.return %pinned -> (%tt)
+}
+
+//===----------------------------------------------------------------------===//
+// Early return inside uir.if: the uir.return inside the then branch
+// survives splitting (FlattenCF lowers it later).
+
+// CHECK-LABEL: hir.func private @EarlyReturn.0() -> (result)
+// CHECK:       } {
+// CHECK:         uir.if %{{.+}} {
+// CHECK:           uir.return %{{.+}} -> (
+// CHECK:         }
+// CHECK:         uir.unreachable
+uir.func @EarlyReturn() -> (result: 0) {
+  %tt = hir.type_type
+  uir.signature () -> (%tt)
+} {
+  %cond = hir.int_type
+  %v = hir.int_type
+  %tt = hir.type_type
+  uir.if %cond {
+    uir.return %v -> (%tt)
+  }
+  uir.unreachable
+}

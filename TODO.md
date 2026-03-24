@@ -30,7 +30,6 @@ Old passes continue working on `hir.unified_func` and flat CF; new passes consum
 Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
 
 - Phase 1: new passes (additive, no churn, testable via `silicon-opt`)
-  - Implement new `SplitPhases2` pass consuming `uir.func` → `hir.func` + `uir.split_func`
   - User-facing phase error diagnostics using const/dyn vocabulary (no numeric phases)
 - Phase 2: extend existing passes for region support (additive, old paths stay intact)
   - InferTypes: walk into `uir.if`/`uir.expr`/`uir.loop` regions in addition to flat blocks
@@ -88,6 +87,19 @@ Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
 - Add positive `test/HIR/check-types.mlir` (only error tests exist today)
 - Add codegen test for `const { expr }` producing `hir.expr` with `phaseShift=-1` in `test/Codegen/basic.si`
 - Add `isModule` test cases to `test/MIR/interpret.mlir`, `test/HIR/specialize-funcs.mlir`, and `test/Transforms/phase-eval-loop.mlir`
+
+## Phase Inference Design Review
+
+- Review how `const { dyn { expr } }` and `dyn { const { expr } }` should behave for value results.
+  Currently by the spec, `const { dyn { 42 } }` is an error: the dyn block pins its result at `p(const)+1 = 0`, but the const block demands `p(const) = -1`.
+  This means `const { dyn { ... } }` is ALWAYS an error as a value expression (the dyn block is one phase too late), while `dyn { const { ... } }` can work (earlier values carry to later phases).
+  For control flow (return/break/continue), balanced nesting DOES cancel because only `p(enclosing_block) = p(target)` is checked.
+  Open questions:
+  - Should `dyn { ... }` inside a const block be treated as "transparent" when the inner result is trivially available earlier (e.g., a literal)?
+  - Should the result phase of a block expression be the block's phase, or the phase of the actual result expression inside?
+  - Is the asymmetry between `const { dyn { ... } }` (always error) and `dyn { const { ... } }` (can succeed) intentional and desirable?
+  - What are the implications for returning dyn values from const contexts?
+  See `tmp/phase-inference/42-balanced-nesting-values.si` for test cases exploring this.
 
 ## Language Cleanup
 
