@@ -652,3 +652,167 @@ uir.func @EarlyReturn() -> (result: 0) {
   }
   uir.unreachable
 }
+
+//===----------------------------------------------------------------------===//
+// Both if branches return, followed by unreachable.
+
+// CHECK-LABEL: hir.func private @BothBranchesReturn.0() -> (r)
+// CHECK:       } {
+// CHECK:         uir.if %{{.+}} {
+// CHECK:           uir.return
+// CHECK:         } else {
+// CHECK:           uir.return
+// CHECK:         }
+// CHECK:         uir.unreachable
+uir.func @BothBranchesReturn() -> (r: 0) {
+  %tt = hir.type_type
+  uir.signature () -> (%tt)
+} {
+  %v = hir.int_type
+  %tt = hir.type_type
+  uir.if %v {
+    uir.return %v -> (%tt)
+  } else {
+    uir.return %v -> (%tt)
+  }
+  uir.unreachable
+}
+
+//===----------------------------------------------------------------------===//
+// Loop with break/continue inside if: all CF terminators coexist.
+
+// CHECK-LABEL: hir.func private @LoopBreakContinue.0() -> ()
+// CHECK:       } {
+// CHECK:         uir.loop {
+// CHECK:           uir.if %{{.+}} {
+// CHECK:             uir.break
+// CHECK:           } else {
+// CHECK:             uir.continue
+// CHECK:           }
+// CHECK:           uir.yield
+// CHECK:         }
+// CHECK:         hir.return
+uir.func @LoopBreakContinue() -> () {
+  uir.signature () -> ()
+} {
+  %cond = hir.int_type
+  uir.loop {
+    uir.if %cond {
+      uir.break
+    } else {
+      uir.continue
+    }
+    uir.yield
+  }
+  uir.return -> ()
+}
+
+//===----------------------------------------------------------------------===//
+// Infinite loop (no break): should split cleanly.
+
+// CHECK-LABEL: hir.func private @InfiniteLoop.0() -> ()
+// CHECK:       } {
+// CHECK:         uir.loop {
+// CHECK:           uir.yield
+// CHECK:         }
+// CHECK-NOT:     hir.return
+uir.func @InfiniteLoop() -> () {
+  uir.signature () -> ()
+} {
+  uir.loop {
+    uir.yield
+  }
+  uir.unreachable
+}
+
+//===----------------------------------------------------------------------===//
+// Unreachable in every region position: verify SplitPhases2 handles
+// uir.unreachable as a terminator in all region-bearing ops, even if
+// the resulting IR wouldn't be valid for FlattenCF.
+
+// IfOp then region ending with unreachable.
+// CHECK-LABEL: hir.func private @UnreachableIfThen.0() -> ()
+// CHECK:       } {
+// CHECK:         uir.if %{{.+}} {
+// CHECK:           uir.unreachable
+// CHECK:         } else {
+// CHECK:           uir.yield
+// CHECK:         }
+// CHECK:         hir.return
+uir.func @UnreachableIfThen() -> () {
+  uir.signature () -> ()
+} {
+  %cond = hir.int_type
+  uir.if %cond {
+    uir.unreachable
+  } else {
+    uir.yield
+  }
+  uir.return -> ()
+}
+
+// IfOp else region ending with unreachable.
+// CHECK-LABEL: hir.func private @UnreachableIfElse.0() -> ()
+// CHECK:       } {
+// CHECK:         uir.if %{{.+}} {
+// CHECK:           uir.yield
+// CHECK:         } else {
+// CHECK:           uir.unreachable
+// CHECK:         }
+// CHECK:         hir.return
+uir.func @UnreachableIfElse() -> () {
+  uir.signature () -> ()
+} {
+  %cond = hir.int_type
+  uir.if %cond {
+    uir.yield
+  } else {
+    uir.unreachable
+  }
+  uir.return -> ()
+}
+
+// LoopOp body ending with unreachable.
+// CHECK-LABEL: hir.func private @UnreachableLoopBody.0() -> ()
+// CHECK:       } {
+// CHECK:         uir.loop {
+// CHECK:           uir.unreachable
+// CHECK:         }
+// CHECK:         hir.return
+uir.func @UnreachableLoopBody() -> () {
+  uir.signature () -> ()
+} {
+  uir.loop {
+    uir.unreachable
+  }
+  uir.return -> ()
+}
+
+// ExprOp body ending with unreachable. The expr creates an internal
+// phase -1, so the unreachable ends up in phase -1's body.
+// CHECK-LABEL: hir.func private @UnreachableExprBody.0a() -> (ctx)
+// CHECK:       } {
+// CHECK:         uir.unreachable
+
+// CHECK-LABEL: hir.func private @UnreachableExprBody.0b(%ctx) -> ()
+// CHECK:         hir.return
+uir.func @UnreachableExprBody() -> () {
+  uir.signature () -> ()
+} {
+  %tt = hir.type_type
+  uir.expr pin -1 {
+    uir.unreachable
+  }
+  uir.return -> ()
+}
+
+// FuncOp signature ending with unreachable.
+// CHECK-LABEL: hir.func private @UnreachableSig.0() -> ()
+// CHECK:         hir.signature () -> ()
+// CHECK:       } {
+// CHECK:         hir.return
+uir.func @UnreachableSig() -> () {
+  uir.unreachable
+} {
+  uir.return -> ()
+}

@@ -760,13 +760,15 @@ LogicalResult SplitFuncOp::verify() {
 }
 
 LogicalResult SplitFuncOp::verifyRegions() {
-  // Make sure signature region is terminated by SignatureOp.
+  // Make sure signature region is terminated by SignatureOp or
+  // UnreachableOp (when all branches have uir.signature inside CF).
   if (getSignature().empty())
     return success();
   auto &block = getSignature().front();
-  if (!isa<SignatureOp>(block.getTerminator()))
+  if (!isa<SignatureOp, UnreachableOp>(block.getTerminator()))
     return block.getTerminator()->emitOpError()
-           << "expected 'uir.signature' terminator in signature region";
+           << "expected 'uir.signature' or 'uir.unreachable' terminator "
+              "in signature region";
   return success();
 }
 
