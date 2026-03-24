@@ -116,7 +116,7 @@ private:
   void createPhaseFunctions();
   LogicalResult splitBodyByPhase();
   void distributeOps(Block &block);
-  void decomposeCall(CallOp callOp);
+  bool decomposeCall(CallOp callOp);
   void dissolveExprsAndPins();
   int16_t findValuePhase(Value value);
   void fixupCrossPhaseRefs();
@@ -357,12 +357,15 @@ void PhaseSplitter2::distributeOps(Block &block) {
       // corrupting the nested structure.
 
       // Decompose uir.call into per-phase hir.call ops on-the-fly.
-      // The new split calls are created at the original call's position.
-      // We distribute them below since they have phases in analysis.opPhases.
+      // If decomposed, the original call is erased and new ops are created
+      // that the next iteration will distribute. If not decomposed (callee
+      // has no split_func, e.g., external func), fall through to regular
+      // distribution.
       if (auto callOp = dyn_cast<CallOp>(op)) {
-        decomposeCall(callOp);
-        changed = true;
-        continue; // decomposeCall erases the original call.
+        if (decomposeCall(callOp)) {
+          changed = true;
+          continue;
+        }
       }
 
       // Move the op to the target phase function if needed.
@@ -388,8 +391,9 @@ void PhaseSplitter2::distributeOps(Block &block) {
 /// Decompose a `uir.call` into per-phase `hir.call` ops using the callee's
 /// `uir.split_func` witness. Each split call is placed at the absolute caller
 /// phase, chaining opaque context between consecutive entries. The original
-/// call is erased.
-void PhaseSplitter2::decomposeCall(CallOp callOp) {
+/// call is erased. Returns true if decomposed, false if callee has no
+/// split_func (the call should be distributed as a regular op).
+bool PhaseSplitter2::decomposeCall(CallOp callOp) {
   auto calleeName = callOp.getCallee();
   auto callArgPhases = callOp.getArgPhases();
   auto callResultPhases = callOp.getResultPhases();
@@ -401,8 +405,7 @@ void PhaseSplitter2::decomposeCall(CallOp callOp) {
   auto calleeSplitFunc = symbolTable.lookup<uir::SplitFuncOp>(calleeName);
   if (!calleeSplitFunc) {
     // Callee hasn't been split (e.g., external func). Move as-is.
-    // The op distribution will handle moving it to its phase.
-    return;
+    return false;
   }
 
   // Build split entries: for each entry in the callee's split_func, compute
@@ -430,7 +433,7 @@ void PhaseSplitter2::decomposeCall(CallOp callOp) {
     }
   }
   if (splitEntries.empty())
-    return;
+    return false;
 
   // Determine which split entry carries the user-visible results.
   int16_t maxResultPhase = INT16_MIN;
@@ -553,6 +556,7 @@ void PhaseSplitter2::decomposeCall(CallOp callOp) {
   // Replace uses and erase the original call.
   callOp.replaceAllUsesWith(unifiedCallReplacements);
   callOp.erase();
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -673,20 +677,25 @@ static bool isTriviallyMaterializable(Operation *op) {
 }
 
 /// Clone a trivially materializable op and its transitive operand tree into
-/// a target block. Returns the cloned op's result corresponding to the
-/// original value.
-static Value cloneMaterializableOp(Operation *op, OpBuilder &builder,
-                                   DenseMap<Operation *, Operation *> &cloned) {
-  if (auto it = cloned.find(op); it != cloned.end())
-    return it->second->getResult(0);
+/// a target block. Returns the cloned value corresponding to the original.
+static Value
+cloneMaterializableValue(Value value, OpBuilder &builder,
+                         DenseMap<Operation *, Operation *> &cloned) {
+  auto *op = value.getDefiningOp();
+  assert(op && "block args are not trivially materializable");
+  if (auto it = cloned.find(op); it != cloned.end()) {
+    unsigned idx = cast<OpResult>(value).getResultNumber();
+    return it->second->getResult(idx);
+  }
   // Clone operands first.
   for (auto operand : op->getOperands()) {
     if (auto *defOp = operand.getDefiningOp())
-      cloneMaterializableOp(defOp, builder, cloned);
+      cloneMaterializableValue(operand, builder, cloned);
   }
   auto *newOp = builder.clone(*op);
   cloned[op] = newOp;
-  return newOp->getResult(0);
+  unsigned idx = cast<OpResult>(value).getResultNumber();
+  return newOp->getResult(idx);
 }
 
 /// After all ops are distributed, scan each phase function for values defined
@@ -741,7 +750,7 @@ void PhaseSplitter2::fixupCrossPhaseRefs() {
         OpBuilder targetBuilder(&targetBlock, targetBlock.begin());
         DenseMap<Operation *, Operation *> cloneCache;
         auto replacement =
-            cloneMaterializableOp(defOp, targetBuilder, cloneCache);
+            cloneMaterializableValue(value, targetBuilder, cloneCache);
         auto targetFunc = splitFor(targetPhase).funcOp;
         value.replaceUsesWithIf(replacement, [targetFunc](OpOperand &use) {
           return use.getOwner()->getParentOfType<hir::FuncOp>() == targetFunc;
