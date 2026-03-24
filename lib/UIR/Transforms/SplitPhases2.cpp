@@ -435,16 +435,17 @@ bool PhaseSplitter2::decomposeCall(CallOp callOp) {
   if (splitEntries.empty())
     return false;
 
-  // Determine which split entry carries the user-visible results.
-  int16_t maxResultPhase = INT16_MIN;
-  for (auto p : callResultPhases)
-    maxResultPhase =
-        std::max(maxResultPhase,
-                 static_cast<int16_t>(callOpPhase + static_cast<int16_t>(p)));
-
   int16_t calleeMaxPhase = INT16_MIN;
   for (auto &entry : splitEntries)
     calleeMaxPhase = std::max(calleeMaxPhase, entry.phase);
+
+  // Partition call results and their type operands by absolute phase.
+  // phaseResults[abs] maps to (resultIndex, typeOfResult) pairs.
+  DenseMap<int16_t, SmallVector<std::pair<unsigned, Value>>> phaseResults;
+  for (auto [i, phase] : llvm::enumerate(callResultPhases)) {
+    int16_t abs = callOpPhase + static_cast<int16_t>(phase);
+    phaseResults[abs].push_back({i, callOp.getTypeOfResults()[i]});
+  }
 
   // Partition call arguments and their type operands by absolute phase.
   DenseMap<int16_t, SmallVector<Value>> phaseArgs, phaseTypeOfArgs;
@@ -476,7 +477,7 @@ bool PhaseSplitter2::decomposeCall(CallOp callOp) {
   // Create per-phase hir.call ops, chaining opaque context.
   OpBuilder callBuilder(callOp);
   SmallVector<Value> prevResults;
-  SmallVector<Value> unifiedCallReplacements;
+  SmallVector<Value> unifiedCallReplacements(callOp.getNumResults());
 
   for (auto &entry : splitEntries) {
     int16_t phase = entry.phase;
@@ -497,28 +498,30 @@ bool PhaseSplitter2::decomposeCall(CallOp callOp) {
       callTypeOfArgs.push_back(opaqueType.getResult());
     }
 
-    // Determine result types for this entry.
-    bool isResultPhase = (phase == maxResultPhase);
+    // Determine result types for this entry. User-visible results appear
+    // at their declared phase; opaque context results for non-last entries.
+    auto &entryResults = phaseResults[phase];
+    bool hasResults = !entryResults.empty();
     SmallVector<Value> callTypeOfResults;
     SmallVector<Type> resultTypes;
+    unsigned numUserResults = 0;
 
-    // User-visible results appear at the max result phase.
-    if (isResultPhase) {
-      callTypeOfResults.append(callOp.getTypeOfResults().begin(),
-                               callOp.getTypeOfResults().end());
-      resultTypes.append(callOp.getResultTypes().begin(),
-                         callOp.getResultTypes().end());
+    // User-visible results at this phase.
+    if (hasResults) {
+      for (auto &[idx, typeOfResult] : entryResults) {
+        callTypeOfResults.push_back(typeOfResult);
+        resultTypes.push_back(anyTy);
+        ++numUserResults;
+      }
     }
 
-    // Opaque context results for non-last entries.
-    if (!isResultPhase || phase != calleeMaxPhase) {
-      unsigned startIdx = isResultPhase ? callOp.getNumResults() : 0;
-      for (unsigned i = startIdx; i < entry.numResults; ++i) {
-        auto opaqueType = hir::OpaqueTypeOp::create(callBuilder, loc);
-        analysis.opPhases[opaqueType] = phase;
-        callTypeOfResults.push_back(opaqueType.getResult());
-        resultTypes.push_back(anyTy);
-      }
+    // Opaque context result for non-last entries.
+    bool needsContext = (phase != calleeMaxPhase);
+    if (needsContext) {
+      auto opaqueType = hir::OpaqueTypeOp::create(callBuilder, loc);
+      analysis.opPhases[opaqueType] = phase;
+      callTypeOfResults.push_back(opaqueType.getResult());
+      resultTypes.push_back(anyTy);
     }
 
     // Create the hir.call.
@@ -528,15 +531,15 @@ bool PhaseSplitter2::decomposeCall(CallOp callOp) {
         callArgs, callTypeOfArgs, callTypeOfResults);
     analysis.opPhases[call] = phase;
 
-    // Track results for chaining and replacement.
-    if (isResultPhase) {
-      for (unsigned i = 0; i < callOp.getNumResults(); ++i)
-        unifiedCallReplacements.push_back(call.getResult(i));
-      prevResults.assign(call.getResults().begin() + callOp.getNumResults(),
-                         call.getResults().end());
-    } else {
-      prevResults.assign(call.getResults().begin(), call.getResults().end());
-    }
+    // Track user-visible results for replacement of the original call.
+    for (auto [i, pair] : llvm::enumerate(entryResults))
+      unifiedCallReplacements[pair.first] = call.getResult(i);
+
+    // Track opaque context results for chaining.
+    if (needsContext)
+      prevResults = {call.getResult(numUserResults)};
+    else
+      prevResults.clear();
   }
 
   // Update tracked return values.

@@ -256,3 +256,126 @@ uir.func @NestedCalls() -> () {
   %r2 = uir.call @TwoPhase(%T2, %r1) : (%tt, %T2) -> (%T2) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
   uir.return -> ()
 }
+
+//===----------------------------------------------------------------------===//
+// Complex callee: 3 args at phases -3, -1, 1 and 3 results at phases -2, 0, 2.
+// Plus an internal phase at -4 from a const block.
+// External phases: {-3, -2, -1, 0, 1, 2}. Internal: {-4}.
+// Phase range: [-4, 2].
+// Groups: {-4, -3}, {-2}, {-1}, {0}, {1}, {2}
+//   Group 0 = multiphase [-4, -3]
+//   Groups 1-5 = single phase each
+// Split func maps: -3: @.0, -2: @.1, -1: @.2, 0: @.3, 1: @.4, 2: @.5
+
+// CHECK-LABEL: hir.func private @SixPhase.0a() -> (ctx)
+// CHECK:         hir.opaque_pack()
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @SixPhase.0b(%a, %ctx) -> (ctx)
+// CHECK:         hir.opaque_pack(%a)
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @SixPhase.1(%ctx) -> (r1, ctx)
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @SixPhase.2(%b, %ctx) -> (ctx)
+// CHECK:         hir.opaque_pack
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @SixPhase.3(%ctx) -> (r2, ctx)
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @SixPhase.4(%c, %ctx) -> (ctx)
+// CHECK:         hir.opaque_pack
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @SixPhase.5(%ctx) -> (r3)
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.return
+
+// CHECK-LABEL: uir.split_func @SixPhase(%a: -3, %b: -1, %c: 1) -> (r1: -2, r2: 0, r3: 2)
+// CHECK:       -3: @SixPhase.0
+// CHECK:       -2: @SixPhase.1
+// CHECK:       -1: @SixPhase.2
+// CHECK:        0: @SixPhase.3
+// CHECK:        1: @SixPhase.4
+// CHECK:        2: @SixPhase.5
+
+// CHECK-LABEL: hir.multiphase_func @SixPhase.0
+// CHECK:       @SixPhase.0a
+// CHECK:       @SixPhase.0b
+uir.func @SixPhase(%a: -3, %b: -1, %c: 1) -> (r1: -2, r2: 0, r3: 2) {
+  %tt = hir.type_type
+  uir.signature (%tt, %tt, %tt) -> (%tt, %tt, %tt)
+} {
+  %tt = hir.type_type
+  // Internal phase at -4: creates a value that is unused (just exercises
+  // the internal phase grouping into multiphase_func).
+  %v = uir.expr pin -4 : %tt {
+    %unused = hir.int_type
+    uir.yield %unused : %unused
+  }
+  uir.return %a, %b, %c -> (%tt, %tt, %tt)
+}
+
+//===----------------------------------------------------------------------===//
+// Caller of @SixPhase: exercises full call decomposition across 6 entries.
+// The caller provides 3 args and receives 3 results.
+// With callOpPhase=0, the split entries map to absolute caller phases
+// -3, -2, -1, 0, 1, 2. Since the caller has no external phases besides 0,
+// groups are: {-3, -2, -1, 0} (multiphase), {1, 2} (trailing multiphase).
+
+// Phase -3 entry: %a (tagged {arg_a}) is passed to @SixPhase.0.
+// CHECK-LABEL: hir.func private @CallSixPhase.0a() -> (ctx)
+// CHECK:         %[[A:.+]] = hir.int_type {arg_a}
+// CHECK:         hir.call @SixPhase.0(%[[A]])
+// CHECK:         hir.opaque_pack(
+// CHECK:         hir.return
+
+// Phase -2 entry: no user args, just context from previous.
+// CHECK-LABEL: hir.func private @CallSixPhase.0b(%ctx) -> (ctx)
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.call @SixPhase.1(
+// CHECK:         hir.opaque_pack(
+// CHECK:         hir.return
+
+// Phase -1 entry: %b (tagged {arg_b}) is passed to @SixPhase.2.
+// CHECK-LABEL: hir.func private @CallSixPhase.0c(%ctx) -> (ctx)
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         %[[B:.+]] = hir.int_type {arg_b}
+// CHECK:         hir.call @SixPhase.2(%[[B]],
+// CHECK:         hir.opaque_pack(
+// CHECK:         hir.return
+
+// Phase 0 entry: no user args, just context.
+// CHECK-LABEL: hir.func private @CallSixPhase.0d(%ctx) -> (ctx)
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.call @SixPhase.3(
+// CHECK:         hir.opaque_pack(
+// CHECK:         hir.return
+
+// Phase 1 entry: %c (tagged {arg_c}) is passed to @SixPhase.4.
+// CHECK-LABEL: hir.func private @CallSixPhase.1a(%ctx) -> (ctx)
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         %[[C:.+]] = hir.int_type {arg_c}
+// CHECK:         hir.call @SixPhase.4(%[[C]],
+// CHECK:         hir.opaque_pack(
+// CHECK:         hir.return
+
+// Phase 2 entry: no user args, receives last result.
+// CHECK-LABEL: hir.func private @CallSixPhase.1b(%ctx) -> ()
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.call @SixPhase.5(
+// CHECK:         hir.return
+uir.func @CallSixPhase() -> () {
+  uir.signature () -> ()
+} {
+  %tt = hir.type_type
+  %a = hir.int_type {arg_a}
+  %b = hir.int_type {arg_b}
+  %c = hir.int_type {arg_c}
+  %r1, %r2, %r3 = uir.call @SixPhase(%a, %b, %c) : (%tt, %tt, %tt) -> (%tt, %tt, %tt) (!hir.any, !hir.any, !hir.any) -> (!hir.any, !hir.any, !hir.any) [-3, -1, 1] -> [-2, 0, 2]
+  uir.return -> ()
+}
