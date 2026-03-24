@@ -242,6 +242,63 @@ uir.func @SigWithCall(%A: -1, %B: 0) -> () {
 }
 
 //===----------------------------------------------------------------------===//
+// Shared non-trivial type: both %B and %C share the same computed type.
+// The sig reconstruction must clone the call result once, not twice.
+
+// CHECK-LABEL: hir.func private @SharedType.1(%B, %C, %ctx) -> ()
+// CHECK:         %[[U:.+]] = hir.opaque_unpack %ctx
+// CHECK:         hir.signature (%[[U]], %[[U]],
+// CHECK:         hir.return
+uir.func @SharedType(%A: -1, %B: 0, %C: 0) -> () {
+  %int_type = hir.int_type
+  %bt = func.call @computeType(%A) : (!hir.any) -> !hir.any
+  uir.signature (%int_type, %bt, %bt) -> ()
+} {
+  uir.return -> ()
+}
+
+//===----------------------------------------------------------------------===//
+// Deep type computation chain: each arg's type depends on the previous arg,
+// computed via func.call @computeType. Each call is at a different phase.
+
+func.func private @derive(!hir.any) -> !hir.any
+
+// Phase -3: provides %A, calls @derive(%A) to get %bt.
+// CHECK-LABEL: hir.func private @DeepChain.0(%A) -> (ctx)
+// CHECK:         hir.int_type
+// CHECK:         hir.signature
+// CHECK:         @derive(%A)
+// CHECK:         hir.opaque_pack
+// CHECK:         hir.return
+
+// Phase -2: unpacks %bt from ctx, calls @derive(%bt) to get %ct.
+// CHECK-LABEL: hir.func private @DeepChain.1(%B, %ctx) -> (ctx)
+// CHECK:         %[[U1:.+]] = hir.opaque_unpack %ctx
+// CHECK:         hir.signature (%[[U1]],
+// CHECK:         hir.return
+
+// Phase -1: unpacks %ct from ctx, calls @derive(%ct) to get %dt.
+// CHECK-LABEL: hir.func private @DeepChain.2(%C, %ctx) -> (ctx)
+// CHECK:         %[[U2:.+]] = hir.opaque_unpack %ctx
+// CHECK:         hir.signature (%[[U2]],
+// CHECK:         hir.return
+
+// Phase 0: unpacks %dt from ctx, uses as %D's type.
+// CHECK-LABEL: hir.func private @DeepChain.3(%D, %ctx) -> ()
+// CHECK:         %[[U3:.+]] = hir.opaque_unpack %ctx
+// CHECK:         hir.signature (%[[U3]],
+// CHECK:         hir.return
+uir.func @DeepChain(%A: -3, %B: -2, %C: -1, %D: 0) -> () {
+  %int_type = hir.int_type
+  %bt = func.call @derive(%A) : (!hir.any) -> !hir.any
+  %ct = func.call @derive(%bt) : (!hir.any) -> !hir.any
+  %dt = func.call @derive(%ct) : (!hir.any) -> !hir.any
+  uir.signature (%int_type, %bt, %ct, %dt) -> ()
+} {
+  uir.return -> ()
+}
+
+//===----------------------------------------------------------------------===//
 // Additional callees for call decomposition tests.
 
 // A callee with 3 args at different phases.
