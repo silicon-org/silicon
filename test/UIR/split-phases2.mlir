@@ -158,6 +158,36 @@ uir.func @ExprCrossPhase() -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Dependent type: type of %B depends on value of %N from an earlier phase.
+// The signature must compute `hir.uint_type %N` where %N flows through
+// opaque context.
+
+// CHECK-LABEL: hir.func private @DepType.0(%N) -> (ctx)
+// CHECK:         %[[INT:.+]] = hir.int_type
+// CHECK:         hir.opaque_type
+// CHECK:         hir.signature (%[[INT]]) -> (
+// CHECK:         hir.opaque_pack(%N,
+// CHECK:         hir.return
+
+// The sig for phase 0 must unpack %N from context and compute uint_type.
+// Result type also comes from context (pre-computed uint_type).
+// CHECK-LABEL: hir.func private @DepType.1(%B, %ctx) -> (result)
+// CHECK:         %[[UNPACK:.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:         %[[UT:.+]] = hir.uint_type %[[UNPACK]]#0
+// CHECK:         hir.opaque_type
+// CHECK:         hir.signature (%[[UT]], %{{.+}}) -> (%[[UNPACK]]#1)
+// CHECK:         hir.return
+uir.func @DepType(%N: -1, %B: 0) -> (result: 0) {
+  // Sig block args are the same as body block args (%N, %B).
+  %int_type = hir.int_type
+  %b_type_sig = hir.uint_type %N
+  uir.signature (%int_type, %b_type_sig) -> (%b_type_sig)
+} {
+  %b_type_body = hir.uint_type %N
+  uir.return %B -> (%b_type_body)
+}
+
+//===----------------------------------------------------------------------===//
 // Additional callees for call decomposition tests.
 
 // A callee with 3 args at different phases.

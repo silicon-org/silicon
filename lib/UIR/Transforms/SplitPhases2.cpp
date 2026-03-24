@@ -291,24 +291,26 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
     // Erase the sig terminator (keep the type-computing ops).
     sigTerminator.erase();
 
-    // Remap sig block args to body block args (they represent the same
-    // function args). Also update saved type values that reference sig
-    // block args.
+    // Clone sig ops into the body, remapping sig block args to body block
+    // args. We can't splice+RAUW because that crosses IsolatedFromAbove
+    // boundaries in either order. Cloning with IRMapping avoids this.
+    IRMapping sigToBody;
     for (auto [sigArg, bodyArg] :
-         llvm::zip(sigBlock.getArguments(), entryBlock.getArguments())) {
-      sigArg.replaceAllUsesWith(bodyArg);
-      // Update saved type values that ARE the sig block arg.
-      for (auto &v : savedSigTypeOfArgs)
-        if (v == sigArg)
-          v = bodyArg;
-      for (auto &v : savedSigTypeOfResults)
-        if (v == sigArg)
-          v = bodyArg;
+         llvm::zip(sigBlock.getArguments(), entryBlock.getArguments()))
+      sigToBody.map(sigArg, bodyArg);
+
+    OpBuilder bodyBuilder(&entryBlock, entryBlock.begin());
+    for (auto &op : llvm::make_early_inc_range(sigBlock)) {
+      bodyBuilder.clone(op, sigToBody);
     }
 
-    // Splice sig ops into the body entry block, before the first body op.
-    entryBlock.getOperations().splice(entryBlock.begin(),
-                                      sigBlock.getOperations());
+    // Update saved type values to point to the cloned ops in the body.
+    for (auto &v : savedSigTypeOfArgs)
+      if (auto mapped = sigToBody.lookupOrNull(v))
+        v = mapped;
+    for (auto &v : savedSigTypeOfResults)
+      if (auto mapped = sigToBody.lookupOrNull(v))
+        v = mapped;
   }
 
   // Move shifted block args to their phase functions first, before capturing
