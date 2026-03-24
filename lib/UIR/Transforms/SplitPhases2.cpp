@@ -499,7 +499,7 @@ bool PhaseSplitter2::decomposeCall(CallOp callOp) {
       else if (auto func = symbolTable.lookup<hir::FuncOp>(name))
         numResults = func.getResultNames().size();
       else
-        continue;
+        llvm_unreachable("split_func entry references unknown function");
       splitEntries.push_back({callerPhase, name, numResults});
     }
   }
@@ -751,25 +751,22 @@ static bool isTriviallyMaterializable(Operation *op) {
 }
 
 /// Clone a trivially materializable op and its transitive operand tree into
-/// a target block. Returns the cloned value corresponding to the original.
-static Value
-cloneMaterializableValue(Value value, OpBuilder &builder,
-                         DenseMap<Operation *, Operation *> &cloned) {
+/// a target block. Uses IRMapping to remap operands so that cloned ops
+/// reference cloned dependencies, not the originals (which may be in a
+/// different IsolatedFromAbove region).
+static Value cloneMaterializableValue(Value value, OpBuilder &builder,
+                                      IRMapping &cloneMapping) {
+  if (auto mapped = cloneMapping.lookupOrNull(value))
+    return mapped;
   auto *op = value.getDefiningOp();
   assert(op && "block args are not trivially materializable");
-  if (auto it = cloned.find(op); it != cloned.end()) {
-    unsigned idx = cast<OpResult>(value).getResultNumber();
-    return it->second->getResult(idx);
-  }
-  // Clone operands first.
-  for (auto operand : op->getOperands()) {
-    if (auto *defOp = operand.getDefiningOp())
-      cloneMaterializableValue(operand, builder, cloned);
-  }
-  auto *newOp = builder.clone(*op);
-  cloned[op] = newOp;
-  unsigned idx = cast<OpResult>(value).getResultNumber();
-  return newOp->getResult(idx);
+  // Clone operands first (post-order traversal).
+  for (auto operand : op->getOperands())
+    if (operand.getDefiningOp())
+      cloneMaterializableValue(operand, builder, cloneMapping);
+  // Clone with mapping so operands reference cloned dependencies.
+  builder.clone(*op, cloneMapping);
+  return cloneMapping.lookup(value);
 }
 
 /// After all ops are distributed, scan each phase function for values defined
@@ -834,9 +831,9 @@ void PhaseSplitter2::fixupCrossPhaseRefs() {
       for (auto targetPhase : targets) {
         auto &targetBlock = splitFor(targetPhase).funcOp.getBody().front();
         OpBuilder targetBuilder(&targetBlock, targetBlock.begin());
-        DenseMap<Operation *, Operation *> cloneCache;
+        IRMapping cloneMapping;
         auto replacement =
-            cloneMaterializableValue(value, targetBuilder, cloneCache);
+            cloneMaterializableValue(value, targetBuilder, cloneMapping);
         auto targetFunc = splitFor(targetPhase).funcOp;
         value.replaceUsesWithIf(replacement, [targetFunc](OpOperand &use) {
           return use.getOwner()->getParentOfType<hir::FuncOp>() == targetFunc;
@@ -882,9 +879,13 @@ void PhaseSplitter2::fixupCrossPhaseRefs() {
                                                                 : val);
     }
 
-    // Create opaque_pack at end of source phase body.
+    // Create opaque_pack at end of source phase body (before terminator
+    // if one exists, e.g., uir.unreachable).
     auto &srcBlock = srcSplit.funcOp.getBody().front();
-    OpBuilder srcBuilder(&srcBlock, srcBlock.end());
+    auto insertPt = srcBlock.end();
+    if (!srcBlock.empty() && srcBlock.back().hasTrait<OpTrait::IsTerminator>())
+      insertPt = std::prev(insertPt);
+    OpBuilder srcBuilder(&srcBlock, insertPt);
     auto packOp =
         hir::OpaquePackOp::create(srcBuilder, loc, anyTy, resolvedValues);
     srcSplit.returnValues.push_back(packOp.getResult());
@@ -986,7 +987,6 @@ void PhaseSplitter2::reconstructSignatures() {
   auto loc = funcOp.getLoc();
 
   auto argPhases = funcOp.getArgPhases();
-  auto resultPhases = funcOp.getResultPhases();
 
   for (int16_t phase = minPhase; phase <= maxPhase; ++phase) {
     auto &split = splitFor(phase);
