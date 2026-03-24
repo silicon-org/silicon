@@ -142,6 +142,8 @@ uir.func @Caller() -> () {
 // CHECK:         hir.return
 
 // CHECK-LABEL: hir.func private @ExprCrossPhase.0b(%ctx) -> (result)
+// CHECK:         %[[TT:.+]] = hir.type_type
+// CHECK:         hir.signature (%{{.+}}) -> (%[[TT]])
 // CHECK:         hir.return
 
 uir.func @ExprCrossPhase() -> (result: 0) {
@@ -166,25 +168,77 @@ uir.func @ExprCrossPhase() -> (result: 0) {
 // CHECK:         %[[INT:.+]] = hir.int_type
 // CHECK:         hir.opaque_type
 // CHECK:         hir.signature (%[[INT]]) -> (
-// CHECK:         hir.opaque_pack(%N,
+// CHECK:         hir.opaque_pack(
 // CHECK:         hir.return
 
-// The sig for phase 0 must unpack %N from context and compute uint_type.
-// Result type also comes from context (pre-computed uint_type).
+// Phase 0 sig: both %N and uint_type(%N) flow from context. The sig
+// picks the pre-computed uint_type result directly from the unpack.
 // CHECK-LABEL: hir.func private @DepType.1(%B, %ctx) -> (result)
-// CHECK:         %[[UNPACK:.+]]:2 = hir.opaque_unpack %ctx
-// CHECK:         %[[UT:.+]] = hir.uint_type %[[UNPACK]]#0
-// CHECK:         hir.opaque_type
-// CHECK:         hir.signature (%[[UT]], %{{.+}}) -> (%[[UNPACK]]#1)
+// CHECK:         %[[U:.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:         hir.signature (%[[U]]#1, %{{.+}}) -> (%[[U]]#0)
 // CHECK:         hir.return
 uir.func @DepType(%N: -1, %B: 0) -> (result: 0) {
-  // Sig block args are the same as body block args (%N, %B).
   %int_type = hir.int_type
   %b_type_sig = hir.uint_type %N
   uir.signature (%int_type, %b_type_sig) -> (%b_type_sig)
 } {
   %b_type_body = hir.uint_type %N
   uir.return %B -> (%b_type_body)
+}
+
+//===----------------------------------------------------------------------===//
+// Chained dependent types: type of %C depends on type of %B which depends on
+// %A. Both type computations use hir.uint_type. The sig for phase 0 must
+// reconstruct the full chain from context.
+
+// CHECK-LABEL: hir.func private @ChainedDepType.0(%A) -> (ctx)
+// CHECK:         hir.int_type
+// CHECK:         hir.signature
+// CHECK:         hir.opaque_pack(
+// CHECK:         hir.return
+
+// Phase 0 sig: both types (uint_type(%A) and uint_type(uint_type(%A)))
+// flow pre-computed from context. The sig picks them directly.
+// CHECK-LABEL: hir.func private @ChainedDepType.1(%B, %C, %ctx) -> ()
+// CHECK:         %[[U:.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:         hir.signature (%[[U]]#0, %[[U]]#1, %{{.+}}) -> ()
+// CHECK:         hir.return
+uir.func @ChainedDepType(%A: -1, %B: 0, %C: 0) -> () {
+  %int_type = hir.int_type
+  %b_type = hir.uint_type %A
+  %c_type = hir.uint_type %b_type
+  uir.signature (%int_type, %b_type, %c_type) -> ()
+} {
+  uir.return -> ()
+}
+
+//===----------------------------------------------------------------------===//
+// Signature with a call: the type of %B is computed by a func.call in the sig.
+// The call should be cloned into the body, distributed, and its result
+// threaded through opaque context to the per-phase sig.
+
+func.func private @computeType(!hir.any) -> !hir.any
+
+// Phase -1: call @computeType in the body, pack result into context.
+// CHECK-LABEL: hir.func private @SigWithCall.0(%A) -> (ctx)
+// CHECK:         hir.int_type
+// CHECK:         hir.signature
+// CHECK:       } {
+// CHECK:         func.call @computeType(%A)
+// CHECK:         hir.opaque_pack
+// CHECK:         hir.return
+
+// Phase 0 sig: the call result flows from context, used as %B's type.
+// CHECK-LABEL: hir.func private @SigWithCall.1(%B, %ctx) -> ()
+// CHECK:         %[[U:.+]] = hir.opaque_unpack %ctx
+// CHECK:         hir.signature (%[[U]],
+// CHECK:         hir.return
+uir.func @SigWithCall(%A: -1, %B: 0) -> () {
+  %int_type = hir.int_type
+  %b_type = func.call @computeType(%A) : (!hir.any) -> !hir.any
+  uir.signature (%int_type, %b_type) -> ()
+} {
+  uir.return -> ()
 }
 
 //===----------------------------------------------------------------------===//
@@ -314,7 +368,8 @@ uir.func @NestedCalls() -> () {
 // CHECK:         hir.return
 
 // CHECK-LABEL: hir.func private @SixPhase.1(%ctx) -> (r1, ctx)
-// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         %[[TT:.+]] = hir.type_type
+// CHECK:         hir.signature (%{{.+}}) -> (%[[TT]], %{{.+}})
 // CHECK:         hir.return
 
 // CHECK-LABEL: hir.func private @SixPhase.2(%b, %ctx) -> (ctx)

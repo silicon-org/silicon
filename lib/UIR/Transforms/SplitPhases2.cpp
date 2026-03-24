@@ -40,6 +40,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/Support/Debug.h"
 
@@ -301,7 +302,12 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
 
     OpBuilder bodyBuilder(&entryBlock, entryBlock.begin());
     for (auto &op : llvm::make_early_inc_range(sigBlock)) {
-      bodyBuilder.clone(op, sigToBody);
+      auto *clonedOp = bodyBuilder.clone(op, sigToBody);
+      // Register the cloned op in the analysis with the original's phase,
+      // so that distribution moves it to the correct phase function.
+      auto phaseIt = analysis.opPhases.find(&op);
+      if (phaseIt != analysis.opPhases.end())
+        analysis.opPhases[clonedOp] = phaseIt->second;
     }
 
     // Update saved type values to point to the cloned ops in the body.
@@ -311,6 +317,12 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
     for (auto &v : savedSigTypeOfResults)
       if (auto mapped = sigToBody.lookupOrNull(v))
         v = mapped;
+
+    // Erase the original sig ops (terminator was already erased above).
+    // Keeping them in the uir.func's sig region would cause
+    // IsolatedFromAbove violations when the uir.func is verified.
+    for (auto &op : llvm::make_early_inc_range(llvm::reverse(sigBlock)))
+      op.erase();
   }
 
   // Move shifted block args to their phase functions first, before capturing
@@ -770,7 +782,10 @@ void PhaseSplitter2::fixupCrossPhaseRefs() {
   // defined in one phase function but used (or referenced in return values) in
   // a different phase function.
   // Map: value → set of target phases where it's needed.
-  DenseMap<Value, DenseSet<int16_t>> valueTargetPhases;
+  // Use MapVector (not DenseMap) to preserve insertion order, which is
+  // the deterministic IR walk order. This ensures opaque_pack/unpack
+  // result indices are stable across runs.
+  MapVector<Value, DenseSet<int16_t>> valueTargetPhases;
 
   auto markIfCrossPhase = [&](Value val, int16_t usingPhase) {
     int16_t srcPhase = findValuePhase(val);
@@ -796,6 +811,15 @@ void PhaseSplitter2::fixupCrossPhaseRefs() {
     for (auto val : split.returnTypeOfValues)
       markIfCrossPhase(val, phase);
   }
+
+  // Also check saved sig type values: each needs to be available in the
+  // phase where it will be used for signature reconstruction.
+  auto argPhasesArr = funcOp.getArgPhases();
+  for (auto [uIdx, ap] : llvm::enumerate(argPhasesArr))
+    markIfCrossPhase(savedSigTypeOfArgs[uIdx], static_cast<int16_t>(ap));
+  auto resultPhasesArr = funcOp.getResultPhases();
+  for (auto [uIdx, rp] : llvm::enumerate(resultPhasesArr))
+    markIfCrossPhase(savedSigTypeOfResults[uIdx], static_cast<int16_t>(rp));
 
   // For each phase boundary, collect values that need to cross it.
   DenseMap<int16_t, SmallVector<Value>> boundaryValues;
@@ -912,12 +936,11 @@ void PhaseSplitter2::fixupCrossPhaseRefs() {
     if (it != phaseValueMapping[phase].end())
       val = it->second;
   }
-  auto resultPhasesArr = funcOp.getResultPhases();
-  for (auto [uIdx, rp] : llvm::enumerate(resultPhasesArr)) {
-    int16_t phase = static_cast<int16_t>(rp);
+  for (auto [uIdx, rp] : llvm::enumerate(funcOp.getResultPhases())) {
+    int16_t phase2 = static_cast<int16_t>(rp);
     auto &val = savedSigTypeOfResults[uIdx];
-    auto it = phaseValueMapping[phase].find(val);
-    if (it != phaseValueMapping[phase].end())
+    auto it = phaseValueMapping[phase2].find(val);
+    if (it != phaseValueMapping[phase2].end())
       val = it->second;
   }
 }
@@ -1002,17 +1025,35 @@ void PhaseSplitter2::reconstructSignatures() {
       }
     }
 
-    // Build typeOfArgs: for each own arg at this phase, clone its type
-    // from the body. Context args get opaque_type.
+    // Resolve a type value for the signature. If it's in this phase's body,
+    // clone its op tree. If it's already mapped (unpack result, block arg),
+    // use the mapped value. If it's in a different phase's body, it should
+    // be reachable through the body→sig mapping (opaque unpack result).
+    auto resolveTypeForSig = [&](Value typeVal) -> Value {
+      // If already in the mapping (e.g., block arg, unpack result).
+      if (auto mapped = bodyToSig.lookupOrNull(typeVal))
+        return mapped;
+      auto *defOp = typeVal.getDefiningOp();
+      if (!defOp)
+        return {};
+      // Trivially materializable: clone directly into the sig.
+      if (isTriviallyMaterializable(defOp))
+        return cloneTypeOpIntoSig(typeVal, sigBuilder, bodyToSig);
+      // If defined in this phase's body, clone the op tree.
+      if (defOp->getParentOfType<hir::FuncOp>() == split.funcOp)
+        return cloneTypeOpIntoSig(typeVal, sigBuilder, bodyToSig);
+      return {};
+    };
+
+    // Build typeOfArgs: for each own arg at this phase, resolve its type
+    // for the signature. Context args get opaque_type.
     SmallVector<Value> sigTypeOfArgs;
     unsigned ownArgIdx = 0;
     for (auto [uIdx, ap] : llvm::enumerate(argPhases)) {
       if (static_cast<int16_t>(ap) != phase)
         continue;
-      // The saved type value for this unified arg. After merging into the
-      // body, it's been distributed and possibly threaded through context.
       Value typeVal = savedSigTypeOfArgs[uIdx];
-      Value sigType = cloneTypeOpIntoSig(typeVal, sigBuilder, bodyToSig);
+      Value sigType = resolveTypeForSig(typeVal);
       if (!sigType) {
         // Fallback: should not happen for correct input.
         sigType = hir::OpaqueTypeOp::create(sigBuilder, loc).getResult();
@@ -1034,7 +1075,7 @@ void PhaseSplitter2::reconstructSignatures() {
         continue;
       // Use returnTypeOfValues which was captured from the UIR return.
       Value typeVal = split.returnTypeOfValues[ownResultIdx];
-      Value sigType = cloneTypeOpIntoSig(typeVal, sigBuilder, bodyToSig);
+      Value sigType = resolveTypeForSig(typeVal);
       if (!sigType)
         sigType = hir::OpaqueTypeOp::create(sigBuilder, loc).getResult();
       sigTypeOfResults.push_back(sigType);
