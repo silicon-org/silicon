@@ -116,6 +116,7 @@ private:
   void createPhaseFunctions();
   LogicalResult splitBodyByPhase();
   void distributeOps(Block &block);
+  void decomposeCall(CallOp callOp);
   void dissolveExprsAndPins();
   int16_t findValuePhase(Value value);
   void fixupCrossPhaseRefs();
@@ -324,47 +325,234 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
 //===----------------------------------------------------------------------===//
 
 /// Distribute ops in a block to their assigned phase functions. Calls are
-/// decomposed on-the-fly. Descends into expr/if/loop regions recursively.
+/// decomposed on-the-fly. Re-scans if call decomposition creates new ops.
 void PhaseSplitter2::distributeOps(Block &block) {
-  // Collect ops to process (avoid iterator invalidation).
-  SmallVector<Operation *> ops;
-  for (auto &op : block)
-    ops.push_back(&op);
+  // Loop because call decomposition may create new ops that need distributing.
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    SmallVector<Operation *> ops;
+    for (auto &op : block)
+      ops.push_back(&op);
 
-  for (auto *op : ops) {
-    // Skip the terminator (already erased or will be handled separately).
-    if (op->hasTrait<OpTrait::IsTerminator>())
-      continue;
+    for (auto *op : ops) {
+      // Skip the terminator (already erased or will be handled separately).
+      if (op->hasTrait<OpTrait::IsTerminator>())
+        continue;
 
-    auto it = analysis.opPhases.find(op);
-    if (it == analysis.opPhases.end())
-      continue;
-    int16_t phase = it->second;
+      auto it = analysis.opPhases.find(op);
+      if (it == analysis.opPhases.end())
+        continue;
+      int16_t phase = it->second;
 
-    // Floating constants (INT16_MIN) stay in place. The cross-phase fixup
-    // clones them into each phase that uses them.
-    if (phase == INT16_MIN)
-      continue;
+      // Floating constants (INT16_MIN) stay in place. The cross-phase fixup
+      // clones them into each phase that uses them.
+      if (phase == INT16_MIN)
+        continue;
 
-    // uir.expr, uir.if, and uir.loop all move as whole units to their
-    // assigned phase. Their internal ops are at the same or shifted phase
-    // (for pinned expr), and dissolution/FlattenCF handles them after
-    // distribution. We do NOT descend into their regions here to avoid
-    // corrupting the nested structure.
+      // uir.expr, uir.if, and uir.loop all move as whole units to their
+      // assigned phase. Their internal ops are at the same or shifted phase
+      // (for pinned expr), and dissolution/FlattenCF handles them after
+      // distribution. We do NOT descend into their regions here to avoid
+      // corrupting the nested structure.
 
-    // TODO: Decompose uir.call into per-phase hir.call ops on-the-fly.
+      // Decompose uir.call into per-phase hir.call ops on-the-fly.
+      // The new split calls are created at the original call's position.
+      // We distribute them below since they have phases in analysis.opPhases.
+      if (auto callOp = dyn_cast<CallOp>(op)) {
+        decomposeCall(callOp);
+        changed = true;
+        continue; // decomposeCall erases the original call.
+      }
 
-    // Move the op to the target phase function if needed.
-    if (phase < minPhase)
-      phase = minPhase;
-    if (phase > maxPhase)
-      phase = maxPhase;
+      // Move the op to the target phase function if needed.
+      if (phase < minPhase)
+        phase = minPhase;
+      if (phase > maxPhase)
+        phase = maxPhase;
 
-    auto &targetBody = splitFor(phase).funcOp.getBody();
-    auto *targetBlock = &targetBody.front();
-    if (op->getBlock() != targetBlock)
-      op->moveBefore(targetBlock, targetBlock->end());
+      auto &targetBody = splitFor(phase).funcOp.getBody();
+      auto *targetBlock = &targetBody.front();
+      if (op->getBlock() != targetBlock) {
+        op->moveBefore(targetBlock, targetBlock->end());
+        changed = true;
+      }
+    }
+  } // while (changed)
+}
+
+//===----------------------------------------------------------------------===//
+// Call Decomposition
+//===----------------------------------------------------------------------===//
+
+/// Decompose a `uir.call` into per-phase `hir.call` ops using the callee's
+/// `uir.split_func` witness. Each split call is placed at the absolute caller
+/// phase, chaining opaque context between consecutive entries. The original
+/// call is erased.
+void PhaseSplitter2::decomposeCall(CallOp callOp) {
+  auto calleeName = callOp.getCallee();
+  auto callArgPhases = callOp.getArgPhases();
+  auto callResultPhases = callOp.getResultPhases();
+  int16_t callOpPhase = analysis.getPhase(callOp);
+  auto loc = callOp.getLoc();
+  auto anyTy = hir::AnyType::get(callOp.getContext());
+
+  // Look up the callee's split_func witness.
+  auto calleeSplitFunc = symbolTable.lookup<uir::SplitFuncOp>(calleeName);
+  if (!calleeSplitFunc) {
+    // Callee hasn't been split (e.g., external func). Move as-is.
+    // The op distribution will handle moving it to its phase.
+    return;
   }
+
+  // Build split entries: for each entry in the callee's split_func, compute
+  // the absolute caller phase and look up the target function's result count.
+  struct CallEntry {
+    int16_t phase;
+    StringRef symbolName;
+    unsigned numResults;
+  };
+  SmallVector<CallEntry> splitEntries;
+  {
+    auto phaseNums = calleeSplitFunc.getPhaseNumbers();
+    auto phaseFuncRefs = calleeSplitFunc.getPhaseFuncs();
+    for (auto [entryPhase, funcRef] : llvm::zip(phaseNums, phaseFuncRefs)) {
+      auto name = cast<FlatSymbolRefAttr>(funcRef).getValue();
+      int16_t callerPhase = callOpPhase + static_cast<int16_t>(entryPhase);
+      unsigned numResults = 0;
+      if (auto mpFunc = symbolTable.lookup<hir::MultiphaseFuncOp>(name))
+        numResults = mpFunc.getResultNames().size();
+      else if (auto func = symbolTable.lookup<hir::FuncOp>(name))
+        numResults = func.getResultNames().size();
+      else
+        continue;
+      splitEntries.push_back({callerPhase, name, numResults});
+    }
+  }
+  if (splitEntries.empty())
+    return;
+
+  // Determine which split entry carries the user-visible results.
+  int16_t maxResultPhase = INT16_MIN;
+  for (auto p : callResultPhases)
+    maxResultPhase =
+        std::max(maxResultPhase,
+                 static_cast<int16_t>(callOpPhase + static_cast<int16_t>(p)));
+
+  int16_t calleeMaxPhase = INT16_MIN;
+  for (auto &entry : splitEntries)
+    calleeMaxPhase = std::max(calleeMaxPhase, entry.phase);
+
+  // Partition call arguments and their type operands by absolute phase.
+  DenseMap<int16_t, SmallVector<Value>> phaseArgs, phaseTypeOfArgs;
+  for (auto [arg, type, phase] : llvm::zip(
+           callOp.getArguments(), callOp.getTypeOfArgs(), callArgPhases)) {
+    int16_t abs = callOpPhase + static_cast<int16_t>(phase);
+    phaseArgs[abs].push_back(arg);
+    phaseTypeOfArgs[abs].push_back(type);
+  }
+
+  // Tighten type operand phases: type-of-arg must be available at the
+  // argument's phase, and type-of-result at the result's phase.
+  for (auto [type, phase] : llvm::zip(callOp.getTypeOfArgs(), callArgPhases)) {
+    int16_t p = callOpPhase + static_cast<int16_t>(phase);
+    if (auto *defOp = type.getDefiningOp()) {
+      auto &opPhase = analysis.opPhases[defOp];
+      opPhase = std::min(opPhase, p);
+    }
+  }
+  for (auto [type, phase] :
+       llvm::zip(callOp.getTypeOfResults(), callResultPhases)) {
+    int16_t p = callOpPhase + static_cast<int16_t>(phase);
+    if (auto *defOp = type.getDefiningOp()) {
+      auto &opPhase = analysis.opPhases[defOp];
+      opPhase = std::min(opPhase, p);
+    }
+  }
+
+  // Create per-phase hir.call ops, chaining opaque context.
+  OpBuilder callBuilder(callOp);
+  SmallVector<Value> prevResults;
+  SmallVector<Value> unifiedCallReplacements;
+
+  for (auto &entry : splitEntries) {
+    int16_t phase = entry.phase;
+
+    // Create all ops at the original call's position. They will be moved
+    // to the correct phase function by the distribution pass (we add them
+    // to the deferred ops list after this method returns).
+
+    // Own args for this phase entry.
+    SmallVector<Value> callArgs(phaseArgs[phase]);
+    SmallVector<Value> callTypeOfArgs(phaseTypeOfArgs[phase]);
+
+    // Chain opaque context from previous entry.
+    for (auto result : prevResults) {
+      callArgs.push_back(result);
+      auto opaqueType = hir::OpaqueTypeOp::create(callBuilder, loc);
+      analysis.opPhases[opaqueType] = phase;
+      callTypeOfArgs.push_back(opaqueType.getResult());
+    }
+
+    // Determine result types for this entry.
+    bool isResultPhase = (phase == maxResultPhase);
+    SmallVector<Value> callTypeOfResults;
+    SmallVector<Type> resultTypes;
+
+    // User-visible results appear at the max result phase.
+    if (isResultPhase) {
+      callTypeOfResults.append(callOp.getTypeOfResults().begin(),
+                               callOp.getTypeOfResults().end());
+      resultTypes.append(callOp.getResultTypes().begin(),
+                         callOp.getResultTypes().end());
+    }
+
+    // Opaque context results for non-last entries.
+    if (!isResultPhase || phase != calleeMaxPhase) {
+      unsigned startIdx = isResultPhase ? callOp.getNumResults() : 0;
+      for (unsigned i = startIdx; i < entry.numResults; ++i) {
+        auto opaqueType = hir::OpaqueTypeOp::create(callBuilder, loc);
+        analysis.opPhases[opaqueType] = phase;
+        callTypeOfResults.push_back(opaqueType.getResult());
+        resultTypes.push_back(anyTy);
+      }
+    }
+
+    // Create the hir.call.
+    auto call = hir::CallOp::create(
+        callBuilder, loc, resultTypes,
+        FlatSymbolRefAttr::get(callBuilder.getContext(), entry.symbolName),
+        callArgs, callTypeOfArgs, callTypeOfResults);
+    analysis.opPhases[call] = phase;
+
+    // Track results for chaining and replacement.
+    if (isResultPhase) {
+      for (unsigned i = 0; i < callOp.getNumResults(); ++i)
+        unifiedCallReplacements.push_back(call.getResult(i));
+      prevResults.assign(call.getResults().begin() + callOp.getNumResults(),
+                         call.getResults().end());
+    } else {
+      prevResults.assign(call.getResults().begin(), call.getResults().end());
+    }
+  }
+
+  // Update tracked return values.
+  for (auto &split : splits)
+    for (auto &rv : split.returnValues)
+      for (auto [oldResult, newResult] :
+           llvm::zip(callOp.getResults(), unifiedCallReplacements))
+        if (rv == oldResult)
+          rv = newResult;
+  for (auto &split : splits)
+    for (auto &rv : split.returnTypeOfValues)
+      for (auto [oldResult, newResult] :
+           llvm::zip(callOp.getResults(), unifiedCallReplacements))
+        if (rv == oldResult)
+          rv = newResult;
+
+  // Replace uses and erase the original call.
+  callOp.replaceAllUsesWith(unifiedCallReplacements);
+  callOp.erase();
 }
 
 //===----------------------------------------------------------------------===//
@@ -467,6 +655,40 @@ int16_t PhaseSplitter2::findValuePhase(Value value) {
   return it != funcToPhase.end() ? it->second : INT16_MIN;
 }
 
+/// Check if an op is trivially materializable: a pure op whose transitive
+/// operands are all trivially materializable. ConstantLike ops and pure ops
+/// with no operands are trivially materializable. These can be cloned into
+/// any phase without threading through opaque context.
+static bool isTriviallyMaterializable(Operation *op) {
+  if (op->hasTrait<OpTrait::ConstantLike>())
+    return true;
+  if (!mlir::isMemoryEffectFree(op))
+    return false;
+  for (auto operand : op->getOperands()) {
+    auto *defOp = operand.getDefiningOp();
+    if (!defOp || !isTriviallyMaterializable(defOp))
+      return false;
+  }
+  return true;
+}
+
+/// Clone a trivially materializable op and its transitive operand tree into
+/// a target block. Returns the cloned op's result corresponding to the
+/// original value.
+static Value cloneMaterializableOp(Operation *op, OpBuilder &builder,
+                                   DenseMap<Operation *, Operation *> &cloned) {
+  if (auto it = cloned.find(op); it != cloned.end())
+    return it->second->getResult(0);
+  // Clone operands first.
+  for (auto operand : op->getOperands()) {
+    if (auto *defOp = operand.getDefiningOp())
+      cloneMaterializableOp(defOp, builder, cloned);
+  }
+  auto *newOp = builder.clone(*op);
+  cloned[op] = newOp;
+  return newOp->getResult(0);
+}
+
 /// After all ops are distributed, scan each phase function for values defined
 /// in a different phase. Thread them through the opaque context chain.
 void PhaseSplitter2::fixupCrossPhaseRefs() {
@@ -513,22 +735,23 @@ void PhaseSplitter2::fixupCrossPhaseRefs() {
   // Separate trivially materializable ops (clone instead of threading).
   for (auto &[value, targets] : valueTargetPhases) {
     auto *defOp = value.getDefiningOp();
-    if (defOp && defOp->hasTrait<OpTrait::ConstantLike>()) {
+    if (defOp && isTriviallyMaterializable(defOp)) {
       for (auto targetPhase : targets) {
         auto &targetBlock = splitFor(targetPhase).funcOp.getBody().front();
         OpBuilder targetBuilder(&targetBlock, targetBlock.begin());
-        auto *cloned = targetBuilder.clone(*defOp);
+        DenseMap<Operation *, Operation *> cloneCache;
+        auto replacement =
+            cloneMaterializableOp(defOp, targetBuilder, cloneCache);
         auto targetFunc = splitFor(targetPhase).funcOp;
-        value.replaceUsesWithIf(cloned->getResult(0), [targetFunc](
-                                                          OpOperand &use) {
+        value.replaceUsesWithIf(replacement, [targetFunc](OpOperand &use) {
           return use.getOwner()->getParentOfType<hir::FuncOp>() == targetFunc;
         });
         for (auto &rv : splitFor(targetPhase).returnValues)
           if (rv == value)
-            rv = cloned->getResult(0);
+            rv = replacement;
         for (auto &rv : splitFor(targetPhase).returnTypeOfValues)
           if (rv == value)
-            rv = cloned->getResult(0);
+            rv = replacement;
       }
       continue;
     }
@@ -587,9 +810,9 @@ void PhaseSplitter2::fixupCrossPhaseRefs() {
 
   // Replace all cross-phase uses with unpacked values.
   for (auto &[value, targets] : valueTargetPhases) {
-    // Skip values already handled by cloning (ConstantLike).
+    // Skip values already handled by cloning (trivially materializable).
     if (value.getDefiningOp() &&
-        value.getDefiningOp()->hasTrait<OpTrait::ConstantLike>())
+        isTriviallyMaterializable(value.getDefiningOp()))
       continue;
 
     for (auto targetPhase : targets) {

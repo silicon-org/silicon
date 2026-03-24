@@ -101,6 +101,30 @@ uir.func @TwoArgsOnePhase(%a: -1, %b: -1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Call decomposition: @Caller calls @TwoPhase which has been split into
+// phases -1 and 0. The unified call becomes two hir.call ops, one per
+// callee split entry.
+
+// CHECK-LABEL: hir.func private @Caller.0a() -> (ctx)
+// CHECK:         hir.call @TwoPhase.0(
+// CHECK:         hir.opaque_pack(
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @Caller.0b(%ctx) -> ()
+// CHECK:         hir.opaque_unpack %ctx
+// CHECK:         hir.call @TwoPhase.1(
+// CHECK:         hir.return
+uir.func @Caller() -> () {
+  uir.signature () -> ()
+} {
+  %type_type = hir.type_type
+  %T = hir.int_type
+  %x = hir.int_type
+  %r = uir.call @TwoPhase(%T, %x) : (%type_type, %T) -> (%T) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  uir.return -> ()
+}
+
+//===----------------------------------------------------------------------===//
 // Cross-phase expr result: a value computed at phase -1 (inside const block)
 // is used at phase 0. The value must flow through opaque context.
 
@@ -110,7 +134,6 @@ uir.func @TwoArgsOnePhase(%a: -1, %b: -1) -> (result: 0) {
 // CHECK:         hir.return
 
 // CHECK-LABEL: hir.func private @ExprCrossPhase.0b(%ctx) -> (result)
-// CHECK:         hir.opaque_unpack %ctx
 // CHECK:         hir.return
 
 uir.func @ExprCrossPhase() -> (result: 0) {
