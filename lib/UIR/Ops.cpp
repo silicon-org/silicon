@@ -298,7 +298,6 @@ LogicalResult ExprOp::verify() {
   return success();
 }
 
-
 //===----------------------------------------------------------------------===//
 // PinOp
 //===----------------------------------------------------------------------===//
@@ -571,11 +570,36 @@ LogicalResult FuncOp::verify() {
 }
 
 LogicalResult FuncOp::verifyRegions() {
-  // Make sure there are no signature terminators in the body region.
-  for (auto &block : getBody())
-    if (isa<SignatureOp>(block.getTerminator()))
-      return block.getTerminator()->emitOpError()
-             << "cannot appear in function body";
+  // Signature must end with uir.signature or uir.unreachable.
+  auto *sigTerm = getSignature().front().getTerminator();
+  if (!isa<SignatureOp, UnreachableOp>(sigTerm))
+    return sigTerm->emitOpError()
+           << "expected 'uir.signature' or 'uir.unreachable' terminator "
+              "in signature region";
+
+  // Signature must not contain uir.return anywhere (even nested).
+  auto sigWalkResult = getSignature().walk([](ReturnOp op) {
+    op.emitOpError() << "cannot appear in signature region";
+    return WalkResult::interrupt();
+  });
+  if (sigWalkResult.wasInterrupted())
+    return failure();
+
+  // Body must end with uir.return or uir.unreachable.
+  auto *bodyTerm = getBody().front().getTerminator();
+  if (!isa<ReturnOp, UnreachableOp>(bodyTerm))
+    return bodyTerm->emitOpError()
+           << "expected 'uir.return' or 'uir.unreachable' terminator "
+              "in function body";
+
+  // Body must not contain uir.signature anywhere (even nested).
+  auto bodyWalkResult = getBody().walk([](SignatureOp op) {
+    op.emitOpError() << "cannot appear in function body";
+    return WalkResult::interrupt();
+  });
+  if (bodyWalkResult.wasInterrupted())
+    return failure();
+
   return success();
 }
 
@@ -756,19 +780,38 @@ LogicalResult SplitFuncOp::verify() {
                          << " entries but phaseFuncs has "
                          << getPhaseFuncs().size() << " entries";
 
+  // Check block arguments in signature region.
+  if (!getSignature().empty()) {
+    auto numArgs = getArgPhases().size();
+    if (getSignature().front().getNumArguments() != numArgs)
+      return emitOpError() << "signature region has "
+                           << getSignature().front().getNumArguments()
+                           << " block arguments but function has " << numArgs
+                           << " arguments";
+  }
+
   return success();
 }
 
 LogicalResult SplitFuncOp::verifyRegions() {
-  // Make sure signature region is terminated by SignatureOp or
-  // UnreachableOp (when all branches have uir.signature inside CF).
   if (getSignature().empty())
     return success();
-  auto &block = getSignature().front();
-  if (!isa<SignatureOp, UnreachableOp>(block.getTerminator()))
-    return block.getTerminator()->emitOpError()
+
+  // Signature must end with uir.signature or uir.unreachable.
+  auto *sigTerm = getSignature().front().getTerminator();
+  if (!isa<SignatureOp, UnreachableOp>(sigTerm))
+    return sigTerm->emitOpError()
            << "expected 'uir.signature' or 'uir.unreachable' terminator "
               "in signature region";
+
+  // Signature must not contain uir.return anywhere (even nested).
+  auto walkResult = getSignature().walk([](ReturnOp op) {
+    op.emitOpError() << "cannot appear in signature region";
+    return WalkResult::interrupt();
+  });
+  if (walkResult.wasInterrupted())
+    return failure();
+
   return success();
 }
 

@@ -118,10 +118,10 @@ uir.func @loop_yield_with_values(%a: 0) -> () {
 
 // -----
 
-// Verify that uir.signature cannot appear in function body.
+// Verify that uir.signature cannot terminate the function body.
 uir.func @sig_in_body(%a: 0) -> () {
   uir.signature (%a) -> ()
 } {
-  // expected-error @below {{cannot appear in function body}}
+  // expected-error @below {{expected 'uir.return' or 'uir.unreachable' terminator in function body}}
   uir.signature (%a) -> ()
 }
