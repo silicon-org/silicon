@@ -81,3 +81,11 @@
   - Pinned ops (pins, pinned exprs, zero-use statements) have authoritative phases set by `processBlock`. When reached via DFS, their existing phase is returned without tightening. Detected via: `latestConstraint` not set + `actualPhase` already set.
   - Calls tighten incrementally via `callPhase = min(old, latest - resultOffset)` per result consumer. Re-descends into args on tightening.
   - `resolveOp` handles both pinned ops (from processBlock) and floating region-bearing ops (from resolveValue). Uses tightening check (`opPhases[op] <= phase → skip`).
+- SplitPhases2 adversarial review findings (remaining to address):
+  - Call decomposition is the main missing piece
+  - Signature reconstruction is currently all-opaque; needs to derive types from unified sig and context
+  - MultiphaseFuncOp arg handling may miss middle-phase args in multi-phase groups (design doc says these should be threaded through context as first-phase args)
+  - Design doc deficiency: no specification of how to derive per-phase signatures (only unified sig is documented)
+  - Design doc terminology: phase-inference.md mixes hir.unified_func/uir.func naming
+- Phase inference test generation (2026-03-23): created 50 test inputs in `tmp/phase-inference/` covering basic through adversarial corner cases. Key finding: `const { dyn { expr } }` does NOT cancel for value results — the dyn block delivers at p(dyn)=p(const)+1, but the const block demands p(const) for its result expression. Only for CONTROL FLOW checks (return/break/continue) do balanced const/dyn blocks cancel, because those check p(enclosing_block)=p(target). Fixed a bug in test 08 (`const_dyn_cancel`) which incorrectly claimed `const { dyn { 42 } }` succeeds. Tests 41-42 thoroughly exercise this distinction with balanced nesting up to 6 levels, off-by-one imbalance, break/continue at non-zero loop phases, and the contrast between CF success and value failure in the same function.
+- UIR region terminators: don't over-constrain verifiers. ExprOp bodies and FuncOp signatures can legitimately end with `uir.unreachable` (when all paths yield/return inside structured CF). The pass code must handle both `uir.yield`/`uir.signature` and `uir.unreachable` as terminators.

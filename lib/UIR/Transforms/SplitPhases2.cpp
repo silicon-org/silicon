@@ -281,16 +281,24 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
   // After merging, these Values track through distribution and fixup.
   {
     auto &sigBlock = funcOp.getSignature().front();
-    auto sigTerminator = cast<uir::SignatureOp>(sigBlock.getTerminator());
 
-    // Save type value handles.
-    savedSigTypeOfArgs.assign(sigTerminator.getTypeOfArgs().begin(),
-                              sigTerminator.getTypeOfArgs().end());
-    savedSigTypeOfResults.assign(sigTerminator.getTypeOfResults().begin(),
-                                 sigTerminator.getTypeOfResults().end());
-
-    // Erase the sig terminator (keep the type-computing ops).
-    sigTerminator.erase();
+    // Save type value handles from the sig terminator. The sig normally
+    // ends with uir.signature, but can end with uir.unreachable if all
+    // branches have uir.signature inside structured CF.
+    if (auto sigTerminator =
+            dyn_cast<uir::SignatureOp>(sigBlock.getTerminator())) {
+      savedSigTypeOfArgs.assign(sigTerminator.getTypeOfArgs().begin(),
+                                sigTerminator.getTypeOfArgs().end());
+      savedSigTypeOfResults.assign(sigTerminator.getTypeOfResults().begin(),
+                                   sigTerminator.getTypeOfResults().end());
+      sigTerminator.erase();
+    } else {
+      // No top-level signature terminator. Erase whatever terminator is
+      // there (e.g., uir.unreachable) so it doesn't get cloned into the
+      // body. Nested uir.signature ops inside structured CF will be
+      // handled by FlattenCF later.
+      sigBlock.getTerminator()->erase();
+    }
 
     // Clone sig ops into the body, remapping sig block args to body block
     // args. We can't splice+RAUW because that crosses IsolatedFromAbove
@@ -652,25 +660,31 @@ void PhaseSplitter2::dissolveExprsAndPins() {
     body.walk([&](ExprOp op) { exprs.push_back(op); });
     for (auto exprOp : exprs) {
       auto &exprBody = exprOp.getBody().front();
-      auto yieldOp = cast<YieldOp>(exprBody.getTerminator());
+      auto *terminator = exprBody.getTerminator();
 
-      // Replace expr results with yield values, including tracked returns.
-      for (auto [result, yieldVal] :
-           llvm::zip(exprOp.getResults(), yieldOp.getValues())) {
-        result.replaceAllUsesWith(yieldVal);
-        // Also update tracked return values/types.
-        for (auto &s : splits) {
-          for (auto &rv : s.returnValues)
-            if (rv == result)
-              rv = yieldVal;
-          for (auto &rv : s.returnTypeOfValues)
-            if (rv == result)
-              rv = yieldVal;
+      // The body normally ends with uir.yield, but can end with
+      // uir.unreachable if all paths yield inside structured CF.
+      if (auto yieldOp = dyn_cast<YieldOp>(terminator)) {
+        // Replace expr results with yield values, including tracked returns.
+        for (auto [result, yieldVal] :
+             llvm::zip(exprOp.getResults(), yieldOp.getValues())) {
+          result.replaceAllUsesWith(yieldVal);
+          for (auto &s : splits) {
+            for (auto &rv : s.returnValues)
+              if (rv == result)
+                rv = yieldVal;
+            for (auto &rv : s.returnTypeOfValues)
+              if (rv == result)
+                rv = yieldVal;
+          }
         }
+        yieldOp.erase();
       }
+      // If unreachable: expr results have no top-level definition (all
+      // paths yield inside CF). The results remain as-is; FlattenCF will
+      // resolve them when lowering the structured CF ops.
 
-      // Erase the yield, then inline the body into the parent block.
-      yieldOp.erase();
+      // Inline the body into the parent block.
       auto *parentBlock = exprOp->getBlock();
       parentBlock->getOperations().splice(exprOp->getIterator(),
                                           exprBody.getOperations());
