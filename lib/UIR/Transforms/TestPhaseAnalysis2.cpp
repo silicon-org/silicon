@@ -38,21 +38,41 @@ struct TestPhaseAnalysis2Pass
         return;
       }
 
-      // Annotate each op in signature and body with its phase.
+      auto *ctx = funcOp.getContext();
+
+      // Turn a phase value into a string attribute: "float" or "-1", "0", etc.
+      auto phaseAttr = [&](int16_t phase) -> StringAttr {
+        if (phase == INT16_MIN)
+          return StringAttr::get(ctx, "float");
+        return StringAttr::get(ctx, std::to_string(phase));
+      };
+
+      // Build an array of phase strings for a range of values.
+      auto valuePhases = [&](auto values) -> ArrayAttr {
+        SmallVector<Attribute> attrs;
+        for (Value v : values) {
+          auto it = analysis.actualPhase.find(v);
+          if (it != analysis.actualPhase.end())
+            attrs.push_back(phaseAttr(it->second));
+          else
+            attrs.push_back(StringAttr::get(ctx, "?"));
+        }
+        return ArrayAttr::get(ctx, attrs);
+      };
+
+      // Annotate each op with its phase, plus operand and result phases.
       auto annotate = [&](Region &region) {
         region.walk([&](Operation *op) {
           auto it = analysis.opPhases.find(op);
           if (it == analysis.opPhases.end())
             return;
-          int16_t phase = it->second;
-          if (phase == INT16_MIN) {
-            op->setAttr("phase", StringAttr::get(op->getContext(), "float"));
-          } else {
-            op->setAttr("phase",
-                        IntegerAttr::get(IntegerType::get(op->getContext(), 16,
-                                                          IntegerType::Signed),
-                                         phase));
-          }
+          op->setAttr("pa.phase", phaseAttr(it->second));
+
+          if (op->getNumOperands() > 0)
+            op->setAttr("pa.operands", valuePhases(op->getOperands()));
+
+          if (op->getNumResults() > 0)
+            op->setAttr("pa.results", valuePhases(op->getResults()));
         });
       };
       annotate(funcOp.getSignature());
