@@ -13,7 +13,7 @@ The only exception is **pure ops**, which may be adjusted to an earlier phase if
 | Function arguments | declared phase (`const` → -1, `dyn` → +1, stacking) | fixed |
 | Function results | declared phase (same modifiers) | fixed |
 | Pure ops | **earliest** = `max(p(operands))` | bottom-up |
-| Calls | **latest** = pushed from parent, adjusted by result offsets | top-down |
+| Calls | `p(enclosing_block)`, result values shifted by offsets | fixed |
 | CF expressions (`if`, `loop`, `while`, `for`, `match`) | `p(enclosing_block)` | fixed |
 | Blocks (`{ ... }`) | **latest** = inherited from parent expression | top-down |
 | `const { ... }` / `dyn { ... }` blocks | `p(enclosing_block) + shift` (-1 / +1) | fixed |
@@ -35,17 +35,22 @@ The only exception is **pure ops**, which may be adjusted to an earlier phase if
   If there is slack (earliest < latest), the op is scheduled at the earliest phase — eager evaluation.
   This is a small optimization within the otherwise top-down algorithm.
 
-- **Calls** have weighted edges from the callee's signature.
-  Latest is pushed from the parent (adjusted by result offsets): `latest = min_j(p(consumer_j) - result_offset_j)`.
-  This latest is pushed to each arg as `latest + arg_offset_i`.
-  Calls resolve to their latest — lazy evaluation.
-  The bottom-up pass computes `earliest = max_i(p(arg_i) - arg_offset_i)` and verifies `earliest ≤ latest`.
+- **Calls** are anchored at `p(enclosing_block)`, like CF expressions.
+  Arg values must be available at `p(call) + arg_offset_i` (feasibility check).
+  Result values are at `p(call) + result_offset_j`.
+  When a call needs to execute at a different phase (e.g., as a const call argument), codegen wraps it in a floating `uir.expr` — the `uir.expr` floats to the consumer's demand, and the call inside is anchored at the expr's block phase.
+  At the language level, nested calls like `foo(bar(x))` appear to float seamlessly; at the IR level, codegen wraps each call-as-subexpression in a `uir.expr` which carries the demand.
 
 - **CF expressions** (`if`, `loop`, `while`, `for`, `match`) are anchored at `p(enclosing_block)`.
   They are control flow decisions and execute at the phase of their surrounding block.
   The condition/iterator must be available at or before `p(CF)` (feasibility check).
   Branch/body blocks are at `p(CF)`.
   When a CF expression needs to float to a different phase (e.g., as a const call argument), codegen wraps it in a `uir.expr` — the `uir.expr` is what floats, not the CF op itself.
+
+- **Side-effecting ops** in general are anchored at `p(enclosing_block)`.
+  Calls and CF are the main categories, but any op with side effects (e.g., `func.call`, `hir.let`) follows the same rule.
+  Only pure ops and ConstantLike ops may float to earlier phases; everything else is anchored.
+  The `uir.expr` wrapper is the universal mechanism for moving a group of side-effecting ops to a different phase.
 
 - **Blocks** (`{ ... }`) inherit their phase from the parent expression's constraint.
   Statements within pin at `p(block)`.
@@ -129,8 +134,8 @@ Push the *latest* phase from parent to children, resolving as we go:
 - **`const` / `dyn` blocks**: `p(block) = p(enclosing_block) + shift`. Push to children.
 - **Statements**: pin root expression at `p(block)`. Push to children.
 - **`let` bindings**: pin at `p(block)`. Process expression's full DFS first to determine `p(value)`. Then push `latest = p(value) - 1` to type expression and process its DFS.
-- **Calls**: `p(call) = latest` from parent (adjusted by result offsets). Push `p(call) + arg_offset_i` to each arg.
-- **CF expressions**: `p(CF) = latest` from parent. Push `p(CF)` as condition latest and branch block phase.
+- **Calls**: `p(call) = p(enclosing_block)`. Push `p(call) + arg_offset_i` to each arg. Result values at `p(call) + result_offset_j`.
+- **CF expressions**: `p(CF) = p(enclosing_block)`. Push `p(CF)` as condition latest and branch block phase.
 - **`return`/`break`/`continue`**: check `p(enclosing_block) = p(target)` immediately. Error if mismatch.
 - **Leaves** (variable references, literals): check `p(leaf) ≤ latest`. ConstantLike at `-∞` always passes. Function args and `let`-bound variables check their already-resolved phase ≤ latest.
 
@@ -139,8 +144,8 @@ Push the *latest* phase from parent to children, resolving as we go:
 Compute *earliest* and verify feasibility:
 
 - **Pure ops**: `earliest = max(p(resolved_operands))`. If `earliest ≤ latest`, resolve to earliest (the only adjustment to the top-down assignment). Otherwise error.
-- **Calls**: `earliest = max_i(p(resolved_arg_i) - arg_offset_i)`. Check `earliest ≤ latest` (feasibility). Keep latest resolution.
-- **CF expressions**: `earliest = max(condition_resolved, ...)`. Check `earliest ≤ latest`. Keep latest resolution.
+- **Calls**: `earliest = max_i(p(resolved_arg_i) - arg_offset_i)`. Check `earliest ≤ p(call)` (feasibility).
+- **CF expressions**: `earliest = max(condition_resolved, ...)`. Check `earliest ≤ p(CF)` (feasibility).
 
 ## Implementation Structure
 
@@ -493,14 +498,14 @@ pub fn main3(const a: int, const b: int) -> int {   // a: -1, b: -1, return: 0
 }
 ```
 
-When the callee's arg and result offsets are all zero, a call snaps to its latest.
+When the callee's arg and result offsets are all zero, a call is at `p(block)`.
 
-`main1`: latest 0 (return). Earliest `max(0, 0) = 0`. No slack.
+`main1`: call at 0 (block phase). Arg feasibility: `max(0, 0) = 0 ≤ 0`. ✓.
 
-`main2`: latest 0. Earliest `max(-1, 0) = 0`. No slack.
+`main2`: call at 0. Arg feasibility: `max(-1, 0) = 0 ≤ 0`. ✓.
 
-`main3`: latest 0. Earliest `max(-1, -1) = -1`. Slack, but call resolves to latest (0).
-The call waits until its result is needed rather than executing as soon as its inputs are ready.
+`main3`: call at 0. Arg feasibility: `max(-1, -1) = -1 ≤ 0`. ✓.
+Both args are const, available one phase earlier — the call could in principle execute earlier, but it's anchored at the block phase.
 
 ### Example 5: Phase errors on return
 
@@ -508,15 +513,15 @@ The call waits until its result is needed rather than executing as soon as its i
 fn add(x: int, y: int) -> int { x + y }
 
 pub fn main4(const a: int, b: int) -> const int {   // a: -1, b: 0, return: -1
-  add(a, b)                                          // -1  (latest); earliest 0 → ERROR
+  add(a, b)                                          // 0  (block phase); result at 0, return needs -1 → ERROR
 }
 
 pub fn main5(a: int, b: int) -> const int {          // a: 0, b: 0, return: -1
-  add(a, b)                                          // -1  (latest); earliest 0 → ERROR
+  add(a, b)                                          // 0  (block phase); result at 0, return needs -1 → ERROR
 }
 ```
 
-Both have infeasible constraints: earliest phase 0, but the `const` return requires phase -1.
+Both have infeasible constraints: the call is at block phase 0, result at 0 (all-zero offsets), but the `const` return requires -1.
 
 `main4` error — `b` is the sole bottleneck:
 ```
@@ -749,10 +754,11 @@ pub fn main(const a: int, b: int) -> int {   // a: -1, b: 0, return: 0
 
 `const { a + 42 }` is pinned at -1.
 foo's const arg requires ≤ `p(call) + (-1)`.
-Call latest = `0 - 0` = 0. Arg 1 latest = `0 + (-1)` = -1.
-Block at -1 ≤ -1. ✓.
+Call at `p(block) = 0`. Arg 0 needs `0 + (-1)` = -1.
+`const` block at -1 ≤ -1. ✓.
 
-Compare with a regular block: `foo({ a + 42 }, b)` — the regular block would inherit its phase from the call's demand (-1), arriving at the same result.
+Compare with a plain subexpression: `foo(a + 42, b)` — codegen wraps `a + 42` in a floating `uir.expr`, which floats to -1 (from the const arg demand), arriving at the same result.
+The `const { ... }` is more explicit: it *pins* the block at -1 regardless of the consumer's demand.
 The difference shows when the enclosing context and the call's demand disagree (see below).
 
 #### `const { ... }` vs `{ ... }` — where they diverge
@@ -1200,15 +1206,17 @@ This keeps CF ops simple and predictable: their phase is always determined by th
 
 #### Summary
 
-At the **language level**, control flow expressions (`if`, `loop`, `while`, `for`, `match`) appear to resolve to **latest** (lazy, top-down), same as calls — when used as expressions in call arguments or assignments, they snap to the consumer's demanded phase.
+At the **language level**, calls and control flow expressions (`if`, `loop`, `while`, `for`, `match`) appear to resolve to **latest** (lazy, top-down) — when used as subexpressions in call arguments or assignments, they snap to the consumer's demanded phase.
 
-At the **IR level**, this is implemented by anchoring CF ops at their enclosing block phase:
-- `uir.if`, `uir.loop`, `uir.match` are always at `p(enclosing_block)`.
-- When the language requires floating (e.g., `if` as a const call arg), codegen wraps the CF op in a floating `uir.expr`, which carries the consumer demand.
-- The CF op is then anchored at the `uir.expr`'s block phase, which is the consumer's demanded phase.
+At the **IR level**, this is implemented by anchoring all side-effecting ops at their enclosing block phase:
+- `uir.call`, `uir.if`, `uir.loop`, `uir.match` are always at `p(enclosing_block)`.
+- When the language requires floating (e.g., a call or `if` as a const call arg), codegen wraps the op in a floating `uir.expr`, which carries the consumer demand.
+- The wrapped op is then anchored at the `uir.expr`'s block phase, which is the consumer's demanded phase.
+- Only pure ops and ConstantLike ops may float to earlier phases on their own; everything else requires a `uir.expr` wrapper.
 
-Sub-blocks of the CF op are at the CF op's phase.
-The condition/iterator must be available at or before the CF op's phase (feasibility check).
+Sub-blocks of CF ops are at the CF op's phase.
+Call args must be available at `p(call) + arg_offset_i` (feasibility check).
+The condition/iterator of a CF op must be available at or before the CF op's phase.
 `uir.return`/`uir.break`/`uir.continue` impose a constraint: `p(enclosing_block) = p(target)`.
 This constraint prevents the enclosing `uir.expr` from floating to a phase where the CF transfer would cross a phase boundary.
 
@@ -1343,24 +1351,23 @@ fn foo(
   const A: int,                  // -1
   const B: int,                  // -1
   x: uint<compute_width(A, B)>,  // 0.   Type: compute_width is a call.
-) -> int {                       //      Call latest = 0 - 1 = -1.
-  0                               //      Call earliest = max(-1-(-1), -1-(-1)) = 0.
-}                                  //      [0, -1] → ERROR!
+) -> int {                       //      Type needs phase -1. Call in uir.expr floats to -1.
+  0                               //      Arg feasibility: -1 + (-1) = -2, args at -1. ERROR!
+}                                  //
 ```
 
-The call to `compute_width(A, B)` in the type expression has earliest 0 (from the const arg offsets: `(-1) - (-1) = 0`).
-But the type needs to be at -1. Error!
-
-This is the call offset issue: `compute_width` has const args (offset -1), so passing `A` at -1 gives `(-1) - (-1) = 0`.
-The call can't be earlier than 0, but the type needs -1.
+The call to `compute_width(A, B)` in the type expression is wrapped in a `uir.expr` (subexpression of the type annotation).
+The type context demands phase -1. The `uir.expr` floats to -1. The call inside is at -1.
+Arg feasibility: `compute_width` has const args (offset -1), so args need `-1 + (-1) = -2`. `A` and `B` are at -1. `-1 > -2`: **ERROR!**
+The args aren't available early enough for the call to execute at -1.
 
 The fix: `compute_width` would need to return `const int` (result offset -1):
 ```silicon
 fn compute_width(const a: int, const b: int) -> const int { a + b }
 ```
-Now the call's result is at `p(call) + (-1) = 0 + (-1) = -1`.
-The call's latest = `(-1) - (-1) = 0` from the type context. The call snaps to 0.
-Result at `0 - 1 = -1`. The type is at -1. ✓.
+Now the `uir.expr` floats to 0 (from the type context: `-1 - (-1) = 0`).
+The call is at 0. Args need `0 + (-1) = -1`. `A` and `B` at -1: ✓.
+Result at `0 + (-1) = -1`. The type is at -1. ✓.
 
 Or alternatively, use a pure expression instead of a call: `uint<A + B>` works directly because pure ops are eager.
 
@@ -1438,7 +1445,7 @@ In the DFS, the expression is processed first to determine `p(value)`, then `lat
 - **Concrete types** (`int`, `bool`): at `-∞`, always satisfied.
 - **Dependent types** (`uint<N>`): pure op, resolves eagerly. The type-determining value (`N`) must be at a strictly earlier phase than the annotated value.
 - **Type arithmetic** (`uint<A + B>`): pure ops compose naturally.
-- **Call results in types** (`uint<compute_width(A, B)>`): calls snap to latest, which can conflict with the type's deadline. Use pure expressions or `const` result modifiers.
+- **Call results in types** (`uint<compute_width(A, B)>`): calls are anchored at the `uir.expr`'s block phase (which floats to the type's demand), but arg offset feasibility can conflict with the type's deadline. Use pure expressions or `const` result modifiers.
 - **`let` with const shift**: shifting a value earlier also shifts the type requirement earlier, potentially requiring deeper `const const` on dependencies.
 - **`const` on typed arg**: deepens the type requirement by one phase. `const x: uint<N>` needs the type at `p(x) - 1`, which is one phase earlier than for a regular arg.
 - **`dyn` on typed arg**: relaxes the type requirement. The type has more time to be computed.
@@ -1471,7 +1478,7 @@ dyn static DEFERRED: int = deferred(42);   // pinned at 0. dyn shifts → DEFERR
 
 The expressions are pinned at the module body phase (0), same as `let` bindings.
 The `const`/`dyn` modifier shifts the resulting value's phase.
-Inside, the same DFS rules apply: calls snap to latest, pure ops float eagerly, types must be one phase before the value.
+Inside, the same DFS rules apply: calls and CF are anchored at the block phase, pure ops float eagerly, types must be one phase before the value.
 
 #### Multi-phase call in a global
 
@@ -1551,7 +1558,7 @@ fn factorial(
     1                // -∞
   } else {           // block: 0
     n                // -1
-      * factorial(   // 0 (call, latest)
+      * factorial(   // 0 (call, block phase)
           n - 1      // [-1, -1] → -1 (pure; no slack)
         )            // result at 0
   }                  // 0 (pure `*`; earliest = max(-1, 0) = 0, no slack)
