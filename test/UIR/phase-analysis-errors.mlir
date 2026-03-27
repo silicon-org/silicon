@@ -252,3 +252,40 @@ uir.func @ConstReturnCall(%x: 0) -> (result: -1) {
   %r = uir.call @ConstReturnCallHelper(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
   uir.return %r -> (%tr)
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Dyn value pinned at block phase: phase 1 cannot satisfy pin at phase 0.
+
+// expected-error @+1 {{value at phase 1 cannot satisfy requirement for phase 0}}
+uir.func @DynPinAtBlockPhase(%a: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  // expected-remark @+2 {{required by operand at phase 0}}
+  // expected-error @+1 {{value at phase 1 cannot satisfy requirement for phase 0}}
+  %sum = hir.add %a, %c1 : %t
+  // expected-remark @+1 {{required by pin at phase 0}}
+  %x = uir.pin %sum, 0 : !hir.any
+  uir.return %x -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Dyn arg returned via non-dyn result: phase 1 cannot satisfy phase 0.
+
+// expected-error @+1 {{value at phase 1 cannot satisfy requirement for phase 0}}
+uir.func @DynReturnMismatch(%a: 1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  // expected-remark @+1 {{required by return value at phase 0}}
+  uir.return %a -> (%t)
+}

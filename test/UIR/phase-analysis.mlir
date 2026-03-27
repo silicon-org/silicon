@@ -78,15 +78,16 @@ uir.func @ConstIdentity(%x: -1) -> (result: 0) {
   uir.return %x -> (%t)
 }
 
-// Dyn arg basics: identity pass-through, dyn+literal, and dyn+dyn pure ops
-// all at phase 1. Return op stays at phase 0, carrying phase-1 values.
+// Dyn arg basics: identity pass-through, dyn+literal, dyn+dyn, and a diamond
+// DAG of pure ops — all at phase 1. Return op stays at phase 0.
 // CHECK-LABEL: uir.func @DynArg
-uir.func @DynArg(%a: 1, %b: 1) -> (r0: 1, r1: 1, r2: 1) {
+uir.func @DynArg(%a: 1, %b: 1) -> (r0: 1, r1: 1, r2: 1, r3: 1) {
   %t0 = hir.int_type
   %t1 = hir.int_type
   %t2 = hir.int_type
   %t3 = hir.int_type
-  uir.signature (%t0, %t1) -> (%t0, %t2, %t3)
+  %t4 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t0, %t2, %t3, %t4)
 } {
   %t = hir.int_type
   // Dyn + literal: add floats to phase 1.
@@ -98,11 +99,16 @@ uir.func @DynArg(%a: 1, %b: 1) -> (r0: 1, r1: 1, r2: 1) {
   // CHECK: hir.add %a, %b {{.*}}pa.phase = "1"
   // CHECK-SAME: pa.results = ["1"]
   %ab = hir.add %a, %b : %t
+  // Diamond DAG: (a+1)*(a-1), all pure ops at phase 1.
+  // CHECK: hir.sub {{.*}}pa.phase = "1"
+  %xm1 = hir.sub %a, %c1 : %t
+  // CHECK: hir.mul {{.*}}pa.phase = "1"
+  %prod = hir.mul %sum, %xm1 : %t
   // Return at phase 0, all value operands at phase 1.
   // CHECK: uir.return {{.*}} -> ({{.*}})
-  // CHECK-SAME: pa.operands = ["1", "1", "1", "float", "float", "float"]
+  // CHECK-SAME: pa.operands = ["1", "1", "1", "1", "float", "float", "float", "float"]
   // CHECK-SAME: pa.phase = "0"
-  uir.return %a, %sum, %ab -> (%t, %t, %t)
+  uir.return %a, %sum, %ab, %prod -> (%t, %t, %t, %t)
 }
 
 // CHECK-LABEL: uir.func @ConstArg
