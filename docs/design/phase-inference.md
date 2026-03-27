@@ -19,7 +19,7 @@ The only exception is **pure ops**, which may be adjusted to an earlier phase if
 | `const { ... }` / `dyn { ... }` blocks | `p(enclosing_block) + shift` (-1 / +1) | fixed |
 | Type expressions | latest = `p(annotated_value) - 1` | top-down |
 | Statements (`;`-terminated) | `p(enclosing_block)` | fixed |
-| `let x = expr;` | execution pinned at `p(block)`; value `x` at result phase | fixed |
+| `let x = expr;` | name binding; `x` has the phase of `expr`'s result | — |
 | Global declarations (`static`) | pinned at module body phase; value shifted by `const`/`dyn` | fixed |
 | `return` / `break` / `continue` | checked against target phase | constraint |
 
@@ -64,12 +64,17 @@ The only exception is **pure ops**, which may be adjusted to an earlier phase if
 - **Statements** pin the execution context at `p(block)`.
   The `;` means "evaluate here."
 
-- **`let` bindings** are statements: the execution context is pinned at `p(block)`.
-  The value `x` can be at a different phase, shifted by `const { ... }`, `dyn { ... }`, or call result offsets:
-  - `let x = a + 42;` → x at `p(block)` (pure op, pinned by statement)
-  - `let x = const { a + 42 };` → x at `p(block) - 1`
-  - `let x = dyn { b + 1 };` → x at `p(block) + 1`
-  - `let x = foo(...);` where foo returns `dyn int` → x at `p(block) + 1`
+- **`let` bindings** are name bindings: `let x = expr` assigns the name `x` to the result of `expr`.
+  The `let` itself has no phase effect — it does not pin or constrain the expression's phase.
+  The phase of `x` is entirely determined by the RHS expression:
+  - `let x = a + 42;` → x at `max(p(a), -∞)` (pure op, floats to earliest)
+  - `let x = const { a + 42 };` → x at `p(block) - 1` (explicit const block)
+  - `let x = dyn { b + 1 };` → x at `p(block) + 1` (explicit dyn block)
+  - `let x = foo(...);` → x at `p(call) + result_offset` (call anchored at block phase)
+  For pure RHS expressions, the phase of `x` may also be influenced by usage sites: if multiple consumers demand `x` at different phases, the pure op floats to the earliest that satisfies all consumers.
+  At the IR level, `let` emits no wrapping ops (`uir.pin` or `uir.expr`).
+  The RHS expression's ops are emitted directly into the enclosing block.
+  Phase shifts require explicit `const { ... }` / `dyn { ... }` blocks on the RHS.
 
 - **Type-constructing ops** (`hir.int_type`, `hir.uint_type %N`, `hir.type_type`, etc.) are just pure ops, like `hir.add`.
   (These are `hir` dialect ops; they coexist with the `uir` structured CF ops before flattening.)

@@ -106,6 +106,16 @@ Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
 - Remove `const fn` / `dyn fn` support from parser and codegen.
   These don't bring distinct semantics beyond arg/result modifiers and `const { ... }` / `dyn { ... }` blocks.
   See docs/design/phase-inference.md for the rationale.
+- Remove `let const` / `let dyn` syntax if it exists.
+  `let` is now a pure name binding; phase shifts use `const { ... }` / `dyn { ... }` on the RHS.
+
+## Let Bindings and uir.pin
+
+- Codegen should stop emitting `uir.pin` or `uir.expr` for plain `let` bindings.
+  `let x = expr` should just emit the RHS expression ops directly into the block.
+  The `let` is a name binding, not a phase constraint.
+- `uir.pin` remains useful for pinning pure ops at a specific phase (e.g., preventing a pure expression from floating), but is no longer tied to `let` bindings.
+- `hir.let` op may need to be rethought or removed — it currently implies pinning semantics that no longer apply.
 
 ## HIR Ops
 
