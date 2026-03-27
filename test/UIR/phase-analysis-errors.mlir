@@ -188,3 +188,67 @@ uir.func @ZeroUsePin(%a: 0) -> () {
   %p = uir.pin %sum, 0 : !hir.any
   uir.return -> ()
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Body-phase arg cannot satisfy const return (result: -1).
+
+// expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @ConstReturnBodyArg(%x: 0) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  // expected-remark @+1 {{required by return value at phase -1}}
+  uir.return %x -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Pure op with body-phase operand cannot satisfy const return. Two error
+// chains: %x→add (operand too late) and add→return (result too late).
+
+// expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @ConstReturnPureOp(%x: 0) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  // expected-remark @+2 {{required by operand at phase -1}}
+  // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
+  %sum = hir.add %x, %c1 : %t
+  // expected-remark @+1 {{required by return value at phase -1}}
+  uir.return %sum -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Call result at phase 0 cannot satisfy const return.
+
+uir.func @ConstReturnCallHelper(%a: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  uir.return %a -> (%t)
+}
+
+// expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @ConstReturnCall(%x: 0) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // expected-remark @+1 {{required by call argument 0 at phase -1}}
+  %r = uir.call @ConstReturnCallHelper(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+  uir.return %r -> (%tr)
+}

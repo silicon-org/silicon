@@ -107,6 +107,10 @@ Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
   These don't bring distinct semantics beyond arg/result modifiers and `const { ... }` / `dyn { ... }` blocks.
   See docs/design/phase-inference.md for the rationale.
 
+## HIR Ops
+
+- Comparison ops (`hir.gt`, `hir.lt`, `hir.geq`, `hir.leq`, `hir.eq`, `hir.neq`) should take a second type operand for the type of the values being compared, e.g. `hir.gt %a, %b : %int_ty -> %bool_ty` instead of just `hir.gt %a, %b : %bool_ty`.
+
 ## Postponed Long-Term Fixes
 
 - MIRToCIRCT: `!si.int` is temporarily mapped to `i64`; once bitwidth inference exists, this should be an error diagnostic instead
