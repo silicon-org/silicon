@@ -524,38 +524,6 @@ uir.func @ConstCondIf(%flag: -1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// Dyn arg as if condition: if pulls to phase 1 (condition not available until
-// then). Yields at phase 1 carry floating literals. Result at phase 1.
-
-// CHECK-LABEL: uir.func @DynCondIf
-uir.func @DynCondIf(%flag: 1) -> (result: 1) {
-  %t0 = hir.int_type
-  %t1 = hir.int_type
-  uir.signature (%t0) -> (%t1)
-} {
-  %t = hir.int_type
-  %c1 = hir.constant_int 1 : %t
-  %c0 = hir.constant_int 0 : %t
-  // CHECK: uir.if {{.*}} {
-  %r = uir.if %flag : %t {
-    // CHECK: uir.yield {{.*}}pa.operands = ["float", "float"]
-    // CHECK-SAME: pa.phase = "1"
-    uir.yield %c1 : %t
-  } else {
-    // CHECK: uir.yield {{.*}}pa.operands = ["float", "float"]
-    // CHECK-SAME: pa.phase = "1"
-    uir.yield %c0 : %t
-  // CHECK: } {pa.operands = ["1", "float"]
-  // CHECK-SAME: pa.phase = "1"
-  // CHECK-SAME: pa.results = ["1"]
-  }
-  // CHECK: uir.return {{.*}} -> ({{.*}})
-  // CHECK-SAME: pa.operands = ["1", "float"]
-  // CHECK-SAME: pa.phase = "0"
-  uir.return %r -> (%t)
-}
-
-//===----------------------------------------------------------------------===//
 // uir.loop with break.
 
 // CHECK-LABEL: uir.func @LoopOp

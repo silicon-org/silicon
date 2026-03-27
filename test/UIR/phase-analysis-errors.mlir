@@ -289,3 +289,27 @@ uir.func @DynReturnMismatch(%a: 1) -> (result: 0) {
   // expected-remark @+1 {{required by return value at phase 0}}
   uir.return %a -> (%t)
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Dyn condition on block-anchored uir.if: condition at phase 1 cannot satisfy
+// the if at block phase 0. Needs uir.expr wrapping to float.
+
+// expected-error @+1 {{value at phase 1 cannot satisfy requirement for phase 0}}
+uir.func @DynCondIf(%flag: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  %c0 = hir.constant_int 0 : %t
+  // expected-remark @+1 {{required by if condition at phase 0}}
+  %r = uir.if %flag : %t {
+    uir.yield %c1 : %t
+  } else {
+    uir.yield %c0 : %t
+  }
+  uir.return %r -> (%t)
+}
