@@ -136,8 +136,14 @@ void PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
         // Root: expression statement (zero-use, pinned at blockPhase).
         resolveOp(&op, blockPhase);
       }
+    } else if (!isa<ExprOp>(&op) && !hir::isEffectivelyPure(&op) &&
+               !op.hasTrait<OpTrait::ConstantLike>()) {
+      // Side-effecting ops (calls, CF) are anchored at the block phase.
+      // Only floating uir.expr, pure ops, and constants may float.
+      resolveOp(&op, blockPhase);
     }
-    // Everything else is floating — reached via use-def from roots/terminator.
+    // Floating uir.expr, pure ops, and constants are reached via use-def
+    // from roots/terminator.
   }
 
   // Step 2: Process the terminator.
