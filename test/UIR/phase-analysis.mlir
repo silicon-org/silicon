@@ -78,6 +78,33 @@ uir.func @ConstIdentity(%x: -1) -> (result: 0) {
   uir.return %x -> (%t)
 }
 
+// Dyn arg basics: identity pass-through, dyn+literal, and dyn+dyn pure ops
+// all at phase 1. Return op stays at phase 0, carrying phase-1 values.
+// CHECK-LABEL: uir.func @DynArg
+uir.func @DynArg(%a: 1, %b: 1) -> (r0: 1, r1: 1, r2: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t0, %t2, %t3)
+} {
+  %t = hir.int_type
+  // Dyn + literal: add floats to phase 1.
+  %c1 = hir.constant_int 1 : %t
+  // CHECK: hir.add %a, {{.*}}pa.phase = "1"
+  // CHECK-SAME: pa.results = ["1"]
+  %sum = hir.add %a, %c1 : %t
+  // Dyn + dyn: add at phase 1.
+  // CHECK: hir.add %a, %b {{.*}}pa.phase = "1"
+  // CHECK-SAME: pa.results = ["1"]
+  %ab = hir.add %a, %b : %t
+  // Return at phase 0, all value operands at phase 1.
+  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK-SAME: pa.operands = ["1", "1", "1", "float", "float", "float"]
+  // CHECK-SAME: pa.phase = "0"
+  uir.return %a, %sum, %ab -> (%t, %t, %t)
+}
+
 // CHECK-LABEL: uir.func @ConstArg
 uir.func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
   %0 = hir.int_type
@@ -276,6 +303,26 @@ uir.func @MixedConstBody(%a: -1, %b: -1, %c: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Mixed body and dyn args: add pulls to phase 1 (max(0, 1) = 1).
+
+// CHECK-LABEL: uir.func @MixedDynBody
+uir.func @MixedDynBody(%x: 0, %y: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  // CHECK: hir.add {{.*}}pa.operands = ["0", "1", "float"]
+  // CHECK-SAME: pa.phase = "1"
+  %sum = hir.add %x, %y : %t
+  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK-SAME: pa.operands = ["1", "float"]
+  // CHECK-SAME: pa.phase = "0"
+  uir.return %sum -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // Pinned uir.expr with phase shift (const block).
 
 // CHECK-LABEL: uir.func @PinnedExpr
@@ -290,6 +337,31 @@ uir.func @PinnedExpr(%a: -1) -> (result: 0) {
     uir.yield %sum : %t
   // CHECK: } {{.*}}pa.phase = "-1"
   }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Pinned uir.expr with dyn shift: block at phase 1, body-phase value flows in.
+
+// CHECK-LABEL: uir.func @DynPinnedExpr
+uir.func @DynPinnedExpr(%x: 0) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin 1 : %t {
+    // Yield at phase 1, carrying %x at phase 0 across the boundary.
+    // CHECK: uir.yield {{.*}}pa.operands = ["0", "float"]
+    // CHECK-SAME: pa.phase = "1"
+    uir.yield %x : %t
+  // CHECK: } {{.*}}pa.phase = "1"
+  // CHECK-SAME: pa.results = ["1"]
+  }
+  // Return at phase 0, carrying phase-1 result.
+  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK-SAME: pa.operands = ["1", "float"]
+  // CHECK-SAME: pa.phase = "0"
   uir.return %0 -> (%t)
 }
 
@@ -442,6 +514,38 @@ uir.func @ConstCondIf(%flag: -1) -> (result: 0) {
     uir.yield %c0 : %t
   // CHECK: } {{.*}}pa.phase = "0"
   }
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Dyn arg as if condition: if pulls to phase 1 (condition not available until
+// then). Yields at phase 1 carry floating literals. Result at phase 1.
+
+// CHECK-LABEL: uir.func @DynCondIf
+uir.func @DynCondIf(%flag: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  %c0 = hir.constant_int 0 : %t
+  // CHECK: uir.if {{.*}} {
+  %r = uir.if %flag : %t {
+    // CHECK: uir.yield {{.*}}pa.operands = ["float", "float"]
+    // CHECK-SAME: pa.phase = "1"
+    uir.yield %c1 : %t
+  } else {
+    // CHECK: uir.yield {{.*}}pa.operands = ["float", "float"]
+    // CHECK-SAME: pa.phase = "1"
+    uir.yield %c0 : %t
+  // CHECK: } {pa.operands = ["1", "float"]
+  // CHECK-SAME: pa.phase = "1"
+  // CHECK-SAME: pa.results = ["1"]
+  }
+  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK-SAME: pa.operands = ["1", "float"]
+  // CHECK-SAME: pa.phase = "0"
   uir.return %r -> (%t)
 }
 

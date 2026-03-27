@@ -14,7 +14,7 @@ The only exception is **pure ops**, which may be adjusted to an earlier phase if
 | Function results | declared phase (same modifiers) | fixed |
 | Pure ops | **earliest** = `max(p(operands))` | bottom-up |
 | Calls | **latest** = pushed from parent, adjusted by result offsets | top-down |
-| CF expressions (`if`, `loop`, `while`, `for`, `match`) | **latest** = pushed from parent | top-down |
+| CF expressions (`if`, `loop`, `while`, `for`, `match`) | `p(enclosing_block)` | fixed |
 | Blocks (`{ ... }`) | **latest** = inherited from parent expression | top-down |
 | `const { ... }` / `dyn { ... }` blocks | `p(enclosing_block) + shift` (-1 / +1) | fixed |
 | Type expressions | latest = `p(annotated_value) - 1` | top-down |
@@ -41,10 +41,11 @@ The only exception is **pure ops**, which may be adjusted to an earlier phase if
   Calls resolve to their latest — lazy evaluation.
   The bottom-up pass computes `earliest = max_i(p(arg_i) - arg_offset_i)` and verifies `earliest ≤ latest`.
 
-- **CF expressions** (`if`, `loop`, `while`, `for`, `match`) resolve to their latest, same as calls.
-  They are control flow decisions and are scheduled when needed.
-  The condition/iterator contributes to earliest (feasibility check).
+- **CF expressions** (`if`, `loop`, `while`, `for`, `match`) are anchored at `p(enclosing_block)`.
+  They are control flow decisions and execute at the phase of their surrounding block.
+  The condition/iterator must be available at or before `p(CF)` (feasibility check).
   Branch/body blocks are at `p(CF)`.
+  When a CF expression needs to float to a different phase (e.g., as a const call argument), codegen wraps it in a `uir.expr` — the `uir.expr` is what floats, not the CF op itself.
 
 - **Blocks** (`{ ... }`) inherit their phase from the parent expression's constraint.
   Statements within pin at `p(block)`.
@@ -1001,14 +1002,14 @@ pub fn main(const a: int, b: int) -> int {   // a: -1, b: 0, return: 0
 }
 ```
 
-`if` snaps to latest = 0 (from return).
+`if` is anchored at `p(block) = 0` (function body phase).
 Both branch blocks at 0.
 Condition `a > 0` is pure; earliest `max(-1, -∞) = -1`, latest 0. `[-1, 0] → -1` (slack).
 `a + 42` is pure; `[-1, 0] → -1` (slack, floats to -1 inside the branch).
 `b + 1` is pure; no slack, stays at 0.
 Feasibility: if earliest = condition resolved = -1. -1 ≤ 0. ✓.
 
-#### `if` as a const call arg — floats to earlier phase
+#### `if` as a const call arg — floats via `uir.expr`
 
 ```silicon
 fn foo(const x: int, y: int) -> int { x + y }
@@ -1021,11 +1022,43 @@ pub fn main(const a: int, b: int) -> int {   // a: -1, b: 0, return: 0
 }
 ```
 
-`if` snaps to -1 (from foo's const arg).
+At the language level, the `if` expression floats to -1 (from foo's const arg).
+At the IR level, codegen wraps the `if` in a floating `uir.expr`:
+
+```
+%r = uir.expr : %t {
+  %v = uir.if %cond : %t { ... } else { ... }
+  uir.yield %v : %t
+}
+```
+
+The `uir.expr` floats to -1 (from the call's const arg demand).
+The `uir.if` inside is anchored at the expr's block phase, which is -1.
 Both branch blocks at -1.
 Condition `a > 0` is pure; earliest -1, latest -1. No slack. ✓.
 `a + 42` and `a - 1` are pure; both have earliest -1. No slack. ✓.
-Feasibility: if earliest = -1. ✓.
+Feasibility: condition earliest = -1 ≤ -1. ✓.
+
+#### `if` as a dyn call arg — floats to later phase via `uir.expr`
+
+```silicon
+fn bar(x: int, dyn y: int) -> dyn int { x + y }
+
+pub fn main(a: int, dyn b: int) -> dyn int {   // a: 0, b: 1, return: 1
+  bar(
+    a,
+    if b > 0 { b + 1 } else { b - 1 },    // 1
+  )                                           // 1
+}
+```
+
+Symmetric to the const case: codegen wraps the `if` in a floating `uir.expr`.
+The `uir.expr` floats to 1 (from bar's dyn arg demand).
+The `uir.if` inside is anchored at the expr's block phase, which is 1.
+Both branch blocks at 1.
+Condition `b > 0` is pure; earliest 1 (from `b`), latest 1. No slack. ✓.
+`b + 1` and `b - 1` are pure; both have earliest 1. No slack. ✓.
+Feasibility: condition earliest = 1 ≤ 1. ✓.
 
 #### `if` with `return` — pinned by constraint
 
@@ -1040,7 +1073,9 @@ pub fn main(const a: int, b: int) -> int {   // a: -1, b: 0, return: 0
 }
 ```
 
-foo's const arg pushes latest -1 to the `if`. `p(if) = -1`. Branch block at -1.
+Codegen wraps the `if` in a floating `uir.expr` (as a call arg to foo).
+The `uir.expr` floats to -1 (from foo's const arg demand).
+The `uir.if` inside is anchored at the expr's block phase, which is -1.
 The `return` requires `p(enclosing_block) = p(function_body) = 0`.
 But `p(enclosing_block) = p(if) = -1`. **-1 ≠ 0. ERROR.**
 
@@ -1055,8 +1090,8 @@ note: this block is const because it is a const argument to `foo`
   |   ~~~
 ```
 
-Without the `return`, the `if` floats freely.
-The `return` acts as an anchor that prevents floating.
+The `return` prevents the `uir.expr` from floating to -1, because the return's target (function body) is at phase 0.
+Without the `return`, the `uir.expr` and its `uir.if` would float to -1 without conflict.
 
 #### `if` with `return` — no conflict when at body phase
 
@@ -1099,7 +1134,7 @@ fn foo(const x: int) -> int { x }
 pub fn main(a: int) -> int {   // a: 0, return: 0
   loop {                        // 0
     foo(
-      if true {                 // -1  (from const arg)
+      if true {                 // -1  (from const arg, via uir.expr)
         break 42;               // p(block) = -1 ≠ p(loop) = 0. ERROR!
         0
       } else { 0 },
@@ -1108,7 +1143,8 @@ pub fn main(a: int) -> int {   // a: 0, return: 0
 }
 ```
 
-`p(loop) = 0`. foo's const arg pushes latest -1 to the `if`. `p(if) = -1`.
+`p(loop) = 0`. Codegen wraps the `if` in a floating `uir.expr` (call arg).
+The `uir.expr` floats to -1 (from foo's const arg). The `uir.if` is anchored at -1.
 `break` checks `p(block) = -1 = p(loop) = 0`. **ERROR.**
 The `break` can't cross the phase boundary created by foo's const arg.
 
@@ -1139,7 +1175,7 @@ pub fn main(const a: int, b: int) -> int {   // a: -1, b: 0, return: 0
 }
 ```
 
-`match` resolves to latest = 0. All arm blocks at 0.
+`match` is anchored at `p(block) = 0`. All arm blocks at 0.
 Matched expression `a`: at -1, latest 0. ✓.
 Each arm follows the same rules as `if` branches.
 `a + 42` floats to -1 (pure, eager). `b + 1` stays at 0.
@@ -1156,14 +1192,25 @@ These control flow constructs map to `uir` dialect ops (see `docs/design/unified
 `uir.break`/`uir.continue`/`uir.return` are region terminators (alternatives to `uir.yield`).
 Phase inference works on the structured `uir` ops; the **FlattenCF** pass converts them to block-based `cf.br`/`cf.cond_br` after phase splitting.
 
+**CF ops are anchored at their block phase.**
+`uir.if`, `uir.loop`, and `uir.match` always execute at `p(enclosing_block)`.
+They do not float on their own.
+When a CF expression needs to float to a different phase (e.g., as a const or dyn call argument), codegen wraps it in a floating `uir.expr { ... }` — the `uir.expr` is what floats, and the CF op inside is anchored at the expr's block phase.
+This keeps CF ops simple and predictable: their phase is always determined by the enclosing block, never by consumer demand.
+
 #### Summary
 
-All control flow expressions (`if`, `loop`, `while`, `for`, `match`) resolve to **latest** (lazy, top-down), same as calls.
-Their sub-blocks are at the CF expression's phase.
+At the **language level**, control flow expressions (`if`, `loop`, `while`, `for`, `match`) appear to resolve to **latest** (lazy, top-down), same as calls — when used as expressions in call arguments or assignments, they snap to the consumer's demanded phase.
+
+At the **IR level**, this is implemented by anchoring CF ops at their enclosing block phase:
+- `uir.if`, `uir.loop`, `uir.match` are always at `p(enclosing_block)`.
+- When the language requires floating (e.g., `if` as a const call arg), codegen wraps the CF op in a floating `uir.expr`, which carries the consumer demand.
+- The CF op is then anchored at the `uir.expr`'s block phase, which is the consumer's demanded phase.
+
+Sub-blocks of the CF op are at the CF op's phase.
+The condition/iterator must be available at or before the CF op's phase (feasibility check).
 `uir.return`/`uir.break`/`uir.continue` impose a constraint: `p(enclosing_block) = p(target)`.
-This constraint is checked eagerly during the downward pass (both phases are known top-down).
-When present, it prevents the enclosing expression from floating away from the target's phase.
-When absent, CF expressions float freely like any other expression.
+This constraint prevents the enclosing `uir.expr` from floating to a phase where the CF transfer would cross a phase boundary.
 
 ### Example 11: Types and dependent types
 
