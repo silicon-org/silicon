@@ -313,3 +313,47 @@ uir.func @DynCondIf(%flag: 1) -> (result: 1) {
   }
   uir.return %r -> (%t)
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Stacked const return mismatch: const arg (-1) cannot satisfy const const
+// return (-2).
+
+// expected-error @+1 {{value at phase -1 cannot satisfy requirement for phase -2}}
+uir.func @StackedConstReturnMismatch(%x: -1) -> (result: -2) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  // expected-remark @+1 {{required by return value at phase -2}}
+  uir.return %x -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Nested const block: const arg (-1) used in const { const { ... } } which
+// demands phase -2. Two error chains: arg→add operand, add→yield.
+
+// expected-error @+1 {{value at phase -1 cannot satisfy requirement for phase -2}}
+uir.func @NestedConstBlockError(%a: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    %inner = uir.expr pin -1 : %t {
+      %c1 = hir.constant_int 1 : %t
+      // expected-remark @+2 {{required by operand at phase -2}}
+      // expected-error @+1 {{value at phase -1 cannot satisfy requirement for phase -2}}
+      %sum = hir.add %a, %c1 : %t
+      // expected-remark @+1 {{required by yield operand}}
+      uir.yield %sum : %t
+    }
+    uir.yield %inner : %t
+  }
+  uir.return %0 -> (%t)
+}

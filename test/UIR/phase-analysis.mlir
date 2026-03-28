@@ -223,18 +223,60 @@ uir.func @ConstLiteralReturn() -> (result: -1) {
 }
 
 //===----------------------------------------------------------------------===//
-// Deep const: phase -2 arg and return (const const).
+// Stacked const: phase -2 identity and pure op floating to -2.
 
-// CHECK-LABEL: uir.func @DeepConstReturn
-uir.func @DeepConstReturn(%x: -2) -> (result: -2) {
+// CHECK-LABEL: uir.func @DeepConst
+uir.func @DeepConst(%x: -2) -> (r0: -2, r1: -2) {
   %t0 = hir.int_type
   %t1 = hir.int_type
-  uir.signature (%t0) -> (%t1)
+  %t2 = hir.int_type
+  uir.signature (%t0) -> (%t1, %t2)
 } {
   %t = hir.int_type
-  // Return op at body block phase 0, value at -2.
-  // CHECK: uir.return {{.*}} -> ({{.*}}) {{.*}}pa.phase = "0"
-  uir.return %x -> (%t)
+  %c1 = hir.constant_int 1 : %t
+  // CHECK: hir.add {{.*}}pa.phase = "-2"
+  %sum = hir.add %x, %c1 : %t
+  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK-SAME: pa.operands = ["-2", "-2", "float", "float"]
+  // CHECK-SAME: pa.phase = "0"
+  uir.return %x, %sum -> (%t, %t)
+}
+
+//===----------------------------------------------------------------------===//
+// Stacked dyn: phase +2 identity and pure op floating to +2.
+
+// CHECK-LABEL: uir.func @DeepDyn
+uir.func @DeepDyn(%x: 2) -> (r0: 2, r1: 2) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0) -> (%t1, %t2)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  // CHECK: hir.add {{.*}}pa.phase = "2"
+  %sum = hir.add %x, %c1 : %t
+  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK-SAME: pa.operands = ["2", "2", "float", "float"]
+  // CHECK-SAME: pa.phase = "0"
+  uir.return %x, %sum -> (%t, %t)
+}
+
+//===----------------------------------------------------------------------===//
+// Mixed depth: const const (-2) + const (-1). Pure op at max(-2, -1) = -1.
+
+// CHECK-LABEL: uir.func @MixedDepth
+uir.func @MixedDepth(%a: -2, %b: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  // CHECK: hir.add {{.*}}pa.operands = ["-2", "-1", "float"]
+  // CHECK-SAME: pa.phase = "-1"
+  %sum = hir.add %a, %b : %t
+  uir.return %sum -> (%t)
 }
 
 //===----------------------------------------------------------------------===//
@@ -369,6 +411,51 @@ uir.func @DynPinnedExpr(%x: 0) -> (result: 1) {
   // CHECK-SAME: pa.operands = ["1", "float"]
   // CHECK-SAME: pa.phase = "0"
   uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Nested const blocks: const { const { ... } } reaches phase -2.
+
+// CHECK-LABEL: uir.func @NestedConstBlocks
+uir.func @NestedConstBlocks(%a: -2) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  // Outer const block at phase -1.
+  %0 = uir.expr pin -1 : %t {
+    // Inner const block at phase -2.
+    // CHECK: hir.add {{.*}}pa.phase = "-2"
+    // CHECK: } {{.*}}pa.phase = "-2"
+    %inner = uir.expr pin -1 : %t {
+      %c1 = hir.constant_int 1 : %t
+      %sum = hir.add %a, %c1 : %t
+      uir.yield %sum : %t
+    }
+    uir.yield %inner : %t
+  // CHECK: } {{.*}}pa.phase = "-1"
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Const block as statement: side-effecting call at phase -1.
+
+func.func private @sideEffectC()
+
+// CHECK-LABEL: uir.func @ConstBlockStatement
+uir.func @ConstBlockStatement(%a: -1) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0) -> ()
+} {
+  // CHECK: func.call @sideEffectC() {{.*}}pa.phase = "-1"
+  // CHECK: } {{.*}}pa.phase = "-1"
+  uir.expr pin -1 {
+    func.call @sideEffectC() : () -> ()
+    uir.yield
+  }
+  uir.return -> ()
 }
 
 //===----------------------------------------------------------------------===//
