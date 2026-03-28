@@ -236,13 +236,6 @@ def GtOp  : HIRBinaryOp<"gt">  { let summary = "compare greater than"; }
 def GeqOp : HIRBinaryOp<"geq"> { let summary = "compare greater or equal"; }
 def LeqOp : HIRBinaryOp<"leq"> { let summary = "compare less or equal"; }
 
-def LetOp : HIROp<"let", []> {
-  let summary = "declare a named variable";
-  let arguments = (ins StrAttr:$name, HIRAnyType:$type);
-  let results = (outs HIRAnyType:$result);
-  let assemblyFormat = "$name `:` $type attr-dict";
-}
-
 def UnifyOp : HIROp<"unify", [
   SameOperandsAndResultType,
   Commutative,

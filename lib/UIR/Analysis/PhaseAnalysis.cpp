@@ -49,9 +49,6 @@ static bool isTypeOperand(OpOperand &operand) {
       // Ops with $typeOperand.
       .Case<hir::ConstantIntOp, hir::CoerceTypeOp>(
           [&](auto op) { return &operand == &op.getTypeOperandMutable(); })
-      // hir.let: $type.
-      .Case<hir::LetOp>(
-          [&](auto op) { return &operand == &op.getTypeMutable(); })
       // hir.store: $valueType.
       .Case<hir::StoreOp>(
           [&](auto op) { return &operand == &op.getValueTypeMutable(); })

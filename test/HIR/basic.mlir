@@ -42,7 +42,6 @@ func.func @Foo(%arg0: !hir.any, %arg1: !hir.any, %arg2: !hir.any, %arg3: i1) {
   hir.gt %arg0, %arg1 : %arg2
   hir.leq %arg0, %arg1 : %arg2
   hir.geq %arg0, %arg1 : %arg2
-  hir.let "x" : %arg0
   hir.store %arg0, %arg1 : %arg2
   cf.br ^bb1(%arg0 : !hir.any)
 ^bb1(%0: !hir.any):

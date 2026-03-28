@@ -1275,7 +1275,6 @@ Value hir::getTypeOf(Value value) {
       .Case<ConstantIntOp>(
           [](ConstantIntOp op) -> Value { return op.getTypeOperand(); })
       .Case<CoerceTypeOp>([](CoerceTypeOp op) { return op.getTypeOperand(); })
-      .Case<LetOp>([](LetOp op) { return op.getType(); })
       .Case<CallOp>([&](CallOp op) {
         return op.getTypeOfResults()[result.getResultNumber()];
       })

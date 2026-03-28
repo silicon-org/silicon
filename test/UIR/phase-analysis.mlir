@@ -1197,23 +1197,6 @@ uir.func @CoerceTypePhase(%a: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// hir.let: operand 0 ($type) gets -1 constraint.
-
-// CHECK-LABEL: uir.func @LetTypeOperand
-uir.func @LetTypeOperand() -> (result: 0) {
-  %t = hir.int_type
-  uir.signature () -> (%t)
-} {
-  // hir.let is not pure, stays at blockPhase (0). Type operand (hir.int_type)
-  // gets 0 - 1 = -1 (float satisfies).
-  %ty = hir.int_type
-  // CHECK: hir.let {{.*}} {{.*}}pa.phase = "0"
-  %x = hir.let "x" : %ty
-  %t = hir.int_type
-  uir.return %x -> (%t)
-}
-
-//===----------------------------------------------------------------------===//
 // Call with non-constant typeOfArgs: uint_type(%n) as arg type.
 
 uir.func @TypedArgTarget(%x: 0) -> (result: 0) {
