@@ -404,11 +404,11 @@ uir.func @DynPinnedExpr(%x: 0) -> (result: 1) {
     // CHECK-SAME: pa.phase = "1"
     uir.yield %x : %t
   // CHECK: } {{.*}}pa.phase = "1"
-  // CHECK-SAME: pa.results = ["1"]
+  // CHECK-SAME: pa.results = ["0"]
   }
-  // Return at phase 0, carrying phase-1 result.
+  // Return at phase 0, result value at phase 0 (propagated through yield).
   // CHECK: uir.return {{.*}} -> ({{.*}})
-  // CHECK-SAME: pa.operands = ["1", "float"]
+  // CHECK-SAME: pa.operands = ["0", "float"]
   // CHECK-SAME: pa.phase = "0"
   uir.return %0 -> (%t)
 }

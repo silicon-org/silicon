@@ -160,38 +160,6 @@ uir.func @IfCondTooLate(%cond: 0, %a: -1) -> (result: -1) {
 // -----
 
 //===----------------------------------------------------------------------===//
-// Compiler bug: zero-use floating uir.expr.
-
-uir.func @ZeroUseFloatingExpr(%a: 0) -> () {
-  %0 = hir.int_type
-  uir.signature (%0) -> ()
-} {
-  // expected-error @+1 {{compiler bug: zero-use floating uir.expr}}
-  uir.expr {
-    uir.yield
-  }
-  uir.return -> ()
-}
-
-// -----
-
-//===----------------------------------------------------------------------===//
-// Compiler bug: zero-use uir.pin.
-
-uir.func @ZeroUsePin(%a: 0) -> () {
-  %0 = hir.int_type
-  uir.signature (%0) -> ()
-} {
-  %t = hir.int_type
-  %sum = hir.add %a, %a : %t
-  // expected-error @+1 {{compiler bug: zero-use uir.pin}}
-  %p = uir.pin %sum, 0 : !hir.any
-  uir.return -> ()
-}
-
-// -----
-
-//===----------------------------------------------------------------------===//
 // Body-phase arg cannot satisfy const return (result: -1).
 
 // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}

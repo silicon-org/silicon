@@ -110,12 +110,6 @@ void PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
   // Step 1: Process roots in block order.
   for (auto &op : block.without_terminator()) {
     if (auto pinOp = dyn_cast<PinOp>(&op)) {
-      if (pinOp.use_empty()) {
-        emitError(pinOp.getLoc())
-            << "compiler bug: zero-use uir.pin; the pinned value is unused";
-        anyErrors = true;
-        continue;
-      }
       // Root: pinned at blockPhase + offset.
       int16_t pinPhase = blockPhase + pinOp.getPhaseOffset();
       resolveOp(pinOp, pinPhase);
@@ -124,15 +118,8 @@ void PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
       int16_t exprPhase = blockPhase + exprOp.getPhaseShift();
       resolveOp(exprOp, exprPhase);
     } else if (op.use_empty()) {
-      if (isa<ExprOp>(&op)) {
-        emitError(op.getLoc())
-            << "compiler bug: zero-use floating uir.expr; codegen should "
-               "have pinned this expression";
-        anyErrors = true;
-      } else {
-        // Root: expression statement (zero-use, pinned at blockPhase).
-        resolveOp(&op, blockPhase);
-      }
+      // Root: expression statement (zero-use, pinned at blockPhase).
+      resolveOp(&op, blockPhase);
     } else if (!isa<ExprOp>(&op) &&
                (!hir::isEffectivelyPure(&op) ||
                 op.getNumRegions() > 0) &&
@@ -164,6 +151,14 @@ void PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
     for (auto [i, typeVal] : llvm::enumerate(yieldOp.getTypeOfValues())) {
       if (failed(resolveValue(typeVal, constraints[i] - 1)))
         emitRemark(yieldOp.getLoc()) << "required by yield type operand";
+    }
+
+    // Yields are phase-transparent conduits: propagate yield operand
+    // actual phases to the parent op's results.
+    for (auto [i, value] : llvm::enumerate(yieldOp.getValues())) {
+      auto valIt = actualPhase.find(value);
+      if (valIt != actualPhase.end() && parent->getNumResults() > i)
+        actualPhase[parent->getResult(i)] = valIt->second;
     }
 
   } else if (auto sigOp = dyn_cast<SignatureOp>(terminator)) {
