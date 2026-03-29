@@ -459,6 +459,36 @@ uir.func @ConstBlockStatement(%a: -1) -> () {
 }
 
 //===----------------------------------------------------------------------===//
+// Pin inside const block: call anchored at -1, pin at -1, pure op at -1.
+
+// CHECK-LABEL: uir.func @PinInConstBlock
+uir.func @PinInConstBlock(%a: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    %ta = hir.int_type
+    %tr = hir.int_type
+    // Call anchored at const block phase -1.
+    // CHECK: uir.call @SingleArgTarget({{.*}})
+    // CHECK-SAME: pa.phase = "-1"
+    %v = uir.call @SingleArgTarget(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    // Pin at blockPhase + 0 = -1.
+    // CHECK: uir.pin {{.*}}, 0
+    // CHECK-SAME: pa.phase = "-1"
+    %y = uir.pin %v, 0 : !hir.any
+    %c2 = hir.constant_int 2 : %t
+    // Pure op using pinned value at -1.
+    // CHECK: hir.mul {{.*}}pa.phase = "-1"
+    %prod = hir.mul %y, %c2 : %t
+    uir.yield %prod : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // Nested dyn blocks: dyn { dyn { ... } } — literal floats through both yields.
 
 // CHECK-LABEL: uir.func @NestedDynBlocks
