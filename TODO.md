@@ -20,6 +20,9 @@
   Once a structured CF op is inlined, its blocks and regions are inserted ahead of that op, such that the linear region/block scan will naturally visit the newly-inlined region.
   For inspiration, look at how the SCF-to-CF lowering in MLIR does things.
 - Improve UIR op parsing/printing (e.g. uir.call, maybe others) to not print the implied `!hir.any` type
+- Move `uir.expr` attr-dict-with-keyword to print before the body region, not after the closing `}`.
+  This makes FileCheck matching much easier (match opening attrs instead of fragile `}` matching).
+  Large mechanical change across all tests.
 
 ## Phase Inference Redesign
 

@@ -54,11 +54,15 @@ The only exception is **pure ops**, which may be adjusted to an earlier phase if
 
 - **Blocks** (`{ ... }`) inherit their phase from the parent expression's constraint.
   Statements within pin at `p(block)`.
-  The block's result expression has latest = `p(block)`.
+  Phase constraints imposed on the block from the outside (e.g., from a call arg demand or a return type) are forwarded transparently through the yield onto the block's result expression.
+  The result value flows through the yield at whatever phase it resolves to — the block phase does not constrain it.
 
 - **`const { ... }` / `dyn { ... }` blocks** are pinned at `p(enclosing_block) + shift` (-1 for `const`, +1 for `dyn`).
   The shift is relative to the enclosing block, not to the parent expression's demand.
-  The block's result is pinned at this shifted phase.
+  The shift determines where side-effecting ops inside are anchored and where `uir.yield` logically executes.
+  However, the block's **result** is at the phase of the yielded value, not the block's phase.
+  Values flow through yields as phase-transparent conduits: a `const` block yielding a phase -2 value produces a -2 result, and a `dyn` block yielding a phase +2 value produces a +2 result.
+  This enables nested `dyn` blocks to produce "futures" — values from later phases that can be passed around symbolically in earlier phases.
   Inside, the same rules apply.
 
 - **Statements** pin the execution context at `p(block)`.
@@ -243,8 +247,15 @@ All `uir` ops are lowered away by two passes:
   - **`uir.expr <offset> { ... }`** — has a region. Groups ops into a block expression. A non-zero offset pins the expression at `p(block) + offset`. Used for `const { ... }` / `dyn { ... }` blocks and for grouping disconnected side effects.
 
   A `uir.expr` can be **floating** or **pinned**, controlled by an optional `pin` keyword:
-  - Floating: phase comes from the consumer (demand-driven).
-  - Pinned: phase is fixed at `p(block) + offset`.
+  - **Pinned**: block phase is fixed at `p(enclosing_block) + offset`. Side-effecting ops inside anchor at this phase.
+  - **Floating**: block phase is determined by the tightest constraint from all consumers of the expr's results.
+    Consumer constraints propagate through the yield to inner values.
+    This works transitively through pure ops: if a yield operand is a pure op consuming a call result, the constraint propagates through the pure op to the call, which then determines the block phase.
+    If a yielded value comes (directly or transitively) from a side-effecting op (call, CF), the constraint determines the block phase via the op's result offset: `p(block) = constraint - result_offset`.
+    Multiple results may impose different constraints; the block floats to the **latest** phase satisfying all of them.
+    If the block phase tightens as new constraints arrive, the block is re-traversed to re-anchor side-effecting ops.
+    If the expr contains only pure ops, the block phase is unconstrained (nothing anchors to it).
+    A floating `uir.expr` is conceptually an inline call whose result phase offsets emerge from its contents.
   Non-zero offsets are always pinned (the offset is meaningless if floating).
   Zero offset can be either: `uir.expr { ... }` is floating, `uir.expr pin { ... }` is pinned at `p(block)`.
 
@@ -1224,6 +1235,13 @@ Call args must be available at `p(call) + arg_offset_i` (feasibility check).
 The condition/iterator of a CF op must be available at or before the CF op's phase.
 `uir.return`/`uir.break`/`uir.continue` impose a constraint: `p(enclosing_block) = p(target)`.
 This constraint prevents the enclosing `uir.expr` from floating to a phase where the CF transfer would cross a phase boundary.
+
+**`uir.yield` and `uir.break` are phase-transparent conduits.**
+They have an execution phase (for CFG ordering), but they relay values and phase constraints without imposing their own phase onto the values.
+Phase constraints from the consumer of a region op's result are forwarded transparently through the yield onto the yielded value.
+The region op's result is at the yielded value's actual phase, not the region op's execution phase.
+This enables nested `dyn` blocks to produce "futures" — values from later phases that flow through earlier-phase yields as opaque handles.
+Symmetrically, `const` block results at earlier phases flow naturally through later-phase yields (as they are already available).
 
 ### Example 11: Types and dependent types
 
