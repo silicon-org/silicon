@@ -18,13 +18,21 @@ namespace uir {
 
 /// Phase analysis for unified functions (`uir.func`).
 ///
-/// The analysis pushes "latest" phase constraints top-down from consumers to
-/// producers via a use-def DFS. All op-level logic (constraint pushing,
-/// tightening, pinned op handling, region entry, pure op scheduling) lives in
-/// `resolveOp`. The `resolveValue` function is a thin wrapper that translates
-/// value-level concerns (block args, call result offsets) to op-level
-/// `resolveOp` calls, then checks the resolved phase against the consumer's
-/// constraint.
+/// The analysis assigns a phase to every op and value in a `uir.func` using
+/// three DFS flow patterns:
+///
+/// 1. **Pure ops:** demand flows down through operands, then the op schedules
+///    at `earliest = max(operand phases)`.
+/// 2. **Side-effecting ops:** demand goes UP to the parent block, the block
+///    adjusts its phase, then pushes DOWN to all ops.
+/// 3. **Region op results:** demand passes through the yield transparently
+///    to the inner value.
+///
+/// The algorithm has four steps:
+/// 1. Pre-walk: collect terminators (break ops per loop, return/signature ops).
+/// 2. Constrain blocks containing function-interface terminators to phase ≤ 0.
+/// 3. Structural setup: processBlock(sig, 0) and processBlock(body, 0).
+/// 4. Demand-driven constraints: push from declared arg/result phases.
 ///
 /// See `docs/design/phase-inference.md` for the full specification.
 ///
@@ -61,34 +69,46 @@ private:
   bool anyErrors = false;
 
   /// Map from region-bearing op to the latest phase constraint for each of its
-  /// block results. Populated before entering a region in `resolveOp`,
-  /// consumed by terminators in `processBlock`.
+  /// block results. Populated by constrainRegionResult, consumed by yield/break
+  /// handlers.
   mlir::DenseMap<mlir::Operation *, llvm::SmallVector<int16_t>>
       resultConstraints;
 
-  /// Process all ops in a block uniformly. Identifies roots (pins, pinned
-  /// exprs, zero-use statements) and resolves them in block order, then
-  /// dispatches on the block's terminator.
+  /// Pre-collected break ops for each loop, and function-interface terminators.
+  mlir::DenseMap<LoopOp, llvm::SmallVector<BreakOp>> loopBreaks;
+  llvm::SmallVector<mlir::Operation *> funcInterfaceTerminators;
+
+  //===--------------------------------------------------------------------===//
+  // Five Core Functions
+  //===--------------------------------------------------------------------===//
+
+  /// Consumer demands value at phase ≤ latest. Dispatches based on the value's
+  /// defining op type (block arg, constant, pure, region, call,
+  /// side-effecting).
+  mlir::FailureOr<int16_t> constrainValue(mlir::Value value, int16_t latest);
+
+  /// Someone needs this block at phase ≤ demanded. Dispatches on the parent op
+  /// (floating expr, pinned expr, anchored CF, function body).
+  void constrainBlock(mlir::Block &block, int16_t demandedPhase);
+
+  /// Push demand through yield/break to a specific result of a region-bearing
+  /// op (ExprOp, IfOp, LoopOp). The constraint propagates to the corresponding
+  /// yield/break operand. The parent result's actualPhase is updated to match.
+  void constrainRegionResult(mlir::Operation *regionOp, unsigned resultIdx,
+                             int16_t latest);
+
+  /// Push blockPhase down to all ops in the block. Called when block phase is
+  /// known or has changed. Validates terminator phase equalities.
   void processBlock(mlir::Block &block, int16_t blockPhase);
 
-  /// Thin value-level wrapper. Translates value constraints to op constraints
-  /// (e.g., call result offset), delegates to `resolveOp`, then checks the
-  /// resolved actual phase against `latest`. Returns the actual phase, or
-  /// failure if the constraint is violated (error already emitted).
-  mlir::FailureOr<int16_t> resolveValue(mlir::Value value, int16_t latest);
+  /// Called by processBlock for each non-terminator op. Sets the op's phase
+  /// and pushes constraints to operands/regions. Skips floating/pure/constant
+  /// ops (demand-driven only).
+  void processOp(mlir::Operation *op, int16_t blockPhase);
 
-  /// Resolve an op at the given phase. Handles tightening, pinned ops,
-  /// constant ops, type_of +1 shift, call arg offsets, type operand -1,
-  /// region entry, and pure op earliest scheduling. The single place for all
-  /// op-level phase resolution logic.
-  void resolveOp(mlir::Operation *op, int16_t phase);
-
-  /// Push a phase constraint onto a specific result of a region-bearing op
-  /// (ExprOp, IfOp, LoopOp). The constraint propagates through the yield to
-  /// the corresponding operand via DFS. The parent result's actualPhase is
-  /// updated to match the resolved yield operand's phase.
-  void constrainResult(mlir::Operation *regionOp, unsigned resultIdx,
-                       int16_t latest);
+  //===--------------------------------------------------------------------===//
+  // Helpers
+  //===--------------------------------------------------------------------===//
 
   /// Find the nearest enclosing op of a given type by walking up the parent
   /// chain. Asserts if not found.
