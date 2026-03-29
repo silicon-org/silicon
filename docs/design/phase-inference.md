@@ -134,35 +134,54 @@ When a use of a `let`-bound variable is encountered (e.g., `x` in `const { x }`)
 This follows SSA dominance: definitions dominate all uses.
 Forward references (using a name before its `let`) are not allowed.
 
-### Downward pass (pre-order)
+### Three DFS flows
 
-Push the *latest* phase from parent to children, resolving as we go:
+The algorithm uses a single DFS with three distinct flow patterns depending on the op type:
 
-- **Function body**: `p(block) = 0`. Result expression gets `latest = p(declared_result)`, which may differ from `p(block)` (see above).
-- **Blocks**: `p(block) = latest` from parent. Push to children.
-- **`const` / `dyn` blocks**: `p(block) = p(enclosing_block) + shift`. Push to children.
-- **Statements**: pin root expression at `p(block)`. Push to children.
-- **`let` bindings**: pin at `p(block)`. Process expression's full DFS first to determine `p(value)`. Then push `latest = p(value) - 1` to type expression and process its DFS.
-- **Calls**: `p(call) = p(enclosing_block)`. Push `p(call) + arg_offset_i` to each arg. Result values at `p(call) + result_offset_j`.
-- **CF expressions**: `p(CF) = p(enclosing_block)`. Push `p(CF)` as condition latest and branch block phase.
-- **`return`/`break`/`continue`**: check `p(enclosing_block) = p(target)` immediately. Error if mismatch.
-- **Leaves** (variable references, literals): check `p(leaf) ≤ latest`. ConstantLike at `-∞` always passes. Function args and `let`-bound variables check their already-resolved phase ≤ latest.
+1. **Pure ops:** `result → constrainValue → constrainPureOp → constrainValue(operands)`.
+   The op mediates between its consumer and its operands.
+   Operands are resolved, then the op is scheduled at `earliest = max(operand phases)`.
+   Pure ops float to the earliest phase their operands allow — eager evaluation.
 
-### Upward pass (post-order)
+2. **Side-effecting ops:** `result → constrainValue → constrainBlock(parentBlock) → processBlock → processOp → constrainValue(operands)`.
+   A consumer demand on a side-effecting op's result goes **up** to the parent block.
+   Side-effecting ops never tighten their own phase — they are always anchored at the parent block's phase.
+   The block adjusts its phase (if floating) or propagates the demand further up (if pinned/anchored).
+   Then the block pushes **down** to all its ops, re-anchoring them at the (possibly tighter) phase.
 
-Compute *earliest* and verify feasibility:
+3. **Region op results:** `result → constrainRegionResult → constrainValue(yieldOperand) → ...`.
+   Demand on a region op's result passes through the yield transparently.
+   The yield operand may be a side-effecting op (triggering flow 2) or pure (flow 1).
+   The region op's result phase equals the yield operand's actual phase, not the block phase.
 
-- **Pure ops**: `earliest = max(p(resolved_operands))`. If `earliest ≤ latest`, resolve to earliest (the only adjustment to the top-down assignment). Otherwise error.
-- **Calls**: `earliest = max_i(p(resolved_arg_i) - arg_offset_i)`. Check `earliest ≤ p(call)` (feasibility).
-- **CF expressions**: `earliest = max(condition_resolved, ...)`. Check `earliest ≤ p(CF)` (feasibility).
+### Block phase propagation
+
+Blocks have a phase that determines where side-effecting ops anchor.
+When a consumer demand arrives that requires a tighter block phase:
+
+- **Floating `uir.expr`:** the block phase tightens to satisfy the demand, and all ops inside are re-processed.
+- **Pinned `uir.expr` at offset N:** the demand propagates to the parent block, shifted by the offset: `constrainBlock(parentBlock, demanded - N)`.
+- **Anchored CF (`uir.if`, `uir.loop`):** the demand propagates to the parent block: `constrainBlock(parentBlock, demanded)`.
+- **Function body/signature:** the block phase is fixed at 0. If the demand requires a tighter phase, it's an error.
+
+### Algorithm steps
+
+1. **Pre-walk:** collect all break ops (associated with their target loop), and all return/signature ops (function-interface terminators).
+2. **Constrain function-interface blocks:** for each return/signature op, `constrainBlock(parentBlock, 0)`. This ensures blocks containing returns are at phase ≤ 0.
+3. **Structural setup:** `processBlock(sig, 0)` and `processBlock(body, 0)`. Recursively enters regions, sets block phases, anchors side-effecting ops. Validates terminator phase equalities (return at 0, break/continue at loop phase).
+4. **Demand-driven constraints:** walk pre-collected return/signature ops and push `constrainValue` on their operands from declared arg/result phases. This triggers the full demand-driven DFS.
+
+The algorithm is monotonic: phases only decrease (tighten).
+Re-visits skip when phases haven't tightened, ensuring termination.
 
 ## Implementation Structure
 
 ### Components
 
-- **`PhaseAnalysis` struct** (`HIR/Analysis/PhaseAnalysis.h`, `.cpp`): takes a `uir.func` op, has a `LogicalResult run()` method that runs the DFS and populates a phase map (`DenseMap<Operation*, int16_t>`).
+- **`PhaseAnalysis` struct** (`UIR/Analysis/PhaseAnalysis.h`, `.cpp`): takes a `uir.func` op, has a `LogicalResult run()` method that runs the DFS and populates phase maps (`opPhases: DenseMap<Operation*, int16_t>`, `actualPhase: DenseMap<Value, int16_t>`).
+  The DFS is implemented as five functions: `constrainValue`, `constrainBlock`, `constrainRegionResult`, `processBlock`, `processOp`.
   On phase errors, emits user-facing diagnostics directly via `mlir::emitError()` and friends (using the const/dyn vocabulary), and returns `failure()`.
-  On success, returns `success()` and the phase map is ready for consumption.
+  On success, returns `success()` and the phase maps are ready for consumption.
   This is not a formal MLIR analysis (not cached, not invalidated) — just factored-out C++ code.
 
 - **`SplitPhases` pass**: constructs `PhaseAnalysis` for each `uir.func`, calls `run()`.
