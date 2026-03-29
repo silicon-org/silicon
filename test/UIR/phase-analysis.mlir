@@ -1494,3 +1494,238 @@ uir.func @CallNonConstTypeOfArgs(%n: -1, %a: 0) -> (result: 0) {
   %r = uir.call @TypedArgTarget(%a) : (%ut) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
   uir.return %r -> (%tr)
 }
+
+//===----------------------------------------------------------------------===//
+// While loop pattern: loop { if !cond { break }; body; yield }.
+
+// CHECK-LABEL: uir.func @WhileLoop
+uir.func @WhileLoop(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.loop {
+    uir.if %x {
+      uir.yield
+    } else {
+      uir.break
+    }
+    %body = hir.add %x, %x : %t
+    %p = uir.pin %body, 0 : !hir.any
+    uir.yield
+  }
+  uir.return %x -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Loop inside const block at phase -1. Break and continue inherit the loop
+// phase, which inherits from the const block.
+
+// CHECK-LABEL: uir.func @ConstLoop
+uir.func @ConstLoop(%x: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    %1 = uir.loop : %t {
+      %cond = hir.gt %x, %x : %t
+      uir.if %cond {
+        %sum = hir.add %x, %x : %t
+        // CHECK: uir.break {{.*}}pa.phase = "-1"
+        uir.break %sum : %t
+      } else {
+        uir.unreachable
+      }
+      // CHECK: uir.continue {{.*}}pa.phase = "-1"
+      uir.continue
+    }
+    uir.yield %1 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Break value with slack: pure op at -1 flows through break transparently.
+// The loop result reflects the break operand's actual phase (-1), not the
+// loop's block phase (0).
+
+// CHECK-LABEL: uir.func @LoopBreakSlack
+uir.func @LoopBreakSlack(%a: -1, %b: -1) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    // CHECK: hir.add {{.*}}pa.phase = "-1"
+    %sum = hir.add %a, %b : %t
+    uir.break %sum : %t
+  }
+  // Loop result at -1 (transparent break).
+  // CHECK: uir.return {{.*}}pa.operands = ["-1", "float"]
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// If inside floating expr: the if is anchored to the floating expr's block,
+// which starts unconstrained. A consumer demand at -1 tightens the floating
+// expr, and the if (and its calls) move with it.
+
+// CHECK-LABEL: uir.func @IfInsideFloatingExpr
+uir.func @IfInsideFloatingExpr(%cond: -1) -> (result: -1) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  %ta = hir.int_type
+  %0 = uir.expr : %ta {
+    %ra = hir.int_type
+    // The if is anchored at the floating expr's block phase.
+    // When the expr tightens to -1, the if and its calls tighten too.
+    // CHECK: uir.if {{.*}} {
+    %r = uir.if %cond : %ta {
+      // CHECK: uir.call @MakeValue()
+      // CHECK-SAME: pa.phase = "-1"
+      %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+      uir.yield %v : %ta
+    } else {
+      // CHECK: uir.call @MakeValue()
+      // CHECK-SAME: pa.phase = "-1"
+      %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+      uir.yield %v : %ta
+    // CHECK: } {{.*}}pa.phase = "-1"
+    }
+    uir.yield %r : %ta
+  // CHECK: } {{.*}}pa.phase = "-1"
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Loop inside floating expr: the loop is anchored to the floating expr's block.
+// A consumer demand at -1 tightens the floating expr, and the loop (and its
+// break values) move with it.
+
+// CHECK-LABEL: uir.func @LoopInsideFloatingExpr
+uir.func @LoopInsideFloatingExpr(%cond: -1) -> (result: -1) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  %ta = hir.int_type
+  %0 = uir.expr : %ta {
+    %ra = hir.int_type
+    // CHECK: uir.loop
+    %r = uir.loop : %ta {
+      uir.if %cond {
+        // CHECK: uir.call @MakeValue()
+        // CHECK-SAME: pa.phase = "-1"
+        %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+        // CHECK: uir.break {{.*}}pa.phase = "-1"
+        uir.break %v : %ta
+      } else {
+        uir.unreachable
+      }
+      uir.yield
+    // CHECK: } {{.*}}pa.phase = "-1"
+    }
+    uir.yield %r : %ta
+  // CHECK: } {{.*}}pa.phase = "-1"
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Pinned expr inside floating expr: the pin's offset is relative to the
+// floating parent. When the floating expr tightens to -1, the pinned inner
+// expr moves to -1 + (-1) = -2.
+
+// CHECK-LABEL: uir.func @PinnedInsideFloatingExpr
+uir.func @PinnedInsideFloatingExpr(%a: -2) -> (result: -1) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  %ta = hir.int_type
+  %0 = uir.expr : %ta {
+    // Inner pinned expr at offset -1 relative to parent.
+    // When parent tightens to -1, inner is at -1 + (-1) = -2.
+    %inner = uir.expr pin -1 : %ta {
+      // Pure op at -2 (operands at -2).
+      // CHECK: hir.add %a, %a {{.*}}pa.phase = "-2"
+      %sum = hir.add %a, %a : %t
+      uir.yield %sum : %ta
+    // CHECK: } {{.*}}pa.phase = "-2"
+    }
+    uir.yield %inner : %ta
+  // CHECK: } {{.*}}pa.phase = "-1"
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Floating expr inside floating expr: both are demand-driven. The outer
+// tightens to -1 (from return), the inner tightens independently based on
+// its own consumers.
+
+// CHECK-LABEL: uir.func @FloatingInsideFloating
+uir.func @FloatingInsideFloating(%a: -2) -> (result: -1) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  %ta = hir.int_type
+  %0 = uir.expr : %ta {
+    %tb = hir.int_type
+    // Inner floating expr. Its phase is determined by its consumer (the yield
+    // of the outer expr, which demands -1).
+    %inner = uir.expr : %tb {
+      // CHECK: hir.add %a, %a {{.*}}pa.phase = "-2"
+      %sum = hir.add %a, %a : %t
+      uir.yield %sum : %tb
+    // CHECK: } {{.*}}pa.phase = "-1"
+    }
+    uir.yield %inner : %ta
+  // CHECK: } {{.*}}pa.phase = "-1"
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Deep nesting: if inside pinned expr inside floating expr. All three layers
+// must tighten when the outermost result is demanded at -1.
+
+// CHECK-LABEL: uir.func @DeepNestedTightening
+uir.func @DeepNestedTightening(%cond: -2) -> (result: -1) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  %ta = hir.int_type
+  %0 = uir.expr : %ta {
+    // Pinned at offset -1 relative to floating parent.
+    // When parent tightens to -1, this is at -2.
+    %inner = uir.expr pin -1 : %ta {
+      %ra = hir.int_type
+      // If anchored at the pinned expr's phase (-2).
+      %r = uir.if %cond : %ta {
+        // CHECK: uir.call @MakeValue()
+        // CHECK-SAME: pa.phase = "-2"
+        %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+        uir.yield %v : %ta
+      } else {
+        // CHECK: uir.call @MakeValue()
+        // CHECK-SAME: pa.phase = "-2"
+        %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+        uir.yield %v : %ta
+      // CHECK: } {{.*}}pa.phase = "-2"
+      }
+      uir.yield %r : %ta
+    // CHECK: } {{.*}}pa.phase = "-2"
+    }
+    uir.yield %inner : %ta
+  // CHECK: } {{.*}}pa.phase = "-1"
+  }
+  uir.return %0 -> (%t)
+}
