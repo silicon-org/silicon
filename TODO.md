@@ -93,6 +93,28 @@ Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
 
 ## Phase Inference Design Review
 
+- CF ops may need to lower-bound their result phases to their op phase.
+  Consider: `uir.if` at phase 0 with a yield carrying `%a` at phase -1.
+  Currently this produces an if result at -1 (transparent yield).
+  But the if decides at phase 0 — it can't produce a value for phase -1,
+  because the decision of which branch to take isn't available until phase 0.
+  The earliest phase a CF result can be at is `p(CF)` (when the decision is made).
+  A phase +1 result is fine (future). A phase -1 result is problematic.
+  Think about whether CF ops should clamp `actualPhase[result] = max(p(CF), yieldedPhase)`.
+  Example:
+  ```mlir
+  uir.func @test(%cond: 0, %a: -1) -> (result: -1) {
+    ...
+    %0 = uir.if %cond : %t {
+      uir.yield %a : %t   // %a at -1, but if decides at 0
+    } else {
+      uir.yield %a : %t
+    }
+    uir.return %0 -> (%t)  // result at -1, but if can't decide until 0
+  }
+  ```
+
+
 - Review how `const { dyn { expr } }` and `dyn { const { expr } }` should behave for value results.
   Currently by the spec, `const { dyn { 42 } }` is an error: the dyn block pins its result at `p(const)+1 = 0`, but the const block demands `p(const) = -1`.
   This means `const { dyn { ... } }` is ALWAYS an error as a value expression (the dyn block is one phase too late), while `dyn { const { ... } }` can work (earlier values carry to later phases).

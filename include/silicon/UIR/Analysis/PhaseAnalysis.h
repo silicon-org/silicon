@@ -36,6 +36,9 @@ namespace uir {
 struct PhaseAnalysis {
   PhaseAnalysis(FuncOp funcOp) : funcOp(funcOp) {}
 
+  /// Sentinel value for unconstrained phases.
+  static constexpr int16_t kUnconstrained = INT16_MAX;
+
   /// Run the phase analysis. Returns failure if phase errors are detected
   /// (diagnostics already emitted via `mlir::emitError`).
   mlir::LogicalResult run();
@@ -79,6 +82,13 @@ private:
   /// region entry, and pure op earliest scheduling. The single place for all
   /// op-level phase resolution logic.
   void resolveOp(mlir::Operation *op, int16_t phase);
+
+  /// Push a phase constraint onto a specific result of a region-bearing op
+  /// (ExprOp, IfOp, LoopOp). The constraint propagates through the yield to
+  /// the corresponding operand via DFS. The parent result's actualPhase is
+  /// updated to match the resolved yield operand's phase.
+  void constrainResult(mlir::Operation *regionOp, unsigned resultIdx,
+                       int16_t latest);
 
   /// Find the nearest enclosing op of a given type by walking up the parent
   /// chain. Asserts if not found.

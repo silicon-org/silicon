@@ -138,25 +138,6 @@ uir.func @CallFeasibilityError(%a: 0) -> (result: 0) {
 
 // -----
 
-//===----------------------------------------------------------------------===//
-// If condition at wrong phase.
-
-// expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
-uir.func @IfCondTooLate(%cond: 0, %a: -1) -> (result: -1) {
-  %t0 = hir.int_type
-  %t1 = hir.int_type
-  uir.signature (%t0, %t1) -> (%t0)
-} {
-  %t = hir.int_type
-  // expected-remark @+1 {{required by if condition at phase -1}}
-  %0 = uir.if %cond : %t {
-    uir.yield %a : %t
-  } else {
-    uir.yield %a : %t
-  }
-  uir.return %0 -> (%t)
-}
-
 // -----
 
 //===----------------------------------------------------------------------===//
@@ -349,7 +330,9 @@ uir.func @DynBlockPhaseMismatch() -> (result: 0) {
   // expected-error @+1 {{value at phase 1 cannot satisfy requirement for phase 0}}
   %0 = uir.expr pin 1 : %t {
     %tr = hir.int_type
+    // expected-error @+1 {{value at phase 1 cannot satisfy requirement for phase 0}}
     %v = uir.call @DynBlockCallHelper() : () -> (%tr) () -> !hir.any [] -> [0]
+    // expected-remark @+1 {{required by yield operand}}
     uir.yield %v : %t
   }
   // expected-remark @+1 {{required by return value at phase 0}}

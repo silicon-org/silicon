@@ -144,21 +144,24 @@ void PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
     assert(it != resultConstraints.end() && "missing result constraints");
     auto &constraints = it->second;
 
+    // Only push constraints for results that have been constrained.
+    // Unconstrained results are skipped — their yield operands will be
+    // resolved when a consumer demands them via constrainResult.
     for (auto [i, value] : llvm::enumerate(yieldOp.getValues())) {
+      if (i >= constraints.size() || constraints[i] == kUnconstrained)
+        continue;
       if (failed(resolveValue(value, constraints[i])))
         emitRemark(yieldOp.getLoc()) << "required by yield operand";
-    }
-    for (auto [i, typeVal] : llvm::enumerate(yieldOp.getTypeOfValues())) {
-      if (failed(resolveValue(typeVal, constraints[i] - 1)))
-        emitRemark(yieldOp.getLoc()) << "required by yield type operand";
-    }
-
-    // Yields are phase-transparent conduits: propagate yield operand
-    // actual phases to the parent op's results.
-    for (auto [i, value] : llvm::enumerate(yieldOp.getValues())) {
+      // Propagate actual phase to parent result.
       auto valIt = actualPhase.find(value);
       if (valIt != actualPhase.end() && parent->getNumResults() > i)
         actualPhase[parent->getResult(i)] = valIt->second;
+    }
+    for (auto [i, typeVal] : llvm::enumerate(yieldOp.getTypeOfValues())) {
+      if (i >= constraints.size() || constraints[i] == kUnconstrained)
+        continue;
+      if (failed(resolveValue(typeVal, constraints[i] - 1)))
+        emitRemark(yieldOp.getLoc()) << "required by yield type operand";
     }
 
   } else if (auto sigOp = dyn_cast<SignatureOp>(terminator)) {
@@ -213,10 +216,19 @@ void PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
     assert(it != resultConstraints.end() && "missing loop result constraints");
     auto &constraints = it->second;
     for (auto [i, value] : llvm::enumerate(breakOp.getValues())) {
+      if (i >= constraints.size() || constraints[i] == kUnconstrained)
+        continue;
       if (failed(resolveValue(value, constraints[i])))
         emitRemark(breakOp.getLoc()) << "required by break operand";
+      // Propagate actual phase to loop result.
+      auto valIt = actualPhase.find(value);
+      if (valIt != actualPhase.end() &&
+          enclosingLoop->getNumResults() > i)
+        actualPhase[enclosingLoop->getResult(i)] = valIt->second;
     }
     for (auto [i, typeVal] : llvm::enumerate(breakOp.getTypeOfValues())) {
+      if (i >= constraints.size() || constraints[i] == kUnconstrained)
+        continue;
       if (failed(resolveValue(typeVal, constraints[i] - 1)))
         emitRemark(breakOp.getLoc()) << "required by break type operand";
     }
@@ -264,13 +276,20 @@ FailureOr<int16_t> PhaseAnalysis::resolveValue(Value value, int16_t latest) {
   auto *op = value.getDefiningOp();
   assert(op && "expected defining op for non-block-arg value");
 
+  unsigned resultIdx = cast<OpResult>(value).getResultNumber();
+
   // For call results, translate the value-level constraint to an op-level
   // constraint by subtracting the result's phase offset.
   if (auto callOp = dyn_cast<CallOp>(op)) {
     auto resultPhases = callOp.getResultPhases();
-    unsigned resultIdx = cast<OpResult>(value).getResultNumber();
     int16_t resultOffset = static_cast<int16_t>(resultPhases[resultIdx]);
     resolveOp(callOp, latest - resultOffset);
+  } else if (isa<ExprOp, IfOp, LoopOp>(op)) {
+    // Region ops: ensure the op has been processed (block entered), then
+    // push per-result constraint through the yield.
+    if (!opPhases.count(op))
+      resolveOp(op, latest);
+    constrainResult(op, resultIdx, latest);
   } else {
     resolveOp(op, latest);
   }
@@ -358,8 +377,16 @@ void PhaseAnalysis::resolveOp(Operation *op, int16_t phase) {
         emitRemark(exprOp.getLoc())
             << "required by expr result type at phase " << phase - 1;
     }
+    // Pinned exprs impose the pinned phase as the result constraint.
+    // Floating exprs start unconstrained — consumers push per-result
+    // constraints via constrainResult.
     auto &constraints = resultConstraints[exprOp.getOperation()];
-    constraints.assign(exprOp.getNumResults(), phase);
+    if (constraints.empty()) {
+      if (exprOp.getPin())
+        constraints.assign(exprOp.getNumResults(), phase);
+      else
+        constraints.assign(exprOp.getNumResults(), kUnconstrained);
+    }
     processBlock(exprOp.getBody().front(), phase);
 
   } else if (auto ifOp = dyn_cast<IfOp>(op)) {
@@ -372,7 +399,8 @@ void PhaseAnalysis::resolveOp(Operation *op, int16_t phase) {
             << "required by if result type at phase " << phase - 1;
     }
     auto &constraints = resultConstraints[ifOp.getOperation()];
-    constraints.assign(ifOp.getNumResults(), phase);
+    if (constraints.empty())
+      constraints.assign(ifOp.getNumResults(), kUnconstrained);
     processBlock(ifOp.getThenRegion().front(), phase);
     if (!ifOp.getElseRegion().empty())
       processBlock(ifOp.getElseRegion().front(), phase);
@@ -384,7 +412,8 @@ void PhaseAnalysis::resolveOp(Operation *op, int16_t phase) {
             << "required by loop result type at phase " << phase - 1;
     }
     auto &constraints = resultConstraints[loopOp.getOperation()];
-    constraints.assign(loopOp.getNumResults(), phase);
+    if (constraints.empty())
+      constraints.assign(loopOp.getNumResults(), kUnconstrained);
     processBlock(loopOp.getBody().front(), phase);
 
   } else if (auto callOp = dyn_cast<CallOp>(op)) {
@@ -438,6 +467,85 @@ void PhaseAnalysis::resolveOp(Operation *op, int16_t phase) {
       for (auto result : op->getResults())
         actualPhase[result] = earliest;
     }
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// constrainResult — Per-Result Constraint Push
+//
+// Pushes a phase constraint onto a specific result of a region-bearing op.
+// The constraint propagates through the yield to the corresponding operand.
+// This enables sparse, per-result constraints: different consumers can demand
+// different results at different phases, and only constrained results push
+// into the DFS.
+//===----------------------------------------------------------------------===//
+
+void PhaseAnalysis::constrainResult(Operation *regionOp, unsigned resultIdx,
+                                    int16_t latest) {
+  // Lazily initialize result constraints if this region op hasn't been
+  // processed by resolveOp yet (consumer reached it before a root did).
+  auto &constraints = resultConstraints[regionOp];
+  if (constraints.empty())
+    constraints.assign(regionOp->getNumResults(), kUnconstrained);
+  assert(resultIdx < constraints.size());
+
+  // Only tighten: skip if already at a tighter-or-equal constraint.
+  if (constraints[resultIdx] != kUnconstrained &&
+      constraints[resultIdx] <= latest)
+    return;
+  constraints[resultIdx] = latest;
+
+  // Find the yield(s) in the region(s) and push the constraint to the
+  // corresponding operand. For IfOp, push into both then/else regions.
+  auto pushToYield = [&](Region &region) {
+    auto *term = region.front().getTerminator();
+    if (auto yieldOp = dyn_cast<YieldOp>(term)) {
+      auto values = yieldOp.getValues();
+      if (resultIdx < values.size()) {
+        Value value = values[resultIdx];
+        // If the value hasn't been resolved yet, push the constraint to
+        // resolve it. If already resolved, just check the constraint.
+        auto valIt = actualPhase.find(value);
+        if (valIt == actualPhase.end()) {
+          if (failed(resolveValue(value, latest)))
+            emitRemark(yieldOp.getLoc()) << "required by yield operand";
+          valIt = actualPhase.find(value);
+        } else if (valIt->second != INT16_MIN && valIt->second > latest) {
+          emitError(value.getLoc())
+              << "value at phase " << valIt->second
+              << " cannot satisfy requirement for phase " << latest;
+          emitRemark(yieldOp.getLoc()) << "required by yield operand";
+          anyErrors = true;
+        }
+        // Propagate actual phase to parent result.
+        if (valIt != actualPhase.end())
+          actualPhase[regionOp->getResult(resultIdx)] = valIt->second;
+      }
+      // Type operand for this result.
+      auto typeOfValues = yieldOp.getTypeOfValues();
+      if (resultIdx < typeOfValues.size()) {
+        if (failed(resolveValue(typeOfValues[resultIdx], latest - 1)))
+          emitRemark(yieldOp.getLoc()) << "required by yield type operand";
+      }
+    }
+    // BreakOp in loops is handled separately via processBlock.
+  };
+
+  if (auto exprOp = dyn_cast<ExprOp>(regionOp)) {
+    pushToYield(exprOp.getBody());
+  } else if (auto ifOp = dyn_cast<IfOp>(regionOp)) {
+    pushToYield(ifOp.getThenRegion());
+    if (!ifOp.getElseRegion().empty())
+      pushToYield(ifOp.getElseRegion());
+  } else if (auto loopOp = dyn_cast<LoopOp>(regionOp)) {
+    // Loop results come from break ops, not directly from yields.
+    // The break handler reads resultConstraints, so updating the constraint
+    // above is sufficient — break ops will pick up the tightened value when
+    // the block is (re-)processed.
+    // However, we may need to re-process the loop body if the constraint
+    // tightened and there are break ops that haven't seen the new value.
+    // For now, the break handler in processBlock already reads from
+    // resultConstraints, so it will use the latest value.
   }
 }
 
