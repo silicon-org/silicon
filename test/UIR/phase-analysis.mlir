@@ -761,6 +761,39 @@ uir.func @ConstCondIf(%flag: -1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// If with const args: if anchored at 0, yields carry -1 values transparently.
+// The if result is at -1 (from yield operands), not 0 (the if's phase).
+// TODO: Revisit this once we figure out how to deal with control flow ops that
+// yield values that must be available in earlier phases.
+
+// CHECK-LABEL: uir.func @IfTransparentYield
+uir.func @IfTransparentYield(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // If anchored at block phase 0.
+  %r = uir.if %sel : %t {
+    // CHECK: uir.yield {{.*}}pa.operands = ["-1", "float"]
+    // CHECK-SAME: pa.phase = "0"
+    uir.yield %a : %t
+  } else {
+    // CHECK: uir.yield {{.*}}pa.operands = ["-1", "float"]
+    // CHECK-SAME: pa.phase = "0"
+    uir.yield %b : %t
+  // Result at -1 (transparent yield), not 0.
+  // CHECK: } {pa.operands = ["-1", "float"]
+  // CHECK-SAME: pa.phase = "0"
+  // CHECK-SAME: pa.results = ["-1"]
+  }
+  // CHECK: uir.return {{.*}}pa.operands = ["-1", "float"]
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // uir.loop with break.
 
 // CHECK-LABEL: uir.func @LoopOp
