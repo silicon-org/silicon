@@ -513,6 +513,72 @@ uir.func @DynConstNesting() -> (result: 1) {
 }
 
 //===----------------------------------------------------------------------===//
+// Floating expr block phase tightening: two results with different consumer
+// demands cause the block phase to tighten. Both calls move to the tighter
+// phase. Constraints propagate transitively through pure ops in the second
+// test.
+
+uir.func @MakeValue() -> (result: 0) {
+  %t = hir.int_type
+  uir.signature () -> (%t)
+} {
+  %t = hir.int_type
+  %c = hir.constant_int 1 : %t
+  uir.return %c -> (%t)
+}
+
+// CHECK-LABEL: uir.func @FloatingExprTightening
+uir.func @FloatingExprTightening() -> (r0: 0, r1: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature () -> (%t0, %t1)
+} {
+  %t = hir.int_type
+  %ta = hir.int_type
+  %tb = hir.int_type
+  %x, %y = uir.expr : %ta, %tb {
+    %ra = hir.int_type
+    // Both calls tighten to -1 (from %y's -1 demand).
+    // CHECK: uir.call @MakeValue()
+    // CHECK-SAME: pa.phase = "-1"
+    %a = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+    %rb = hir.int_type
+    // CHECK: uir.call @MakeValue()
+    // CHECK-SAME: pa.phase = "-1"
+    %b = uir.call @MakeValue() : () -> (%rb) () -> !hir.any [] -> [0]
+    uir.yield %a, %b : %ta, %tb
+  }
+  uir.return %x, %y -> (%t, %t)
+}
+
+// CHECK-LABEL: uir.func @FloatingExprTransitivePure
+uir.func @FloatingExprTransitivePure() -> (r0: 0, r1: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature () -> (%t0, %t1)
+} {
+  %t = hir.int_type
+  %ta = hir.int_type
+  %tb = hir.int_type
+  %x, %y = uir.expr : %ta, %tb {
+    %ra = hir.int_type
+    // CHECK: uir.call @MakeValue()
+    // CHECK-SAME: pa.phase = "-1"
+    %a = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+    %rb = hir.int_type
+    // CHECK: uir.call @MakeValue()
+    // CHECK-SAME: pa.phase = "-1"
+    %b = uir.call @MakeValue() : () -> (%rb) () -> !hir.any [] -> [0]
+    // Pure ops between calls and yield: constraints propagate through.
+    %c1 = hir.constant_int 1 : %t
+    %a2 = hir.add %a, %c1 : %t
+    %b2 = hir.add %b, %c1 : %t
+    uir.yield %a2, %b2 : %ta, %tb
+  }
+  uir.return %x, %y -> (%t, %t)
+}
+
+//===----------------------------------------------------------------------===//
 // Floating uir.expr: phase comes from consumer.
 
 // CHECK-LABEL: uir.func @FloatingExpr

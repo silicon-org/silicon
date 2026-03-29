@@ -136,7 +136,7 @@ void PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
 
   // Step 2: Process the terminator.
   auto *terminator = block.getTerminator();
-  opPhases.insert({terminator, blockPhase});
+  opPhases[terminator] = blockPhase;
 
   if (auto yieldOp = dyn_cast<YieldOp>(terminator)) {
     auto *parent = yieldOp->getParentOp();
@@ -505,8 +505,22 @@ void PhaseAnalysis::constrainResult(Operation *regionOp, unsigned resultIdx,
         Value value = values[resultIdx];
         // If the value hasn't been resolved yet, push the constraint to
         // resolve it. If already resolved, just check the constraint.
+        bool isFloating =
+            isa<ExprOp>(regionOp) && !cast<ExprOp>(regionOp).getPin();
+
+        // For floating exprs, tighten the block phase first so that
+        // side-effecting ops inside re-anchor at the tighter phase.
+        // This must happen before resolving the yield operand, because
+        // the operand may depend on a call anchored at the block phase.
+        if (isFloating) {
+          auto exprIt = opPhases.find(regionOp);
+          if (exprIt != opPhases.end() && exprIt->second > latest)
+            resolveOp(regionOp, latest);
+        }
+
         auto valIt = actualPhase.find(value);
         if (valIt == actualPhase.end()) {
+          // Not yet resolved — push the constraint to resolve it.
           if (failed(resolveValue(value, latest)))
             emitRemark(yieldOp.getLoc()) << "required by yield operand";
           valIt = actualPhase.find(value);
