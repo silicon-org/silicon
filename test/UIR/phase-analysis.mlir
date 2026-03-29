@@ -459,6 +459,60 @@ uir.func @ConstBlockStatement(%a: -1) -> () {
 }
 
 //===----------------------------------------------------------------------===//
+// Nested dyn blocks: dyn { dyn { ... } } — literal floats through both yields.
+
+// CHECK-LABEL: uir.func @NestedDynBlocks
+uir.func @NestedDynBlocks() -> (result: 2) {
+  %t = hir.int_type
+  uir.signature () -> (%t)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin 1 : %t {
+    // CHECK: } {{.*}}pa.phase = "2"
+    // CHECK-SAME: pa.results = ["float"]
+    %inner = uir.expr pin 1 : %t {
+      %c99 = hir.constant_int 99 : %t
+      uir.yield %c99 : %t
+    }
+    uir.yield %inner : %t
+  // CHECK: } {{.*}}pa.phase = "1"
+  // CHECK-SAME: pa.results = ["float"]
+  }
+  // Literal floats through both yields — result and return operand are float.
+  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK-SAME: pa.operands = ["float", "float"]
+  // CHECK-SAME: pa.phase = "0"
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// dyn { const { ... } }: outer at +1, inner const at 0 (relative -1 from +1).
+// Literal floats through both yields.
+
+// CHECK-LABEL: uir.func @DynConstNesting
+uir.func @DynConstNesting() -> (result: 1) {
+  %t = hir.int_type
+  uir.signature () -> (%t)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin 1 : %t {
+    // CHECK: } {{.*}}pa.phase = "0"
+    // CHECK-SAME: pa.results = ["float"]
+    %inner = uir.expr pin -1 : %t {
+      %c42 = hir.constant_int 42 : %t
+      uir.yield %c42 : %t
+    }
+    // Yield carries float value at phase 1.
+    // CHECK: uir.yield {{.*}}pa.operands = ["float", "float"]
+    // CHECK-SAME: pa.phase = "1"
+    uir.yield %inner : %t
+  // CHECK: } {{.*}}pa.phase = "1"
+  // CHECK-SAME: pa.results = ["float"]
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // Floating uir.expr: phase comes from consumer.
 
 // CHECK-LABEL: uir.func @FloatingExpr

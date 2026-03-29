@@ -325,3 +325,33 @@ uir.func @NestedConstBlockError(%a: -1) -> (result: 0) {
   }
   uir.return %0 -> (%t)
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Dyn block with side-effecting call: result at phase 1 (call anchored at dyn
+// block phase) returned via phase-0 result.
+
+uir.func @DynBlockCallHelper() -> (result: 0) {
+  %t = hir.int_type
+  uir.signature () -> (%t)
+} {
+  %t = hir.int_type
+  %c42 = hir.constant_int 42 : %t
+  uir.return %c42 -> (%t)
+}
+
+uir.func @DynBlockPhaseMismatch() -> (result: 0) {
+  %t = hir.int_type
+  uir.signature () -> (%t)
+} {
+  %t = hir.int_type
+  // expected-error @+1 {{value at phase 1 cannot satisfy requirement for phase 0}}
+  %0 = uir.expr pin 1 : %t {
+    %tr = hir.int_type
+    %v = uir.call @DynBlockCallHelper() : () -> (%tr) () -> !hir.any [] -> [0]
+    uir.yield %v : %t
+  }
+  // expected-remark @+1 {{required by return value at phase 0}}
+  uir.return %0 -> (%t)
+}
