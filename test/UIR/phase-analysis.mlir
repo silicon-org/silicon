@@ -379,11 +379,11 @@ uir.func @PinnedExpr(%a: -1) -> (result: 0) {
   uir.signature (%0) -> (%0)
 } {
   %t = hir.int_type
+  // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-1"
   %0 = uir.expr pin -1 : %t {
     // CHECK: hir.add {{.*}} {{.*}}pa.phase = "-1"
     %sum = hir.add %a, %a : %t
     uir.yield %sum : %t
-  // CHECK: } {{.*}}pa.phase = "-1"
   }
   uir.return %0 -> (%t)
 }
@@ -398,13 +398,12 @@ uir.func @DynPinnedExpr(%x: 0) -> (result: 1) {
   uir.signature (%t0) -> (%t1)
 } {
   %t = hir.int_type
+  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["0"]
   %0 = uir.expr pin 1 : %t {
     // Yield at phase 1, carrying %x at phase 0 across the boundary.
     // CHECK: uir.yield {{.*}}pa.operands = ["0", "float"]
     // CHECK-SAME: pa.phase = "1"
     uir.yield %x : %t
-  // CHECK: } {{.*}}pa.phase = "1"
-  // CHECK-SAME: pa.results = ["0"]
   }
   // Return at phase 0, result value at phase 0 (propagated through yield).
   // CHECK: uir.return {{.*}} -> ({{.*}})
@@ -424,17 +423,17 @@ uir.func @NestedConstBlocks(%a: -2) -> (result: 0) {
 } {
   %t = hir.int_type
   // Outer const block at phase -1.
+  // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-1"
   %0 = uir.expr pin -1 : %t {
     // Inner const block at phase -2.
-    // CHECK: hir.add {{.*}}pa.phase = "-2"
-    // CHECK: } {{.*}}pa.phase = "-2"
+    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-2"
     %inner = uir.expr pin -1 : %t {
       %c1 = hir.constant_int 1 : %t
+      // CHECK: hir.add {{.*}}pa.phase = "-2"
       %sum = hir.add %a, %c1 : %t
       uir.yield %sum : %t
     }
     uir.yield %inner : %t
-  // CHECK: } {{.*}}pa.phase = "-1"
   }
   uir.return %0 -> (%t)
 }
@@ -449,9 +448,9 @@ uir.func @ConstBlockStatement(%a: -1) -> () {
   %t0 = hir.int_type
   uir.signature (%t0) -> ()
 } {
-  // CHECK: func.call @sideEffectC() {{.*}}pa.phase = "-1"
-  // CHECK: } {{.*}}pa.phase = "-1"
+  // CHECK: uir.expr pin -1 attributes {{{.*}}pa.phase = "-1"
   uir.expr pin -1 {
+    // CHECK: func.call @sideEffectC() {{.*}}pa.phase = "-1"
     func.call @sideEffectC() : () -> ()
     uir.yield
   }
@@ -497,16 +496,14 @@ uir.func @NestedDynBlocks() -> (result: 2) {
   uir.signature () -> (%t)
 } {
   %t = hir.int_type
+  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["float"]
   %0 = uir.expr pin 1 : %t {
-    // CHECK: } {{.*}}pa.phase = "2"
-    // CHECK-SAME: pa.results = ["float"]
+    // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "2", pa.results = ["float"]
     %inner = uir.expr pin 1 : %t {
       %c99 = hir.constant_int 99 : %t
       uir.yield %c99 : %t
     }
     uir.yield %inner : %t
-  // CHECK: } {{.*}}pa.phase = "1"
-  // CHECK-SAME: pa.results = ["float"]
   }
   // Literal floats through both yields — result and return operand are float.
   // CHECK: uir.return {{.*}} -> ({{.*}})
@@ -525,19 +522,16 @@ uir.func @DynConstNesting() -> (result: 1) {
   uir.signature () -> (%t)
 } {
   %t = hir.int_type
+  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["float"]
   %0 = uir.expr pin 1 : %t {
-    // CHECK: } {{.*}}pa.phase = "0"
-    // CHECK-SAME: pa.results = ["float"]
+    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["float"]
     %inner = uir.expr pin -1 : %t {
       %c42 = hir.constant_int 42 : %t
       uir.yield %c42 : %t
     }
     // Yield carries float value at phase 1.
-    // CHECK: uir.yield {{.*}}pa.operands = ["float", "float"]
-    // CHECK-SAME: pa.phase = "1"
+    // CHECK: uir.yield {{.*}}pa.phase = "1"
     uir.yield %inner : %t
-  // CHECK: } {{.*}}pa.phase = "1"
-  // CHECK-SAME: pa.results = ["float"]
   }
   uir.return %0 -> (%t)
 }
@@ -619,13 +613,13 @@ uir.func @FloatingExpr(%a: -1) -> (result: 0) {
   // The floating expr's phase is determined by its consumer (uir.return, which
   // needs the value at phase 0).
   %t = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "0"
   %0 = uir.expr : %t {
     // The add is pure, operands at -1, so earliest = -1.
     // CHECK: hir.add {{.*}} {{.*}}pa.phase = "-1"
     %sum = hir.add %a, %a : %t
     // CHECK: uir.yield {{.*}} {{.*}}pa.phase = "0"
     uir.yield %sum : %t
-  // CHECK: } {{.*}}pa.phase = "0"
   }
   uir.return %0 -> (%t)
 }
@@ -640,13 +634,12 @@ uir.func @DeadExprStatement(%a: 0, %b: 0) -> () {
   uir.signature (%t0, %t1) -> ()
 } {
   %t = hir.int_type
-  // CHECK: uir.expr pin {
+  // CHECK: uir.expr pin attributes {{{.*}}pa.phase = "0"
   uir.expr pin {
     // CHECK: hir.add {{.*}} {{.*}}pa.phase = "0"
     %sum = hir.add %a, %b : %t
     // CHECK: uir.yield {{.*}}pa.phase = "0"
     uir.yield
-  // CHECK: } {{.*}}pa.phase = "0"
   }
   uir.return -> ()
 }
@@ -694,13 +687,13 @@ uir.func @IfOp(%cond: 0) -> (result: 0) {
   uir.signature (%0) -> (%0)
 } {
   %t = hir.int_type
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0"
   %0 = uir.if %cond : %t {
     // CHECK: uir.yield {{.*}} {{.*}}pa.phase = "0"
     uir.yield %cond : %t
   } else {
     // CHECK: uir.yield {{.*}} {{.*}}pa.phase = "0"
     uir.yield %cond : %t
-  // CHECK: } {{.*}}pa.phase = "0"
   }
   uir.return %0 -> (%t)
 }
@@ -719,7 +712,7 @@ uir.func @ShortCircuitAnd(%x: 0, %lo: 0, %hi: 0) -> (result: 0) {
   %bt = hir.bool_type
   // CHECK: hir.geq {{.*}} {{.*}}pa.phase = "0"
   %cond1 = hir.geq %x, %lo : %bt
-  // CHECK: uir.if {{.*}} {
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0"
   %r = uir.if %cond1 : %bt {
     // CHECK: hir.leq {{.*}} {{.*}}pa.phase = "0"
     %cond2 = hir.leq %x, %hi : %bt
@@ -729,7 +722,6 @@ uir.func @ShortCircuitAnd(%x: 0, %lo: 0, %hi: 0) -> (result: 0) {
     %cfalse = hir.constant_bool <false>
     // CHECK: uir.yield {{.*}} {{.*}}pa.phase = "0"
     uir.yield %cfalse : %bt
-  // CHECK: } {{.*}}pa.phase = "0"
   }
   uir.return %r -> (%bt)
 }
@@ -748,14 +740,13 @@ uir.func @ConstCondIf(%flag: -1) -> (result: 0) {
   %c1 = hir.constant_int 1 : %t
   // CHECK: hir.constant_int 0 {{.*}} {{.*}}pa.phase = "float"
   %c0 = hir.constant_int 0 : %t
-  // CHECK: uir.if {{.*}} {
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0"
   %r = uir.if %flag : %t {
     // CHECK: uir.yield {{.*}} {{.*}}pa.phase = "0"
     uir.yield %c1 : %t
   } else {
     // CHECK: uir.yield {{.*}} {{.*}}pa.phase = "0"
     uir.yield %c0 : %t
-  // CHECK: } {{.*}}pa.phase = "0"
   }
   uir.return %r -> (%t)
 }
@@ -776,6 +767,8 @@ uir.func @IfTransparentYield(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
 } {
   %t = hir.int_type
   // If anchored at block phase 0.
+  // Result at -1 (transparent yield), not 0.
+  // CHECK: uir.if {{.*}} attributes {pa.operands = ["-1", "float"], pa.phase = "0", pa.results = ["-1"]
   %r = uir.if %sel : %t {
     // CHECK: uir.yield {{.*}}pa.operands = ["-1", "float"]
     // CHECK-SAME: pa.phase = "0"
@@ -784,10 +777,6 @@ uir.func @IfTransparentYield(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
     // CHECK: uir.yield {{.*}}pa.operands = ["-1", "float"]
     // CHECK-SAME: pa.phase = "0"
     uir.yield %b : %t
-  // Result at -1 (transparent yield), not 0.
-  // CHECK: } {pa.operands = ["-1", "float"]
-  // CHECK-SAME: pa.phase = "0"
-  // CHECK-SAME: pa.results = ["-1"]
   }
   // CHECK: uir.return {{.*}}pa.operands = ["-1", "float"]
   uir.return %r -> (%t)
@@ -803,6 +792,7 @@ uir.func @LoopOp(%cond: 0, %val: 0) -> (result: 0) {
   uir.signature (%0, %1) -> (%0)
 } {
   %t = hir.int_type
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0"
   %0 = uir.loop : %t {
     uir.if %cond {
       // CHECK: uir.break {{.*}} {{.*}}pa.phase = "0"
@@ -812,7 +802,6 @@ uir.func @LoopOp(%cond: 0, %val: 0) -> (result: 0) {
     }
     // CHECK: uir.yield {{.*}}pa.phase = "0"
     uir.yield
-  // CHECK: } {{.*}}pa.phase = "0"
   }
   uir.return %0 -> (%t)
 }
@@ -1077,11 +1066,11 @@ uir.func @NestedExprInIf(%cond: 0, %a: -1) -> (result: 0) {
 } {
   %t = hir.int_type
   %0 = uir.if %cond : %t {
+    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-1"
     %inner = uir.expr pin -1 : %t {
       // CHECK: hir.add {{.*}} {{.*}}pa.phase = "-1"
       %sum = hir.add %a, %a : %t
       uir.yield %sum : %t
-    // CHECK: } {{.*}}pa.phase = "-1"
     }
     uir.yield %inner : %t
   } else {
@@ -1191,8 +1180,11 @@ uir.func @NestedLoopResults(%a: 1, %cond: 0) -> (result: 1) {
   uir.signature (%0, %1) -> (%0)
 } {
   %t = hir.int_type
+  // Outer loop result is 1 (transparent from inner).
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
   %0 = uir.loop : %t {
     // Inner loop executes at 0 but result is at 1 (transparent break).
+    // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
     %inner = uir.loop : %t {
       uir.if %cond {
         // CHECK: hir.add %a, %a {{.*}}pa.phase = "1"
@@ -1202,12 +1194,9 @@ uir.func @NestedLoopResults(%a: 1, %cond: 0) -> (result: 1) {
         uir.unreachable
       }
       uir.yield
-    // CHECK: } {{.*}}pa.phase = "0", pa.results = ["1"]
     }
     // Outer break carries the dyn value.
     uir.break %inner : %t
-  // Outer loop result is 1 (transparent from inner).
-  // CHECK: } {{.*}}pa.phase = "0", pa.results = ["1"]
   }
   uir.return %0 -> (%t)
 }
@@ -1225,6 +1214,7 @@ uir.func @MultiResultLoopPhases(%a: 1) -> (r0: 1, r1: 0) {
 } {
   %t = hir.int_type
   %t2 = hir.int_type
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1", "0"]
   %r0, %r1 = uir.loop : %t, %t2 {
     // CHECK: hir.add %a, %a {{.*}}pa.phase = "1"
     %sum = hir.add %a, %a : %t
@@ -1234,7 +1224,6 @@ uir.func @MultiResultLoopPhases(%a: 1) -> (r0: 1, r1: 0) {
     %v = uir.call @MakeValue() : () -> (%rt) () -> !hir.any [] -> [0]
     // CHECK: uir.break {{.*}}pa.operands = ["1", "0", "float", "float"]
     uir.break %sum, %v : %t, %t2
-  // CHECK: } {{.*}}pa.phase = "0", pa.results = ["1", "0"]
   }
   // CHECK: uir.return {{.*}}pa.operands = ["1", "0", "float", "float"]
   uir.return %r0, %r1 -> (%t, %t2)
@@ -1253,11 +1242,11 @@ uir.func @IfTransparentDynYield(%sel: 0, %a: 1, %b: 1) -> (result: 1) {
   uir.signature (%t0, %t1, %t2) -> (%t3)
 } {
   %t = hir.int_type
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
   %r = uir.if %sel : %t {
     uir.yield %a : %t
   } else {
     uir.yield %b : %t
-  // CHECK: } {{.*}}pa.phase = "0", pa.results = ["1"]
   }
   // CHECK: uir.return {{.*}}pa.operands = ["1", "float"]
   uir.return %r -> (%t)
@@ -1273,9 +1262,9 @@ uir.func @ExprTransparentDynYield(%a: 1) -> (result: 1) {
   uir.signature (%t) -> (%t)
 } {
   %t = hir.int_type
+  // CHECK: uir.expr pin : {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
   %0 = uir.expr pin : %t {
     uir.yield %a : %t
-  // CHECK: } {{.*}}pa.phase = "0", pa.results = ["1"]
   }
   uir.return %0 -> (%t)
 }
@@ -1290,9 +1279,9 @@ uir.func @LoopTransparentDynBreak(%a: 1) -> (result: 1) {
   uir.signature (%t) -> (%t)
 } {
   %t = hir.int_type
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
   %0 = uir.loop : %t {
     uir.break %a : %t
-  // CHECK: } {{.*}}pa.phase = "0", pa.results = ["1"]
   }
   uir.return %0 -> (%t)
 }
@@ -1462,12 +1451,11 @@ uir.func @MultiResultIf(%cond: 0, %a: 0, %b: 0) -> (r0: 0, r1: 0) {
   uir.signature (%t0, %t1, %t2) -> (%t3, %t4)
 } {
   %t = hir.int_type
-  // CHECK: uir.if {{.*}} {
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0"
   %r0, %r1 = uir.if %cond : %t, %t {
     uir.yield %a, %b : %t, %t
   } else {
     uir.yield %b, %a : %t, %t
-  // CHECK: } {{.*}}pa.phase = "0"
   }
   uir.return %r0, %r1 -> (%t, %t)
 }
@@ -1697,11 +1685,12 @@ uir.func @IfInsideFloatingExpr(%cond: -1) -> (result: -1) {
 } {
   %t = hir.int_type
   %ta = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "-1"
   %0 = uir.expr : %ta {
     %ra = hir.int_type
     // The if is anchored at the floating expr's block phase.
     // When the expr tightens to -1, the if and its calls tighten too.
-    // CHECK: uir.if {{.*}} {
+    // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "-1"
     %r = uir.if %cond : %ta {
       // CHECK: uir.call @MakeValue()
       // CHECK-SAME: pa.phase = "-1"
@@ -1712,10 +1701,8 @@ uir.func @IfInsideFloatingExpr(%cond: -1) -> (result: -1) {
       // CHECK-SAME: pa.phase = "-1"
       %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
       uir.yield %v : %ta
-    // CHECK: } {{.*}}pa.phase = "-1"
     }
     uir.yield %r : %ta
-  // CHECK: } {{.*}}pa.phase = "-1"
   }
   uir.return %0 -> (%t)
 }
@@ -1732,9 +1719,10 @@ uir.func @LoopInsideFloatingExpr(%cond: -1) -> (result: -1) {
 } {
   %t = hir.int_type
   %ta = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "-1"
   %0 = uir.expr : %ta {
     %ra = hir.int_type
-    // CHECK: uir.loop
+    // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "-1"
     %r = uir.loop : %ta {
       uir.if %cond {
         // CHECK: uir.call @MakeValue()
@@ -1746,10 +1734,8 @@ uir.func @LoopInsideFloatingExpr(%cond: -1) -> (result: -1) {
         uir.unreachable
       }
       uir.yield
-    // CHECK: } {{.*}}pa.phase = "-1"
     }
     uir.yield %r : %ta
-  // CHECK: } {{.*}}pa.phase = "-1"
   }
   uir.return %0 -> (%t)
 }
@@ -1766,18 +1752,18 @@ uir.func @PinnedInsideFloatingExpr(%a: -2) -> (result: -1) {
 } {
   %t = hir.int_type
   %ta = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "-1"
   %0 = uir.expr : %ta {
     // Inner pinned expr at offset -1 relative to parent.
     // When parent tightens to -1, inner is at -1 + (-1) = -2.
+    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-2"
     %inner = uir.expr pin -1 : %ta {
       // Pure op at -2 (operands at -2).
       // CHECK: hir.add %a, %a {{.*}}pa.phase = "-2"
       %sum = hir.add %a, %a : %t
       uir.yield %sum : %ta
-    // CHECK: } {{.*}}pa.phase = "-2"
     }
     uir.yield %inner : %ta
-  // CHECK: } {{.*}}pa.phase = "-1"
   }
   uir.return %0 -> (%t)
 }
@@ -1794,18 +1780,18 @@ uir.func @FloatingInsideFloating(%a: -2) -> (result: -1) {
 } {
   %t = hir.int_type
   %ta = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "-1"
   %0 = uir.expr : %ta {
     %tb = hir.int_type
     // Inner floating expr. Its phase is determined by its consumer (the yield
     // of the outer expr, which demands -1).
+    // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "-1"
     %inner = uir.expr : %tb {
       // CHECK: hir.add %a, %a {{.*}}pa.phase = "-2"
       %sum = hir.add %a, %a : %t
       uir.yield %sum : %tb
-    // CHECK: } {{.*}}pa.phase = "-1"
     }
     uir.yield %inner : %ta
-  // CHECK: } {{.*}}pa.phase = "-1"
   }
   uir.return %0 -> (%t)
 }
@@ -1821,12 +1807,15 @@ uir.func @DeepNestedTightening(%cond: -2) -> (result: -1) {
 } {
   %t = hir.int_type
   %ta = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "-1"
   %0 = uir.expr : %ta {
     // Pinned at offset -1 relative to floating parent.
     // When parent tightens to -1, this is at -2.
+    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-2"
     %inner = uir.expr pin -1 : %ta {
       %ra = hir.int_type
       // If anchored at the pinned expr's phase (-2).
+      // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "-2"
       %r = uir.if %cond : %ta {
         // CHECK: uir.call @MakeValue()
         // CHECK-SAME: pa.phase = "-2"
@@ -1837,13 +1826,10 @@ uir.func @DeepNestedTightening(%cond: -2) -> (result: -1) {
         // CHECK-SAME: pa.phase = "-2"
         %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
         uir.yield %v : %ta
-      // CHECK: } {{.*}}pa.phase = "-2"
       }
       uir.yield %r : %ta
-    // CHECK: } {{.*}}pa.phase = "-2"
     }
     uir.yield %inner : %ta
-  // CHECK: } {{.*}}pa.phase = "-1"
   }
   uir.return %0 -> (%t)
 }

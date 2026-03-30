@@ -76,6 +76,10 @@ ParseResult IfOp::parse(OpAsmParser &parser, OperationState &result) {
   // Add result types (one !hir.any per result type operand).
   result.addTypes(SmallVector<Type>(resultTypeOperands.size(), anyTy));
 
+  // Parse optional attributes (before regions).
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
   // Parse then region.
   auto *thenRegion = result.addRegion();
   if (parser.parseRegion(*thenRegion))
@@ -87,10 +91,6 @@ ParseResult IfOp::parse(OpAsmParser &parser, OperationState &result) {
     if (parser.parseRegion(*elseRegion))
       return failure();
   }
-
-  // Parse optional attributes.
-  if (parser.parseOptionalAttrDict(result.attributes))
-    return failure();
 
   return success();
 }
@@ -105,6 +105,9 @@ void IfOp::print(OpAsmPrinter &p) {
                           [&](Value v) { p.printOperand(v); });
   }
 
+  // Print attributes before regions.
+  p.printOptionalAttrDictWithKeyword((*this)->getAttrs());
+
   // Print then region.
   p << ' ';
   p.printRegion(getThenRegion(), /*printEntryBlockArgs=*/false);
@@ -114,8 +117,6 @@ void IfOp::print(OpAsmPrinter &p) {
     p << " else ";
     p.printRegion(getElseRegion(), /*printEntryBlockArgs=*/false);
   }
-
-  p.printOptionalAttrDict((*this)->getAttrs());
 }
 
 LogicalResult IfOp::verify() {
@@ -160,13 +161,13 @@ ParseResult LoopOp::parse(OpAsmParser &parser, OperationState &result) {
   // Add result types.
   result.addTypes(SmallVector<Type>(resultTypeOperands.size(), anyTy));
 
+  // Parse optional attributes (before region).
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
   // Parse body region.
   auto *body = result.addRegion();
   if (parser.parseRegion(*body))
-    return failure();
-
-  // Parse optional attributes.
-  if (parser.parseOptionalAttrDict(result.attributes))
     return failure();
 
   return success();
@@ -180,11 +181,12 @@ void LoopOp::print(OpAsmPrinter &p) {
                           [&](Value v) { p.printOperand(v); });
   }
 
+  // Print attributes before region.
+  p.printOptionalAttrDictWithKeyword((*this)->getAttrs());
+
   // Print body region.
   p << ' ';
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
-
-  p.printOptionalAttrDict((*this)->getAttrs());
 }
 
 LogicalResult LoopOp::verify() {
@@ -248,13 +250,13 @@ ParseResult ExprOp::parse(OpAsmParser &parser, OperationState &result) {
   // Add result types.
   result.addTypes(SmallVector<Type>(resultTypeOperands.size(), anyTy));
 
+  // Parse optional attributes (before region), eliding pin/phaseShift.
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
   // Parse body region.
   auto *body = result.addRegion();
   if (parser.parseRegion(*body))
-    return failure();
-
-  // Parse optional attributes.
-  if (parser.parseOptionalAttrDict(result.attributes))
     return failure();
 
   return success();
@@ -275,12 +277,13 @@ void ExprOp::print(OpAsmPrinter &p) {
                           [&](Value v) { p.printOperand(v); });
   }
 
+  // Print attrs before region, eliding pin and phaseShift (printed above).
+  p.printOptionalAttrDictWithKeyword((*this)->getAttrs(),
+                                     {"pin", "phaseShift"});
+
   // Print body region.
   p << ' ';
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
-
-  // Print attrs, eliding pin and phaseShift (printed above).
-  p.printOptionalAttrDict((*this)->getAttrs(), {"pin", "phaseShift"});
 }
 
 LogicalResult ExprOp::verify() {
