@@ -1014,6 +1014,148 @@ uir.func @CallConstArg(%n: -1, %a: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Call with const arg offset -1 and dyn result offset +1. The return demands
+// result at phase 0, so callPhase + 1 = 0 → callPhase = -1. Arg at -1 offset
+// needs phase -1 + (-1) = -2. %x at -2 satisfies.
+
+uir.func @ConstArgDynResult(%c: -1) -> (result: 1) {
+  %t = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t) -> (%t2)
+} {
+  %t3 = hir.int_type
+  uir.return %c -> (%t3)
+}
+
+// CHECK-LABEL: uir.func @CallBothOffsets
+uir.func @CallBothOffsets(%x: -2) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // CHECK: uir.call @ConstArgDynResult({{.*}}) {{.*}}pa.phase = "-1"
+  // CHECK-SAME: pa.results = ["0"]
+  %r = uir.call @ConstArgDynResult(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [1]
+  uir.return %r -> (%tr)
+}
+
+//===----------------------------------------------------------------------===//
+// Triple const chain: takes_const(takes_const(takes_const(x))). Each const arg
+// offset -1 means each call tightens one phase earlier. x at -3.
+
+uir.func @TakesConst(%x: -1) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+// CHECK-LABEL: uir.func @TripleConstChain
+uir.func @TripleConstChain(%x: -3) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  %tr1 = hir.int_type
+  %tr2 = hir.int_type
+  %tr3 = hir.int_type
+  // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "-2"
+  %r1 = uir.call @TakesConst(%x) : (%t1) -> (%tr1) (!hir.any) -> !hir.any [-1] -> [0]
+  // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "-1"
+  %r2 = uir.call @TakesConst(%r1) : (%t2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+  // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "0"
+  %r3 = uir.call @TakesConst(%r2) : (%t3) -> (%tr3) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %r3 -> (%tr3)
+}
+
+//===----------------------------------------------------------------------===//
+// Triple dyn chain: returns_dyn(returns_dyn(returns_dyn(x))). Each dyn result
+// offset +1 pushes later. Calls tighten to -3, -2, -1 so the final result
+// reaches phase 0.
+
+uir.func @ReturnsDyn(%x: 0) -> (result: 1) {
+  %t = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t) -> (%t2)
+} {
+  %t3 = hir.int_type
+  uir.return %x -> (%t3)
+}
+
+// CHECK-LABEL: uir.func @TripleDynChain
+uir.func @TripleDynChain(%x: -3) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  %tr1 = hir.int_type
+  %tr2 = hir.int_type
+  %tr3 = hir.int_type
+  // CHECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-3"
+  // CHECK-SAME: pa.results = ["-2"]
+  %r1 = uir.call @ReturnsDyn(%x) : (%t1) -> (%tr1) (!hir.any) -> !hir.any [0] -> [1]
+  // CHECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-2"
+  // CHECK-SAME: pa.results = ["-1"]
+  %r2 = uir.call @ReturnsDyn(%r1) : (%t2) -> (%tr2) (!hir.any) -> !hir.any [0] -> [1]
+  // CHECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-1"
+  // CHECK-SAME: pa.results = ["0"]
+  %r3 = uir.call @ReturnsDyn(%r2) : (%t3) -> (%tr3) (!hir.any) -> !hir.any [0] -> [1]
+  uir.return %r3 -> (%tr3)
+}
+
+//===----------------------------------------------------------------------===//
+// Offset cancel: takes_const(returns_dyn(x)). Inner dyn +1 and outer const -1
+// cancel out. x at -2, inner call at -2 (result at -1), outer call at 0.
+
+// CHECK-LABEL: uir.func @OffsetCancel
+uir.func @OffsetCancel(%x: -2) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %tr1 = hir.int_type
+  %tr2 = hir.int_type
+  // CHECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-2"
+  // CHECK-SAME: pa.results = ["-1"]
+  %r1 = uir.call @ReturnsDyn(%x) : (%t1) -> (%tr1) (!hir.any) -> !hir.any [0] -> [1]
+  // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "0"
+  %r2 = uir.call @TakesConst(%r1) : (%t2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %r2 -> (%tr2)
+}
+
+//===----------------------------------------------------------------------===//
+// Deep nesting with const blocks: const { const { takes_const(x) } }.
+// Block phase shift + arg offset: -1 + (-1) + (-1) = -3 for the arg.
+
+// CHECK-LABEL: uir.func @DeepViaBlocks
+uir.func @DeepViaBlocks(%x: -3) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  %0 = uir.expr pin -1 : %t2 {
+    %1 = uir.expr pin -1 : %t2 {
+      %ta = hir.int_type
+      %tr = hir.int_type
+      // Call at block phase -2. Const arg at -2 + (-1) = -3. x at -3. Ok.
+      // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "-2"
+      %r = uir.call @TakesConst(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+      uir.yield %r : %t2
+    }
+    uir.yield %1 : %t2
+  }
+  %p = uir.pin %0, 0 : !hir.any
+  uir.return %p -> (%t2)
+}
+
+//===----------------------------------------------------------------------===//
 // uir.if without else region.
 
 // CHECK-LABEL: uir.func @IfNoElse
@@ -1077,6 +1219,78 @@ uir.func @NestedExprInIf(%cond: 0, %a: -1) -> (result: 0) {
     uir.yield %a : %t
   }
   uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// If inside const block inside loop: the const block shifts to -1, the if
+// inside is at -1. The result flows through pin to an add at phase 0.
+
+// CHECK-LABEL: uir.func @IfInConstInLoop
+uir.func @IfInConstInLoop(%flag: -1, %a: -1, %b: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %2 = hir.int_type
+  %3 = hir.int_type
+  uir.signature (%0, %1, %2, %3) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-1"
+    %chosen = uir.expr pin -1 : %t {
+      // CHECK: uir.if %flag {{.*}} attributes {{{.*}}pa.phase = "-1"
+      %sel = uir.if %flag : %t {
+        // CHECK: uir.yield %a {{.*}}pa.phase = "-1"
+        uir.yield %a : %t
+      } else {
+        uir.yield %b : %t
+      }
+      uir.yield %sel : %t
+    }
+    // Pin absorbs the -1 result to 0.
+    // CHECK: uir.pin {{.*}}pa.phase = "0"
+    %pinned = uir.pin %chosen, 0 : !hir.any
+    // CHECK: hir.add {{.*}}pa.phase = "0"
+    %sum = hir.add %pinned, %x : %t
+    uir.break %sum : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Deep nesting: loop inside if inside const block. Both branches of the if
+// contain loops, all at phase -1.
+
+// CHECK-LABEL: uir.func @DeepNesting
+uir.func @DeepNesting(%a: -1, %b: -1) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-1"
+  %val = uir.expr pin -1 : %t {
+    %cond = hir.gt %a, %b : %t
+    // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "-1"
+    %0 = uir.if %cond : %t {
+      %1 = uir.loop : %t {
+        // CHECK: hir.add %a, %b {{.*}}pa.phase = "-1"
+        %sum = hir.add %a, %b : %t
+        uir.break %sum : %t
+      }
+      uir.yield %1 : %t
+    } else {
+      %2 = uir.loop : %t {
+        // CHECK: hir.sub %b, %a {{.*}}pa.phase = "-1"
+        %diff = hir.sub %b, %a : %t
+        uir.break %diff : %t
+      }
+      uir.yield %2 : %t
+    }
+    uir.yield %0 : %t
+  }
+  // CHECK: uir.pin {{.*}}pa.phase = "0"
+  %pinned = uir.pin %val, 0 : !hir.any
+  uir.return %pinned -> (%t)
 }
 
 //===----------------------------------------------------------------------===//
@@ -1351,6 +1565,134 @@ uir.func @PureTypeOperandEarliest(%a: -1) -> (result: 0) {
   %0 = hir.add %a, %a : %ut
   %rt = hir.int_type
   uir.return %0 -> (%rt)
+}
+
+//===----------------------------------------------------------------------===//
+// Mixed const depth with dependent types: A at -2, B at -1, x at -1 with
+// type uint<A> at -2, y at 0 with type uint<B> at -1.
+
+// CHECK-LABEL: uir.func @MixedDepthDependentTypes
+uir.func @MixedDepthDependentTypes(%A: -2, %B: -1, %x: -1, %y: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %2 = hir.uint_type %A
+  %3 = hir.uint_type %B
+  %4 = hir.uint_type %B
+  uir.signature (%0, %1, %2, %3) -> (%4)
+} {
+  // CHECK: hir.uint_type %A {{.*}}pa.phase = "-2"
+  %ta = hir.uint_type %A
+  // CHECK: hir.uint_type %B {{.*}}pa.phase = "-1"
+  %tb = hir.uint_type %B
+  uir.return %y -> (%tb)
+}
+
+//===----------------------------------------------------------------------===//
+// Type arithmetic with mixed depths: uint<A + B> where A at -2, B at -1.
+// A + B is pure at max(-2, -1) = -1, uint_type at -1.
+
+// CHECK-LABEL: uir.func @TypeArithMixedDepth
+uir.func @TypeArithMixedDepth(%A: -2, %B: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %ab = hir.add %A, %B : %0
+  %2 = hir.uint_type %ab
+  %ab2 = hir.add %A, %B : %0
+  %3 = hir.uint_type %ab2
+  uir.signature (%0, %1, %2) -> (%3)
+} {
+  %t = hir.int_type
+  // add floats to max(-2, -1) = -1.
+  // CHECK: hir.add %A, %B {{.*}}pa.phase = "-1"
+  %ab = hir.add %A, %B : %t
+  // CHECK: hir.uint_type {{.*}}pa.phase = "-1"
+  %ut = hir.uint_type %ab
+  uir.return %x -> (%ut)
+}
+
+//===----------------------------------------------------------------------===//
+// Widening pattern: uint<N + 1>. N at -1, literal floats, N+1 at -1,
+// uint_type at -1.
+
+// CHECK-LABEL: uir.func @WidenType
+uir.func @WidenType(%N: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.uint_type %N
+  %lit = hir.constant_int 1 : %0
+  %np1 = hir.add %N, %lit : %0
+  %2 = hir.uint_type %np1
+  uir.signature (%0, %1) -> (%2)
+} {
+  %t = hir.int_type
+  %one = hir.constant_int 1 : %t
+  // CHECK: hir.add {{.*}}pa.phase = "-1"
+  %np1 = hir.add %N, %one : %t
+  // CHECK: hir.uint_type {{.*}}pa.phase = "-1"
+  %ut = hir.uint_type %np1
+  uir.return %x -> (%ut)
+}
+
+//===----------------------------------------------------------------------===//
+// Deep dependent type: N at -2 (const const), uint<N> at -2, x at -1 with
+// type at -2. Tests that dependent types work at stacked const depths.
+
+// CHECK-LABEL: uir.func @DeepDependentType
+uir.func @DeepDependentType(%N: -2, %x: -1) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.uint_type %N
+  %2 = hir.uint_type %N
+  uir.signature (%0, %1) -> (%2)
+} {
+  // CHECK: hir.uint_type {{.*}}pa.phase = "-2"
+  %rt = hir.uint_type %N
+  uir.return %x -> (%rt)
+}
+
+//===----------------------------------------------------------------------===//
+// Computed type uint<A + B>: A and B at -1, add pure at -1, uint_type at -1.
+
+// CHECK-LABEL: uir.func @ComputedTypeAdd
+uir.func @ComputedTypeAdd(%A: -1, %B: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %ab = hir.add %A, %B : %0
+  %2 = hir.uint_type %ab
+  %ab2 = hir.add %A, %B : %0
+  %3 = hir.uint_type %ab2
+  uir.signature (%0, %1, %2) -> (%3)
+} {
+  %t = hir.int_type
+  // CHECK: hir.add %A, %B {{.*}}pa.phase = "-1"
+  %ab = hir.add %A, %B : %t
+  // CHECK: hir.uint_type {{.*}}pa.phase = "-1"
+  %ut = hir.uint_type %ab
+  uir.return %x -> (%ut)
+}
+
+//===----------------------------------------------------------------------===//
+// Chained type computation: uint<A + B + C> with all const at -1.
+
+// CHECK-LABEL: uir.func @ChainedTypeComputation
+uir.func @ChainedTypeComputation(%A: -1, %B: -1, %C: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %2 = hir.int_type
+  %ab = hir.add %A, %B : %0
+  %abc = hir.add %ab, %C : %0
+  %3 = hir.uint_type %abc
+  %ab2 = hir.add %A, %B : %0
+  %abc2 = hir.add %ab2, %C : %0
+  %4 = hir.uint_type %abc2
+  uir.signature (%0, %1, %2, %3) -> (%4)
+} {
+  %t = hir.int_type
+  // CHECK: hir.add %A, %B {{.*}}pa.phase = "-1"
+  %ab = hir.add %A, %B : %t
+  // CHECK: hir.add {{.*}}, %C {{.*}}pa.phase = "-1"
+  %abc = hir.add %ab, %C : %t
+  // CHECK: hir.uint_type {{.*}}pa.phase = "-1"
+  %ut = hir.uint_type %abc
+  uir.return %x -> (%ut)
 }
 
 //===----------------------------------------------------------------------===//
