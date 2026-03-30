@@ -368,3 +368,73 @@ uir.func @DynBlockPhaseMismatch() -> (result: 0) {
   // expected-remark @+1 {{required by return value at phase 0}}
   uir.return %0 -> (%t)
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Phase boundary off-by-one: pure op earliest > latest.
+
+// expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @PureBoundaryError(%a: 0) -> (result: -1) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %lit = hir.constant_int 1 : %t
+  // expected-remark @+2 {{required by operand at phase -1}}
+  // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
+  %sum = hir.add %a, %lit : %t
+  // expected-remark @+1 {{required by return value at phase -1}}
+  uir.return %sum -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Phase boundary off-by-one: call arg one phase too late.
+
+uir.func @BoundaryCallHelper(%x: -1) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+// expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @CallBoundaryError(%a: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // expected-remark @+1 {{required by call argument 0 at phase -1}}
+  %r = uir.call @BoundaryCallHelper(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %r -> (%tr)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Phase boundary off-by-one: dyn result demands call one phase too early.
+
+uir.func @DynResultHelper(%x: 0) -> (result: 1) {
+  %t = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t) -> (%t2)
+} {
+  %t3 = hir.int_type
+  uir.return %x -> (%t3)
+}
+
+// expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @DynResultBoundaryError(%a: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // expected-remark @+1 {{required by call argument 0 at phase -1}}
+  %r = uir.call @DynResultHelper(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [1]
+  uir.return %r -> (%tr)
+}

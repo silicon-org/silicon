@@ -207,6 +207,50 @@ uir.func @ConstReturn(%x: -1, %y: -1) -> (r0: -1, r1: -1, r2: -1) {
 }
 
 //===----------------------------------------------------------------------===//
+// Zero-slack pure op: earliest == latest exactly. Const arg at -1, const
+// return at -1. a+1 earliest = max(-1) = -1, latest = -1. Just valid.
+
+// CHECK-LABEL: uir.func @PureNoSlack
+uir.func @PureNoSlack(%a: -1) -> (result: -1) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %lit = hir.constant_int 1 : %t
+  // CHECK: hir.add {{.*}}pa.phase = "-1"
+  %sum = hir.add %a, %lit : %t
+  uir.return %sum -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Pin vs float interaction: a*a floats to -1, pin fixes copy at 0. Independent
+// a*a in const block also floats to -1. Both paths produce -1 values, combined
+// at 0 via pins.
+
+// CHECK-LABEL: uir.func @LetPinConstraint
+uir.func @LetPinConstraint(%a: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: hir.mul %a, %a {{.*}}pa.phase = "-1"
+  %prod = hir.mul %a, %a : %t
+  // CHECK: uir.pin {{.*}}pa.phase = "0"
+  %x = uir.pin %prod, 0 : !hir.any
+  // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-1"
+  %y = uir.expr pin -1 : %t {
+    // CHECK: hir.mul %a, %a {{.*}}pa.phase = "-1"
+    %prod2 = hir.mul %a, %a : %t
+    uir.yield %prod2 : %t
+  }
+  // CHECK: uir.pin {{.*}}pa.phase = "0"
+  %pinY = uir.pin %y, 0 : !hir.any
+  // CHECK: hir.add {{.*}}pa.phase = "0"
+  %sum = hir.add %x, %pinY : %t
+  uir.return %sum -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // Literal-only const return: float satisfies -1 demand.
 
 // CHECK-LABEL: uir.func @ConstLiteralReturn
