@@ -8,10 +8,8 @@
 
 #pragma once
 
+#include "silicon/Support/MLIR.h"
 #include "silicon/UIR/Ops.h"
-#include "mlir/IR/Value.h"
-#include "mlir/Support/LogicalResult.h"
-#include "llvm/ADT/SmallVector.h"
 
 namespace silicon {
 namespace uir {
@@ -29,7 +27,8 @@ namespace uir {
 ///    to the inner value.
 ///
 /// The algorithm has four steps:
-/// 1. Pre-walk: collect terminators (break ops per loop, return/signature ops).
+/// 1. Pre-walk: collect terminators (break/continue per loop,
+///    return/signature ops).
 /// 2. Constrain blocks containing function-interface terminators to phase ≤ 0.
 /// 3. Structural setup: processBlock(sig, 0) and processBlock(body, 0).
 /// 4. Demand-driven constraints: push from declared arg/result phases.
@@ -49,34 +48,55 @@ struct PhaseAnalysis {
 
   /// Run the phase analysis. Returns failure if phase errors are detected
   /// (diagnostics already emitted via `mlir::emitError`).
-  mlir::LogicalResult run();
+  LogicalResult run();
 
   /// Look up the resolved phase for an op. Asserts if not found.
-  int16_t getPhase(mlir::Operation *op) const;
+  int16_t getPhase(Operation *op) const;
 
   /// Look up the resolved phase for a value. Asserts if not found.
-  int16_t getValuePhase(mlir::Value value) const;
+  int16_t getValuePhase(Value value) const;
 
   FuncOp funcOp;
 
   /// The resolved phase for each op (for the test pass annotation).
-  mlir::DenseMap<mlir::Operation *, int16_t> opPhases;
+  DenseMap<Operation *, int16_t> opPhases;
 
   /// The resolved actual phase for each value.
-  mlir::DenseMap<mlir::Value, int16_t> actualPhase;
+  DenseMap<Value, int16_t> actualPhase;
 
 private:
   bool anyErrors = false;
 
+  /// Debug indentation depth for tracing the DFS.
+  unsigned depth = 0;
+
   /// Map from region-bearing op to the latest phase constraint for each of its
   /// block results. Populated by constrainRegionResult, consumed by yield/break
   /// handlers.
-  mlir::DenseMap<mlir::Operation *, llvm::SmallVector<int16_t>>
-      resultConstraints;
+  DenseMap<Operation *, SmallVector<int16_t>> resultConstraints;
 
-  /// Pre-collected break ops for each loop, and function-interface terminators.
-  mlir::DenseMap<LoopOp, llvm::SmallVector<BreakOp>> loopBreaks;
-  llvm::SmallVector<mlir::Operation *> funcInterfaceTerminators;
+  //===--------------------------------------------------------------------===//
+  // Pre-collected Terminator Mappings
+  //
+  // Built by collectTerminators() in a single manual walk with loop context.
+  // Used to jump between terminators and their parent ops without walking the
+  // parent chain at each use.
+  //===--------------------------------------------------------------------===//
+
+  /// Break ops for each loop, and the reverse mapping.
+  DenseMap<LoopOp, SmallVector<BreakOp>> loopBreaks;
+  DenseMap<BreakOp, LoopOp> breakToLoop;
+
+  /// Continue ops mapped to their enclosing loop.
+  DenseMap<ContinueOp, LoopOp> continueToLoop;
+
+  /// All ReturnOp and SignatureOp terminators in the function.
+  SmallVector<Operation *> funcInterfaceTerminators;
+
+  /// Walk the function IR and populate the terminator mappings above. Uses
+  /// manual recursion with a `currentLoop` context to avoid repeated parent
+  /// chain walks.
+  void collectTerminators();
 
   //===--------------------------------------------------------------------===//
   // Five Core Functions
@@ -85,35 +105,26 @@ private:
   /// Consumer demands value at phase ≤ latest. Dispatches based on the value's
   /// defining op type (block arg, constant, pure, region, call,
   /// side-effecting).
-  mlir::FailureOr<int16_t> constrainValue(mlir::Value value, int16_t latest);
+  FailureOr<int16_t> constrainValue(Value value, int16_t latest);
 
   /// Someone needs this block at phase ≤ demanded. Dispatches on the parent op
   /// (floating expr, pinned expr, anchored CF, function body).
-  void constrainBlock(mlir::Block &block, int16_t demandedPhase);
+  void constrainBlock(Block &block, int16_t demandedPhase);
 
   /// Push demand through yield/break to a specific result of a region-bearing
   /// op (ExprOp, IfOp, LoopOp). The constraint propagates to the corresponding
   /// yield/break operand. The parent result's actualPhase is updated to match.
-  void constrainRegionResult(mlir::Operation *regionOp, unsigned resultIdx,
+  void constrainRegionResult(Operation *regionOp, unsigned resultIdx,
                              int16_t latest);
 
   /// Push blockPhase down to all ops in the block. Called when block phase is
   /// known or has changed. Validates terminator phase equalities.
-  void processBlock(mlir::Block &block, int16_t blockPhase);
+  void processBlock(Block &block, int16_t blockPhase);
 
   /// Called by processBlock for each non-terminator op. Sets the op's phase
   /// and pushes constraints to operands/regions. Skips floating/pure/constant
   /// ops (demand-driven only).
-  void processOp(mlir::Operation *op, int16_t blockPhase);
-
-  //===--------------------------------------------------------------------===//
-  // Helpers
-  //===--------------------------------------------------------------------===//
-
-  /// Find the nearest enclosing op of a given type by walking up the parent
-  /// chain. Asserts if not found.
-  template <typename OpTy>
-  OpTy findEnclosing(mlir::Operation *from);
+  void processOp(Operation *op, int16_t blockPhase);
 };
 
 } // namespace uir

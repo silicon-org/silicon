@@ -1180,6 +1180,124 @@ uir.func @NestedLoopConstContinue(%c1: 0, %c2: 0) -> () {
 }
 
 //===----------------------------------------------------------------------===//
+// Nested loops with result phase transparency: inner loop produces a dyn value
+// at phase 1 (pure op on dyn args), which flows through the outer loop's break.
+// Both loops execute at phase 0, but the inner result is at 1.
+
+// CHECK-LABEL: uir.func @NestedLoopResults
+uir.func @NestedLoopResults(%a: 1, %cond: 0) -> (result: 1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    // Inner loop executes at 0 but result is at 1 (transparent break).
+    %inner = uir.loop : %t {
+      uir.if %cond {
+        // CHECK: hir.add %a, %a {{.*}}pa.phase = "1"
+        %sum = hir.add %a, %a : %t
+        uir.break %sum : %t
+      } else {
+        uir.unreachable
+      }
+      uir.yield
+    // CHECK: } {{.*}}pa.phase = "0", pa.results = ["1"]
+    }
+    // Outer break carries the dyn value.
+    uir.break %inner : %t
+  // Outer loop result is 1 (transparent from inner).
+  // CHECK: } {{.*}}pa.phase = "0", pa.results = ["1"]
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Multi-result loop with break values at different phases. Result 0 is a dyn
+// pure op at phase 1, result 1 is a call result at phase 0.
+
+// CHECK-LABEL: uir.func @MultiResultLoopPhases
+uir.func @MultiResultLoopPhases(%a: 1) -> (r0: 1, r1: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %2 = hir.int_type
+  uir.signature (%0) -> (%1, %2)
+} {
+  %t = hir.int_type
+  %t2 = hir.int_type
+  %r0, %r1 = uir.loop : %t, %t2 {
+    // CHECK: hir.add %a, %a {{.*}}pa.phase = "1"
+    %sum = hir.add %a, %a : %t
+    %rt = hir.int_type
+    // CHECK: uir.call @MakeValue()
+    // CHECK-SAME: pa.phase = "0"
+    %v = uir.call @MakeValue() : () -> (%rt) () -> !hir.any [] -> [0]
+    // CHECK: uir.break {{.*}}pa.operands = ["1", "0", "float", "float"]
+    uir.break %sum, %v : %t, %t2
+  // CHECK: } {{.*}}pa.phase = "0", pa.results = ["1", "0"]
+  }
+  // CHECK: uir.return {{.*}}pa.operands = ["1", "0", "float", "float"]
+  uir.return %r0, %r1 -> (%t, %t2)
+}
+
+//===----------------------------------------------------------------------===//
+// Transparent dyn result through if: dyn arg at phase 1 yielded through an if
+// at phase 0. The if result must be 1, not capped to the if's execution phase.
+
+// CHECK-LABEL: uir.func @IfTransparentDynYield
+uir.func @IfTransparentDynYield(%sel: 0, %a: 1, %b: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  %r = uir.if %sel : %t {
+    uir.yield %a : %t
+  } else {
+    uir.yield %b : %t
+  // CHECK: } {{.*}}pa.phase = "0", pa.results = ["1"]
+  }
+  // CHECK: uir.return {{.*}}pa.operands = ["1", "float"]
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Transparent dyn result through pinned expr: dyn arg at phase 1 yielded
+// through a pinned expr at phase 0. Result must be 1.
+
+// CHECK-LABEL: uir.func @ExprTransparentDynYield
+uir.func @ExprTransparentDynYield(%a: 1) -> (result: 1) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin : %t {
+    uir.yield %a : %t
+  // CHECK: } {{.*}}pa.phase = "0", pa.results = ["1"]
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Transparent dyn result through loop: dyn arg at phase 1 flows through a
+// break in a loop at phase 0. Loop result must be 1.
+
+// CHECK-LABEL: uir.func @LoopTransparentDynBreak
+uir.func @LoopTransparentDynBreak(%a: 1) -> (result: 1) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    uir.break %a : %t
+  // CHECK: } {{.*}}pa.phase = "0", pa.results = ["1"]
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // Zero-use uir.call (expression statement): arg offsets must be respected.
 
 uir.func @VoidTarget(%n: -1, %x: 0) -> () {

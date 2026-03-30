@@ -34,6 +34,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
 
@@ -54,6 +55,7 @@ using llvm::LogicalResult;
 using llvm::MapVector;
 using llvm::ParseResult;
 using llvm::PointerUnion;
+using llvm::SaveAndRestore;
 using llvm::SetVector;
 using llvm::SmallDenseMap;
 using llvm::SmallDenseSet;

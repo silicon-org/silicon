@@ -2,7 +2,16 @@
 
 //===----------------------------------------------------------------------===//
 // Pure op operand available too late: arg at phase 0 used in const block.
-// Two block arg errors (one per operand of hir.add), plus the pure op error.
+// The add is pure and would float, but the call anchors its result at phase -1,
+// forcing the constraint. The add needs %a at phase -1, which is too late.
+
+uir.func @PureOpTooLateHelper(%x: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  uir.return %x -> (%t)
+}
 
 // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
 uir.func @PureOpTooLate(%a: 0) -> (result: 0) {
@@ -11,15 +20,15 @@ uir.func @PureOpTooLate(%a: 0) -> (result: 0) {
 } {
   %t = hir.int_type
   %0 = uir.expr pin -1 : %t {
-    // hir.type_of shifts +1, so pushes latest = -1+1 = 0 to %a. Satisfies.
-    // But the type_of result is at p(%a)-1 = -1. The unary op hir.type_of
-    // itself is at -1.
     %ta = hir.type_of %a
     // expected-remark @+2 {{required by operand at phase -1}}
     // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
     %sum = hir.add %a, %ta : %t
-    // expected-remark @+1 {{required by yield operand}}
-    uir.yield %sum : %t
+    // Call anchored at -1 forces %sum to be available at -1.
+    %tr = hir.int_type
+    // expected-remark @+1 {{required by call argument 0 at phase -1}}
+    %v = uir.call @PureOpTooLateHelper(%sum) : (%tr) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    uir.yield %v : %t
   }
   uir.return %0 -> (%t)
 }
@@ -84,7 +93,16 @@ uir.func @ContinueFromConstBlock(%cond: 0) -> () {
 // -----
 
 //===----------------------------------------------------------------------===//
-// Block arg yielded directly in const block.
+// Block arg passed to call in const block: %a at phase 0 cannot satisfy the
+// call's arg requirement at phase -1.
+
+uir.func @IdentityHelper(%x: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  uir.return %x -> (%t)
+}
 
 // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
 uir.func @BlockArgInConstBlock(%a: 0) -> (result: 0) {
@@ -93,8 +111,11 @@ uir.func @BlockArgInConstBlock(%a: 0) -> (result: 0) {
 } {
   %t = hir.int_type
   %0 = uir.expr pin -1 : %t {
-    // expected-remark @+1 {{required by yield operand}}
-    uir.yield %a : %t
+    %ta = hir.int_type
+    %tr = hir.int_type
+    // expected-remark @+1 {{required by call argument 0 at phase -1}}
+    %v = uir.call @IdentityHelper(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    uir.yield %v : %t
   }
   uir.return %0 -> (%t)
 }
@@ -283,8 +304,17 @@ uir.func @StackedConstReturnMismatch(%x: -1) -> (result: -2) {
 // -----
 
 //===----------------------------------------------------------------------===//
-// Nested const block: const arg (-1) used in const { const { ... } } which
-// demands phase -2. Two error chains: arg→add operand, add→yield.
+// Nested const block: const arg (-1) passed to a call inside
+// const { const { ... } } which anchors at phase -2. The call demands its arg
+// at phase -2, but %a is only at -1.
+
+uir.func @NestedIdentityHelper(%x: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  uir.return %x -> (%t)
+}
 
 // expected-error @+1 {{value at phase -1 cannot satisfy requirement for phase -2}}
 uir.func @NestedConstBlockError(%a: -1) -> (result: 0) {
@@ -295,12 +325,12 @@ uir.func @NestedConstBlockError(%a: -1) -> (result: 0) {
   %t = hir.int_type
   %0 = uir.expr pin -1 : %t {
     %inner = uir.expr pin -1 : %t {
-      %c1 = hir.constant_int 1 : %t
-      // expected-remark @+2 {{required by operand at phase -2}}
-      // expected-error @+1 {{value at phase -1 cannot satisfy requirement for phase -2}}
-      %sum = hir.add %a, %c1 : %t
-      // expected-remark @+1 {{required by yield operand}}
-      uir.yield %sum : %t
+      %ta = hir.int_type
+      %tr = hir.int_type
+      // Call anchored at -2. Arg needs phase -2, but %a is at -1.
+      // expected-remark @+1 {{required by call argument 0 at phase -2}}
+      %v = uir.call @NestedIdentityHelper(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+      uir.yield %v : %t
     }
     uir.yield %inner : %t
   }

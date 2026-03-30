@@ -56,16 +56,61 @@ static bool isTypeOperand(OpOperand &operand) {
 }
 
 //===----------------------------------------------------------------------===//
-// Helpers
+// Debug Helpers
 //===----------------------------------------------------------------------===//
 
-template <typename OpTy>
-OpTy PhaseAnalysis::findEnclosing(Operation *from) {
-  for (auto *op = from->getParentOp(); op; op = op->getParentOp()) {
-    if (auto target = dyn_cast<OpTy>(op))
-      return target;
-  }
-  llvm_unreachable("enclosing op not found");
+/// Print indentation for the current DFS depth.
+#define INDENT llvm::indent(depth * 2)
+
+//===----------------------------------------------------------------------===//
+// Pre-walk: Collect Terminators
+//
+// Walks the function IR with manual recursion, passing a `currentLoop` context
+// down through regions. This lets us associate break/continue ops with their
+// enclosing loop without walking the parent chain at each use.
+//===----------------------------------------------------------------------===//
+
+void PhaseAnalysis::collectTerminators() {
+  // Walk a block's ops, passing the current enclosing loop context.
+  std::function<void(Block &, LoopOp)> walkBlock = [&](Block &block,
+                                                       LoopOp currentLoop) {
+    for (auto &op : block) {
+      // Collect function-interface terminators.
+      if (isa<ReturnOp, SignatureOp>(&op)) {
+        funcInterfaceTerminators.push_back(&op);
+        continue;
+      }
+
+      // Collect break/continue and map to enclosing loop.
+      if (auto breakOp = dyn_cast<BreakOp>(&op)) {
+        assert(currentLoop && "break outside of loop");
+        loopBreaks[currentLoop].push_back(breakOp);
+        breakToLoop[breakOp] = currentLoop;
+        continue;
+      }
+      if (auto continueOp = dyn_cast<ContinueOp>(&op)) {
+        assert(currentLoop && "continue outside of loop");
+        continueToLoop[continueOp] = currentLoop;
+        continue;
+      }
+
+      // Recurse into regions. LoopOp updates the currentLoop context.
+      if (auto loopOp = dyn_cast<LoopOp>(&op)) {
+        for (auto &region : op.getRegions())
+          for (auto &innerBlock : region)
+            walkBlock(innerBlock, loopOp);
+      } else {
+        for (auto &region : op.getRegions())
+          for (auto &innerBlock : region)
+            walkBlock(innerBlock, currentLoop);
+      }
+    }
+  };
+
+  for (auto &block : funcOp.getSignature())
+    walkBlock(block, /*currentLoop=*/nullptr);
+  for (auto &block : funcOp.getBody())
+    walkBlock(block, /*currentLoop=*/nullptr);
 }
 
 //===----------------------------------------------------------------------===//
@@ -79,8 +124,8 @@ OpTy PhaseAnalysis::findEnclosing(Operation *from) {
 //===----------------------------------------------------------------------===//
 
 LogicalResult PhaseAnalysis::run() {
-  LLVM_DEBUG(llvm::dbgs() << "Analyzing phases in " << funcOp.getSymNameAttr()
-                          << "\n");
+  LLVM_DEBUG(dbgs() << "Analyzing phases in " << funcOp.getSymNameAttr()
+                    << "\n");
 
   // Seed the function at phase 0.
   opPhases.insert({funcOp, 0});
@@ -93,36 +138,31 @@ LogicalResult PhaseAnalysis::run() {
     int16_t argPhase = static_cast<int16_t>(phase);
     actualPhase[bodyArgs[idx]] = argPhase;
     actualPhase[sigArgs[idx]] = argPhase;
-    LLVM_DEBUG(if (argPhase != 0) llvm::dbgs()
-               << "- Arg " << idx << " has phase " << argPhase << "\n");
+    LLVM_DEBUG(if (argPhase != 0) dbgs()
+               << "  arg " << idx << " has phase " << argPhase << "\n");
   }
 
   // Step 1: Pre-walk — collect terminators.
-  funcOp.walk([&](Operation *op) {
-    if (auto breakOp = dyn_cast<BreakOp>(op)) {
-      auto loopOp = findEnclosing<LoopOp>(breakOp);
-      loopBreaks[loopOp].push_back(breakOp);
-    } else if (isa<ReturnOp, SignatureOp>(op)) {
-      funcInterfaceTerminators.push_back(op);
-    }
-  });
+  collectTerminators();
 
   // Step 2: Constrain blocks containing function-interface terminators.
   // This ensures any floating expr containing a return or signature gets
   // constrained to phase ≤ 0.
+  LLVM_DEBUG(dbgs() << "  step 2: constrain function-interface blocks\n");
   for (auto *term : funcInterfaceTerminators)
     constrainBlock(*term->getBlock(), 0);
 
   // Step 3: Structural setup — process blocks.
+  LLVM_DEBUG(dbgs() << "  step 3: structural setup\n");
   processBlock(funcOp.getSignature().front(), 0);
   processBlock(funcOp.getBody().front(), 0);
 
   // Step 4: Demand-driven constraints — function interface.
+  LLVM_DEBUG(dbgs() << "  step 4: demand-driven constraints\n");
   for (auto *term : funcInterfaceTerminators) {
     if (auto sigOp = dyn_cast<SignatureOp>(term)) {
-      auto enclosingFunc = findEnclosing<FuncOp>(sigOp);
-      auto argPhases = enclosingFunc.getArgPhases();
-      auto resultPhases = enclosingFunc.getResultPhases();
+      auto argPhases = funcOp.getArgPhases();
+      auto resultPhases = funcOp.getResultPhases();
 
       for (auto [i, typeVal] : llvm::enumerate(sigOp.getTypeOfArgs())) {
         int16_t latest = static_cast<int16_t>(argPhases[i]) - 1;
@@ -137,8 +177,7 @@ LogicalResult PhaseAnalysis::run() {
               << "required by signature type of result " << i;
       }
     } else if (auto returnOp = dyn_cast<ReturnOp>(term)) {
-      auto enclosingFunc = findEnclosing<FuncOp>(returnOp);
-      auto resultPhases = enclosingFunc.getResultPhases();
+      auto resultPhases = funcOp.getResultPhases();
 
       for (auto [i, value] : llvm::enumerate(returnOp.getValues())) {
         int16_t latest = static_cast<int16_t>(resultPhases[i]);
@@ -171,11 +210,15 @@ LogicalResult PhaseAnalysis::run() {
 //===----------------------------------------------------------------------===//
 
 FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
+  SaveAndRestore guard(depth, depth + 2);
+
   // Block arguments have fixed phases.
   if (isa<BlockArgument>(value)) {
     auto it = actualPhase.find(value);
     assert(it != actualPhase.end() && "block arg phase not seeded");
     int16_t phase = it->second;
+    LLVM_DEBUG(dbgs() << INDENT << "constrainValue(blockArg, <=" << latest
+                      << "): actual " << phase << "\n");
     if (phase != INT16_MIN && phase > latest) {
       emitError(value.getLoc())
           << "value at phase " << phase
@@ -193,11 +236,19 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
 
   // ConstantLike ops float to any phase.
   if (op->hasTrait<OpTrait::ConstantLike>()) {
+    LLVM_DEBUG(dbgs() << INDENT << "constrainValue(constant, <=" << latest
+                      << "): float\n");
     opPhases[op] = INT16_MIN;
     for (auto result : op->getResults())
       actualPhase[result] = INT16_MIN;
     return INT16_MIN;
   }
+
+  LLVM_DEBUG({
+    dbgs() << INDENT << "constrainValue(<=" << latest << "): ";
+    op->print(dbgs(), OpPrintingFlags().skipRegions());
+    dbgs() << "\n";
+  });
 
   // hir.type_of: result is at p(operand) - 1. Push latest + 1 to input.
   if (isa<hir::TypeOfOp>(op)) {
@@ -205,11 +256,7 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
     (void)constrainValue(op->getOperand(0), latest + 1);
     int16_t inputPhase = actualPhase.lookup(op->getOperand(0));
     int16_t resolved = (inputPhase == INT16_MIN) ? INT16_MIN : inputPhase - 1;
-    LLVM_DEBUG({
-      llvm::dbgs() << "- Phase " << resolved << " for: ";
-      op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-      llvm::dbgs() << "\n";
-    });
+    LLVM_DEBUG(dbgs() << INDENT << "  => phase " << resolved << "\n");
     opPhases[op] = resolved;
     for (auto result : op->getResults())
       actualPhase[result] = resolved;
@@ -279,11 +326,7 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
     // Only update if this is a tighter (earlier) phase or first visit.
     auto it = opPhases.find(op);
     if (it == opPhases.end() || it->second > earliest) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "- Phase " << earliest << " for: ";
-        op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-        llvm::dbgs() << "\n";
-      });
+      LLVM_DEBUG(dbgs() << INDENT << "  => phase " << earliest << "\n");
       opPhases[op] = earliest;
       for (auto result : op->getResults())
         actualPhase[result] = earliest;
@@ -328,13 +371,23 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
 //===----------------------------------------------------------------------===//
 
 void PhaseAnalysis::constrainBlock(Block &block, int16_t demandedPhase) {
+  SaveAndRestore guard(depth, depth + 2);
   auto *parentOp = block.getParentOp();
   if (!parentOp)
     return;
 
   // Function body/signature: phase is fixed at 0. Nothing to constrain.
-  if (isa<FuncOp>(parentOp))
+  if (isa<FuncOp>(parentOp)) {
+    LLVM_DEBUG(dbgs() << INDENT << "constrainBlock(<=" << demandedPhase
+                      << "): func body, fixed at 0\n");
     return;
+  }
+
+  LLVM_DEBUG({
+    dbgs() << INDENT << "constrainBlock(<=" << demandedPhase << "): ";
+    parentOp->print(dbgs(), OpPrintingFlags().skipRegions());
+    dbgs() << "\n";
+  });
 
   if (auto exprOp = dyn_cast<ExprOp>(parentOp)) {
     if (exprOp.getPin()) {
@@ -371,6 +424,8 @@ void PhaseAnalysis::constrainBlock(Block &block, int16_t demandedPhase) {
 
 void PhaseAnalysis::constrainRegionResult(Operation *regionOp,
                                           unsigned resultIdx, int16_t latest) {
+  SaveAndRestore guard(depth, depth + 2);
+
   // Initialize result constraints if needed.
   auto &constraints = resultConstraints[regionOp];
   if (constraints.empty())
@@ -379,8 +434,20 @@ void PhaseAnalysis::constrainRegionResult(Operation *regionOp,
 
   // Only tighten: skip if already at a tighter-or-equal constraint.
   if (constraints[resultIdx] != kUnconstrained &&
-      constraints[resultIdx] <= latest)
+      constraints[resultIdx] <= latest) {
+    LLVM_DEBUG(dbgs() << INDENT << "constrainRegionResult(result " << resultIdx
+                      << ", <=" << latest
+                      << "): already <=" << constraints[resultIdx] << "\n");
     return;
+  }
+
+  LLVM_DEBUG({
+    dbgs() << INDENT << "constrainRegionResult(result " << resultIdx
+           << ", <=" << latest << "): ";
+    regionOp->print(dbgs(), OpPrintingFlags().skipRegions());
+    dbgs() << "\n";
+  });
+
   constraints[resultIdx] = latest;
 
   // Push constraint through yields/breaks.
@@ -400,14 +467,12 @@ void PhaseAnalysis::constrainRegionResult(Operation *regionOp,
           auto exprIt = opPhases.find(regionOp);
           if (exprIt == opPhases.end() || exprIt->second > latest) {
             auto exprOp = cast<ExprOp>(regionOp);
-            LLVM_DEBUG({
-              llvm::dbgs() << "- Phase " << latest << " for: ";
-              regionOp->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-              llvm::dbgs() << "\n";
-            });
+            LLVM_DEBUG(dbgs() << INDENT << "  floating expr => phase " << latest
+                              << "\n");
             opPhases[regionOp] = latest;
-            for (auto result : regionOp->getResults())
-              actualPhase[result] = latest;
+            // Don't set actualPhase for results here — they are transparent
+            // conduits through the yield. actualPhase will be set when
+            // constrainRegionResult resolves each result's yield operand.
             for (auto typeVal : exprOp.getResultTypes()) {
               if (failed(constrainValue(typeVal, latest - 1)))
                 emitRemark(exprOp.getLoc())
@@ -492,6 +557,9 @@ void PhaseAnalysis::constrainRegionResult(Operation *regionOp,
 //===----------------------------------------------------------------------===//
 
 void PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
+  SaveAndRestore guard(depth, depth + 2);
+  LLVM_DEBUG(dbgs() << INDENT << "processBlock(phase " << blockPhase << ")\n");
+
   // Process non-terminator ops.
   for (auto &op : block.without_terminator())
     processOp(&op, blockPhase);
@@ -537,8 +605,9 @@ void PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
     // Operand constraints handled in Step 4 of run().
 
   } else if (auto breakOp = dyn_cast<BreakOp>(terminator)) {
-    auto enclosingLoop = findEnclosing<LoopOp>(breakOp);
-    int16_t loopPhase = getPhase(enclosingLoop);
+    auto loopIt = breakToLoop.find(breakOp);
+    assert(loopIt != breakToLoop.end() && "break not in pre-collected map");
+    int16_t loopPhase = getPhase(loopIt->second);
     if (blockPhase != loopPhase) {
       emitError(breakOp.getLoc())
           << "break from a phase-shifted block is not allowed";
@@ -547,8 +616,10 @@ void PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
     // Break operand constraints are handled via constrainRegionResult.
 
   } else if (auto continueOp = dyn_cast<ContinueOp>(terminator)) {
-    auto enclosingLoop = findEnclosing<LoopOp>(continueOp);
-    int16_t loopPhase = getPhase(enclosingLoop);
+    auto loopIt = continueToLoop.find(continueOp);
+    assert(loopIt != continueToLoop.end() &&
+           "continue not in pre-collected map");
+    int16_t loopPhase = getPhase(loopIt->second);
     if (blockPhase != loopPhase) {
       emitError(continueOp.getLoc())
           << "continue from a phase-shifted block is not allowed";
@@ -582,6 +653,8 @@ void PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
       !op->use_empty())
     return;
 
+  SaveAndRestore guard(depth, depth + 2);
+
   // Pinned expr: phase = blockPhase + offset.
   if (auto exprOp = dyn_cast<ExprOp>(op)) {
     assert(exprOp.getPin() && "floating expr should have been skipped");
@@ -592,14 +665,11 @@ void PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
     if (it != opPhases.end() && it->second <= exprPhase)
       return;
 
-    LLVM_DEBUG({
-      llvm::dbgs() << "- Phase " << exprPhase << " for: ";
-      op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-      llvm::dbgs() << "\n";
-    });
+    LLVM_DEBUG(dbgs() << INDENT << "processOp(pinnedExpr, phase " << exprPhase
+                      << ")\n");
     opPhases[op] = exprPhase;
-    for (auto result : op->getResults())
-      actualPhase[result] = exprPhase;
+    // Don't set actualPhase for results — they are transparent conduits
+    // through the yield. constrainRegionResult sets them.
 
     // Push result type constraints.
     for (auto typeVal : exprOp.getResultTypes()) {
@@ -608,10 +678,12 @@ void PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
             << "required by expr result type at phase " << exprPhase - 1;
     }
 
-    // Initialize result constraints for pinned exprs.
+    // Result constraints start unconstrained, same as if/loop. Results are
+    // transparent conduits through the yield — consumers pull via
+    // constrainRegionResult.
     auto &constraints = resultConstraints[op];
     if (constraints.empty())
-      constraints.assign(exprOp.getNumResults(), exprPhase);
+      constraints.assign(exprOp.getNumResults(), kUnconstrained);
 
     processBlock(exprOp.getBody().front(), exprPhase);
     return;
@@ -621,11 +693,8 @@ void PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
   if (auto pinOp = dyn_cast<PinOp>(op)) {
     int16_t pinPhase = blockPhase + pinOp.getPhaseOffset();
 
-    LLVM_DEBUG({
-      llvm::dbgs() << "- Phase " << pinPhase << " for: ";
-      op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-      llvm::dbgs() << "\n";
-    });
+    LLVM_DEBUG(dbgs() << INDENT << "processOp(pin, phase " << pinPhase
+                      << ")\n");
     opPhases[op] = pinPhase;
     for (auto result : op->getResults())
       actualPhase[result] = pinPhase;
@@ -643,14 +712,11 @@ void PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
     if (it != opPhases.end() && it->second <= blockPhase)
       return;
 
-    LLVM_DEBUG({
-      llvm::dbgs() << "- Phase " << blockPhase << " for: ";
-      op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-      llvm::dbgs() << "\n";
-    });
+    LLVM_DEBUG(dbgs() << INDENT << "processOp(if, phase " << blockPhase
+                      << ")\n");
     opPhases[op] = blockPhase;
-    for (auto result : op->getResults())
-      actualPhase[result] = blockPhase;
+    // Don't set actualPhase for results — they are transparent conduits
+    // through the yield. constrainRegionResult sets them.
 
     if (failed(constrainValue(ifOp.getCondition(), blockPhase)))
       emitRemark(ifOp.getLoc())
@@ -677,14 +743,11 @@ void PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
     if (it != opPhases.end() && it->second <= blockPhase)
       return;
 
-    LLVM_DEBUG({
-      llvm::dbgs() << "- Phase " << blockPhase << " for: ";
-      op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-      llvm::dbgs() << "\n";
-    });
+    LLVM_DEBUG(dbgs() << INDENT << "processOp(loop, phase " << blockPhase
+                      << ")\n");
     opPhases[op] = blockPhase;
-    for (auto result : op->getResults())
-      actualPhase[result] = blockPhase;
+    // Don't set actualPhase for results — they are transparent conduits
+    // through the break. constrainRegionResult sets them.
 
     for (auto typeVal : loopOp.getResultTypes()) {
       if (failed(constrainValue(typeVal, blockPhase - 1)))
@@ -706,11 +769,8 @@ void PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
     if (it != opPhases.end() && it->second <= blockPhase)
       return;
 
-    LLVM_DEBUG({
-      llvm::dbgs() << "- Phase " << blockPhase << " for: ";
-      op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-      llvm::dbgs() << "\n";
-    });
+    LLVM_DEBUG(dbgs() << INDENT << "processOp(call, phase " << blockPhase
+                      << ")\n");
     opPhases[op] = blockPhase;
 
     // Update result phases with per-result offsets.
@@ -747,9 +807,9 @@ void PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
     return;
 
   LLVM_DEBUG({
-    llvm::dbgs() << "- Phase " << blockPhase << " for: ";
-    op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-    llvm::dbgs() << "\n";
+    dbgs() << INDENT << "processOp(generic, phase " << blockPhase << "): ";
+    op->print(dbgs(), OpPrintingFlags().skipRegions());
+    dbgs() << "\n";
   });
   opPhases[op] = blockPhase;
   for (auto result : op->getResults())
