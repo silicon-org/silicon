@@ -21,6 +21,15 @@
   For inspiration, look at how the SCF-to-CF lowering in MLIR does things.
 - Improve UIR op parsing/printing (e.g. uir.call, maybe others) to not print the implied `!hir.any` type
 
+## Phase Analysis
+
+- Pure op earliest scheduling should be deferred to a post-pass.
+  Currently, pure ops compute `earliest = max(operand actuals)` during the DFS.
+  This causes stale values when a call tightens after a pure consumer was already resolved.
+  Fix: during the DFS, assign pure ops `latest` like any other op.
+  After the DFS completes (all call phases are final), make a single block-order pass over all pure ops and shift them to their `earliest` phase.
+  Block order ensures operands are visited before consumers (SSA dominance), so one pass suffices.
+
 ## Phase Inference Redesign
 
 See `docs/design/phase-inference.md`, `docs/design/unified-dialect.md`, and `docs/design/control-flow.md` (FlattenCF section).

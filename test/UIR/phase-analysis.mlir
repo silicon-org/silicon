@@ -1778,6 +1778,67 @@ uir.func @MultiResultCall(%a: -1) -> (r0: 0, r1: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Multi-result call with spread offsets -1/0/+1. Call tightens to -1 (from
+// r2: 0 - 1 = -1). Results at -2, -1, 0.
+
+uir.func @Spread(%x: 0) -> (r0: -1, r1: 0, r2: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0) -> (%t1, %t2, %t3)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  %c2 = hir.constant_int 2 : %t
+  %c3 = hir.constant_int 3 : %t
+  uir.return %c1, %c2, %c3 -> (%t, %t, %t)
+}
+
+// CHECK-LABEL: uir.func @SpreadCallAllResults
+uir.func @SpreadCallAllResults(%a: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %ta = hir.int_type
+  %tr0 = hir.int_type
+  %tr1 = hir.int_type
+  %tr2 = hir.int_type
+  // CHECK: uir.call @Spread({{.*}}) {{.*}}pa.phase = "-1"
+  // CHECK-SAME: pa.results = ["-2", "-1", "0"]
+  %r0, %r1, %r2 = uir.call @Spread(%a) : (%ta) -> (%tr0, %tr1, %tr2) (!hir.any) -> (!hir.any, !hir.any, !hir.any) [0] -> [-1, 0, 1]
+  %t = hir.int_type
+  // TODO: These adds should float to max(operand phases), but pure op earliest
+  // scheduling sees stale call result phases when the call tightens after the
+  // add was resolved. Deferring pure scheduling to a post-pass would fix this.
+  %sum01 = hir.add %r0, %r1 : %t
+  %sum = hir.add %sum01, %r2 : %t
+  uir.return %sum -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Partial use of multi-result call: only the dyn result (offset +1) is
+// consumed, tightening the call to -1.
+
+// CHECK-LABEL: uir.func @SpreadCallPartialUse
+uir.func @SpreadCallPartialUse(%a: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %ta = hir.int_type
+  %tr0 = hir.int_type
+  %tr1 = hir.int_type
+  %tr2 = hir.int_type
+  // CHECK: uir.call @Spread({{.*}}) {{.*}}pa.phase = "-1"
+  // CHECK-SAME: pa.results = ["-2", "-1", "0"]
+  %r0, %r1, %r2 = uir.call @Spread(%a) : (%ta) -> (%tr0, %tr1, %tr2) (!hir.any) -> (!hir.any, !hir.any, !hir.any) [0] -> [-1, 0, 1]
+  %t = hir.int_type
+  uir.return %r2 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // hir.type_of used by two consumers at different phases. The tightest
 // constraint wins.
 
