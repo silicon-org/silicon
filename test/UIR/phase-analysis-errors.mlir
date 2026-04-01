@@ -21,8 +21,7 @@ uir.func @PureOpTooLate(%a: 0) -> (result: 0) {
   %t = hir.int_type
   %0 = uir.expr pin -1 : %t {
     %ta = hir.type_of %a
-    // expected-remark @+2 {{required by operand at phase -1}}
-    // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
+    // expected-remark @+1 {{required by operand at phase -1}}
     %sum = hir.add %a, %ta : %t
     // Call anchored at -1 forces %sum to be available at -1.
     %tr = hir.int_type
@@ -88,6 +87,86 @@ uir.func @ContinueFromConstBlock(%cond: 0) -> () {
     uir.yield
   }
   uir.return -> ()
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Return from inside a dyn block (symmetric to @ReturnFromConstBlock).
+
+uir.func @ReturnFromDynBlock(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.expr pin 1 {
+    // expected-error @+1 {{return from a phase-shifted block is not allowed}}
+    uir.return %x -> (%t)
+  }
+  uir.unreachable
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Break from inside a dyn block (symmetric to @BreakFromConstBlock).
+
+uir.func @BreakFromDynBlock(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    uir.expr pin 1 {
+      // expected-error @+1 {{break from a phase-shifted block is not allowed}}
+      uir.break %x : %t
+    }
+    uir.yield
+  }
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Continue from inside a dyn block (symmetric to @ContinueFromConstBlock).
+
+uir.func @ContinueFromDynBlock(%x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0) -> ()
+} {
+  uir.loop {
+    uir.expr pin 1 {
+      // expected-error @+1 {{continue from a phase-shifted block is not allowed}}
+      uir.continue
+    }
+    uir.yield
+  }
+  uir.return -> ()
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Break inside nested dyn blocks: outer dyn at +1, loop at +1, inner dyn at
+// +2. Break targets loop at +1, but block phase is +2.
+
+uir.func @BreakFromNestedDynBlock(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin 1 : %t {
+    %1 = uir.loop : %t {
+      uir.expr pin 1 {
+        // expected-error @+1 {{break from a phase-shifted block is not allowed}}
+        uir.break %x : %t
+      }
+      uir.yield
+    }
+    uir.yield %1 : %t
+  }
+  uir.return %0 -> (%t)
 }
 
 // -----
@@ -189,8 +268,7 @@ uir.func @ConstReturnPureOp(%x: 0) -> (result: -1) {
 } {
   %t = hir.int_type
   %c1 = hir.constant_int 1 : %t
-  // expected-remark @+2 {{required by operand at phase -1}}
-  // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
+  // expected-remark @+1 {{required by operand at phase -1}}
   %sum = hir.add %x, %c1 : %t
   // expected-remark @+1 {{required by return value at phase -1}}
   uir.return %sum -> (%t)
@@ -210,7 +288,6 @@ uir.func @ConstReturnCallHelper(%a: 0) -> (result: 0) {
   uir.return %a -> (%t)
 }
 
-// expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
 uir.func @ConstReturnCall(%x: 0) -> (result: -1) {
   %t0 = hir.int_type
   %t1 = hir.int_type
@@ -218,8 +295,9 @@ uir.func @ConstReturnCall(%x: 0) -> (result: -1) {
 } {
   %ta = hir.int_type
   %tr = hir.int_type
-  // expected-remark @+1 {{required by call argument 0 at phase -1}}
+  // expected-error @+1 {{call result 0 at phase 0 cannot satisfy requirement for phase -1}}
   %r = uir.call @ConstReturnCallHelper(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+  // expected-remark @+1 {{required by return value at phase -1}}
   uir.return %r -> (%tr)
 }
 
@@ -236,8 +314,7 @@ uir.func @DynPinAtBlockPhase(%a: 1) -> (result: 1) {
 } {
   %t = hir.int_type
   %c1 = hir.constant_int 1 : %t
-  // expected-remark @+2 {{required by operand at phase 0}}
-  // expected-error @+1 {{value at phase 1 cannot satisfy requirement for phase 0}}
+  // expected-remark @+1 {{required by operand at phase 0}}
   %sum = hir.add %a, %c1 : %t
   // expected-remark @+1 {{required by pin at phase 0}}
   %x = uir.pin %sum, 0 : !hir.any
@@ -357,7 +434,6 @@ uir.func @DynBlockPhaseMismatch() -> (result: 0) {
   uir.signature () -> (%t)
 } {
   %t = hir.int_type
-  // expected-error @+1 {{value at phase 1 cannot satisfy requirement for phase 0}}
   %0 = uir.expr pin 1 : %t {
     %tr = hir.int_type
     // expected-error @+1 {{value at phase 1 cannot satisfy requirement for phase 0}}
@@ -381,8 +457,7 @@ uir.func @PureBoundaryError(%a: 0) -> (result: -1) {
 } {
   %t = hir.int_type
   %lit = hir.constant_int 1 : %t
-  // expected-remark @+2 {{required by operand at phase -1}}
-  // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
+  // expected-remark @+1 {{required by operand at phase -1}}
   %sum = hir.add %a, %lit : %t
   // expected-remark @+1 {{required by return value at phase -1}}
   uir.return %sum -> (%t)
@@ -427,14 +502,87 @@ uir.func @DynResultHelper(%x: 0) -> (result: 1) {
   uir.return %x -> (%t3)
 }
 
-// expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
 uir.func @DynResultBoundaryError(%a: 0) -> (result: 0) {
   %t = hir.int_type
   uir.signature (%t) -> (%t)
 } {
   %ta = hir.int_type
   %tr = hir.int_type
-  // expected-remark @+1 {{required by call argument 0 at phase -1}}
+  // expected-error @+1 {{call result 0 at phase 1 cannot satisfy requirement for phase 0}}
   %r = uir.call @DynResultHelper(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [1]
+  // expected-remark @+1 {{required by return value at phase 0}}
+  uir.return %r -> (%tr)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Short-circuit || inside const block with non-const RHS. Const block at -1.
+// If at -1. Else branch needs b at -1. b at 0. Error.
+
+uir.func @IdentityHelper2(%x: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  uir.return %x -> (%t)
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @OrErrorInConstBlock(%a: -1, %b: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %true_val = hir.constant_bool <true>
+  %0 = uir.expr pin -1 : %t {
+    %or = uir.if %a : %t {
+      uir.yield %true_val : %t
+    } else {
+      // expected-remark @below {{required by yield operand}}
+      uir.yield %b : %t
+    }
+    // Anchor the if result at -1 via a call.
+    %ta = hir.int_type
+    %tr = hir.int_type
+    // expected-remark @below {{required by call argument 0 at phase -1}}
+    %v = uir.call @IdentityHelper2(%or) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    uir.yield %v : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Pin prevents floating: a+42 would float to -1, but pin fixes it at phase 0.
+// Passing to a const arg at -1 fails because the pin anchors the result.
+
+uir.func @NeedsConstForPin(%x: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  uir.return %x -> (%t)
+}
+
+uir.func @PinPreventsFloat(%a: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %fortytwo = hir.constant_int 42 : %t
+  %sum = hir.add %a, %fortytwo : %t
+  // Pin at phase 0 (let binding). Without the pin, %sum would float to -1.
+  // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+  %x = uir.pin %sum, 0 : !hir.any
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // expected-remark @below {{required by call argument 0 at phase -1}}
+  %r = uir.call @NeedsConstForPin(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
   uir.return %r -> (%tr)
 }

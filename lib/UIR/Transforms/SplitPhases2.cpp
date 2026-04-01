@@ -308,14 +308,31 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
          llvm::zip(sigBlock.getArguments(), entryBlock.getArguments()))
       sigToBody.map(sigArg, bodyArg);
 
+    // Copy phase analysis data (opPhases and actualPhase) from an original
+    // op to its clone, recursing into nested regions.
+    std::function<void(Operation *, Operation *)> copyPhases =
+        [&](Operation *orig, Operation *clone) {
+          auto phaseIt = analysis.opPhases.find(orig);
+          if (phaseIt != analysis.opPhases.end())
+            analysis.opPhases[clone] = phaseIt->second;
+          for (auto [origResult, cloneResult] :
+               llvm::zip(orig->getResults(), clone->getResults())) {
+            auto valIt = analysis.actualPhase.find(origResult);
+            if (valIt != analysis.actualPhase.end())
+              analysis.actualPhase[cloneResult] = valIt->second;
+          }
+          for (auto [origRegion, cloneRegion] :
+               llvm::zip(orig->getRegions(), clone->getRegions()))
+            for (auto [origBlock, cloneBlock] :
+                 llvm::zip(origRegion, cloneRegion))
+              for (auto [origOp, cloneOp] : llvm::zip(origBlock, cloneBlock))
+                copyPhases(&origOp, &cloneOp);
+        };
+
     OpBuilder bodyBuilder(&entryBlock, entryBlock.begin());
     for (auto &op : llvm::make_early_inc_range(sigBlock)) {
       auto *clonedOp = bodyBuilder.clone(op, sigToBody);
-      // Register the cloned op in the analysis with the original's phase,
-      // so that distribution moves it to the correct phase function.
-      auto phaseIt = analysis.opPhases.find(&op);
-      if (phaseIt != analysis.opPhases.end())
-        analysis.opPhases[clonedOp] = phaseIt->second;
+      copyPhases(&op, clonedOp);
     }
 
     // Update saved type values to point to the cloned ops in the body.

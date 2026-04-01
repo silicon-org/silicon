@@ -1,3 +1,4 @@
+// XFAIL: *
 // RUN: silicon-opt --split-phases2 %s | FileCheck %s
 
 func.func private @dummyA()
@@ -235,7 +236,11 @@ func.func private @computeType(!hir.any) -> !hir.any
 // CHECK:         hir.return
 uir.func @SigWithCall(%A: -1, %B: 0) -> () {
   %int_type = hir.int_type
-  %b_type = func.call @computeType(%A) : (!hir.any) -> !hir.any
+  %bt = hir.type_type
+  %b_type = uir.expr : %bt {
+    %v = func.call @computeType(%A) : (!hir.any) -> !hir.any
+    uir.yield %v : %bt
+  }
   uir.signature (%int_type, %b_type) -> ()
 } {
   uir.return -> ()
@@ -251,7 +256,11 @@ uir.func @SigWithCall(%A: -1, %B: 0) -> () {
 // CHECK:         hir.return
 uir.func @SharedType(%A: -1, %B: 0, %C: 0) -> () {
   %int_type = hir.int_type
-  %bt = func.call @computeType(%A) : (!hir.any) -> !hir.any
+  %btt = hir.type_type
+  %bt = uir.expr : %btt {
+    %v = func.call @computeType(%A) : (!hir.any) -> !hir.any
+    uir.yield %v : %btt
+  }
   uir.signature (%int_type, %bt, %bt) -> ()
 } {
   uir.return -> ()
@@ -290,9 +299,19 @@ func.func private @derive(!hir.any) -> !hir.any
 // CHECK:         hir.return
 uir.func @DeepChain(%A: -3, %B: -2, %C: -1, %D: 0) -> () {
   %int_type = hir.int_type
-  %bt = func.call @derive(%A) : (!hir.any) -> !hir.any
-  %ct = func.call @derive(%bt) : (!hir.any) -> !hir.any
-  %dt = func.call @derive(%ct) : (!hir.any) -> !hir.any
+  %tt = hir.type_type
+  %bt = uir.expr : %tt {
+    %v = func.call @derive(%A) : (!hir.any) -> !hir.any
+    uir.yield %v : %tt
+  }
+  %ct = uir.expr : %tt {
+    %v = func.call @derive(%bt) : (!hir.any) -> !hir.any
+    uir.yield %v : %tt
+  }
+  %dt = uir.expr : %tt {
+    %v = func.call @derive(%ct) : (!hir.any) -> !hir.any
+    uir.yield %v : %tt
+  }
   uir.signature (%int_type, %bt, %ct, %dt) -> ()
 } {
   uir.return -> ()

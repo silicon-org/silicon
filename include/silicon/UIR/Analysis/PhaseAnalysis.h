@@ -65,8 +65,6 @@ struct PhaseAnalysis {
   DenseMap<Value, int16_t> actualPhase;
 
 private:
-  bool anyErrors = false;
-
   /// Debug indentation depth for tracing the DFS.
   unsigned depth = 0;
 
@@ -109,22 +107,22 @@ private:
 
   /// Someone needs this block at phase ≤ demanded. Dispatches on the parent op
   /// (floating expr, pinned expr, anchored CF, function body).
-  void constrainBlock(Block &block, int16_t demandedPhase);
+  LogicalResult constrainBlock(Block &block, int16_t demandedPhase);
 
   /// Push demand through yield/break to a specific result of a region-bearing
   /// op (ExprOp, IfOp, LoopOp). The constraint propagates to the corresponding
   /// yield/break operand. The parent result's actualPhase is updated to match.
-  void constrainRegionResult(Operation *regionOp, unsigned resultIdx,
-                             int16_t latest);
+  LogicalResult constrainRegionResult(Operation *regionOp, unsigned resultIdx,
+                                      int16_t latest);
 
   /// Push blockPhase down to all ops in the block. Called when block phase is
   /// known or has changed. Validates terminator phase equalities.
-  void processBlock(Block &block, int16_t blockPhase);
+  LogicalResult processBlock(Block &block, int16_t blockPhase);
 
   /// Called by processBlock for each non-terminator op. Sets the op's phase
   /// and pushes constraints to operands/regions. Skips floating/pure/constant
   /// ops (demand-driven only).
-  void processOp(Operation *op, int16_t blockPhase);
+  LogicalResult processOp(Operation *op, int16_t blockPhase);
 };
 
 } // namespace uir
