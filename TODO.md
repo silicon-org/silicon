@@ -27,12 +27,6 @@
   Root cause: `reconstructSignatures` → `isTriviallyMaterializable` hits a null value when the expr result is involved.
   Test: `split-phases2.mlir` is XFAILed pending this fix.
 
-- Pure op earliest scheduling should be deferred to a post-pass.
-  Currently, pure ops compute `earliest = max(operand actuals)` during the DFS.
-  This causes stale values when a call tightens after a pure consumer was already resolved.
-  Fix: during the DFS, assign pure ops `latest` like any other op.
-  After the DFS completes (all call phases are final), make a single block-order pass over all pure ops and shift them to their `earliest` phase.
-  Block order ensures operands are visited before consumers (SSA dominance), so one pass suffices.
 
 ## Phase Inference Redesign
 
@@ -42,8 +36,6 @@ See `docs/design/phase-inference.md`, `docs/design/unified-dialect.md`, and `doc
 Old passes continue working on `hir.unified_func` and flat CF; new passes consume `uir.*` ops.
 Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
 
-- Phase 1: new passes (additive, no churn, testable via `silicon-opt`)
-  - User-facing phase error diagnostics using const/dyn vocabulary (no numeric phases)
 - Phase 2: extend existing passes for region support (additive, old paths stay intact)
   - InferTypes: walk into `uir.if`/`uir.expr`/`uir.loop` regions in addition to flat blocks
   - InferTypes: optimistic hoisting of type op trees out of regions for cross-boundary RAUW
@@ -112,6 +104,7 @@ Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
   A phase +1 result is fine (future). A phase -1 result is problematic.
   Think about whether CF ops should clamp `actualPhase[result] = max(p(CF), yieldedPhase)`.
   Example:
+
   ```mlir
   uir.func @test(%cond: 0, %a: -1) -> (result: -1) {
     ...
@@ -124,7 +117,6 @@ Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
   }
   ```
 
-
 - Review how `const { dyn { expr } }` and `dyn { const { expr } }` should behave for value results.
   Currently by the spec, `const { dyn { 42 } }` is an error: the dyn block pins its result at `p(const)+1 = 0`, but the const block demands `p(const) = -1`.
   This means `const { dyn { ... } }` is ALWAYS an error as a value expression (the dyn block is one phase too late), while `dyn { const { ... } }` can work (earlier values carry to later phases).
@@ -134,7 +126,7 @@ Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
   - Should the result phase of a block expression be the block's phase, or the phase of the actual result expression inside?
   - Is the asymmetry between `const { dyn { ... } }` (always error) and `dyn { const { ... } }` (can succeed) intentional and desirable?
   - What are the implications for returning dyn values from const contexts?
-  See `tmp/phase-inference/42-balanced-nesting-values.si` for test cases exploring this.
+    See `tmp/phase-inference/42-balanced-nesting-values.si` for test cases exploring this.
 
 ## Language Cleanup
 

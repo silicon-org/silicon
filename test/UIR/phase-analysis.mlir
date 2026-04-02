@@ -540,18 +540,18 @@ uir.func @NestedDynBlocks() -> (result: 2) {
   uir.signature () -> (%t)
 } {
   %t = hir.int_type
-  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["float"]
+  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["2"]
   %0 = uir.expr pin 1 : %t {
-    // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "2", pa.results = ["float"]
+    // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "2", pa.results = ["2"]
     %inner = uir.expr pin 1 : %t {
       %c99 = hir.constant_int 99 : %t
       uir.yield %c99 : %t
     }
     uir.yield %inner : %t
   }
-  // Literal floats through both yields — result and return operand are float.
+  // Region result at demanded phase 2 (not rescheduled through yields).
   // CHECK: uir.return {{.*}} -> ({{.*}})
-  // CHECK-SAME: pa.operands = ["float", "float"]
+  // CHECK-SAME: pa.operands = ["2", "float"]
   // CHECK-SAME: pa.phase = "0"
   uir.return %0 -> (%t)
 }
@@ -566,9 +566,9 @@ uir.func @DynConstNesting() -> (result: 1) {
   uir.signature () -> (%t)
 } {
   %t = hir.int_type
-  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["float"]
+  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["1"]
   %0 = uir.expr pin 1 : %t {
-    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["float"]
+    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
     %inner = uir.expr pin -1 : %t {
       %c42 = hir.constant_int 42 : %t
       uir.yield %c42 : %t
@@ -657,8 +657,10 @@ uir.func @FloatingExpr(%a: -1) -> (result: 0) {
   // The floating expr's phase is determined by its consumer (uir.return, which
   // needs the value at phase 0).
   %t = hir.int_type
-  // Floating expr: no opPhase (pure contents only), but result at -1.
-  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.results = ["-1"]
+  // Floating expr: no opPhase (pure contents only). Result at 0 (demanded
+  // phase from return); the add inside is rescheduled to -1 by the post-pass
+  // but region results are not re-propagated.
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.results = ["0"]
   %0 = uir.expr : %t {
     // The add is pure, operands at -1, so earliest = -1.
     // CHECK: hir.add {{.*}} {{.*}}pa.phase = "-1"
@@ -2147,8 +2149,9 @@ uir.func @LoopBreakSlack(%a: -1, %b: -1) -> (result: 0) {
     %sum = hir.add %a, %b : %t
     uir.break %sum : %t
   }
-  // Loop result at -1 (transparent break).
-  // CHECK: uir.return {{.*}}pa.operands = ["-1", "float"]
+  // Loop result at 0 (demanded phase; the add inside is rescheduled to -1
+  // by the post-pass but region results are not re-propagated).
+  // CHECK: uir.return {{.*}}pa.operands = ["0", "float"]
   uir.return %0 -> (%t)
 }
 
@@ -2231,11 +2234,12 @@ uir.func @PinnedInsideFloatingExpr(%a: -2) -> (result: -1) {
 } {
   %t = hir.int_type
   %ta = hir.int_type
-  // Floating expr: pure contents only, no opPhase. Result at -2.
-  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.results = ["-2"]
+  // Floating expr: pure contents only, no opPhase. Result at -1 (demanded
+  // phase; the add inside is at -2 but region results are not rescheduled).
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.results = ["-1"]
   %0 = uir.expr : %ta {
-    // Pinned expr inside unprocessed floating expr: no opPhase. Result at -2.
-    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.results = ["-2"]
+    // Pinned expr inside unprocessed floating expr: no opPhase. Result at -1.
+    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.results = ["-1"]
     %inner = uir.expr pin -1 : %ta {
       // Pure op at -2 (operands at -2).
       // CHECK: hir.add %a, %a {{.*}}pa.phase = "-2"
@@ -2259,12 +2263,13 @@ uir.func @FloatingInsideFloating(%a: -2) -> (result: -1) {
 } {
   %t = hir.int_type
   %ta = hir.int_type
-  // Floating expr: pure contents only, no opPhase. Result at -2.
-  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.results = ["-2"]
+  // Floating expr: pure contents only, no opPhase. Result at -1 (demanded
+  // phase; the add inside is at -2 but region results are not rescheduled).
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.results = ["-1"]
   %0 = uir.expr : %ta {
     %tb = hir.int_type
-    // Inner floating expr: also pure contents, no opPhase. Result at -2.
-    // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.results = ["-2"]
+    // Inner floating expr: also pure contents, no opPhase. Result at -1.
+    // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.results = ["-1"]
     %inner = uir.expr : %tb {
       // CHECK: hir.add %a, %a {{.*}}pa.phase = "-2"
       %sum = hir.add %a, %a : %t

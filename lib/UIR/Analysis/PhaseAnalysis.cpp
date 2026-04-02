@@ -163,6 +163,48 @@ LogicalResult PhaseAnalysis::run() {
     }
   }
 
+  // Step 5: Reschedule pure ops to their earliest possible phase. During the
+  // DFS, pure ops were assigned their demanded phase (`latest`). Now that all
+  // phases are final, recompute each pure op's phase as max(operand phases).
+  // Walk in pre-order so operands are visited before their consumers.
+  LLVM_DEBUG(dbgs() << "  step 5: reschedule pure ops\n");
+  funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (!hir::isEffectivelyPure(op) || op->hasTrait<OpTrait::IsTerminator>() ||
+        op->getNumRegions() > 0)
+      return;
+    auto phaseIt = opPhases.find(op);
+    if (phaseIt == opPhases.end())
+      return;
+
+    int16_t earliest = INT16_MIN;
+    if (isa<hir::TypeOfOp>(op)) {
+      earliest = actualPhase.at(op->getOperand(0));
+      if (earliest != INT16_MIN)
+        earliest -= 1;
+    } else {
+      for (auto &operand : op->getOpOperands()) {
+        auto valIt = actualPhase.find(operand.get());
+        if (valIt == actualPhase.end())
+          continue;
+        int16_t opActual = valIt->second;
+        if (isTypeOperand(operand) && opActual != INT16_MIN)
+          opActual += 1;
+        earliest = std::max(earliest, opActual);
+      }
+    }
+
+    if (earliest < phaseIt->second) {
+      LLVM_DEBUG({
+        dbgs() << "    " << phaseIt->second << " => " << earliest << ": ";
+        op->print(dbgs(), OpPrintingFlags().skipRegions());
+        dbgs() << "\n";
+      });
+      phaseIt->second = earliest;
+      for (auto r : op->getResults())
+        actualPhase[r] = earliest;
+    }
+  });
+
   return success();
 }
 
@@ -279,38 +321,24 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
     return actual;
   }
 
-  // Pure ops: push to operands, then schedule at max(operand phases).
+  // Pure ops: push constraints to operands, assign `latest` as the phase.
   if (hir::isEffectivelyPure(op)) {
-    SmallVector<int16_t> operandPhases;
     for (auto &operand : op->getOpOperands()) {
       int16_t opLatest = isTypeOperand(operand) ? (latest - 1) : latest;
-      auto phase = constrainValue(operand.get(), opLatest);
-      if (failed(phase)) {
+      if (failed(constrainValue(operand.get(), opLatest))) {
         emitRemark(op->getLoc()) << "required by operand at phase " << opLatest;
         return failure();
       }
-      operandPhases.push_back(*phase);
-    }
-
-    // Post-order: schedule at max(operand phases), with type operand +1 rule.
-    int16_t earliest = INT16_MIN;
-    for (auto [i, operand] : llvm::enumerate(op->getOpOperands())) {
-      int16_t opActual = operandPhases[i];
-      if (isTypeOperand(operand) && opActual != INT16_MIN)
-        opActual += 1;
-      earliest = std::max(earliest, opActual);
     }
 
     auto it = opPhases.find(op);
-    if (it == opPhases.end() || it->second > earliest) {
-      LLVM_DEBUG(dbgs() << INDENT << "  => phase " << earliest << "\n");
-      opPhases[op] = earliest;
+    if (it == opPhases.end() || it->second > latest) {
+      LLVM_DEBUG(dbgs() << INDENT << "  => phase " << latest << "\n");
+      opPhases[op] = latest;
       for (auto r : op->getResults())
-        actualPhase[r] = earliest;
+        actualPhase[r] = latest;
     }
 
-    assert(actualPhase.at(value) <= latest &&
-           "pure op phase exceeds demand after successful operand constraints");
     return actualPhase.at(value);
   }
 
