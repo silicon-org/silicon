@@ -98,8 +98,9 @@ private:
   FailureOr<int16_t> constrainValue(Value value, int16_t latest);
 
   /// Someone needs this block at phase ≤ demanded. Dispatches on the parent op
-  /// (floating expr, pinned expr, anchored CF, function body).
-  LogicalResult constrainBlock(Block &block, int16_t demandedPhase);
+  /// (floating expr, pinned expr, anchored CF, function body). Returns the
+  /// resolved block phase.
+  FailureOr<int16_t> constrainBlock(Block &block, int16_t demandedPhase);
 
   /// Push demand through yield/break to a specific result of a region-bearing
   /// op (ExprOp, IfOp, LoopOp). The constraint propagates to the corresponding

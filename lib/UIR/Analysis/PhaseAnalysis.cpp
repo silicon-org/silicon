@@ -382,17 +382,17 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
 // - Function body/signature: phase is 0 (no action needed here).
 //===----------------------------------------------------------------------===//
 
-LogicalResult PhaseAnalysis::constrainBlock(Block &block,
-                                            int16_t demandedPhase) {
+FailureOr<int16_t> PhaseAnalysis::constrainBlock(Block &block,
+                                                 int16_t demandedPhase) {
   SaveAndRestore guard(depth, depth + 2);
   auto *parentOp = block.getParentOp();
   assert(parentOp && "block has no parent op");
 
-  // Function body/signature: phase is fixed at 0. Nothing to constrain.
+  // Function body/signature: phase is fixed at 0.
   if (isa<FuncOp>(parentOp)) {
     LLVM_DEBUG(dbgs() << INDENT << "constrainBlock(<=" << demandedPhase
                       << "): func body, fixed at 0\n");
-    return success();
+    return int16_t(0);
   }
 
   LLVM_DEBUG({
@@ -404,34 +404,40 @@ LogicalResult PhaseAnalysis::constrainBlock(Block &block,
   if (auto exprOp = dyn_cast<ExprOp>(parentOp)) {
     if (exprOp.getPin()) {
       // Pinned expr at offset N: propagate to parent block with adjusted
-      // demand.
-      return constrainBlock(*parentOp->getBlock(),
-                            demandedPhase - exprOp.getPhaseShift());
-    } else {
-      // Floating expr: tighten block phase if needed, then re-process.
-      auto it = opPhases.find(parentOp);
-      if (it != opPhases.end() && it->second <= demandedPhase)
-        return success(); // already tight enough
-
-      LLVM_DEBUG(dbgs() << INDENT << "  floating expr => phase "
-                        << demandedPhase << "\n");
-      opPhases[parentOp] = demandedPhase;
-      for (auto typeVal : exprOp.getResultTypes()) {
-        if (failed(constrainValue(typeVal, demandedPhase - 1))) {
-          emitRemark(exprOp.getLoc())
-              << "required by expr result type at phase " << demandedPhase - 1;
-          return failure();
-        }
-      }
-      return processBlock(exprOp.getBody().front(), demandedPhase);
+      // demand. Block phase = parentBlockPhase + offset.
+      auto parentPhase = constrainBlock(*parentOp->getBlock(),
+                                        demandedPhase - exprOp.getPhaseShift());
+      if (failed(parentPhase))
+        return failure();
+      return int16_t(*parentPhase + exprOp.getPhaseShift());
     }
+
+    // Floating expr: tighten block phase if needed, then re-process.
+    auto it = opPhases.find(parentOp);
+    if (it != opPhases.end() && it->second <= demandedPhase)
+      return it->second; // already tight enough
+
+    LLVM_DEBUG(dbgs() << INDENT << "  floating expr => phase " << demandedPhase
+                      << "\n");
+    opPhases[parentOp] = demandedPhase;
+    for (auto typeVal : exprOp.getResultTypes()) {
+      if (failed(constrainValue(typeVal, demandedPhase - 1))) {
+        emitRemark(exprOp.getLoc())
+            << "required by expr result type at phase " << demandedPhase - 1;
+        return failure();
+      }
+    }
+    if (failed(processBlock(exprOp.getBody().front(), demandedPhase)))
+      return failure();
+    return demandedPhase;
   }
 
-  // Anchored CF (if/loop): demand propagates to parent block.
+  // Anchored CF (if/loop): demand propagates to parent block. The block phase
+  // is the same as the parent block phase.
   if (isa<IfOp, LoopOp>(parentOp))
     return constrainBlock(*parentOp->getBlock(), demandedPhase);
 
-  return success();
+  llvm_unreachable("unexpected parent op in constrainBlock");
 }
 
 //===----------------------------------------------------------------------===//
@@ -524,60 +530,17 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
 //===----------------------------------------------------------------------===//
 // processBlock — Push Block Phase Down to Ops
 //
-// Walks ops in block order, calling processOp for non-terminators. Then sets
-// the terminator phase and validates phase equalities (return at 0, break/
-// continue at loop phase).
+// Walks all ops in a block (including the terminator), calling processOp on
+// each. processOp handles phase assignment and validation for all op types.
 //===----------------------------------------------------------------------===//
 
 LogicalResult PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
   SaveAndRestore guard(depth, depth + 2);
   LLVM_DEBUG(dbgs() << INDENT << "processBlock(phase " << blockPhase << ")\n");
 
-  // Process non-terminator ops.
-  for (auto &op : block.without_terminator())
+  for (auto &op : block)
     if (failed(processOp(&op, blockPhase)))
       return failure();
-
-  // Process the terminator.
-  auto *terminator = block.getTerminator();
-  opPhases[terminator] = blockPhase;
-
-  if (isa<YieldOp, SignatureOp, UnreachableOp>(terminator)) {
-    // Yield operand constraints are handled by constrainRegionResult.
-    // Signature operand constraints are handled in Step 4 of run().
-    // Unreachable: nothing to check.
-
-  } else if (auto returnOp = dyn_cast<ReturnOp>(terminator)) {
-    if (blockPhase != 0) {
-      emitError(returnOp.getLoc())
-          << "return from a phase-shifted block is not allowed";
-      return failure();
-    }
-
-  } else if (auto breakOp = dyn_cast<BreakOp>(terminator)) {
-    auto loopIt = breakToLoop.find(breakOp);
-    assert(loopIt != breakToLoop.end() && "break not in pre-collected map");
-    int16_t loopPhase = getPhase(loopIt->second);
-    if (blockPhase != loopPhase) {
-      emitError(breakOp.getLoc())
-          << "break from a phase-shifted block is not allowed";
-      return failure();
-    }
-
-  } else if (auto continueOp = dyn_cast<ContinueOp>(terminator)) {
-    auto loopIt = continueToLoop.find(continueOp);
-    assert(loopIt != continueToLoop.end() &&
-           "continue not in pre-collected map");
-    int16_t loopPhase = getPhase(loopIt->second);
-    if (blockPhase != loopPhase) {
-      emitError(continueOp.getLoc())
-          << "continue from a phase-shifted block is not allowed";
-      return failure();
-    }
-
-  } else {
-    llvm_unreachable("unexpected terminator in UIR block");
-  }
 
   return success();
 }
@@ -745,6 +708,56 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
         emitRemark(callOp.getLoc()) << "required by type of call result " << i;
         return failure();
       }
+    }
+    return success();
+  }
+
+  // Terminators: assign block phase and validate phase-shift constraints.
+  // Yield/signature operand constraints are handled elsewhere (constrainRegion-
+  // Result and run() step 4, respectively).
+  if (isa<YieldOp, UnreachableOp>(op)) {
+    opPhases[op] = blockPhase;
+    return success();
+  }
+
+  if (isa<ReturnOp>(op)) {
+    opPhases[op] = blockPhase;
+    if (blockPhase != 0) {
+      emitError(op->getLoc())
+          << "return from a phase-shifted block is not allowed";
+      return failure();
+    }
+    return success();
+  }
+
+  if (isa<SignatureOp>(op)) {
+    opPhases[op] = blockPhase;
+    if (blockPhase != 0) {
+      emitError(op->getLoc())
+          << "signature in a phase-shifted block is not allowed";
+      return failure();
+    }
+    return success();
+  }
+
+  if (auto breakOp = dyn_cast<BreakOp>(op)) {
+    opPhases[op] = blockPhase;
+    int16_t loopPhase = getPhase(breakToLoop.at(breakOp));
+    if (blockPhase != loopPhase) {
+      emitError(breakOp.getLoc())
+          << "break from a phase-shifted block is not allowed";
+      return failure();
+    }
+    return success();
+  }
+
+  if (auto continueOp = dyn_cast<ContinueOp>(op)) {
+    opPhases[op] = blockPhase;
+    int16_t loopPhase = getPhase(continueToLoop.at(continueOp));
+    if (blockPhase != loopPhase) {
+      emitError(continueOp.getLoc())
+          << "continue from a phase-shifted block is not allowed";
+      return failure();
     }
     return success();
   }
