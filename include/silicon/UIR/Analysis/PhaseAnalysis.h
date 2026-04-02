@@ -65,14 +65,6 @@ private:
   /// Debug indentation depth for tracing the DFS.
   unsigned depth = 0;
 
-  //===--------------------------------------------------------------------===//
-  // Pre-collected Terminator Mappings
-  //
-  // Built by collectTerminators() in a single manual walk with loop context.
-  // Used to jump between terminators and their parent ops without walking the
-  // parent chain at each use.
-  //===--------------------------------------------------------------------===//
-
   /// Break ops for each loop, and the reverse mapping.
   DenseMap<LoopOp, SmallVector<BreakOp>> loopBreaks;
   DenseMap<BreakOp, LoopOp> breakToLoop;
@@ -81,20 +73,15 @@ private:
   DenseMap<ContinueOp, LoopOp> continueToLoop;
 
   /// All ReturnOp and SignatureOp terminators in the function.
-  SmallVector<Operation *> funcInterfaceTerminators;
+  SmallVector<Operation *> funcTerminators;
 
-  /// Walk the function IR and populate the terminator mappings above. Uses
-  /// manual recursion with a `currentLoop` context to avoid repeated parent
-  /// chain walks.
+  /// Walk the function IR and populate the terminator mappings above.
   void collectTerminators();
-
-  //===--------------------------------------------------------------------===//
-  // Five Core Functions
-  //===--------------------------------------------------------------------===//
 
   /// Consumer demands value at phase ≤ latest. Dispatches based on the value's
   /// defining op type (block arg, constant, pure, region, call,
-  /// side-effecting).
+  /// side-effecting). Returns the resolved phase, or failure if the demand
+  /// cannot be satisfied.
   FailureOr<int16_t> constrainValue(Value value, int16_t latest);
 
   /// Someone needs this block at phase ≤ demanded. Dispatches on the parent op
@@ -103,18 +90,17 @@ private:
   FailureOr<int16_t> constrainBlock(Block &block, int16_t demandedPhase);
 
   /// Push demand through yield/break to a specific result of a region-bearing
-  /// op (ExprOp, IfOp, LoopOp). The constraint propagates to the corresponding
-  /// yield/break operand. The parent result's actualPhase is updated to match.
+  /// op. The constraint forwards through the terminator operand transparently.
   LogicalResult constrainRegionResult(Operation *regionOp, unsigned resultIdx,
                                       int16_t latest);
 
-  /// Push blockPhase down to all ops in the block. Called when block phase is
-  /// known or has changed. Validates terminator phase equalities.
+  /// Push blockPhase down to all ops in a block (including the terminator).
   LogicalResult processBlock(Block &block, int16_t blockPhase);
 
-  /// Called by processBlock for each non-terminator op. Sets the op's phase
-  /// and pushes constraints to operands/regions. Skips floating/pure/constant
-  /// ops (demand-driven only).
+  /// Assign phase to a single op and push constraints to operands/regions.
+  /// Skips floating exprs, pure ops, and constants (demand-driven only).
+  /// Validates terminator phase constraints (return/break/continue/signature
+  /// must be at the correct phase).
   LogicalResult processOp(Operation *op, int16_t blockPhase);
 };
 

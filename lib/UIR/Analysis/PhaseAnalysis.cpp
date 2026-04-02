@@ -16,66 +16,40 @@ using namespace silicon;
 using namespace uir;
 
 #define DEBUG_TYPE "phase-analysis2"
-
-//===----------------------------------------------------------------------===//
-// Type Operand Classification
-//
-// Determines which operands of an op are "type operands" — values that describe
-// types rather than carry data. Type operands must be available one phase
-// before the value they describe (the "-1 rule").
-//
-// For each op, we compute a bitmask where bit i indicates that operand i is a
-// type operand. processOp and constrainValue push `phase - 1` to type operands
-// instead of `phase`.
-//
-// NOTE: When adding a new HIR op with type operands, this function must be
-// updated. See also the corresponding op definitions in HIR/Ops.td.
-//===----------------------------------------------------------------------===//
+#define INDENT llvm::indent(depth * 2)
 
 /// Check whether an operand is a "type operand" — a value that describes a
-/// type rather than carrying data. Uses tablegen-generated Mutable accessors
-/// to identify type operands without hardcoding indices.
+/// type rather than carrying data. Type operands must be available one phase
+/// before the value they describe (the "-1 rule").
+///
+/// Uses tablegen-generated Mutable accessors to identify type operands without
+/// hardcoding indices.
 ///
 /// NOTE: When adding a new HIR op with type operands, add a case here.
 /// See also the corresponding op definitions in HIR/Ops.td.
 static bool isTypeOperand(OpOperand &operand) {
   return TypeSwitch<Operation *, bool>(operand.getOwner())
-      // HIR binary ops and others with $resultType.
       .Case<hir::AddOp, hir::SubOp, hir::MulOp, hir::DivOp, hir::ModOp,
             hir::AndOp, hir::OrOp, hir::XorOp, hir::ShlOp, hir::ShrOp,
             hir::EqOp, hir::NeqOp, hir::LtOp, hir::GtOp, hir::GeqOp,
             hir::LeqOp>(
           [&](auto op) { return &operand == &op.getResultTypeMutable(); })
-      // Ops with $typeOperand.
       .Case<hir::ConstantIntOp, hir::CoerceTypeOp>(
           [&](auto op) { return &operand == &op.getTypeOperandMutable(); })
-      // hir.store: $valueType.
       .Case<hir::StoreOp>(
           [&](auto op) { return &operand == &op.getValueTypeMutable(); })
       .Default([](auto) { return false; });
 }
 
-//===----------------------------------------------------------------------===//
-// Debug Helpers
-//===----------------------------------------------------------------------===//
-
-/// Print indentation for the current DFS depth.
-#define INDENT llvm::indent(depth * 2)
-
-//===----------------------------------------------------------------------===//
-// Pre-walk: Collect Terminators
-//
-// Walks the function IR with manual recursion, passing a `currentLoop` context
-// down through regions. This lets us associate break/continue ops with their
-// enclosing loop without walking the parent chain at each use.
-//===----------------------------------------------------------------------===//
-
+/// Walk the function IR and populate the terminator mappings. Uses manual
+/// recursion with a `currentLoop` context to associate break/continue ops with
+/// their enclosing loop without walking the parent chain at each use.
 void PhaseAnalysis::collectTerminators() {
   std::function<void(Block &, LoopOp)> walkBlock = [&](Block &block,
                                                        LoopOp currentLoop) {
     for (auto &op : block) {
       if (isa<ReturnOp, SignatureOp>(&op)) {
-        funcInterfaceTerminators.push_back(&op);
+        funcTerminators.push_back(&op);
         continue;
       }
       if (auto breakOp = dyn_cast<BreakOp>(&op)) {
@@ -107,15 +81,15 @@ void PhaseAnalysis::collectTerminators() {
     walkBlock(block, /*currentLoop=*/nullptr);
 }
 
-//===----------------------------------------------------------------------===//
-// Entry Point
-//===----------------------------------------------------------------------===//
-
+/// Run the phase analysis. The algorithm has four steps:
+/// 1. Pre-walk: collect terminators.
+/// 2. Constrain blocks containing function terminators to phase ≤ 0.
+/// 3. Structural setup: processBlock(sig, 0) and processBlock(body, 0).
+/// 4. Demand-driven constraints: push from declared arg/result phases.
 LogicalResult PhaseAnalysis::run() {
   LLVM_DEBUG(dbgs() << "Analyzing phases in " << funcOp.getSymNameAttr()
                     << "\n");
 
-  // Seed the function at phase 0.
   opPhases.insert({funcOp, 0});
 
   // Pre-populate actualPhase for body and signature block arguments.
@@ -132,9 +106,9 @@ LogicalResult PhaseAnalysis::run() {
   // Step 1: Pre-walk — collect terminators.
   collectTerminators();
 
-  // Step 2: Constrain blocks containing function-interface terminators.
-  LLVM_DEBUG(dbgs() << "  step 2: constrain function-interface blocks\n");
-  for (auto *term : funcInterfaceTerminators)
+  // Step 2: Constrain blocks containing function terminators.
+  LLVM_DEBUG(dbgs() << "  step 2: constrain function terminator blocks\n");
+  for (auto *term : funcTerminators)
     if (failed(constrainBlock(*term->getBlock(), 0)))
       return failure();
 
@@ -147,7 +121,7 @@ LogicalResult PhaseAnalysis::run() {
 
   // Step 4: Demand-driven constraints — function interface.
   LLVM_DEBUG(dbgs() << "  step 4: demand-driven constraints\n");
-  for (auto *term : funcInterfaceTerminators) {
+  for (auto *term : funcTerminators) {
     if (auto sigOp = dyn_cast<SignatureOp>(term)) {
       auto argPhases = funcOp.getArgPhases();
       auto resultPhases = funcOp.getResultPhases();
@@ -192,18 +166,11 @@ LogicalResult PhaseAnalysis::run() {
   return success();
 }
 
-//===----------------------------------------------------------------------===//
-// constrainValue — Consumer Demand on a Value
-//
-// Consumer demands value at phase ≤ latest. Dispatches based on the value's
-// kind:
-// - Block arg: check actualPhase ≤ latest.
-// - Constant-like result: resolve op, always satisfies.
-// - Pure op result: push to operands, schedule at earliest.
-// - Region op result (expr/if/loop): constrainRegionResult.
-// - Call/pin/side-effecting result: constrainBlock, then check actualPhase.
-//===----------------------------------------------------------------------===//
+// NOLINTBEGIN(misc-no-recursion)
 
+/// Consumer demands value at phase ≤ latest. Dispatches based on the value's
+/// kind. Returns the resolved phase, or failure if the demand cannot be
+/// satisfied (diagnostics already emitted).
 FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
   SaveAndRestore guard(depth, depth + 2);
 
@@ -230,28 +197,26 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
     LLVM_DEBUG(dbgs() << INDENT << "constrainValue(constant, <=" << latest
                       << "): float\n");
     opPhases[op] = INT16_MIN;
-    for (auto result : op->getResults())
-      actualPhase[result] = INT16_MIN;
+    for (auto r : op->getResults())
+      actualPhase[r] = INT16_MIN;
     return INT16_MIN;
   }
 
   LLVM_DEBUG({
     dbgs() << INDENT << "constrainValue(<=" << latest << "): ";
-    op->print(dbgs(), OpPrintingFlags().skipRegions());
+    value.printAsOperand(dbgs(), OpPrintingFlags());
     dbgs() << "\n";
   });
 
-  // hir.type_of: result is at p(operand) - 1. Push latest + 1 to input.
-  if (isa<hir::TypeOfOp>(op)) {
-    assert(op->getNumOperands() == 1);
-    auto inputPhase = constrainValue(op->getOperand(0), latest + 1);
+  // hir.type_of: result is at p(operand) - 1.
+  if (auto typeOfOp = dyn_cast<hir::TypeOfOp>(op)) {
+    auto inputPhase = constrainValue(typeOfOp.getInput(), latest + 1);
     if (failed(inputPhase))
       return failure();
     int16_t resolved = (*inputPhase == INT16_MIN) ? INT16_MIN : *inputPhase - 1;
     LLVM_DEBUG(dbgs() << INDENT << "  => phase " << resolved << "\n");
     opPhases[op] = resolved;
-    for (auto result : op->getResults())
-      actualPhase[result] = resolved;
+    actualPhase[typeOfOp.getResult()] = resolved;
     return resolved;
   }
 
@@ -314,9 +279,8 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
     return actual;
   }
 
-  // Pure ops (effectively pure): push to operands, then schedule at earliest.
+  // Pure ops: push to operands, then schedule at max(operand phases).
   if (hir::isEffectivelyPure(op)) {
-    // Push constraints to operands and collect their resolved phases.
     SmallVector<int16_t> operandPhases;
     for (auto &operand : op->getOpOperands()) {
       int16_t opLatest = isTypeOperand(operand) ? (latest - 1) : latest;
@@ -328,8 +292,7 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
       operandPhases.push_back(*phase);
     }
 
-    // Post-order: schedule at max(operand actuals), accounting for the type
-    // operand -1 rule.
+    // Post-order: schedule at max(operand phases), with type operand +1 rule.
     int16_t earliest = INT16_MIN;
     for (auto [i, operand] : llvm::enumerate(op->getOpOperands())) {
       int16_t opActual = operandPhases[i];
@@ -338,17 +301,14 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
       earliest = std::max(earliest, opActual);
     }
 
-    // Only update if this is a tighter (earlier) phase or first visit.
     auto it = opPhases.find(op);
     if (it == opPhases.end() || it->second > earliest) {
       LLVM_DEBUG(dbgs() << INDENT << "  => phase " << earliest << "\n");
       opPhases[op] = earliest;
-      for (auto result : op->getResults())
-        actualPhase[result] = earliest;
+      for (auto r : op->getResults())
+        actualPhase[r] = earliest;
     }
 
-    // After constraining all operands successfully, the op's phase must
-    // satisfy the demand.
     assert(actualPhase.at(value) <= latest &&
            "pure op phase exceeds demand after successful operand constraints");
     return actualPhase.at(value);
@@ -372,23 +332,19 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
   return actual;
 }
 
-//===----------------------------------------------------------------------===//
-// constrainBlock — Block Phase Demand
-//
-// Someone needs this block at phase ≤ demanded. Dispatches on the parent op:
-// - Floating expr: tighten block phase, re-process.
-// - Pinned expr at offset N: constrainBlock(parentBlock, demanded - N).
-// - Anchored CF (if/loop): constrainBlock(parentBlock, demanded).
-// - Function body/signature: phase is 0 (no action needed here).
-//===----------------------------------------------------------------------===//
-
+/// Someone needs this block at phase ≤ demanded. Dispatches on the parent op:
+/// - Floating expr: tighten block phase, re-process.
+/// - Pinned expr at offset N: propagate to parent block at demanded - N.
+/// - Anchored CF (if/loop): propagate to parent block.
+/// - Function body/signature: fixed at 0.
+///
+/// Returns the resolved block phase.
 FailureOr<int16_t> PhaseAnalysis::constrainBlock(Block &block,
                                                  int16_t demandedPhase) {
   SaveAndRestore guard(depth, depth + 2);
   auto *parentOp = block.getParentOp();
   assert(parentOp && "block has no parent op");
 
-  // Function body/signature: phase is fixed at 0.
   if (isa<FuncOp>(parentOp)) {
     LLVM_DEBUG(dbgs() << INDENT << "constrainBlock(<=" << demandedPhase
                       << "): func body, fixed at 0\n");
@@ -403,8 +359,6 @@ FailureOr<int16_t> PhaseAnalysis::constrainBlock(Block &block,
 
   if (auto exprOp = dyn_cast<ExprOp>(parentOp)) {
     if (exprOp.getPin()) {
-      // Pinned expr at offset N: propagate to parent block with adjusted
-      // demand. Block phase = parentBlockPhase + offset.
       auto parentPhase = constrainBlock(*parentOp->getBlock(),
                                         demandedPhase - exprOp.getPhaseShift());
       if (failed(parentPhase))
@@ -415,7 +369,7 @@ FailureOr<int16_t> PhaseAnalysis::constrainBlock(Block &block,
     // Floating expr: tighten block phase if needed, then re-process.
     auto it = opPhases.find(parentOp);
     if (it != opPhases.end() && it->second <= demandedPhase)
-      return it->second; // already tight enough
+      return it->second;
 
     LLVM_DEBUG(dbgs() << INDENT << "  floating expr => phase " << demandedPhase
                       << "\n");
@@ -432,30 +386,23 @@ FailureOr<int16_t> PhaseAnalysis::constrainBlock(Block &block,
     return demandedPhase;
   }
 
-  // Anchored CF (if/loop): demand propagates to parent block. The block phase
-  // is the same as the parent block phase.
+  // Anchored CF (if/loop): propagate to parent block.
   if (isa<IfOp, LoopOp>(parentOp))
     return constrainBlock(*parentOp->getBlock(), demandedPhase);
 
   llvm_unreachable("unexpected parent op in constrainBlock");
 }
 
-//===----------------------------------------------------------------------===//
-// constrainRegionResult — Per-Result Constraint Through Yield/Break
-//
-// Pushes a phase constraint onto a specific result of a region-bearing op by
-// forwarding constrainValue to the corresponding yield/break operand. The
-// resolved actual phase is propagated back to the region result. Yields and
-// breaks are pure conduits — they don't create errors or inspect phases
-// themselves.
-//===----------------------------------------------------------------------===//
-
+/// Push demand through yield/break to a specific result of a region-bearing op.
+/// Yields and breaks are transparent conduits — they just forward
+/// constrainValue to the corresponding operand and propagate the resolved phase
+/// to the region result.
 LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
                                                    unsigned resultIdx,
                                                    int16_t latest) {
   SaveAndRestore guard(depth, depth + 2);
 
-  // Skip if this result already has a phase that satisfies the demand.
+  // Skip if this result already satisfies the demand.
   auto resultIt = actualPhase.find(regionOp->getResult(resultIdx));
   if (resultIt != actualPhase.end() && resultIt->second <= latest)
     return success();
@@ -467,9 +414,7 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
     dbgs() << "\n";
   });
 
-  // Forward the constraint through a single terminator's operand.
   auto constrainTermOperand = [&](Operation *term) -> LogicalResult {
-    // Get the value and type operands from the terminator.
     auto getOperands = [&](Operation *t) -> std::pair<ValueRange, ValueRange> {
       if (auto yieldOp = dyn_cast<YieldOp>(t))
         return {yieldOp.getValues(), yieldOp.getTypeOfValues()};
@@ -480,18 +425,15 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
 
     auto [values, typeOfValues] = getOperands(term);
 
-    // Constrain the value operand.
     if (resultIdx < values.size()) {
       auto phase = constrainValue(values[resultIdx], latest);
       if (failed(phase)) {
         emitRemark(term->getLoc()) << "required by yield operand";
         return failure();
       }
-      // Propagate actual phase to parent result.
       actualPhase[regionOp->getResult(resultIdx)] = *phase;
     }
 
-    // Constrain the type operand (type operand -1 rule).
     if (resultIdx < typeOfValues.size()) {
       if (failed(constrainValue(typeOfValues[resultIdx], latest - 1))) {
         emitRemark(term->getLoc()) << "required by yield type operand";
@@ -502,10 +444,10 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
     return success();
   };
 
-  // Dispatch to all terminators that produce this result.
-  if (auto exprOp = dyn_cast<ExprOp>(regionOp)) {
+  if (auto exprOp = dyn_cast<ExprOp>(regionOp))
     return constrainTermOperand(exprOp.getBody().front().getTerminator());
-  } else if (auto ifOp = dyn_cast<IfOp>(regionOp)) {
+
+  if (auto ifOp = dyn_cast<IfOp>(regionOp)) {
     if (failed(
             constrainTermOperand(ifOp.getThenRegion().front().getTerminator())))
       return failure();
@@ -514,7 +456,9 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
               ifOp.getElseRegion().front().getTerminator())))
         return failure();
     return success();
-  } else if (auto loopOp = dyn_cast<LoopOp>(regionOp)) {
+  }
+
+  if (auto loopOp = dyn_cast<LoopOp>(regionOp)) {
     auto it = loopBreaks.find(loopOp);
     if (it != loopBreaks.end()) {
       for (auto breakOp : it->second)
@@ -527,13 +471,7 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
   return success();
 }
 
-//===----------------------------------------------------------------------===//
-// processBlock — Push Block Phase Down to Ops
-//
-// Walks all ops in a block (including the terminator), calling processOp on
-// each. processOp handles phase assignment and validation for all op types.
-//===----------------------------------------------------------------------===//
-
+/// Push blockPhase down to all ops in a block (including the terminator).
 LogicalResult PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
   SaveAndRestore guard(depth, depth + 2);
   LLVM_DEBUG(dbgs() << INDENT << "processBlock(phase " << blockPhase << ")\n");
@@ -545,16 +483,11 @@ LogicalResult PhaseAnalysis::processBlock(Block &block, int16_t blockPhase) {
   return success();
 }
 
-//===----------------------------------------------------------------------===//
-// processOp — Push Block Phase to a Single Op
-//
-// Called by processBlock for each non-terminator. Sets the op's phase and
-// pushes constraints to operands and regions. Skips floating exprs, pure ops,
-// and constants (demand-driven only).
-//===----------------------------------------------------------------------===//
-
+/// Assign phase to a single op and push constraints to operands/regions.
+/// Skips floating exprs, pure ops, and constants (demand-driven only).
+/// Validates terminator phase constraints.
 LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
-  // Floating uir.expr: demand-driven only. Skip.
+  // Floating uir.expr: demand-driven only.
   if (auto exprOp = dyn_cast<ExprOp>(op); exprOp && !exprOp.getPin())
     return success();
 
@@ -572,7 +505,6 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
     assert(exprOp.getPin() && "floating expr should have been skipped");
     int16_t exprPhase = blockPhase + exprOp.getPhaseShift();
 
-    // Tightening check.
     auto it = opPhases.find(op);
     if (it != opPhases.end() && it->second <= exprPhase)
       return success();
@@ -581,7 +513,6 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
                       << ")\n");
     opPhases[op] = exprPhase;
 
-    // Push result type constraints.
     for (auto typeVal : exprOp.getResultTypes()) {
       if (failed(constrainValue(typeVal, exprPhase - 1))) {
         emitRemark(exprOp.getLoc())
@@ -600,8 +531,8 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
     LLVM_DEBUG(dbgs() << INDENT << "processOp(pin, phase " << pinPhase
                       << ")\n");
     opPhases[op] = pinPhase;
-    for (auto result : op->getResults())
-      actualPhase[result] = pinPhase;
+    for (auto r : op->getResults())
+      actualPhase[r] = pinPhase;
 
     for (auto input : pinOp.getInputs()) {
       if (failed(constrainValue(input, pinPhase))) {
@@ -674,12 +605,10 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
                       << ")\n");
     opPhases[op] = blockPhase;
 
-    // Update result phases with per-result offsets.
     auto resultPhases = callOp.getResultPhases();
-    for (auto [i, result] : llvm::enumerate(callOp.getResults()))
-      actualPhase[result] = blockPhase + static_cast<int16_t>(resultPhases[i]);
+    for (auto [i, r] : llvm::enumerate(callOp.getResults()))
+      actualPhase[r] = blockPhase + static_cast<int16_t>(resultPhases[i]);
 
-    // Constrain arguments.
     auto argPhases = callOp.getArgPhases();
     for (auto [i, arg] : llvm::enumerate(callOp.getArguments())) {
       int16_t argLatest = blockPhase + static_cast<int16_t>(argPhases[i]);
@@ -690,7 +619,6 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
       }
     }
 
-    // Constrain argument types.
     for (auto [i, typeVal] : llvm::enumerate(callOp.getTypeOfArgs())) {
       int16_t typeLatest = blockPhase + static_cast<int16_t>(argPhases[i]) - 1;
       if (failed(constrainValue(typeVal, typeLatest))) {
@@ -700,7 +628,6 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
       }
     }
 
-    // Constrain result types.
     for (auto [i, typeVal] : llvm::enumerate(callOp.getTypeOfResults())) {
       int16_t typeLatest =
           blockPhase + static_cast<int16_t>(resultPhases[i]) - 1;
@@ -713,8 +640,6 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
   }
 
   // Terminators: assign block phase and validate phase-shift constraints.
-  // Yield/signature operand constraints are handled elsewhere (constrainRegion-
-  // Result and run() step 4, respectively).
   if (isa<YieldOp, UnreachableOp>(op)) {
     opPhases[op] = blockPhase;
     return success();
@@ -773,10 +698,9 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
     dbgs() << "\n";
   });
   opPhases[op] = blockPhase;
-  for (auto result : op->getResults())
-    actualPhase[result] = blockPhase;
+  for (auto r : op->getResults())
+    actualPhase[r] = blockPhase;
 
-  // Generic ops: push to operands with type operand -1 shift.
   for (auto &operand : op->getOpOperands()) {
     int16_t opLatest = isTypeOperand(operand) ? (blockPhase - 1) : blockPhase;
     if (failed(constrainValue(operand.get(), opLatest))) {
@@ -786,6 +710,8 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
   }
   return success();
 }
+
+// NOLINTEND(misc-no-recursion)
 
 //===----------------------------------------------------------------------===//
 // Accessors
