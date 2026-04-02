@@ -436,7 +436,7 @@ uir.func @DynBlockPhaseMismatch() -> (result: 0) {
   %t = hir.int_type
   %0 = uir.expr pin 1 : %t {
     %tr = hir.int_type
-    // expected-error @+1 {{value at phase 1 cannot satisfy requirement for phase 0}}
+    // expected-error @+1 {{call result 0 at phase 1 cannot satisfy requirement for phase 0}}
     %v = uir.call @DynBlockCallHelper() : () -> (%tr) () -> !hir.any [] -> [0]
     // expected-remark @+1 {{required by yield operand}}
     uir.yield %v : %t

@@ -657,12 +657,12 @@ uir.func @FloatingExpr(%a: -1) -> (result: 0) {
   // The floating expr's phase is determined by its consumer (uir.return, which
   // needs the value at phase 0).
   %t = hir.int_type
-  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "0"
+  // Floating expr: no opPhase (pure contents only), but result at -1.
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.results = ["-1"]
   %0 = uir.expr : %t {
     // The add is pure, operands at -1, so earliest = -1.
     // CHECK: hir.add {{.*}} {{.*}}pa.phase = "-1"
     %sum = hir.add %a, %a : %t
-    // CHECK: uir.yield {{.*}} {{.*}}pa.phase = "0"
     uir.yield %sum : %t
   }
   uir.return %0 -> (%t)
@@ -1143,32 +1143,41 @@ uir.func @ReturnsDyn(%x: 0) -> (result: 1) {
   uir.return %x -> (%t3)
 }
 
-// TODO: Disabled pending constrainRegionResult simplification (step 2 of
-// PhaseAnalysis refactoring). Chained floating exprs with dyn result offsets
-// don't cascade tightening correctly. Calls need uir.expr wrapping.
-//
-// C HECK-LABEL: uir.func @TripleDynChain
-// uir.func @TripleDynChain(%x: -3) -> (result: 0) {
-//   %t = hir.int_type
-//   uir.signature (%t) -> (%t)
-// } {
-//   %t1 = hir.int_type
-//   %t2 = hir.int_type
-//   %t3 = hir.int_type
-//   %tr1 = hir.int_type
-//   %tr2 = hir.int_type
-//   %tr3 = hir.int_type
-//   // C HECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-3"
-//   // C HECK-SAME: pa.results = ["-2"]
-//   %r1 = uir.call @ReturnsDyn(%x) : (%t1) -> (%tr1) (!hir.any) -> !hir.any [0] -> [1]
-//   // C HECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-2"
-//   // C HECK-SAME: pa.results = ["-1"]
-//   %r2 = uir.call @ReturnsDyn(%r1) : (%t2) -> (%tr2) (!hir.any) -> !hir.any [0] -> [1]
-//   // C HECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-1"
-//   // C HECK-SAME: pa.results = ["0"]
-//   %r3 = uir.call @ReturnsDyn(%r2) : (%t3) -> (%tr3) (!hir.any) -> !hir.any [0] -> [1]
-//   uir.return %r3 -> (%tr3)
-// }
+// Triple dyn chain with floating expr wrappers. Each call has dyn result
+// offset +1, so each floating expr tightens to place the result one phase
+// earlier. Cascading: -3 → -2 → -1 → 0.
+
+// CHECK-LABEL: uir.func @TripleDynChain
+uir.func @TripleDynChain(%x: -3) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  %tr1 = hir.int_type
+  %tr2 = hir.int_type
+  %tr3 = hir.int_type
+  // CHECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-3"
+  // CHECK-SAME: pa.results = ["-2"]
+  %r1 = uir.expr : %tr1 {
+    %v1 = uir.call @ReturnsDyn(%x) : (%t1) -> (%tr1) (!hir.any) -> !hir.any [0] -> [1]
+    uir.yield %v1 : %tr1
+  }
+  // CHECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-2"
+  // CHECK-SAME: pa.results = ["-1"]
+  %r2 = uir.expr : %tr2 {
+    %v2 = uir.call @ReturnsDyn(%r1) : (%t2) -> (%tr2) (!hir.any) -> !hir.any [0] -> [1]
+    uir.yield %v2 : %tr2
+  }
+  // CHECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-1"
+  // CHECK-SAME: pa.results = ["0"]
+  %r3 = uir.expr : %tr3 {
+    %v3 = uir.call @ReturnsDyn(%r2) : (%t3) -> (%tr3) (!hir.any) -> !hir.any [0] -> [1]
+    uir.yield %v3 : %tr3
+  }
+  uir.return %r3 -> (%tr3)
+}
 
 //===----------------------------------------------------------------------===//
 // Offset cancel: takes_const(returns_dyn(x)). Inner dyn +1 and outer const -1
@@ -1787,17 +1796,14 @@ uir.func @MultiResultCall(%a: -1) -> (r0: 0, r1: 0) {
   %ta = hir.int_type
   %tr0 = hir.int_type
   %tr1 = hir.int_type
-  // TODO: Disabled pending constrainRegionResult simplification (step 2).
-  // Multi-result floating expr tightening doesn't re-update already-propagated
-  // result actualPhases. Call needs uir.expr wrapping.
-  //
-  // C HECK: uir.call @MultiResultTarget({{.*}}) {{.*}} {{.*}}pa.phase = "-1"
-  // %r0, %r1 = uir.call @MultiResultTarget(%a) : (%ta) -> (%tr0, %tr1) (!hir.any) -> (!hir.any, !hir.any) [0] -> [0, 1]
-  // %t = hir.int_type
-  // uir.return %r0, %r1 -> (%t, %t)
+  // Call wrapped in floating expr: tightens to -1 so r1 at 0.
+  // CHECK: uir.call @MultiResultTarget({{.*}}) {{.*}}pa.phase = "-1"
+  %r0, %r1 = uir.expr : %tr0, %tr1 {
+    %v0, %v1 = uir.call @MultiResultTarget(%a) : (%ta) -> (%tr0, %tr1) (!hir.any) -> (!hir.any, !hir.any) [0] -> [0, 1]
+    uir.yield %v0, %v1 : %tr0, %tr1
+  }
   %t = hir.int_type
-  %c0 = hir.constant_int 0 : %t
-  uir.return %c0, %c0 -> (%t, %t)
+  uir.return %r0, %r1 -> (%t, %t)
 }
 
 //===----------------------------------------------------------------------===//
@@ -1818,51 +1824,51 @@ uir.func @Spread(%x: 0) -> (r0: -1, r1: 0, r2: 1) {
   uir.return %c1, %c2, %c3 -> (%t, %t, %t)
 }
 
-// TODO: Disabled pending constrainRegionResult simplification (step 2).
-// Call needs uir.expr wrapping; multi-result tightening doesn't cascade.
-//
-// C HECK-LABEL: uir.func @SpreadCallAllResults
-// uir.func @SpreadCallAllResults(%a: -1) -> (result: 0) {
-//   %t0 = hir.int_type
-//   %t1 = hir.int_type
-//   uir.signature (%t0) -> (%t1)
-// } {
-//   %ta = hir.int_type
-//   %tr0 = hir.int_type
-//   %tr1 = hir.int_type
-//   %tr2 = hir.int_type
-//   // C HECK: uir.call @Spread({{.*}}) {{.*}}pa.phase = "-1"
-//   // C HECK-SAME: pa.results = ["-2", "-1", "0"]
-//   %r0, %r1, %r2 = uir.call @Spread(%a) : (%ta) -> (%tr0, %tr1, %tr2) (!hir.any) -> (!hir.any, !hir.any, !hir.any) [0] -> [-1, 0, 1]
-//   %t = hir.int_type
-//   %sum01 = hir.add %r0, %r1 : %t
-//   %sum = hir.add %sum01, %r2 : %t
-//   uir.return %sum -> (%t)
-// }
+// CHECK-LABEL: uir.func @SpreadCallAllResults
+uir.func @SpreadCallAllResults(%a: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %ta = hir.int_type
+  %tr0 = hir.int_type
+  %tr1 = hir.int_type
+  %tr2 = hir.int_type
+  // CHECK: uir.call @Spread({{.*}}) {{.*}}pa.phase = "-1"
+  // CHECK-SAME: pa.results = ["-2", "-1", "0"]
+  %r0, %r1, %r2 = uir.expr : %tr0, %tr1, %tr2 {
+    %v0, %v1, %v2 = uir.call @Spread(%a) : (%ta) -> (%tr0, %tr1, %tr2) (!hir.any) -> (!hir.any, !hir.any, !hir.any) [0] -> [-1, 0, 1]
+    uir.yield %v0, %v1, %v2 : %tr0, %tr1, %tr2
+  }
+  %t = hir.int_type
+  %sum01 = hir.add %r0, %r1 : %t
+  %sum = hir.add %sum01, %r2 : %t
+  uir.return %sum -> (%t)
+}
 
 //===----------------------------------------------------------------------===//
 // Partial use of multi-result call: only the dyn result (offset +1) is
 // consumed, tightening the call to -1.
 
-// TODO: Disabled pending constrainRegionResult simplification (step 2).
-// Call needs uir.expr wrapping; multi-result tightening doesn't cascade.
-//
-// C HECK-LABEL: uir.func @SpreadCallPartialUse
-// uir.func @SpreadCallPartialUse(%a: -1) -> (result: 0) {
-//   %t0 = hir.int_type
-//   %t1 = hir.int_type
-//   uir.signature (%t0) -> (%t1)
-// } {
-//   %ta = hir.int_type
-//   %tr0 = hir.int_type
-//   %tr1 = hir.int_type
-//   %tr2 = hir.int_type
-//   // C HECK: uir.call @Spread({{.*}}) {{.*}}pa.phase = "-1"
-//   // C HECK-SAME: pa.results = ["-2", "-1", "0"]
-//   %r0, %r1, %r2 = uir.call @Spread(%a) : (%ta) -> (%tr0, %tr1, %tr2) (!hir.any) -> (!hir.any, !hir.any, !hir.any) [0] -> [-1, 0, 1]
-//   %t = hir.int_type
-//   uir.return %r2 -> (%t)
-// }
+// CHECK-LABEL: uir.func @SpreadCallPartialUse
+uir.func @SpreadCallPartialUse(%a: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %ta = hir.int_type
+  %tr0 = hir.int_type
+  %tr1 = hir.int_type
+  %tr2 = hir.int_type
+  // CHECK: uir.call @Spread({{.*}}) {{.*}}pa.phase = "-1"
+  // CHECK-SAME: pa.results = ["-2", "-1", "0"]
+  %r0, %r1, %r2 = uir.expr : %tr0, %tr1, %tr2 {
+    %v0, %v1, %v2 = uir.call @Spread(%a) : (%ta) -> (%tr0, %tr1, %tr2) (!hir.any) -> (!hir.any, !hir.any, !hir.any) [0] -> [-1, 0, 1]
+    uir.yield %v0, %v1, %v2 : %tr0, %tr1, %tr2
+  }
+  %t = hir.int_type
+  uir.return %r2 -> (%t)
+}
 
 //===----------------------------------------------------------------------===//
 // hir.type_of used by two consumers at different phases. The tightest
@@ -2225,11 +2231,11 @@ uir.func @PinnedInsideFloatingExpr(%a: -2) -> (result: -1) {
 } {
   %t = hir.int_type
   %ta = hir.int_type
-  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "-1"
+  // Floating expr: pure contents only, no opPhase. Result at -2.
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.results = ["-2"]
   %0 = uir.expr : %ta {
-    // Inner pinned expr at offset -1 relative to parent.
-    // When parent tightens to -1, inner is at -1 + (-1) = -2.
-    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-2"
+    // Pinned expr inside unprocessed floating expr: no opPhase. Result at -2.
+    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.results = ["-2"]
     %inner = uir.expr pin -1 : %ta {
       // Pure op at -2 (operands at -2).
       // CHECK: hir.add %a, %a {{.*}}pa.phase = "-2"
@@ -2253,12 +2259,12 @@ uir.func @FloatingInsideFloating(%a: -2) -> (result: -1) {
 } {
   %t = hir.int_type
   %ta = hir.int_type
-  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "-1"
+  // Floating expr: pure contents only, no opPhase. Result at -2.
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.results = ["-2"]
   %0 = uir.expr : %ta {
     %tb = hir.int_type
-    // Inner floating expr. Its phase is determined by its consumer (the yield
-    // of the outer expr, which demands -1).
-    // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "-1"
+    // Inner floating expr: also pure contents, no opPhase. Result at -2.
+    // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.results = ["-2"]
     %inner = uir.expr : %tb {
       // CHECK: hir.add %a, %a {{.*}}pa.phase = "-2"
       %sum = hir.add %a, %a : %t
@@ -2280,23 +2286,24 @@ uir.func @DeepNestedTightening(%cond: -2) -> (result: -1) {
 } {
   %t = hir.int_type
   %ta = hir.int_type
-  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "-1"
+  // Floating expr: tightened to 0 by constrainBlock (calls inside trigger it).
+  // The pinned expr at offset -1 shifts to -1, satisfying the -1 result demand.
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["-1"]
   %0 = uir.expr : %ta {
-    // Pinned at offset -1 relative to floating parent.
-    // When parent tightens to -1, this is at -2.
-    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-2"
+    // Pinned at offset -1 relative to floating parent at 0: phase -1.
+    // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-1"
     %inner = uir.expr pin -1 : %ta {
       %ra = hir.int_type
-      // If anchored at the pinned expr's phase (-2).
-      // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "-2"
+      // If anchored at the pinned expr's phase (-1).
+      // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "-1"
       %r = uir.if %cond : %ta {
         // CHECK: uir.call @MakeValue()
-        // CHECK-SAME: pa.phase = "-2"
+        // CHECK-SAME: pa.phase = "-1"
         %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
         uir.yield %v : %ta
       } else {
         // CHECK: uir.call @MakeValue()
-        // CHECK-SAME: pa.phase = "-2"
+        // CHECK-SAME: pa.phase = "-1"
         %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
         uir.yield %v : %ta
       }

@@ -23,20 +23,9 @@
 
 ## Phase Analysis
 
-- SplitPhases2: `copyPhases` helper copies phase data from sig ops to cloned body ops, but the splitter crashes when processing `uir.expr` ops in the signature region.
+- SplitPhases2: the splitter crashes when processing `uir.expr` ops in the signature region.
   Root cause: `reconstructSignatures` → `isTriviallyMaterializable` hits a null value when the expr result is involved.
-  The sig-to-body cloning works (phases are copied for nested ops), but the splitter's signature reconstruction doesn't handle region-bearing ops from the signature correctly.
   Test: `split-phases2.mlir` is XFAILed pending this fix.
-- Calls and pins are now strictly anchored at block phase — calls in function bodies or signature blocks that need to run at earlier phases must be wrapped in floating `uir.expr` blocks.
-  Some tests in `phase-analysis.mlir` have been updated with `uir.expr` wrappers. The `split-phases2.mlir` tests also need this wrapping but the splitter crashes on them (see above).
-- `constrainRegionResult` and `constrainBlock` both handle floating expr processing, causing double-processing.
-  Need to unify: move floating expr processing entirely into `constrainBlock` (step 2 of the PhaseAnalysis refactoring plan).
-  This likely fixes the cascading tightening issue where chained calls inside nested floating exprs don't tighten deeply enough.
-  Commented-out tests to re-enable after fixing:
-  - `@TripleDynChain` in `test/UIR/phase-analysis.mlir` — chained dyn result calls in floating exprs
-  - `@MultiResultCall` in `test/UIR/phase-analysis.mlir` — multi-result call with offset [0, 1] in floating expr
-  - `@SpreadCallAllResults` in `test/UIR/phase-analysis.mlir` — spread call [-1, 0, +1] in floating expr
-  - `@SpreadCallPartialUse` in `test/UIR/phase-analysis.mlir` — partial use of spread call in floating expr
 
 - Pure op earliest scheduling should be deferred to a post-pass.
   Currently, pure ops compute `earliest = max(operand actuals)` during the DFS.

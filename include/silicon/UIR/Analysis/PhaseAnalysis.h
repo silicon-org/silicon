@@ -43,9 +43,6 @@ namespace uir {
 struct PhaseAnalysis {
   PhaseAnalysis(FuncOp funcOp) : funcOp(funcOp) {}
 
-  /// Sentinel value for unconstrained phases.
-  static constexpr int16_t kUnconstrained = INT16_MAX;
-
   /// Run the phase analysis. Returns failure if phase errors are detected
   /// (diagnostics already emitted via `mlir::emitError`).
   LogicalResult run();
@@ -67,11 +64,6 @@ struct PhaseAnalysis {
 private:
   /// Debug indentation depth for tracing the DFS.
   unsigned depth = 0;
-
-  /// Map from region-bearing op to the latest phase constraint for each of its
-  /// block results. Populated by constrainRegionResult, consumed by yield/break
-  /// handlers.
-  DenseMap<Operation *, SmallVector<int16_t>> resultConstraints;
 
   //===--------------------------------------------------------------------===//
   // Pre-collected Terminator Mappings

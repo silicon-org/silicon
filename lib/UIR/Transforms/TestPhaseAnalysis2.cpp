@@ -61,12 +61,15 @@ struct TestPhaseAnalysis2Pass
       };
 
       // Annotate each op with its phase, plus operand and result phases.
+      // Ops without an opPhase entry still get result annotations if their
+      // results have actualPhase entries (e.g., floating exprs with pure
+      // contents where only the result phase was resolved via
+      // constrainRegionResult).
       auto annotate = [&](Region &region) {
         region.walk([&](Operation *op) {
           auto it = analysis.opPhases.find(op);
-          if (it == analysis.opPhases.end())
-            return;
-          op->setAttr("pa.phase", phaseAttr(it->second));
+          if (it != analysis.opPhases.end())
+            op->setAttr("pa.phase", phaseAttr(it->second));
 
           if (op->getNumOperands() > 0)
             op->setAttr("pa.operands", valuePhases(op->getOperands()));
