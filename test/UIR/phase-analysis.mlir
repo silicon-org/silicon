@@ -2392,6 +2392,59 @@ uir.func @SharedNeedsConst(%x: -1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// All literals: entire pure op chain stays at float.
+
+// CHECK-LABEL: uir.func @AllLiterals
+uir.func @AllLiterals() -> (result: 0) {
+  %t = hir.int_type
+  uir.signature () -> (%t)
+} {
+  %t = hir.int_type
+  %c10 = hir.constant_int 10 : %t
+  %c20 = hir.constant_int 20 : %t
+  // CHECK: hir.add {{.*}}pa.phase = "float"
+  %sum = hir.add %c10, %c20 : %t
+  %c30 = hir.constant_int 30 : %t
+  %c5 = hir.constant_int 5 : %t
+  // CHECK: hir.sub {{.*}}pa.phase = "float"
+  %diff = hir.sub %c30, %c5 : %t
+  // CHECK: hir.mul {{.*}}pa.phase = "float"
+  %prod = hir.mul %sum, %diff : %t
+  uir.return %prod -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Dyn-result call as discarded statement: result unused, call pinned at
+// block phase via expr pin.
+
+uir.func @DynCallStatementDeferred(%x: 0) -> (result: 1) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  %0 = uir.expr pin 1 : %t2 { uir.yield %x : %t2 }
+  uir.return %0 -> (%t2)
+}
+
+// CHECK-LABEL: uir.func @DynCallStatement
+uir.func @DynCallStatement(%a: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  uir.signature (%t0) -> (%t0)
+} {
+  %t = hir.int_type
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // CHECK: uir.expr pin {{.*}}pa.phase = "0"
+  uir.expr pin {
+    %r = uir.call @DynCallStatementDeferred(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [1]
+    uir.yield
+  }
+  %c42 = hir.constant_int 42 : %t
+  // CHECK: uir.return {{.*}}pa.phase = "0"
+  uir.return %c42 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // Zero-use side-effect inside const block: pinned at -1.
 
 func.func private @side_effect_const(!hir.any)
