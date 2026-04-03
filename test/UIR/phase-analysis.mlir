@@ -2254,6 +2254,38 @@ uir.func @MultiConsumerNeedsConst(%x: -1) -> (result: 0) {
 //===----------------------------------------------------------------------===//
 // Multiple break sites: two balanced breaks, both valid.
 
+//===----------------------------------------------------------------------===//
+// CSE-shared pure op: a+1 consumed as const arg (-1) and body operand (0).
+// Tightest consumer (-1) wins. Second consumer at 0 satisfied by -1 <= 0.
+
+uir.func @SharedNeedsConst(%x: -1) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+// CHECK-LABEL: uir.func @SharedTwoConsumers
+uir.func @SharedTwoConsumers(%a: -1, %b: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  // CHECK: hir.add %a, {{.*}}pa.phase = "-1"
+  %ap1 = hir.add %a, %c1 : %t
+  %ta = hir.int_type
+  %tr = hir.int_type
+  %r1 = uir.call @SharedNeedsConst(%ap1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  // CHECK: hir.add {{.*}}, %b {{.*}}pa.phase = "0"
+  %sum = hir.add %ap1, %b : %t
+  %r2 = hir.add %r1, %sum : %t
+  uir.return %r2 -> (%t)
+}
+
 // CHECK-LABEL: uir.func @TwoBreaksBothBalanced
 uir.func @TwoBreaksBothBalanced(%flag: 0, %a: 0, %b: 0) -> (result: 0) {
   %t0 = hir.int_type

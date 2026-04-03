@@ -1017,3 +1017,36 @@ uir.func @ContinueBreakMixed(%flag: 0, %a: 0) -> (result: 0) {
   }
   uir.return %0 -> (%t)
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// CSE-shared pure op error: b+1 at 0 can't satisfy const arg at -1.
+
+uir.func @SharedNeedsConstErr(%x: -1) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @SharedOpError(%a: -1, %b: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  // expected-remark @below {{required by operand at phase -1}}
+  %bp1 = hir.add %b, %c1 : %t
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // expected-remark @below {{required by call argument 0 at phase -1}}
+  %r1 = uir.call @SharedNeedsConstErr(%bp1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %sum = hir.add %bp1, %bp1 : %t
+  %r2 = hir.add %r1, %sum : %t
+  uir.return %r2 -> (%t)
+}
