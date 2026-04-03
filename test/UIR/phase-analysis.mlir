@@ -2251,6 +2251,72 @@ uir.func @MultiConsumerNeedsConst(%x: -1) -> (result: 0) {
   uir.return %x -> (%t)
 }
 
+//===----------------------------------------------------------------------===//
+// Multiple break sites: two balanced breaks, both valid.
+
+// CHECK-LABEL: uir.func @TwoBreaksBothBalanced
+uir.func @TwoBreaksBothBalanced(%flag: 0, %a: 0, %b: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t0)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    uir.if %flag {
+      uir.expr pin 1 {
+        uir.expr pin -1 {
+          // CHECK: uir.break {{.*}}pa.phase = "0"
+          uir.break %a : %t
+        }
+        uir.unreachable
+      }
+      uir.yield
+    } else {
+      uir.yield
+    }
+    uir.expr pin -1 {
+      uir.expr pin 1 {
+        // CHECK: uir.break {{.*}}pa.phase = "0"
+        uir.break %b : %t
+      }
+      uir.unreachable
+    }
+    uir.yield
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Break with values at different phases (pure float slack).
+
+// CHECK-LABEL: uir.func @BreakValuesDifferentPhases
+uir.func @BreakValuesDifferentPhases(%flag: 0, %a: -1, %b: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t0)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    uir.if %flag {
+      %c1 = hir.constant_int 1 : %t
+      // CHECK: hir.add %a, {{.*}}pa.phase = "-1"
+      %sum = hir.add %a, %c1 : %t
+      // CHECK: uir.break {{.*}}pa.phase = "0"
+      uir.break %sum : %t
+    } else {
+      uir.yield
+    }
+    %c1b = hir.constant_int 1 : %t
+    // CHECK: hir.add %b, {{.*}}pa.phase = "0"
+    %sum2 = hir.add %b, %c1b : %t
+    // CHECK: uir.break {{.*}}pa.phase = "0"
+    uir.break %sum2 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
 // CHECK-LABEL: uir.func @MultiConsumerFixed
 uir.func @MultiConsumerFixed(%a: -1) -> (result: 0) {
   %0 = hir.int_type

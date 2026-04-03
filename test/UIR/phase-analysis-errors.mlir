@@ -964,3 +964,56 @@ uir.func @ReturnBalancedInConst(%x: 0) -> (result: 0) {
   }
   uir.unreachable
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Multiple break sites: one OK, one in const block ERROR.
+
+uir.func @MultiBreakOneError(%flag: 0, %a: 0, %b: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t0)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    uir.if %flag {
+      uir.break %a : %t
+    } else {
+      uir.yield
+    }
+    uir.expr pin -1 {
+      // expected-error @below {{break from a phase-shifted block is not allowed}}
+      uir.break %b : %t
+    }
+    uir.yield
+  }
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Continue and break mixed: break OK, continue in const block ERROR.
+
+uir.func @ContinueBreakMixed(%flag: 0, %a: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t0)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    uir.if %flag {
+      uir.break %a : %t
+    } else {
+      uir.yield
+    }
+    uir.expr pin -1 {
+      // expected-error @below {{continue from a phase-shifted block is not allowed}}
+      uir.continue
+    }
+    uir.yield
+  }
+  uir.return %0 -> (%t)
+}
