@@ -2267,6 +2267,35 @@ uir.func @SharedNeedsConst(%x: -1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Dyn loop: while inside dyn block at +1. Symmetric with const loop tests.
+
+// CHECK-LABEL: uir.func @DynWhileLoop
+uir.func @DynWhileLoop(%flag: 1) -> (result: 1) {
+  %0 = hir.bool_type
+  %1 = hir.int_type
+  uir.signature (%0) -> (%1)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin 1 : %t {
+    // CHECK: uir.loop {{.*}}pa.phase = "1"
+    uir.loop {
+      // CHECK: uir.if {{.*}}pa.phase = "1"
+      uir.if %flag {
+        // CHECK: uir.yield {{.*}}pa.phase = "1"
+        uir.yield
+      } else {
+        uir.break
+      }
+      // CHECK: uir.yield {{.*}}pa.phase = "1"
+      uir.yield
+    }
+    %c0 = hir.constant_int 0 : %t
+    uir.yield %c0 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // Loop result consumed as const arg: yield transparency pulls break values
 // to -1, pure add inside floats to -1.
 
