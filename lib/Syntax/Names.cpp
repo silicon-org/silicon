@@ -88,7 +88,7 @@ struct Resolver : public ast::Visitor<Resolver> {
   auto makeScope() {
     LLVM_DEBUG(dbgs().indent(scopes.size() * 2) << "Subscope\n");
     scopes.emplace_back();
-    return llvm::make_scope_exit([this] { scopes.pop_back(); });
+    return llvm::scope_exit([this] { scopes.pop_back(); });
   }
 
   // Do not descend into child nodes when declaring names. We only want to
