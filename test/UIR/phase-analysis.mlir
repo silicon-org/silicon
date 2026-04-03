@@ -2266,6 +2266,45 @@ uir.func @SharedNeedsConst(%x: -1) -> (result: 0) {
   uir.return %x -> (%t2)
 }
 
+//===----------------------------------------------------------------------===//
+// Loop result consumed as const arg: yield transparency pulls break values
+// to -1, pure add inside floats to -1.
+
+uir.func @FloatedLoopOuter(%x: -1) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+// CHECK-LABEL: uir.func @LoopInConstArg
+uir.func @LoopInConstArg(%flag: -1, %a: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %loopr = uir.loop : %t {
+    uir.if %flag {
+      %c1 = hir.constant_int 1 : %t
+      // CHECK: hir.add {{.*}}pa.phase = "-1"
+      %sum = hir.add %a, %c1 : %t
+      // CHECK: uir.break {{.*}}pa.phase = "0"
+      uir.break %sum : %t
+    } else {
+      uir.unreachable
+    }
+    uir.yield
+  }
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // CHECK: uir.call @FloatedLoopOuter({{.*}}) {{.*}}pa.phase = "0"
+  %r = uir.call @FloatedLoopOuter(%loopr) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %r -> (%tr)
+}
+
 // CHECK-LABEL: uir.func @SharedTwoConsumers
 uir.func @SharedTwoConsumers(%a: -1, %b: 0) -> (result: 0) {
   %t0 = hir.int_type

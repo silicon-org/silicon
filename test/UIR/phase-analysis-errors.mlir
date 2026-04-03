@@ -1050,3 +1050,100 @@ uir.func @SharedOpError(%a: -1, %b: 0) -> (result: 0) {
   %r2 = hir.add %r1, %sum : %t
   uir.return %r2 -> (%t)
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Call with const arg inside if whose result feeds into an outer const arg.
+// Inner call at block phase 0, arg offset -1: arg at -1. b at 0 > -1. ERROR.
+
+uir.func @FloatedIfOuter(%x: -1) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+uir.func @FloatedIfInner(%y: -1) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %y -> (%t2)
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @CallInFloatedIf(%a: -1, %b: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %bt = hir.bool_type
+  %c0 = hir.constant_int 0 : %t
+  %cond = hir.gt %a, %c0 : %bt
+  %ifr = uir.if %cond : %t {
+    %ta = hir.int_type
+    %tr = hir.int_type
+    // expected-remark @below {{required by call argument 0 at phase -1}}
+    %r = uir.call @FloatedIfInner(%b) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+    uir.yield %r : %t
+  } else {
+    uir.yield %a : %t
+  }
+  %ta2 = hir.int_type
+  %tr2 = hir.int_type
+  %r2 = uir.call @FloatedIfOuter(%ifr) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %r2 -> (%tr2)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Loop version: inner call with const arg inside loop whose result feeds
+// into outer const arg.
+
+uir.func @FloatedLoopOuter2(%x: -1) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+uir.func @FloatedLoopInner(%y: -1) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %y -> (%t2)
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @LoopCallCascade(%flag: -1, %a: -1, %b: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  %loopr = uir.loop : %t {
+    uir.if %flag {
+      %ta = hir.int_type
+      %tr = hir.int_type
+      // expected-remark @below {{required by call argument 0 at phase -1}}
+      %r = uir.call @FloatedLoopInner(%b) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+      uir.break %r : %t
+    } else {
+      uir.unreachable
+    }
+    uir.yield
+  }
+  %ta2 = hir.int_type
+  %tr2 = hir.int_type
+  %r2 = uir.call @FloatedLoopOuter2(%loopr) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %r2 -> (%tr2)
+}
