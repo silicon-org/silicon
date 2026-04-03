@@ -829,6 +829,101 @@ uir.func @IfTransparentYield(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// if as const return expression: both branches and condition at -1.
+
+// CHECK-LABEL: uir.func @IfConstReturn
+uir.func @IfConstReturn(%x: -1, %y: -1) -> (result: -1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%0)
+} {
+  %bt = hir.bool_type
+  %cmp = hir.gt %x, %y : %bt
+  %t = hir.int_type
+  // CHECK: uir.if {{.*}}pa.results = ["-1"]
+  %0 = uir.if %cmp : %t {
+    uir.yield %x : %t
+  } else {
+    uir.yield %y : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// if as dyn return: branches yield dyn values. Symmetric with const.
+
+// CHECK-LABEL: uir.func @IfDynReturn
+uir.func @IfDynReturn(%x: 1, %y: 1, %cond: 0) -> (result: 1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %2 = hir.bool_type
+  uir.signature (%0, %1, %2) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.if {{.*}}pa.results = ["1"]
+  %0 = uir.if %cond : %t {
+    uir.yield %x : %t
+  } else {
+    uir.yield %y : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Nested if as const return: all branches at -1.
+
+// CHECK-LABEL: uir.func @NestedIfConstReturn
+uir.func @NestedIfConstReturn(%a: -1, %b: -1, %c: -1) -> (result: -1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %2 = hir.int_type
+  uir.signature (%0, %1, %2) -> (%0)
+} {
+  %t = hir.int_type
+  %bt = hir.bool_type
+  %c0 = hir.constant_int 0 : %t
+  %cmp_a = hir.gt %a, %c0 : %bt
+  // CHECK: uir.if {{.*}}pa.results = ["-1"]
+  %0 = uir.if %cmp_a : %t {
+    %cmp_b = hir.gt %b, %c0 : %bt
+    // CHECK: uir.if {{.*}}pa.results = ["-1"]
+    %inner = uir.if %cmp_b : %t {
+      %sum = hir.add %a, %b : %t
+      uir.yield %sum : %t
+    } else {
+      uir.yield %c : %t
+    }
+    uir.yield %inner : %t
+  } else {
+    %prod = hir.mul %a, %c : %t
+    uir.yield %prod : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// if with early return: one branch returns, other yields.
+
+// CHECK-LABEL: uir.func @IfWithEarlyReturn
+uir.func @IfWithEarlyReturn(%x: -1, %y: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%0)
+} {
+  %t = hir.int_type
+  %bt = hir.bool_type
+  %c0 = hir.constant_int 0 : %t
+  %c1 = hir.constant_int 1 : %t
+  %cmp = hir.gt %x, %c0 : %bt
+  uir.if %cmp {
+    %sum = hir.add %x, %c1 : %t
+    // CHECK: uir.return {{.*}}pa.phase = "0"
+    uir.return %sum -> (%t)
+  }
+  uir.return %y -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // uir.loop with break.
 
 // CHECK-LABEL: uir.func @LoopOp

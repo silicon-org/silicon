@@ -1199,3 +1199,28 @@ uir.func @NestedCallCascade(%a: -1, %b: 0) -> (result: -1) {
   // expected-remark @below {{required by return value at phase -1}}
   uir.return %outer -> (%t)
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// if as const return: one branch has body-phase value. Error on y at 0.
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @IfConstReturnError(%x: -1, %y: 0) -> (result: -1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%0)
+} {
+  %t = hir.int_type
+  %bt = hir.bool_type
+  %c0 = hir.constant_int 0 : %t
+  %cmp = hir.gt %x, %c0 : %bt
+  %0 = uir.if %cmp : %t {
+    uir.yield %x : %t
+  } else {
+    // expected-remark @below {{required by yield operand}}
+    uir.yield %y : %t
+  }
+  // expected-remark @below {{required by return value at phase -1}}
+  uir.return %0 -> (%t)
+}
