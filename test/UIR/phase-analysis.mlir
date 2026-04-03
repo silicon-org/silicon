@@ -2362,6 +2362,96 @@ uir.func @SharedNeedsConst(%x: -1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Zero-use side-effect inside const block: pinned at -1.
+
+func.func private @side_effect_const(!hir.any)
+
+// CHECK-LABEL: uir.func @ZeroUseInConst
+uir.func @ZeroUseInConst(%a: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    // CHECK: func.call @side_effect_const(%a) {{.*}}pa.phase = "-1"
+    func.call @side_effect_const(%a) : (!hir.any) -> ()
+    %c0 = hir.constant_int 0 : %t
+    uir.yield %c0 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Dyn symmetric: zero-use side-effect inside dyn block at +1.
+
+func.func private @side_effect_dyn(!hir.any)
+
+// CHECK-LABEL: uir.func @ZeroUseInDyn
+uir.func @ZeroUseInDyn(%a: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin 1 : %t {
+    // CHECK: func.call @side_effect_dyn(%a) {{.*}}pa.phase = "1"
+    func.call @side_effect_dyn(%a) : (!hir.any) -> ()
+    %c0 = hir.constant_int 0 : %t
+    uir.yield %c0 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Multiple zero-use side effects at different phases in sequence.
+
+func.func private @side_effect_multi(!hir.any)
+
+// CHECK-LABEL: uir.func @MultiZeroUse
+uir.func @MultiZeroUse(%a: -1, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: func.call @side_effect_multi(%b) {{.*}}pa.phase = "0"
+  func.call @side_effect_multi(%b) : (!hir.any) -> ()
+  uir.expr pin -1 {
+    // CHECK: func.call @side_effect_multi(%a) {{.*}}pa.phase = "-1"
+    func.call @side_effect_multi(%a) : (!hir.any) -> ()
+    uir.yield
+  }
+  // CHECK: func.call @side_effect_multi(%b) {{.*}}pa.phase = "0"
+  func.call @side_effect_multi(%b) : (!hir.any) -> ()
+  %c0 = hir.constant_int 0 : %t
+  uir.return %c0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Zero-use nested: side-effect inside if inside const block.
+
+func.func private @side_effect_nested(!hir.any)
+
+// CHECK-LABEL: uir.func @ZeroUseNested
+uir.func @ZeroUseNested(%a: -1, %flag: -1) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.bool_type
+  uir.signature (%0, %1) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    // CHECK: uir.if {{.*}}pa.phase = "-1"
+    uir.if %flag {
+      // CHECK: func.call @side_effect_nested(%a) {{.*}}pa.phase = "-1"
+      func.call @side_effect_nested(%a) : (!hir.any) -> ()
+      uir.yield
+    }
+    %c0 = hir.constant_int 0 : %t
+    uir.yield %c0 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // Loop as dyn return: break at +1. Symmetric with const loop return.
 
 // CHECK-LABEL: uir.func @LoopDynReturn

@@ -1203,6 +1203,29 @@ uir.func @NestedCallCascade(%a: -1, %b: 0) -> (result: -1) {
 // -----
 
 //===----------------------------------------------------------------------===//
+// Zero-use error: non-const arg b in side-effect inside const block.
+
+func.func private @side_effect_err(!hir.any)
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @ZeroUseError(%a: -1, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    // expected-remark @below {{required by operand at phase -1}}
+    func.call @side_effect_err(%b) : (!hir.any) -> ()
+    %c0 = hir.constant_int 0 : %t
+    uir.yield %c0 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
 // Loop as const return: break value at 0 but const return demands -1.
 
 // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
