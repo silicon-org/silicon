@@ -1147,3 +1147,55 @@ uir.func @LoopCallCascade(%flag: -1, %a: -1, %b: 0) -> (result: 0) {
   %r2 = uir.call @FloatedLoopOuter2(%loopr) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
   uir.return %r2 -> (%tr2)
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Error cascade through nested floating calls: const return demands -1,
+// outer call floats to -1, inner call floats to -1, arg b at 0 > -1.
+
+uir.func @CascadeAdd(%x: 0, %y: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %r = hir.add %x, %y : %t
+  uir.return %r -> (%t)
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @NestedCallCascade(%a: -1, %b: 0) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %ta1 = hir.int_type
+  %ta2 = hir.int_type
+  %tr1 = hir.int_type
+  %fortytwo = hir.constant_int 42 : %t
+  // Floating expr lets inner call float to -1.
+  %inner = uir.expr : %t {
+    // expected-remark @below {{required by call argument 0 at phase -1}}
+    // expected-remark @below {{required by call result 0 at phase -1}}
+    %r = uir.call @CascadeAdd(%b, %fortytwo) : (%ta1, %ta2) -> (%tr1) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+    // expected-remark @below {{required by yield operand}}
+    uir.yield %r : %t
+  }
+  %ta3 = hir.int_type
+  %ta4 = hir.int_type
+  %tr2 = hir.int_type
+  // Floating expr lets outer call float to -1.
+  %outer = uir.expr : %t {
+    // expected-remark @below {{required by call argument 1 at phase -1}}
+    // expected-remark @below {{required by call result 0 at phase -1}}
+    %r = uir.call @CascadeAdd(%a, %inner) : (%ta3, %ta4) -> (%tr2) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+    // expected-remark @below {{required by yield operand}}
+    uir.yield %r : %t
+  }
+  // expected-remark @below {{required by return value at phase -1}}
+  uir.return %outer -> (%t)
+}
