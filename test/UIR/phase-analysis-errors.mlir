@@ -586,3 +586,333 @@ uir.func @PinPreventsFloat(%a: -1) -> (result: 0) {
   %r = uir.call @NeedsConstForPin(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
   uir.return %r -> (%tr)
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Balanced nesting off-by-one: 3 const + 2 dyn = net -1.
+
+uir.func @ReturnAlmostCancels(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.expr pin -1 {
+    uir.expr pin 1 {
+      uir.expr pin -1 {
+        uir.expr pin 1 {
+          uir.expr pin -1 {
+            // expected-error @below {{return from a phase-shifted block is not allowed}}
+            uir.return %x -> (%t)
+          }
+          uir.unreachable
+        }
+        uir.unreachable
+      }
+      uir.unreachable
+    }
+    uir.unreachable
+  }
+  uir.unreachable
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// break with unbalanced nesting around non-zero loop.
+
+uir.func @BreakUnbalancedNonzeroLoop(%x: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    %1 = uir.loop : %t {
+      uir.expr pin 1 {
+        // expected-error @below {{break from a phase-shifted block is not allowed}}
+        uir.break %x : %t
+      }
+      uir.yield
+    }
+    uir.yield %1 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Balanced nesting: values DON'T cancel. const { dyn { a } } with a call
+// in the const block to pin the dyn result at -1.
+
+uir.func @BalancedIdentity(%x: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @BalancedConstDynValueError(%a: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  uir.signature (%t0) -> (%t0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    %1 = uir.expr pin 1 : %t {
+      // expected-remark @below {{required by yield operand}}
+      uir.yield %a : %t
+    }
+    %ta = hir.int_type
+    %tr = hir.int_type
+    // expected-remark @below {{required by call argument 0 at phase -1}}
+    %r = uir.call @BalancedIdentity(%1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    uir.yield %r : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Symmetric dyn side: dyn { const { dyn { a } } } with call pinning.
+
+uir.func @BalancedIdentity2(%x: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+// expected-error @below {{value at phase 1 cannot satisfy requirement for phase 0}}
+uir.func @BalancedDynConstDynValueError(%a: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin 1 : %t {
+    %1 = uir.expr pin -1 : %t {
+      %2 = uir.expr pin 1 : %t {
+        // expected-remark @below {{required by yield operand}}
+        uir.yield %a : %t
+      }
+      %ta = hir.int_type
+      %tr = hir.int_type
+      // expected-remark @below {{required by call argument 0 at phase 0}}
+      %r = uir.call @BalancedIdentity2(%2) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+      uir.yield %r : %t
+    }
+    uir.yield %1 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Pure op bottleneck: identity call pins at block phase -1.
+
+uir.func @BottleneckIdentity(%x: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @PureBottleneckSingle(%a: -1, %b: -1, %c: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %2 = hir.int_type
+  uir.signature (%0, %1, %2) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    %ab = hir.add %a, %b : %t
+    // expected-remark @below {{required by operand at phase -1}}
+    %abc = hir.add %ab, %c : %t
+    %ta = hir.int_type
+    %tr = hir.int_type
+    // expected-remark @below {{required by call argument 0 at phase -1}}
+    %r = uir.call @BottleneckIdentity(%abc) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    uir.yield %r : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Two bottlenecks: both b and c at phase 0.
+
+uir.func @BottleneckIdentity2(%x: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @PureBottleneckTwo(%a: -1, %b: 0, %c: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %2 = hir.int_type
+  uir.signature (%0, %1, %2) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    // expected-remark @below {{required by operand at phase -1}}
+    %ab = hir.add %a, %b : %t
+    // expected-remark @below {{required by operand at phase -1}}
+    %abc = hir.add %ab, %c : %t
+    %ta = hir.int_type
+    %tr = hir.int_type
+    // expected-remark @below {{required by call argument 0 at phase -1}}
+    %r = uir.call @BottleneckIdentity2(%abc) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    uir.yield %r : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Nested pure op bottleneck through mul(add(a,b), add(a,c)).
+
+uir.func @BottleneckIdentity3(%x: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @PureBottleneckNested(%a: -1, %b: -1, %c: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %2 = hir.int_type
+  uir.signature (%0, %1, %2) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    %ab = hir.add %a, %b : %t
+    // expected-remark @below {{required by operand at phase -1}}
+    %ac = hir.add %a, %c : %t
+    // expected-remark @below {{required by operand at phase -1}}
+    %r = hir.mul %ab, %ac : %t
+    %ta = hir.int_type
+    %tr = hir.int_type
+    // expected-remark @below {{required by call argument 0 at phase -1}}
+    %call = uir.call @BottleneckIdentity3(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    uir.yield %call : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Signature type consuming: N at 0, type latest = -1. Error.
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @SigReturnTypeError(%N: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  // expected-remark @below {{required by operand at phase -1}}
+  %ut = hir.uint_type %N
+  // expected-remark @below {{required by signature type of result 0}}
+  uir.signature (%t0) -> (%ut)
+} {
+  %t = hir.int_type
+  %fortytwo = hir.constant_int 42 : %t
+  uir.return %fortytwo -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Const return but N only at -1. Type latest = -2. Error.
+
+// expected-error @below {{value at phase -1 cannot satisfy requirement for phase -2}}
+uir.func @SigConstReturnTypeError(%N: -1) -> (result: -1) {
+  %t0 = hir.int_type
+  // expected-remark @below {{required by operand at phase -2}}
+  %ut = hir.uint_type %N
+  // expected-remark @below {{required by signature type of result 0}}
+  uir.signature (%t0) -> (%ut)
+} {
+  %t = hir.int_type
+  %fortytwo = hir.constant_int 42 : %t
+  %r = uir.expr pin -1 : %t {
+    uir.yield %fortytwo : %t
+  }
+  uir.return %r -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Multi-consumer error: let-pinned call result at 0 used as const arg at -1.
+
+uir.func @MultiConsumerComputeErr(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  %r = hir.add %x, %c1 : %t
+  uir.return %r -> (%t)
+}
+
+uir.func @MultiConsumerNeedsConstErr(%x: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.return %x -> (%t)
+}
+
+uir.func @MultiConsumerError(%a: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %ta = hir.int_type
+  %tr = hir.int_type
+  %call = uir.call @MultiConsumerComputeErr(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+  // expected-error @below {{pinned value at phase 0 cannot satisfy requirement for phase -1}}
+  %r = uir.pin %call, 0 : !hir.any
+  %ta2 = hir.int_type
+  %tr2 = hir.int_type
+  // expected-remark @below {{required by call argument 0 at phase -1}}
+  %nc = uir.call @MultiConsumerNeedsConstErr(%r) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+  %sum = hir.add %nc, %r : %t
+  uir.return %sum -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// return in balanced nesting inside outer const block. Net -1 from body. ERROR.
+
+uir.func @ReturnBalancedInConst(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.expr pin -1 {
+    uir.expr pin 1 {
+      uir.expr pin -1 {
+        // expected-error @below {{return from a phase-shifted block is not allowed}}
+        uir.return %x -> (%t)
+      }
+      uir.unreachable
+    }
+    uir.unreachable
+  }
+  uir.unreachable
+}

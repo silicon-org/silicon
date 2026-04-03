@@ -1774,6 +1774,507 @@ uir.func @ChainedTypeComputation(%A: -1, %B: -1, %C: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Signature type consuming: return type depends on N. Result at 0, type
+// latest = 0 - 1 = -1. uint_type %N at -1 satisfies.
+
+// CHECK-LABEL: uir.func @SigReturnDependent
+uir.func @SigReturnDependent(%N: -1, %x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  // CHECK: hir.uint_type {{.*}}pa.phase = "-1"
+  %ut = hir.uint_type %N
+  uir.signature (%t0, %ut) -> (%ut)
+} {
+  %t = hir.int_type
+  uir.return %x -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Signature type consuming: computed N+M as return type.
+
+// CHECK-LABEL: uir.func @SigReturnComputedType
+uir.func @SigReturnComputedType(%N: -1, %M: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  // CHECK: hir.add {{.*}}pa.phase = "-1"
+  %sum = hir.add %N, %M : %t0
+  // CHECK: hir.uint_type {{.*}}pa.phase = "-1"
+  %ut = hir.uint_type %sum
+  uir.signature (%t0, %t1) -> (%ut)
+} {
+  %t = hir.int_type
+  %fortytwo = hir.constant_int 42 : %t
+  uir.return %fortytwo -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Dyn return: result at +1, type latest = 0. N at -1 satisfies. Symmetric
+// with const return case.
+
+// CHECK-LABEL: uir.func @SigDynReturnDependent
+uir.func @SigDynReturnDependent(%N: -1, %x: 0) -> (result: 1) {
+  %t0 = hir.int_type
+  // CHECK: hir.uint_type {{.*}}pa.phase = "-1"
+  %ut = hir.uint_type %N
+  uir.signature (%t0, %ut) -> (%ut)
+} {
+  %t = hir.int_type
+  %r = uir.expr pin 1 : %t {
+    uir.yield %x : %t
+  }
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Const return: result at -1, type latest = -2. N at -2 satisfies.
+
+// CHECK-LABEL: uir.func @SigConstReturnDependent
+uir.func @SigConstReturnDependent(%N: -2) -> (result: -1) {
+  %t0 = hir.int_type
+  // CHECK: hir.uint_type {{.*}}pa.phase = "-2"
+  %ut = hir.uint_type %N
+  uir.signature (%t0) -> (%ut)
+} {
+  %t = hir.int_type
+  %fortytwo = hir.constant_int 42 : %t
+  %r = uir.expr pin -1 : %t {
+    uir.yield %fortytwo : %t
+  }
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Shared uint<N> for args at different phases: arg y at -1 (type latest = -2),
+// arg x at 0 (type latest = -1). N at -2 satisfies both.
+
+// CHECK-LABEL: uir.func @SigArgTypesDifferentPhases
+uir.func @SigArgTypesDifferentPhases(%N: -2, %y: -1, %x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  // CHECK: hir.uint_type {{.*}}pa.phase = "-2"
+  %ut = hir.uint_type %N
+  %t_res = hir.int_type
+  uir.signature (%t0, %ut, %ut) -> (%t_res)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  uir.return %zero -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Sequential const block chain: each let uses the previous.
+
+uir.func @NeedsConstChain(%v: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.return %v -> (%t)
+}
+
+// CHECK-LABEL: uir.func @SequentialConstChain
+uir.func @SequentialConstChain(%a: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  // CHECK: uir.expr pin -1 {{.*}}pa.phase = "-1"
+  %x = uir.expr pin -1 : %t {
+    %sum = hir.add %a, %c1 : %t
+    uir.yield %sum : %t
+  }
+  // CHECK: uir.expr pin -1 {{.*}}pa.phase = "-1"
+  %y = uir.expr pin -1 : %t {
+    %sum = hir.add %x, %c1 : %t
+    uir.yield %sum : %t
+  }
+  // CHECK: uir.expr pin -1 {{.*}}pa.phase = "-1"
+  %z = uir.expr pin -1 : %t {
+    %sum = hir.add %y, %c1 : %t
+    uir.yield %sum : %t
+  }
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // CHECK: uir.call @NeedsConstChain({{.*}}) {{.*}}pa.phase = "0"
+  %r = uir.call @NeedsConstChain(%z) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %r -> (%tr)
+}
+
+//===----------------------------------------------------------------------===//
+// Interleaved const and body-phase lets.
+
+uir.func @NeedsConstInterleaved(%v: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.return %v -> (%t)
+}
+
+// CHECK-LABEL: uir.func @InterleavedConstBody
+uir.func @InterleavedConstBody(%a: -1, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %2 = hir.int_type
+  uir.signature (%0, %1) -> (%2)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  %x = uir.expr pin -1 : %t {
+    %sum = hir.add %a, %c1 : %t
+    uir.yield %sum : %t
+  }
+  %sum2 = hir.add %b, %c1 : %t
+  // CHECK: uir.pin {{.*}}pa.phase = "0"
+  %y = uir.pin %sum2, 0 : !hir.any
+  %ta = hir.int_type
+  %tr = hir.int_type
+  %nc = uir.call @NeedsConstInterleaved(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  // CHECK: hir.add {{.*}}pa.phase = "0"
+  %r = hir.add %nc, %y : %t
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Balanced const/dyn nesting for CF: return in dyn { const { ... } }.
+
+// CHECK-LABEL: uir.func @ReturnDynConst
+uir.func @ReturnDynConst(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.expr pin 1 {
+    uir.expr pin -1 {
+      // CHECK: uir.return {{.*}}pa.phase = "0"
+      uir.return %x -> (%t)
+    }
+    uir.unreachable
+  }
+  uir.unreachable
+}
+
+//===----------------------------------------------------------------------===//
+// Symmetric: return in const { dyn { ... } }.
+
+// CHECK-LABEL: uir.func @ReturnConstDyn
+uir.func @ReturnConstDyn(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.expr pin -1 {
+    uir.expr pin 1 {
+      // CHECK: uir.return {{.*}}pa.phase = "0"
+      uir.return %x -> (%t)
+    }
+    uir.unreachable
+  }
+  uir.unreachable
+}
+
+//===----------------------------------------------------------------------===//
+// Six-level alternating const/dyn nesting.
+
+// CHECK-LABEL: uir.func @ReturnSixLevels
+uir.func @ReturnSixLevels(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.expr pin -1 {
+    uir.expr pin 1 {
+      uir.expr pin -1 {
+        uir.expr pin 1 {
+          uir.expr pin -1 {
+            uir.expr pin 1 {
+              // CHECK: uir.return {{.*}}pa.phase = "0"
+              uir.return %x -> (%t)
+            }
+            uir.unreachable
+          }
+          uir.unreachable
+        }
+        uir.unreachable
+      }
+      uir.unreachable
+    }
+    uir.unreachable
+  }
+  uir.unreachable
+}
+
+//===----------------------------------------------------------------------===//
+// break inside balanced nesting in a loop.
+
+// CHECK-LABEL: uir.func @BreakInBalanced
+uir.func @BreakInBalanced(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    uir.expr pin 1 {
+      uir.expr pin -1 {
+        // CHECK: uir.break {{.*}}pa.phase = "0"
+        uir.break %x : %t
+      }
+      uir.unreachable
+    }
+    uir.yield
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// continue inside balanced nesting.
+
+// CHECK-LABEL: uir.func @ContinueInBalanced
+uir.func @ContinueInBalanced() -> (result: 0) {
+  %t0 = hir.int_type
+  uir.signature () -> (%t0)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    uir.expr pin -1 {
+      uir.expr pin 1 {
+        // CHECK: uir.continue {{.*}}pa.phase = "0"
+        uir.continue
+      }
+      uir.unreachable
+    }
+    %c42 = hir.constant_int 42 : %t
+    uir.break %c42 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// break at non-zero loop phase with balanced nesting.
+
+// CHECK-LABEL: uir.func @BreakBalancedNonzeroLoop
+uir.func @BreakBalancedNonzeroLoop(%x: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    %1 = uir.loop : %t {
+      uir.expr pin 1 {
+        uir.expr pin -1 {
+          %c1 = hir.constant_int 1 : %t
+          %sum = hir.add %x, %c1 : %t
+          // CHECK: uir.break {{.*}}pa.phase = "-1"
+          uir.break %sum : %t
+        }
+        uir.unreachable
+      }
+      uir.yield
+    }
+    uir.yield %1 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// return inside balanced nesting inside an if branch.
+
+// CHECK-LABEL: uir.func @ReturnBalancedInIf
+uir.func @ReturnBalancedInIf(%flag: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%0)
+} {
+  %t = hir.int_type
+  uir.if %flag {
+    uir.expr pin 1 {
+      uir.expr pin -1 {
+        // CHECK: uir.return {{.*}}pa.phase = "0"
+        uir.return %x -> (%t)
+      }
+      uir.unreachable
+    }
+    uir.yield
+  } else {
+    uir.yield
+  }
+  %c0 = hir.constant_int 0 : %t
+  uir.return %c0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Balanced nesting: dyn { const { 42 } } — OK for values because const at 0,
+// dyn yields at +1. Return demands +1.
+
+// CHECK-LABEL: uir.func @BalancedDynConstValue
+uir.func @BalancedDynConstValue() -> (result: 1) {
+  %t0 = hir.int_type
+  uir.signature () -> (%t0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr pin 1 {{.*}}pa.phase = "1"
+  %0 = uir.expr pin 1 : %t {
+    %1 = uir.expr pin -1 : %t {
+      %c42 = hir.constant_int 42 : %t
+      uir.yield %c42 : %t
+    }
+    // CHECK: uir.yield {{.*}}pa.phase = "1"
+    uir.yield %1 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// CF succeeds where value fails: const { dyn { return x+1 } }.
+
+// CHECK-LABEL: uir.func @CfSucceedsWhereValueFails
+uir.func @CfSucceedsWhereValueFails(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.expr pin -1 {
+    uir.expr pin 1 {
+      %c1 = hir.constant_int 1 : %t
+      %sum = hir.add %x, %c1 : %t
+      // CHECK: uir.return {{.*}}pa.phase = "0"
+      uir.return %sum -> (%t)
+    }
+    uir.unreachable
+  }
+  uir.unreachable
+}
+
+//===----------------------------------------------------------------------===//
+// Double-balanced nesting: 4 levels around loop at -1.
+
+// CHECK-LABEL: uir.func @BreakDoubleBalancedConstLoop
+uir.func @BreakDoubleBalancedConstLoop(%a: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    %1 = uir.loop : %t {
+      uir.expr pin 1 {
+        uir.expr pin -1 {
+          uir.expr pin 1 {
+            uir.expr pin -1 {
+              // CHECK: uir.break {{.*}}pa.phase = "-1"
+              uir.break %a : %t
+            }
+            uir.unreachable
+          }
+          uir.unreachable
+        }
+        uir.unreachable
+      }
+      uir.yield
+    }
+    uir.yield %1 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Nested loops: break targets inner loop with balanced nesting.
+
+// CHECK-LABEL: uir.func @BreakInnerBalanced
+uir.func @BreakInnerBalanced(%a: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    %inner = uir.loop : %t {
+      uir.expr pin 1 {
+        uir.expr pin -1 {
+          // CHECK: uir.break {{.*}}pa.phase = "0"
+          uir.break %a : %t
+        }
+        uir.unreachable
+      }
+      uir.yield
+    }
+    %z = uir.pin %inner, 0 : !hir.any
+    %c0 = hir.constant_int 0 : %t
+    uir.break %c0 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Break value computed in const block INSIDE balanced CF nesting.
+
+// CHECK-LABEL: uir.func @BreakValueConstInBalanced
+uir.func @BreakValueConstInBalanced(%a: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.loop : %t {
+    uir.expr pin 1 {
+      uir.expr pin -1 {
+        %val = uir.expr pin -1 : %t {
+          %c1 = hir.constant_int 1 : %t
+          // CHECK: hir.add {{.*}}pa.phase = "-1"
+          %sum = hir.add %a, %c1 : %t
+          uir.yield %sum : %t
+        }
+        uir.break %val : %t
+      }
+      uir.unreachable
+    }
+    uir.yield
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Multi-consumer fix: let r = const { compute(a) } so r at -1 satisfies
+// both const call arg and body-phase use.
+
+uir.func @MultiConsumerCompute(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  %r = hir.add %x, %c1 : %t
+  uir.return %r -> (%t)
+}
+
+uir.func @MultiConsumerNeedsConst(%x: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.return %x -> (%t)
+}
+
+// CHECK-LABEL: uir.func @MultiConsumerFixed
+uir.func @MultiConsumerFixed(%a: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // CHECK: uir.expr pin -1 {{.*}}pa.phase = "-1"
+  %r = uir.expr pin -1 : %t {
+    %call = uir.call @MultiConsumerCompute(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    uir.yield %call : %t
+  }
+  %ta2 = hir.int_type
+  %tr2 = hir.int_type
+  // CHECK: uir.call @MultiConsumerNeedsConst({{.*}}) {{.*}}pa.phase = "0"
+  %nc = uir.call @MultiConsumerNeedsConst(%r) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+  %c42 = hir.constant_int 42 : %t
+  // CHECK: hir.add {{.*}}pa.phase = "0"
+  %sum = hir.add %nc, %c42 : %t
+  uir.return %sum -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // Multi-result call with different result offsets. Result 0 at callPhase + 0,
 // result 1 at callPhase + 1. Two consumers tighten the call from different
 // results.
