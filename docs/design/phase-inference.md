@@ -4,24 +4,24 @@
 
 ### Phase Assignment
 
-Almost everything is assigned the *latest* phase, pushed top-down from the parent.
+Almost everything is assigned the _latest_ phase, pushed top-down from the parent.
 The only exception is **pure ops**, which may be adjusted to an earlier phase if slack permits.
 
-| Construct | Phase | Direction |
-| --- | --- | --- |
-| ConstantLike ops (literals, etc.) | `-∞` | fixed |
-| Function arguments | declared phase (`const` → -1, `dyn` → +1, stacking) | fixed |
-| Function results | declared phase (same modifiers) | fixed |
-| Pure ops | **earliest** = `max(p(operands))` | bottom-up |
-| Calls | `p(enclosing_block)`, result values shifted by offsets | fixed |
-| CF expressions (`if`, `loop`, `while`, `for`, `match`) | `p(enclosing_block)` | fixed |
-| Blocks (`{ ... }`) | **latest** = inherited from parent expression | top-down |
-| `const { ... }` / `dyn { ... }` blocks | `p(enclosing_block) + shift` (-1 / +1) | fixed |
-| Type expressions | latest = `p(annotated_value) - 1` | top-down |
-| Statements (`;`-terminated) | `p(enclosing_block)` | fixed |
-| `let x = expr;` | name binding; `x` has the phase of `expr`'s result | — |
-| Global declarations (`static`) | pinned at module body phase; value shifted by `const`/`dyn` | fixed |
-| `return` / `break` / `continue` | checked against target phase | constraint |
+| Construct                                              | Phase                                                       | Direction  |
+| ------------------------------------------------------ | ----------------------------------------------------------- | ---------- |
+| ConstantLike ops (literals, etc.)                      | `-∞`                                                        | fixed      |
+| Function arguments                                     | declared phase (`const` → -1, `dyn` → +1, stacking)         | fixed      |
+| Function results                                       | declared phase (same modifiers)                             | fixed      |
+| Pure ops                                               | **earliest** = `max(p(operands))`                           | bottom-up  |
+| Calls                                                  | `p(enclosing_block)`, result values shifted by offsets      | fixed      |
+| CF expressions (`if`, `loop`, `while`, `for`, `match`) | `p(enclosing_block)`                                        | fixed      |
+| Blocks (`{ ... }`)                                     | **latest** = inherited from parent expression               | top-down   |
+| `const { ... }` / `dyn { ... }` blocks                 | `p(enclosing_block) + shift` (-1 / +1)                      | fixed      |
+| Type expressions                                       | latest = `p(annotated_value) - 1`                           | top-down   |
+| Statements (`;`-terminated)                            | `p(enclosing_block)`                                        | fixed      |
+| `let x = expr;`                                        | name binding; `x` has the phase of `expr`'s result          | —          |
+| Global declarations (`static`)                         | pinned at module body phase; value shifted by `const`/`dyn` | fixed      |
+| `return` / `break` / `continue`                        | checked against target phase                                | constraint |
 
 ### Phase Details
 
@@ -75,10 +75,10 @@ The only exception is **pure ops**, which may be adjusted to an earlier phase if
   - `let x = const { a + 42 };` → x at `p(block) - 1` (explicit const block)
   - `let x = dyn { b + 1 };` → x at `p(block) + 1` (explicit dyn block)
   - `let x = foo(...);` → x at `p(call) + result_offset` (call anchored at block phase)
-  For pure RHS expressions, the phase of `x` may also be influenced by usage sites: if multiple consumers demand `x` at different phases, the pure op floats to the earliest that satisfies all consumers.
-  At the IR level, `let` emits no wrapping ops (`uir.pin` or `uir.expr`).
-  The RHS expression's ops are emitted directly into the enclosing block.
-  Phase shifts require explicit `const { ... }` / `dyn { ... }` blocks on the RHS.
+    For pure RHS expressions, the phase of `x` may also be influenced by usage sites: if multiple consumers demand `x` at different phases, the pure op floats to the earliest that satisfies all consumers.
+    At the IR level, `let` emits no wrapping ops (`uir.pin` or `uir.expr`).
+    The RHS expression's ops are emitted directly into the enclosing block.
+    Phase shifts require explicit `const { ... }` / `dyn { ... }` blocks on the RHS.
 
 - **Type-constructing ops** (`hir.int_type`, `hir.uint_type %N`, `hir.type_type`, etc.) are just pure ops, like `hir.add`.
   (These are `hir` dialect ops; they coexist with the `uir` structured CF ops before flattening.)
@@ -154,6 +154,83 @@ The algorithm uses a single DFS with three distinct flow patterns depending on t
    The yield operand may be a side-effecting op (triggering flow 2) or pure (flow 1).
    The region op's result phase equals the yield operand's actual phase, not the block phase.
 
+### Result phase floor for merging CF ops
+
+The transparent yield-through rule (flow 3 above) allows a region op's result to be at any phase, independent of the block phase.
+This is correct when there is a single unambiguous value for each result — but **merging CF ops** (`uir.if`, `uir.loop`, and function bodies) can have multiple terminators that provide distinct values for the same result.
+When that happens, the CF op performs a **selection** among the values, and that selection executes at `p(block)`.
+The result phase must therefore be at least `p(block)`:
+
+> **Result phase floor rule:** For each result of a merging CF op (or function), if multiple terminators (`uir.yield`, `uir.break`, `uir.return`, `hir.signature`) provide **distinct SSA values** for that result, then `p(result) >= p(block)`.
+
+The three cases:
+
+- **`p(result) == p(block)`**: the result is a regular value at the block's phase.
+  Straightforward.
+- **`p(result) > p(block)`**: the result is an opaque/symbolic reference at the block's phase, materialized later.
+  The block sets up the control flow structure, and the actual value is filled in during a later phase.
+- **`p(result) < p(block)`**: **contradictory when distinct values are involved.**
+  The result would need to be determined before the CF that selects it has executed.
+  This is an error.
+
+The constraint is purely local: for each CF op, collect the terminators that provide values for each result position, check whether they all provide the same SSA value, and if not, impose the floor.
+
+Non-merging terminators (`uir.return`, `uir.break`, `uir.continue`) are **value transport** — they shuttle a value from an inner scope to an outer scope but do not themselves perform a selection.
+The selection has already happened at the enclosing CF op.
+These terminators impose no floor constraint of their own.
+
+This means a function with `const` results and a single unconditional return path is fine:
+
+```silicon
+// Body at phase 0, result at phase -1.
+// Single return, no selection, no floor constraint.
+fn make() -> (y: const int) {
+  return 42;
+}
+```
+
+But a function where control flow selects between distinct `const` return values requires the selection to happen at the right phase:
+
+```silicon
+// ERROR: if at phase 0 selects between distinct values for the phase -1 result.
+fn pick1(x: bool) -> (y: const int) {
+  if x {
+    return 42;
+  } else {
+    return 1337;
+  }
+}
+
+// OK: const if at phase -1 selects between distinct values for the phase -1
+// result.
+fn pick2(x: const bool) -> (y: const int) {
+  const {
+    if x {
+      return 42;
+    } else {
+      return 1337;
+    }
+  }
+}
+
+// OK: single return, no selection, no floor constraint.
+fn pick3(x: bool) -> (y: const int) {
+  if x {
+    return 42;
+  } else {
+    unreachable;
+  }
+}
+```
+
+#### Implementation
+
+During the demand-driven phase (algorithm step 4), when `constrainRegionResult` processes a result with `demanded < p(block)`, it checks whether all terminators for that result provide the same SSA value.
+If they do, the demand passes through transparently (no selection, no floor).
+If they don't, the analysis emits an error: the result requires a phase below the block phase, but the CF op selects between distinct values at `p(block)`.
+
+The error diagnostic points to the CF op and the conflicting terminators, giving the user enough context to restructure the code (e.g., by moving the selection to an earlier phase with `const { ... }`).
+
 ### Block phase propagation
 
 Blocks have a phase that determines where side-effecting ops anchor.
@@ -204,6 +281,7 @@ The phase map (`DenseMap<Operation*, int16_t>`) tells the splitting pass which p
 Splitting creates a `hir.func` for each distinct phase, moves/clones ops into the appropriate function, and wires up cross-phase context.
 
 Key aspects (see `docs/design/phase-splits.md` for full details):
+
 - Ops are placed into the split function for their assigned phase.
 - Trivially materializable ops (phase `-∞`) are cloned into each phase that needs them.
 - Cross-phase values are threaded via opaque context: if a value is defined at phase P and used at phase Q, it is carried through the context boundaries at P/P+1, P+1/P+2, ..., Q-1/Q. The context for each split function can be computed in a post-processing step.
@@ -242,6 +320,7 @@ The structured representation lives in a dedicated **Unified IR dialect** (`uir`
 See `docs/design/unified-dialect.md` for the full dialect design.
 
 The `uir` dialect holds:
+
 - **Unified functions:** `uir.func`, `uir.call`, `uir.split_func` — cross-phase function representation.
 - **Structured CF:** `uir.if`, `uir.loop`, `uir.match` — control flow with nested regions.
 - **Region terminators:** `uir.yield`, `uir.break`, `uir.continue`, `uir.return`, `uir.unreachable`.
@@ -251,6 +330,7 @@ The `hir` dialect retains the flat, per-phase ops: `hir.func`, `hir.call`, `hir.
 Both dialects coexist freely in the IR — MLIR's dialect mixing requires no conversion for the shared ops.
 
 All `uir` ops are lowered away by two passes:
+
 - **SplitPhases:** consumes `uir.func`/`uir.call`/`uir.expr`/`uir.pin`, produces `hir.func`/`hir.call` + `uir.split_func` witnesses.
 - **FlattenCF:** consumes `uir.if`/`uir.loop`/`uir.break`/`uir.continue`/`uir.return`/`uir.unreachable`, produces `cf.br`/`cf.cond_br` + `hir.return`.
 
@@ -275,8 +355,8 @@ All `uir` ops are lowered away by two passes:
     If the block phase tightens as new constraints arrive, the block is re-traversed to re-anchor side-effecting ops.
     If the expr contains only pure ops, the block phase is unconstrained (nothing anchors to it).
     A floating `uir.expr` is conceptually an inline call whose result phase offsets emerge from its contents.
-  Non-zero offsets are always pinned (the offset is meaningless if floating).
-  Zero offset can be either: `uir.expr { ... }` is floating, `uir.expr pin { ... }` is pinned at `p(block)`.
+    Non-zero offsets are always pinned (the offset is meaningless if floating).
+    Zero offset can be either: `uir.expr { ... }` is floating, `uir.expr pin { ... }` is pinned at `p(block)`.
 
   Syntax:
   - `uir.expr { ... }` — floating block expression (grouping only)
@@ -287,7 +367,7 @@ All `uir` ops are lowered away by two passes:
   - `uir.pin %val, -1` — pin value at block phase - 1 (const)
 
 - **Codegen wraps defensively, then immediately checks inlinability.**
-  Codegen wraps call args and subexpressions in `uir.expr` whenever one *may* be needed.
+  Codegen wraps call args and subexpressions in `uir.expr` whenever one _may_ be needed.
   Once codegen finishes emitting into the wrapper, it checks on the spot whether the `uir.expr` can be inlined:
   - Floating `uir.expr` with a clean use-def chain (no disconnected side effects) → inline the contents into the parent block.
   - Pinned `uir.expr pin N` with a result and clean use-def chain → replace with `uir.pin %result, N` and inline contents.
@@ -321,7 +401,7 @@ The block-level DFS works as follows:
 
 ### Type inference across region boundaries
 
-*(Decision: explicit type operands + results on region ops, unify at yield, optimistic hoisting in InferTypes.)*
+_(Decision: explicit type operands + results on region ops, unify at yield, optimistic hoisting in InferTypes.)_
 
 #### Explicit type operands and results
 
@@ -353,7 +433,7 @@ uir.call @foo(%r, %z) : (%r_ty, %z_ty) -> (%res_ty)
 The chain: `foo`'s signature says arg 0 is `uint<8>` → CheckCalls unifies `%r_ty` with `uint<8>` → InferTypes resolves `%r_ty` → the `hir.unify %r_ty, %x_ty` inside the then-region propagates to `%x_ty` → the literal's inferrable type resolves.
 Both branches unify with the same `%r_ty`, so "both branches must produce the same type" falls out for free.
 
-The key: `%r_ty` is defined *outside* the region but MLIR's SSA scoping makes it visible *inside*.
+The key: `%r_ty` is defined _outside_ the region but MLIR's SSA scoping makes it visible _inside_.
 The `hir.unify` ops inside the regions directly reference it — standard SSA, no magic.
 
 #### Optimistic hoisting for cross-region RAUW
@@ -386,7 +466,7 @@ Two complementary mechanisms handle type flow across region boundaries:
 
 ### Pass adaptation
 
-*(Decision: passes need recursive traversal, but no algorithm changes.)*
+_(Decision: passes need recursive traversal, but no algorithm changes.)_
 
 With type flow handled explicitly via SSA type operands and results (see above), the existing passes need only **recursive region traversal** — no algorithm changes:
 
@@ -403,6 +483,7 @@ Codegen currently produces block-based CF immediately.
 It needs to produce `uir` structured CF ops (`uir.if`, `uir.loop`, `uir.return`, `uir.break`, `uir.continue`, `uir.unreachable`) and wrap subexpressions in `uir.expr`.
 
 For each `uir.if`/`uir.expr`/`uir.loop` with results, codegen:
+
 1. Creates `hir.inferrable` ops for the result types.
 2. Passes them as the op's result type operands.
 3. Inside each region, creates `hir.unify` between the outer inferrable and the yielded value's type operand (grabbed directly from the defining op, no `hir.type_of` needed).
@@ -420,14 +501,14 @@ After emitting into each `uir.expr`, codegen immediately checks inlinability and
 Errors never mention numeric phases.
 Instead, they use the const/dyn vocabulary that matches what the user writes in code:
 
-| Phase | User-facing term | Example phrasing |
-| --- | --- | --- |
-| -3 | const const const | "expression `a` must be const const const" |
-| -2 | const const | "expression `a` must be const const" |
-| -1 | const | "expression `a` must be const" |
-| 0 | *(current phase)* | "expression `b` is dyn but must be available at the current phase" |
-| +1 | dyn | "expression `x` must be dyn" |
-| +2 | dyn dyn | "expression `x` must be dyn dyn" |
+| Phase | User-facing term  | Example phrasing                                                   |
+| ----- | ----------------- | ------------------------------------------------------------------ |
+| -3    | const const const | "expression `a` must be const const const"                         |
+| -2    | const const       | "expression `a` must be const const"                               |
+| -1    | const             | "expression `a` must be const"                                     |
+| 0     | _(current phase)_ | "expression `b` is dyn but must be available at the current phase" |
+| +1    | dyn               | "expression `x` must be dyn"                                       |
+| +2    | dyn dyn           | "expression `x` must be dyn dyn"                                   |
 
 The terms are not put in backticks — they describe high-level language concepts, not verbatim code extracts.
 Errors state the **absolute** requirement (what the value must be), not the delta.
@@ -559,6 +640,7 @@ pub fn main5(a: int, b: int) -> const int {          // a: 0, b: 0, return: -1
 Both have infeasible constraints: the call is at block phase 0, result at 0 (all-zero offsets), but the `const` return requires -1.
 
 `main4` error — `b` is the sole bottleneck:
+
 ```
 error: expression `b` must be const
  --> main4
@@ -571,6 +653,7 @@ note: result of `add` must be const, which requires argument 2 to be const
 ```
 
 `main5` error — both `a` and `b` are bottlenecks:
+
 ```
 error: expression `a` must be const
  --> main5
@@ -587,6 +670,7 @@ note: result of `add` must be const, which requires arguments 1 and 2 to be cons
 ```
 
 `main6` error — nested call, the error chain traces through two calls:
+
 ```silicon
 pub fn main6(const a: int, b: int) -> const int {   // a: -1, b: 0, return: -1
   add(
@@ -687,6 +771,7 @@ latest = `min((-1)-(-1), 0-0, 1-1)` = 0. Snaps to 0.
 Feasibility: earliest = `max((-2)-(-1), (-1)-0, 0-1)` = -1. -1 ≤ 0. ✓.
 
 Results at `p(call) = 0`:
+
 - const result: `0 + (-1) = -1`. Return requires -1. ✓
 - regular result: `0 + 0 = 0`. Return requires 0. ✓
 - dyn result: `0 + 1 = 1`. Return requires +1. ✓
@@ -710,6 +795,7 @@ Feasibility: earliest = `max(0-(-1), 0-0, 0-1)` = 1. 1 > 0. **ERROR.**
 
 The DFS pushes latest 0 to the call, then `0 + (-1) = -1` to the const arg.
 `x` at phase 0 can't satisfy phase -1 — error on `x`:
+
 ```
 error: expression `x` must be const
  --> main_error
@@ -793,7 +879,7 @@ Call at `p(block) = 0`. Arg 0 needs `0 + (-1)` = -1.
 `const` block at -1 ≤ -1. ✓.
 
 Compare with a plain subexpression: `foo(a + 42, b)` — codegen wraps `a + 42` in a floating `uir.expr`, which floats to -1 (from the const arg demand), arriving at the same result.
-The `const { ... }` is more explicit: it *pins* the block at -1 regardless of the consumer's demand.
+The `const { ... }` is more explicit: it _pins_ the block at -1 regardless of the consumer's demand.
 The difference shows when the enclosing context and the call's demand disagree (see below).
 
 #### `const { ... }` vs `{ ... }` — where they diverge
@@ -1012,6 +1098,7 @@ pub fn main(const a: int, b: int) -> int {   // a: -1, b: 0, return: 0
 ```
 
 `x` at -1 is used in two places:
+
 - As foo's const arg: needs ≤ `0 + (-1)` = -1. `x` at -1 ≤ -1. ✓.
 - In `x + b`: pure op, earliest `max(-1, 0) = 0`. ✓.
 
@@ -1022,6 +1109,7 @@ No conflict — the value was computed once at -1 and is available to all later 
 
 `let x = expr;` pins the execution context at `p(block)`, ensuring side effects happen "here."
 The value `x` can be at a different phase:
+
 - Same as `p(block)` for plain expressions (`let x = a + 42;`)
 - Shifted by `const { ... }` or `dyn { ... }` (`let x = const { ... };`)
 - Shifted by call result offsets (`let x = foo();` where foo returns `dyn int`)
@@ -1224,6 +1312,7 @@ Each arm follows the same rules as `if` branches.
 #### IR representation
 
 These control flow constructs map to `uir` dialect ops (see `docs/design/unified-dialect.md`):
+
 - `if`/`else` → `uir.if` with `then`/`else` regions.
 - `loop`/`while`/`for` → `uir.loop` with a body region. `while` and `for` desugar to `uir.loop` + `uir.if`.
 - `match` → `uir.match` with per-arm regions.
@@ -1244,6 +1333,7 @@ This keeps CF ops simple and predictable: their phase is always determined by th
 At the **language level**, calls and control flow expressions (`if`, `loop`, `while`, `for`, `match`) appear to resolve to **latest** (lazy, top-down) — when used as subexpressions in call arguments or assignments, they snap to the consumer's demanded phase.
 
 At the **IR level**, this is implemented by anchoring all side-effecting ops at their enclosing block phase:
+
 - `uir.call`, `uir.if`, `uir.loop`, `uir.match` are always at `p(enclosing_block)`.
 - When the language requires floating (e.g., a call or `if` as a const call arg), codegen wraps the op in a floating `uir.expr`, which carries the consumer demand.
 - The wrapped op is then anchored at the `uir.expr`'s block phase, which is the consumer's demanded phase.
@@ -1404,9 +1494,11 @@ Arg feasibility: `compute_width` has const args (offset -1), so args need `-1 + 
 The args aren't available early enough for the call to execute at -1.
 
 The fix: `compute_width` would need to return `const int` (result offset -1):
+
 ```silicon
 fn compute_width(const a: int, const b: int) -> const int { a + b }
 ```
+
 Now the `uir.expr` floats to 0 (from the type context: `-1 - (-1) = 0`).
 The call is at 0. Args need `0 + (-1) = -1`. `A` and `B` at -1: ✓.
 Result at `0 + (-1) = -1`. The type is at -1. ✓.
@@ -1423,6 +1515,7 @@ fn foo(const N: int, x: uint<N>, y: uint<N>) -> uint<N> {
 
 `N` at -1, `x` at 0, `y` at 0, return at 0.
 Three occurrences of `uint<N>`:
+
 - Type of `x`: latest = `0 - 1 = -1`. `uint<N>` earliest = -1. ✓.
 - Type of `y`: latest = `0 - 1 = -1`. Same. ✓.
 - Return type: latest = `0 - 1 = -1`. Same. ✓.
@@ -1442,6 +1535,7 @@ fn foo(const N: int, const x: uint<N>, y: uint<N>) -> uint<N> {
 ```
 
 `N` at -1, `x` at -1, `y` at 0.
+
 - Type of `x`: latest = `-1 - 1 = -2`. `uint<N>` earliest = -1. `[-1, -2]` → **ERROR!**
 
 `N` at -1 can't produce a type at -2.
@@ -1457,10 +1551,11 @@ fn foo(const N: int, dyn x: uint<N>) -> dyn uint<N> {
 ```
 
 `N` at -1, `x` at +1, return at +1.
+
 - Type of `x`: latest = `+1 - 1 = 0`. `uint<N>` earliest = -1. `[-1, 0] → -1` (pure, eager). ✓.
 - Return type: latest = `+1 - 1 = 0`. Same. ✓.
 
-The `dyn` shift gives the type *more* room.
+The `dyn` shift gives the type _more_ room.
 The type needs to be at phase 0, but `uint<N>` can be at -1. Plenty of slack.
 This is the opposite of the const case: `dyn` makes type requirements easier, `const` makes them harder.
 
@@ -1473,6 +1568,7 @@ fn foo(dyn N: int, dyn x: uint<N>) -> dyn uint<N> {
 ```
 
 `N` at +1, `x` at +1.
+
 - Type of `x`: latest = `+1 - 1 = 0`. `uint<N>` earliest = `max(+1) = +1`. `[+1, 0]` → **ERROR!**
 
 `N` at +1 can't produce a type at phase 0.
@@ -1537,6 +1633,7 @@ static (a, b, c) = foo(42);
 The call is pinned at phase 0.
 Each result is at `p(call) + result_offset`.
 During module-level phase splitting:
+
 - Phase -1: `a` becomes available.
 - Phase 0: `b` becomes available.
 - Phase +1: `c` becomes available.
@@ -1565,6 +1662,7 @@ The type rules for globals are identical to `let` bindings: `latest(type) = p(va
 We considered `const fn` / `dyn fn` as function-level phase modifiers that would shift the entire call by -1 / +1.
 After analysis, these don't bring distinct semantics beyond arg/result modifiers and `const { ... }` / `dyn { ... }` blocks at call sites.
 The existing tools cover all use cases:
+
 - "Call at earlier phase" → `const { foo(...) }` at call site
 - "Result at later phase" → `-> dyn int` on the function
 - "All args earlier" → `const` on each arg

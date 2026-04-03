@@ -208,6 +208,62 @@ This model treats `return` as "assign to implicit result slots and jump to end."
 Each result slot lives at its declared phase, and the jump is control flow at the function body's phase.
 Similarly, `break` is "jump to after the loop" at the loop's phase.
 
+### Result phase floor from value selection
+
+Control flow ops that merge multiple paths — `if`, `loop`, `expr`, and function bodies — can produce result values.
+When multiple terminators (`return`, `break`, `yield`) provide **distinct values** for the same result, the CF op performs a selection: which path was taken determines which value the result gets.
+That selection happens at `p(block)`, so the result cannot be at an earlier phase:
+
+> If multiple terminators provide distinct values for a result, then `p(result) >= p(block)`.
+
+When all terminators provide the **same SSA value**, no selection occurs — the result is the same regardless of which path was taken.
+In that case, the floor does not apply and `p(result)` can be at any phase.
+
+This is the key distinction between CF ops (which may select) and terminators like `return`/`break`/`continue` (which only transport values).
+A `return` does not select — it forwards a value to the function boundary.
+The selection already happened at whatever `if` or `loop` chose which `return` to reach.
+
+```silicon
+fn pick_something(x: const bool) -> (y: const int, z: int) {
+    // The function body is at phase 0. Result `y` is at phase -1,
+    // result `z` is at phase 0.
+
+    // ERROR: the if executes at phase 0, but it selects between
+    // distinct values (42 vs 1337) for `y` which is at phase -1.
+    // The selection can't happen before the if has executed.
+    if x {
+        return 42, 1337;
+    } else {
+        return 1337, 9001;
+    }
+}
+```
+
+The fix is to move the selection to the right phase:
+
+```silicon
+fn pick_something(x: const bool) -> (y: const int, z: int) {
+    // Move the selection of `y` to phase -1 with a const block.
+    let y_val: const int = const {
+        if x { 42 } else { 1337 }
+    };
+
+    // The if at phase 0 still selects `z`, which is fine
+    // since p(z) == p(block).
+    if x {
+        return y_val, 1337;
+    } else {
+        return y_val, 9001;
+    }
+}
+```
+
+In this version, the `const { if ... }` moves the selection of `y` to phase -1 where `x` is available.
+The outer `if` still selects between distinct values for `z`, but `z` is at phase 0 which equals the block phase — no constraint violation.
+Both returns now provide the same SSA value (`y_val`) for `y`, so the floor does not apply to it.
+
+For the formal rule and implementation details, see {{< page-link "/design/phase-inference" >}}, "Result phase floor for merging CF ops."
+
 ### If-else with const conditions
 
 An `if const` with bodies in both branches uses two separate replicates (one per branch), each with a 0-or-1 element hits vector.
