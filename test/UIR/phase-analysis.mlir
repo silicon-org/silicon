@@ -2362,6 +2362,44 @@ uir.func @SharedNeedsConst(%x: -1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Loop as dyn return: break at +1. Symmetric with const loop return.
+
+// CHECK-LABEL: uir.func @LoopDynReturn
+uir.func @LoopDynReturn(%x: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  // CHECK: uir.loop {{.*}}pa.results = ["1"]
+  %0 = uir.loop : %t {
+    // CHECK: hir.add {{.*}}pa.phase = "1"
+    %sum = hir.add %x, %c1 : %t
+    uir.break %sum : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Loop as const return: break at -1.
+
+// CHECK-LABEL: uir.func @LoopConstReturn
+uir.func @LoopConstReturn(%x: -1) -> (result: -1) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  // CHECK: uir.loop {{.*}}pa.results = ["-1"]
+  %0 = uir.loop : %t {
+    // CHECK: hir.add {{.*}}pa.phase = "-1"
+    %sum = hir.add %x, %c1 : %t
+    uir.break %sum : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // Dyn loop: while inside dyn block at +1. Symmetric with const loop tests.
 
 // CHECK-LABEL: uir.func @DynWhileLoop

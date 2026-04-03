@@ -1203,6 +1203,62 @@ uir.func @NestedCallCascade(%a: -1, %b: 0) -> (result: -1) {
 // -----
 
 //===----------------------------------------------------------------------===//
+// Loop as const return: break value at 0 but const return demands -1.
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @LoopConstReturnError(%x: 0) -> (result: -1) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %c1 = hir.constant_int 1 : %t
+  %0 = uir.loop : %t {
+    // expected-remark @below {{required by operand at phase -1}}
+    %sum = hir.add %x, %c1 : %t
+    // expected-remark @below {{required by yield operand}}
+    uir.break %sum : %t
+  }
+  // expected-remark @below {{required by return value at phase -1}}
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Dyn break value error: deferred() result at +1, return demands 0.
+
+uir.func @DeferredForLoop() -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature () -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin 1 : %t {
+    %c42 = hir.constant_int 42 : %t
+    uir.yield %c42 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+uir.func @LoopDynBreakError() -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature () -> (%0)
+} {
+  %t = hir.int_type
+  %ta = hir.int_type
+  %0 = uir.loop : %t {
+    %tr = hir.int_type
+    // expected-error @below {{call result 0 at phase 1 cannot satisfy requirement for phase 0}}
+    %call = uir.call @DeferredForLoop() : () -> (%tr) () -> !hir.any [] -> [1]
+    // expected-remark @below {{required by yield operand}}
+    uir.break %call : %t
+  }
+  // expected-remark @below {{required by return value at phase 0}}
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
 // if as const return: one branch has body-phase value. Error on y at 0.
 
 // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
