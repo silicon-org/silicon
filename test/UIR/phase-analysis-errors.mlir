@@ -1282,9 +1282,9 @@ uir.func @LoopDynBreakError() -> (result: 0) {
 // -----
 
 //===----------------------------------------------------------------------===//
-// if as const return: one branch has body-phase value. Error on y at 0.
+// if as const return: one branch has body-phase value. The if at phase 0
+// selects between distinct values for a result demanded at phase -1.
 
-// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
 uir.func @IfConstReturnError(%x: -1, %y: 0) -> (result: -1) {
   %0 = hir.int_type
   %1 = hir.int_type
@@ -1294,12 +1294,205 @@ uir.func @IfConstReturnError(%x: -1, %y: 0) -> (result: -1) {
   %bt = hir.bool_type
   %c0 = hir.constant_int 0 : %t
   %cmp = hir.gt %x, %c0 : %bt
+  // expected-error @below {{result at phase -1 is selected by control flow at phase 0; result phase must be >= 0}}
   %0 = uir.if %cmp : %t {
+    // expected-note @below {{value provided here}}
     uir.yield %x : %t
   } else {
-    // expected-remark @below {{required by yield operand}}
+    // expected-note @below {{value provided here}}
     uir.yield %y : %t
   }
   // expected-remark @below {{required by return value at phase -1}}
   uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Result Phase Floor Tests
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// if at phase 0, both branches yield distinct const values. The if selects
+// between them, so the result can't be at -1.
+
+uir.func @IfDistinctYieldFloorError(%sel: -1, %a: -1, %b: -1) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // expected-error @below {{result at phase -1 is selected by control flow at phase 0; result phase must be >= 0}}
+  %r = uir.if %sel : %t {
+    // expected-note @below {{value provided here}}
+    uir.yield %a : %t
+  } else {
+    // expected-note @below {{value provided here}}
+    uir.yield %b : %t
+  }
+  // expected-remark @below {{required by return value at phase -1}}
+  uir.return %r -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Nested if: both branches yield distinct const values at phase -1. Since the
+// if is at phase 0 (function body), this is an error.
+
+uir.func @NestedIfFloorError(%a: -1, %b: -1, %c: -1) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t0)
+} {
+  %t = hir.int_type
+  %bt = hir.bool_type
+  %c0 = hir.constant_int 0 : %t
+  %cmp = hir.gt %a, %c0 : %bt
+  // expected-error @below {{result at phase -1 is selected by control flow at phase 0; result phase must be >= 0}}
+  %0 = uir.if %cmp : %t {
+    // expected-note @below {{value provided here}}
+    uir.yield %a : %t
+  } else {
+    // expected-note @below {{value provided here}}
+    uir.yield %b : %t
+  }
+  // expected-remark @below {{required by return value at phase -1}}
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Loop at phase 0, two breaks with distinct const values. Floor violated.
+
+uir.func @LoopDistinctBreakFloorError(%a: -1, %b: -1, %flag: 0) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // expected-error @below {{result at phase -1 is selected by control flow at phase 0; result phase must be >= 0}}
+  %r = uir.loop : %t {
+    uir.if %flag {
+      // expected-note @below {{value provided here}}
+      uir.break %a : %t
+    } else {
+      // expected-note @below {{value provided here}}
+      uir.break %b : %t
+    }
+    uir.yield
+  }
+  // expected-remark @below {{required by return value at phase -1}}
+  uir.return %r -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Function returns: two returns provide distinct values for a const result.
+// The function body is at phase 0, so the result can't be at -1.
+
+// expected-error @below {{result 0 at phase -1 is selected by control flow at phase 0; result phase must be >= 0}}
+uir.func @FuncDistinctReturnFloorError(%a: -1, %b: -1, %flag: 0) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  uir.if %flag {
+    // expected-note @below {{return value provided here}}
+    uir.return %a -> (%t)
+  }
+  // expected-note @below {{return value provided here}}
+  uir.return %b -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// if inside a const block at phase -1, yields distinct values for a result
+// demanded at phase -2 (from a doubly-const call arg). The if is at phase -1,
+// so the result can't be below -1.
+
+uir.func @NeedsDoubleConstArg(%x: -2) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  uir.return %x -> (%t)
+}
+
+uir.func @IfInConstFloorError(%a: -2, %b: -2, %flag: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  %sel = uir.expr pin -1 : %t {
+    // expected-error @below {{result at phase -2 is selected by control flow at phase -1; result phase must be >= -1}}
+    %r = uir.if %flag : %t {
+      // expected-note @below {{value provided here}}
+      uir.yield %a : %t
+    } else {
+      // expected-note @below {{value provided here}}
+      uir.yield %b : %t
+    }
+    // expected-remark @below {{required by yield operand}}
+    uir.yield %r : %t
+  }
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // expected-remark @below {{required by call argument 0 at phase -2}}
+  %result = uir.call @NeedsDoubleConstArg(%sel) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-2] -> [0]
+  uir.return %result -> (%tr)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Short-circuit && with both const args, result fed as const arg to a call.
+// The if at phase 0 selects between distinct values (%b and %false_val) but
+// the call demands the result at phase -1. Floor violated.
+
+uir.func @NeedsConstBoolFloor(%x: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  uir.return %x -> (%t)
+}
+
+uir.func @ShortCircuitFloorError(%a: -1, %b: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %false_val = hir.constant_bool <false>
+  // expected-error @below {{result at phase -1 is selected by control flow at phase 0; result phase must be >= 0}}
+  %and = uir.if %a : %t {
+    // expected-note @below {{value provided here}}
+    uir.yield %b : %t
+  } else {
+    // expected-note @below {{value provided here}}
+    uir.yield %false_val : %t
+  }
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // expected-remark @below {{required by call argument 0 at phase -1}}
+  %r = uir.call @NeedsConstBoolFloor(%and) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %r -> (%tr)
 }

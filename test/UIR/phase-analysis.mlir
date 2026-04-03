@@ -798,10 +798,10 @@ uir.func @ConstCondIf(%flag: -1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// If with const args: if anchored at 0, yields carry -1 values transparently.
-// The if result is at -1 (from yield operands), not 0 (the if's phase).
-// TODO: Revisit this once we figure out how to deal with control flow ops that
-// yield values that must be available in earlier phases.
+// If with const args: if at phase 0 yields distinct const values. Result is
+// demanded at phase 0, so the floor (p(result) >= p(block) = 0) is satisfied.
+// The actual result phase is -1 (from the yield operands), which is fine
+// because the floor only rejects when the demanded phase < block phase.
 
 // CHECK-LABEL: uir.func @IfTransparentYield
 uir.func @IfTransparentYield(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
@@ -859,24 +859,289 @@ uir.func @AsymmetricPureFloat(%a: -1, %b: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// if as const return expression: both branches and condition at -1.
+// Result Phase Floor Tests — Valid Cases
+//===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: uir.func @IfConstReturn
-uir.func @IfConstReturn(%x: -1, %y: -1) -> (result: -1) {
-  %0 = hir.int_type
-  %1 = hir.int_type
-  uir.signature (%0, %1) -> (%0)
+//===----------------------------------------------------------------------===//
+// if at phase 0, both branches yield the same SSA value at phase -1. No
+// selection occurs, so the floor does not apply. Result is at -1.
+
+// CHECK-LABEL: uir.func @IfSameValueNoFloor
+uir.func @IfSameValueNoFloor(%sel: 0, %x: -1) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
 } {
-  %bt = hir.bool_type
-  %cmp = hir.gt %x, %y : %bt
   %t = hir.int_type
-  // CHECK: uir.if {{.*}}pa.results = ["-1"]
-  %0 = uir.if %cmp : %t {
+  // Both branches yield the same SSA value %x. No selection, no floor.
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["-1"]
+  %r = uir.if %sel : %t {
     uir.yield %x : %t
   } else {
-    uir.yield %y : %t
+    uir.yield %x : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// if at phase 0, both branches yield the same dyn SSA value at phase +1.
+// No selection, no floor. Result is at +1.
+
+// CHECK-LABEL: uir.func @IfSameValueNoFloorDyn
+uir.func @IfSameValueNoFloorDyn(%sel: 0, %x: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
+  %r = uir.if %sel : %t {
+    uir.yield %x : %t
+  } else {
+    uir.yield %x : %t
+  }
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// if at phase 0, both branches yield distinct values at phase 0. Floor is
+// satisfied since p(result) = 0 >= p(block) = 0.
+
+// CHECK-LABEL: uir.func @IfDistinctValuesFloorSatisfied
+uir.func @IfDistinctValuesFloorSatisfied(%sel: 0, %a: 0, %b: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["0"]
+  %r = uir.if %sel : %t {
+    uir.yield %a : %t
+  } else {
+    uir.yield %b : %t
+  }
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// if at phase 0, distinct dyn values at phase 1. Floor satisfied (1 >= 0).
+
+// CHECK-LABEL: uir.func @IfDistinctValuesDynFloorSatisfied
+uir.func @IfDistinctValuesDynFloorSatisfied(%sel: 0, %a: 1, %b: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
+  %r = uir.if %sel : %t {
+    uir.yield %a : %t
+  } else {
+    uir.yield %b : %t
+  }
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// if where one branch returns (early exit), other branch yields. Only one
+// yield contributes to the if result, so the if's floor is not triggered.
+// The function has result at phase 0 so the return floor is trivially satisfied.
+
+// CHECK-LABEL: uir.func @IfOneBranchReturnsNoFloor
+uir.func @IfOneBranchReturnsNoFloor(%sel: 0, %a: 0, %b: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // Then-branch returns early, else-branch yields. Single yield, no floor
+  // on the if (only one yield). Result at -1 from the yield operand.
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["-1"]
+  %r = uir.if %sel : %t {
+    uir.return %a -> (%t)
+  } else {
+    uir.yield %b : %t
+  }
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// if where both branches have early returns. No results on the if, so the
+// if's floor doesn't apply. The function returns at phase 0, trivially OK.
+
+// CHECK-LABEL: uir.func @IfBothReturnNoIfFloor
+uir.func @IfBothReturnNoIfFloor(%sel: 0, %a: 0, %b: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0"
+  uir.if %sel {
+    uir.return %a -> (%t)
+  } else {
+    uir.return %b -> (%t)
+  }
+  uir.unreachable
+}
+
+//===----------------------------------------------------------------------===//
+// Loop with two breaks providing the same SSA value. No floor.
+
+// CHECK-LABEL: uir.func @LoopSameBreakNoFloor
+uir.func @LoopSameBreakNoFloor(%x: -1, %flag: 0) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  // Two breaks, same SSA value. No selection, no floor.
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["-1"]
+  %r = uir.loop : %t {
+    uir.if %flag {
+      uir.break %x : %t
+    } else {
+      uir.break %x : %t
+    }
+    uir.yield
+  }
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Loop with a single break at const phase. No floor.
+
+// CHECK-LABEL: uir.func @LoopSingleBreakNoFloor
+uir.func @LoopSingleBreakNoFloor(%x: -1, %flag: 0) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["-1"]
+  %r = uir.loop : %t {
+    uir.if %flag {
+      uir.break %x : %t
+    } else {
+      uir.unreachable
+    }
+    uir.yield
+  }
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Loop with two breaks providing distinct values at phase 0. Floor satisfied.
+
+// CHECK-LABEL: uir.func @LoopDistinctBreakFloorSatisfied
+uir.func @LoopDistinctBreakFloorSatisfied(%a: 0, %b: 0, %flag: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["0"]
+  %r = uir.loop : %t {
+    uir.if %flag {
+      uir.break %a : %t
+    } else {
+      uir.break %b : %t
+    }
+    uir.yield
+  }
+  uir.return %r -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Function with const result, single return. No floor.
+
+// CHECK-LABEL: uir.func @FuncSingleReturnNoFloor
+uir.func @FuncSingleReturnNoFloor(%x: -1) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  uir.return %x -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Function with const result, two returns with the same SSA value. No floor.
+
+// CHECK-LABEL: uir.func @FuncSameReturnNoFloor
+uir.func @FuncSameReturnNoFloor(%x: -1, %flag: 0) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  uir.if %flag {
+    uir.return %x -> (%t)
+  }
+  uir.return %x -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// Function with result at phase 0, two distinct returns. Floor trivially
+// satisfied (0 >= 0).
+
+// CHECK-LABEL: uir.func @FuncDistinctReturnFloorSatisfied
+uir.func @FuncDistinctReturnFloorSatisfied(%a: 0, %b: 0, %flag: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  uir.if %flag {
+    uir.return %a -> (%t)
+  }
+  uir.return %b -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// if inside const block: distinct values at -1, if at -1. Floor satisfied
+// (-1 >= -1). Demonstrates the workaround for the floor constraint.
+
+// CHECK-LABEL: uir.func @ConstBlockWorkaround
+uir.func @ConstBlockWorkaround(%a: -1, %b: -1, %flag: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // The if is inside a const block at -1. The selection happens at -1,
+  // and the result is demanded at -1. Floor: -1 >= -1. OK.
+  // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-1"
+  %chosen = uir.expr pin -1 : %t {
+    // CHECK: uir.if %flag {{.*}} attributes {{{.*}}pa.phase = "-1", pa.results = ["-1"]
+    %sel = uir.if %flag : %t {
+      uir.yield %a : %t
+    } else {
+      uir.yield %b : %t
+    }
+    uir.yield %sel : %t
+  }
+  %pinned = uir.pin %chosen, 0 : !hir.any
+  uir.return %pinned -> (%t)
 }
 
 //===----------------------------------------------------------------------===//
@@ -895,38 +1160,6 @@ uir.func @IfDynReturn(%x: 1, %y: 1, %cond: 0) -> (result: 1) {
     uir.yield %x : %t
   } else {
     uir.yield %y : %t
-  }
-  uir.return %0 -> (%t)
-}
-
-//===----------------------------------------------------------------------===//
-// Nested if as const return: all branches at -1.
-
-// CHECK-LABEL: uir.func @NestedIfConstReturn
-uir.func @NestedIfConstReturn(%a: -1, %b: -1, %c: -1) -> (result: -1) {
-  %0 = hir.int_type
-  %1 = hir.int_type
-  %2 = hir.int_type
-  uir.signature (%0, %1, %2) -> (%0)
-} {
-  %t = hir.int_type
-  %bt = hir.bool_type
-  %c0 = hir.constant_int 0 : %t
-  %cmp_a = hir.gt %a, %c0 : %bt
-  // CHECK: uir.if {{.*}}pa.results = ["-1"]
-  %0 = uir.if %cmp_a : %t {
-    %cmp_b = hir.gt %b, %c0 : %bt
-    // CHECK: uir.if {{.*}}pa.results = ["-1"]
-    %inner = uir.if %cmp_b : %t {
-      %sum = hir.add %a, %b : %t
-      uir.yield %sum : %t
-    } else {
-      uir.yield %c : %t
-    }
-    uir.yield %inner : %t
-  } else {
-    %prod = hir.mul %a, %c : %t
-    uir.yield %prod : %t
   }
   uir.return %0 -> (%t)
 }
@@ -3470,29 +3703,6 @@ uir.func @NeedsConstBool(%x: -1) -> (result: 0) {
 } {
   %t = hir.int_type
   uir.return %x -> (%t)
-}
-
-// CHECK-LABEL: uir.func @ShortCircuitAndBothConst
-uir.func @ShortCircuitAndBothConst(%a: -1, %b: -1) -> (result: 0) {
-  %t0 = hir.int_type
-  %t1 = hir.int_type
-  %t2 = hir.int_type
-  uir.signature (%t0, %t1) -> (%t2)
-} {
-  %t = hir.int_type
-  %false_val = hir.constant_bool <false>
-  // if at 0 (block phase). Result floats to satisfy const arg demand at -1.
-  // CHECK: uir.if %a {{.*}}pa.phase = "0"
-  %and = uir.if %a : %t {
-    uir.yield %b : %t
-  } else {
-    uir.yield %false_val : %t
-  }
-  %ta = hir.int_type
-  %tr = hir.int_type
-  // CHECK: uir.call @NeedsConstBool({{.*}}) {{.*}}pa.phase = "0"
-  %r = uir.call @NeedsConstBool(%and) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
-  uir.return %r -> (%tr)
 }
 
 //===----------------------------------------------------------------------===//

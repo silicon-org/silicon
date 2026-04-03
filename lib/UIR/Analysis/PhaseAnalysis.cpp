@@ -119,6 +119,40 @@ LogicalResult PhaseAnalysis::run() {
   if (failed(processBlock(funcOp.getBody().front(), 0)))
     return failure();
 
+  // Step 3b: Result phase floor for function returns. When multiple return ops
+  // provide distinct SSA values for a result, the result phase is floored at
+  // the body phase (0). If the declared result phase is < 0, this is an error.
+  {
+    auto resultPhases = funcOp.getResultPhases();
+    for (unsigned i = 0; i < resultPhases.size(); ++i) {
+      int16_t rp = static_cast<int16_t>(resultPhases[i]);
+      if (rp >= 0)
+        continue;
+
+      SmallVector<Value, 4> returnValues;
+      for (auto *term : funcTerminators)
+        if (auto returnOp = dyn_cast<ReturnOp>(term))
+          if (i < returnOp.getValues().size())
+            returnValues.push_back(returnOp.getValues()[i]);
+
+      if (returnValues.size() <= 1)
+        continue;
+      bool allSame = llvm::all_of(
+          returnValues, [&](Value v) { return v == returnValues[0]; });
+      if (allSame)
+        continue;
+
+      auto diag = emitError(funcOp.getLoc())
+                  << "result " << i << " at phase " << rp
+                  << " is selected by control flow at phase 0"
+                  << "; result phase must be >= 0";
+      for (auto *term : funcTerminators)
+        if (auto returnOp = dyn_cast<ReturnOp>(term))
+          diag.attachNote(returnOp.getLoc()) << "return value provided here";
+      return failure();
+    }
+  }
+
   // Step 4: Demand-driven constraints — function interface.
   LLVM_DEBUG(dbgs() << "  step 4: demand-driven constraints\n");
   for (auto *term : funcTerminators) {
@@ -425,6 +459,12 @@ FailureOr<int16_t> PhaseAnalysis::constrainBlock(Block &block,
 /// Yields and breaks are transparent conduits — they just forward
 /// constrainValue to the corresponding operand and propagate the resolved phase
 /// to the region result.
+///
+/// For merging CF ops (IfOp, LoopOp), a result phase floor applies: when
+/// multiple terminators provide distinct SSA values for a result, the result
+/// phase must be >= the block phase (the CF op performs a selection at its
+/// block phase, so the result can't be known earlier). When all terminators
+/// provide the same SSA value, no floor applies — no selection occurs.
 LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
                                                    unsigned resultIdx,
                                                    int16_t latest) {
@@ -472,10 +512,69 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
     return success();
   };
 
+  // Get the value operand for `resultIdx` from a yield or break terminator.
+  // Returns a null Value for other terminators (return, unreachable).
+  auto getTermValue = [&](Operation *term) -> Value {
+    if (auto yieldOp = dyn_cast<YieldOp>(term)) {
+      auto values = yieldOp.getValues();
+      if (resultIdx < values.size())
+        return values[resultIdx];
+    } else if (auto breakOp = dyn_cast<BreakOp>(term)) {
+      auto values = breakOp.getValues();
+      if (resultIdx < values.size())
+        return values[resultIdx];
+    }
+    return {};
+  };
+
+  // Check the result phase floor for merging CF ops. When multiple terminators
+  // provide distinct SSA values for a result, the result phase is floored at
+  // the block phase — the CF op performs a selection that can't happen earlier.
+  // Each entry is a (value, terminator) pair for diagnostic purposes.
+  auto checkFloor =
+      [&](SmallVectorImpl<std::pair<Value, Operation *>> &termEntries)
+      -> LogicalResult {
+    if (termEntries.size() <= 1)
+      return success();
+    bool allSame = llvm::all_of(termEntries, [&](auto &entry) {
+      return entry.first == termEntries[0].first;
+    });
+    if (allSame)
+      return success();
+
+    auto phaseIt = opPhases.find(regionOp);
+    if (phaseIt == opPhases.end())
+      return success(); // Not yet processed; floor check deferred.
+    int16_t blockPhase = phaseIt->second;
+    if (latest < blockPhase) {
+      auto diag = emitError(regionOp->getLoc())
+                  << "result at phase " << latest
+                  << " is selected by control flow at phase " << blockPhase
+                  << "; result phase must be >= " << blockPhase;
+      for (auto &[val, term] : termEntries)
+        diag.attachNote(term->getLoc()) << "value provided here";
+      return failure();
+    }
+    return success();
+  };
+
   if (auto exprOp = dyn_cast<ExprOp>(regionOp))
     return constrainTermOperand(exprOp.getBody().front().getTerminator());
 
   if (auto ifOp = dyn_cast<IfOp>(regionOp)) {
+    // Collect values for the floor check before constraining.
+    SmallVector<std::pair<Value, Operation *>, 2> termEntries;
+    auto *thenTerm = ifOp.getThenRegion().front().getTerminator();
+    if (auto v = getTermValue(thenTerm))
+      termEntries.push_back({v, thenTerm});
+    if (!ifOp.getElseRegion().empty()) {
+      auto *elseTerm = ifOp.getElseRegion().front().getTerminator();
+      if (auto v = getTermValue(elseTerm))
+        termEntries.push_back({v, elseTerm});
+    }
+    if (failed(checkFloor(termEntries)))
+      return failure();
+
     if (failed(
             constrainTermOperand(ifOp.getThenRegion().front().getTerminator())))
       return failure();
@@ -487,12 +586,20 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
   }
 
   if (auto loopOp = dyn_cast<LoopOp>(regionOp)) {
+    // Collect values for the floor check before constraining.
+    SmallVector<std::pair<Value, Operation *>, 2> termEntries;
     auto it = loopBreaks.find(loopOp);
-    if (it != loopBreaks.end()) {
+    if (it != loopBreaks.end())
+      for (auto breakOp : it->second)
+        if (auto v = getTermValue(breakOp))
+          termEntries.push_back({v, breakOp});
+    if (failed(checkFloor(termEntries)))
+      return failure();
+
+    if (it != loopBreaks.end())
       for (auto breakOp : it->second)
         if (failed(constrainTermOperand(breakOp)))
           return failure();
-    }
     return success();
   }
 
