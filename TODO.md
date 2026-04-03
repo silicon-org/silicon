@@ -20,13 +20,15 @@
   Once a structured CF op is inlined, its blocks and regions are inserted ahead of that op, such that the linear region/block scan will naturally visit the newly-inlined region.
   For inspiration, look at how the SCF-to-CF lowering in MLIR does things.
 - Improve UIR op parsing/printing (e.g. uir.call, maybe others) to not print the implied `!hir.any` type
+- Add an HIR identifier op that just pass through an operand to its result.
+  We'll use this op to have a mechanism to capture the location of a named expression like `x`.
+  When reporting phase errors, we can stop at `x` and indicate an error right there, instead of pointing the user at a definition like the `x: const int` arg of a function, which is far more confusing.
 
 ## Phase Analysis
 
 - SplitPhases2: the splitter crashes when processing `uir.expr` ops in the signature region.
   Root cause: `reconstructSignatures` → `isTriviallyMaterializable` hits a null value when the expr result is involved.
   Test: `split-phases2.mlir` is XFAILed pending this fix.
-
 
 ## Phase Inference Redesign
 

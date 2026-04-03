@@ -35,7 +35,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 
 - Code lives in the `silicon` C++ namespace.
 - One sentence per line in Markdown files; don't break long lines.
-- Run clang-format on changed files before git add and git commit.
+- Run clang-format on changed C++ files before git add and git commit.
 - If you notice any inconsistencies or contradictions, ask the user for clarification.
 - Write down anything noteworthy or surprising, and any useful feedback you got from the user to remember later as concise bullet-point notes in the SESSION.md file.
 - The `summary` field in tablegen definitions should be a very concise description of the op; not a full sentence, just a handful of words, and use `"..."` syntax
