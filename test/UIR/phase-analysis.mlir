@@ -829,6 +829,36 @@ uir.func @IfTransparentYield(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Asymmetric branches: pure ops float to different phases internally.
+// Then-branch add at -1 (from %a), else-branch add at 0 (from %b).
+
+// CHECK-LABEL: uir.func @AsymmetricPureFloat
+uir.func @AsymmetricPureFloat(%a: -1, %b: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %bt = hir.bool_type
+  %ctrue = hir.constant_bool <true>
+  %0 = uir.if %ctrue : %t {
+    %c1 = hir.constant_int 1 : %t
+    // CHECK: hir.add %a, {{.*}}pa.phase = "-1"
+    %sum = hir.add %a, %c1 : %t
+    // CHECK: uir.yield {{.*}}pa.phase = "0"
+    uir.yield %sum : %t
+  } else {
+    %c1b = hir.constant_int 1 : %t
+    // CHECK: hir.add %b, {{.*}}pa.phase = "0"
+    %sum2 = hir.add %b, %c1b : %t
+    // CHECK: uir.yield {{.*}}pa.phase = "0"
+    uir.yield %sum2 : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // if as const return expression: both branches and condition at -1.
 
 // CHECK-LABEL: uir.func @IfConstReturn
