@@ -856,6 +856,54 @@ uir.func @SigConstReturnTypeError(%N: -1) -> (result: -1) {
 // -----
 
 //===----------------------------------------------------------------------===//
+// Dyn call inside const block: floating expr lets call float to -2 (for dyn
+// result at -1). Arg at -2. a at -1 > -2. ERROR.
+
+uir.func @DynCallDeferred(%x: 0) -> (result: 1) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  %0 = uir.expr pin 1 : %t2 { uir.yield %x : %t2 }
+  uir.return %0 -> (%t2)
+}
+
+uir.func @DynCallPin(%x: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+// expected-error @below {{value at phase -1 cannot satisfy requirement for phase -2}}
+uir.func @DynCallInConstError(%a: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    %ta = hir.int_type
+    %tr = hir.int_type
+    %r = uir.expr : %t {
+      // expected-remark @below {{required by call argument 0 at phase -2}}
+      // expected-remark @below {{required by call result 0 at phase -1}}
+      %inner = uir.call @DynCallDeferred(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [1]
+      // expected-remark @below {{required by yield operand}}
+      uir.yield %inner : %t
+    }
+    %ta2 = hir.int_type
+    %tr2 = hir.int_type
+    // expected-remark @below {{required by call argument 0 at phase -1}}
+    %pinned = uir.call @DynCallPin(%r) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [0] -> [0]
+    uir.yield %pinned : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
 // Multi-consumer error: let-pinned call result at 0 used as const arg at -1.
 
 uir.func @MultiConsumerComputeErr(%x: 0) -> (result: 0) {

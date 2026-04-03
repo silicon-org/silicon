@@ -2275,6 +2275,52 @@ uir.func @MultiConsumerFixed(%a: -1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Call with dyn result (+1) inside const block. const at -1. Dyn result: call
+// at -2. Deep const arg at -3 satisfies -2 + (-1) = -3.
+
+uir.func @ComplexCallee(%x: -1) -> (result: 1) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  %0 = uir.expr pin 1 : %t2 {
+    uir.yield %x : %t2
+  }
+  uir.return %0 -> (%t2)
+}
+
+uir.func @ComplexCalleePin(%x: 0) -> (result: 0) {
+  %t = hir.int_type
+  uir.signature (%t) -> (%t)
+} {
+  %t2 = hir.int_type
+  uir.return %x -> (%t2)
+}
+
+// CHECK-LABEL: uir.func @DynCallInConstOk
+uir.func @DynCallInConstOk(%a: -3) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %0 = uir.expr pin -1 : %t {
+    %ta = hir.int_type
+    %tr = hir.int_type
+    // Floating expr: call floats to -2 (for dyn result at -1, satisfying Pin).
+    %r = uir.expr : %t {
+      // CHECK: uir.call @ComplexCallee({{.*}}) {{.*}}pa.phase = "-2"
+      %inner = uir.call @ComplexCallee(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [1]
+      uir.yield %inner : %t
+    }
+    %ta2 = hir.int_type
+    %tr2 = hir.int_type
+    %pinned = uir.call @ComplexCalleePin(%r) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [0] -> [0]
+    uir.yield %pinned : %t
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
 // Multi-result call with different result offsets. Result 0 at callPhase + 0,
 // result 1 at callPhase + 1. Two consumers tighten the call from different
 // results.
