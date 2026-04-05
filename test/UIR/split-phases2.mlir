@@ -1,4 +1,3 @@
-// XFAIL: *
 // RUN: silicon-opt --split-phases2 %s | FileCheck %s
 
 func.func private @dummyA()

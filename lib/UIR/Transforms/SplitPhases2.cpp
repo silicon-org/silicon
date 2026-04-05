@@ -126,7 +126,7 @@ private:
   void dissolveExprsAndPins();
   int16_t findValuePhase(Value value);
   void fixupCrossPhaseRefs();
-  void reconstructSignatures();
+  LogicalResult reconstructSignatures();
   void createReturnOps();
   void emitStructuralOps();
 };
@@ -694,6 +694,12 @@ void PhaseSplitter2::dissolveExprsAndPins() {
               if (rv == result)
                 rv = yieldVal;
           }
+          for (auto &v : savedSigTypeOfArgs)
+            if (v == result)
+              v = yieldVal;
+          for (auto &v : savedSigTypeOfResults)
+            if (v == result)
+              v = yieldVal;
         }
         yieldOp.erase();
       }
@@ -723,6 +729,12 @@ void PhaseSplitter2::dissolveExprsAndPins() {
             if (rv == output)
               rv = input;
         }
+        for (auto &v : savedSigTypeOfArgs)
+          if (v == output)
+            v = input;
+        for (auto &v : savedSigTypeOfResults)
+          if (v == output)
+            v = input;
       }
       pinOp.erase();
     }
@@ -1013,7 +1025,7 @@ static Value cloneTypeOpIntoSig(Value bodyVal, OpBuilder &sigBuilder,
 /// were merged into the body before distribution, so type values are now in
 /// the per-phase bodies. We reconstruct sigs by cloning type op trees from
 /// the body using a body→sig mapping.
-void PhaseSplitter2::reconstructSignatures() {
+LogicalResult PhaseSplitter2::reconstructSignatures() {
   auto anyTy = hir::AnyType::get(funcOp.getContext());
   auto loc = funcOp.getLoc();
 
@@ -1089,8 +1101,10 @@ void PhaseSplitter2::reconstructSignatures() {
       Value typeVal = savedSigTypeOfArgs[uIdx];
       Value sigType = resolveTypeForSig(typeVal);
       if (!sigType) {
-        // Fallback: should not happen for correct input.
-        sigType = hir::OpaqueTypeOp::create(sigBuilder, loc).getResult();
+        emitBug(funcOp.getLoc())
+            << "failed to resolve type for argument " << uIdx << " in phase "
+            << phase << " during signature reconstruction";
+        return failure();
       }
       sigTypeOfArgs.push_back(sigType);
       ++ownArgIdx;
@@ -1110,14 +1124,16 @@ void PhaseSplitter2::reconstructSignatures() {
       if (rp != phase)
         continue;
       Value sigType;
-      if (ownResultIdx < split.returnTypeOfValues.size()) {
+      if (ownResultIdx < split.returnTypeOfValues.size())
         sigType = resolveTypeForSig(split.returnTypeOfValues[ownResultIdx]);
-      }
-      if (!sigType && uIdx < savedSigTypeOfResults.size()) {
+      if (!sigType && uIdx < savedSigTypeOfResults.size())
         sigType = resolveTypeForSig(savedSigTypeOfResults[uIdx]);
+      if (!sigType) {
+        emitBug(funcOp.getLoc())
+            << "failed to resolve type for result " << uIdx << " in phase "
+            << phase << " during signature reconstruction";
+        return failure();
       }
-      if (!sigType)
-        sigType = hir::OpaqueTypeOp::create(sigBuilder, loc).getResult();
       sigTypeOfResults.push_back(sigType);
       ++ownResultIdx;
     }
@@ -1128,6 +1144,7 @@ void PhaseSplitter2::reconstructSignatures() {
 
     hir::SignatureOp::create(sigBuilder, loc, sigTypeOfArgs, sigTypeOfResults);
   }
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -1301,7 +1318,8 @@ LogicalResult PhaseSplitter2::run() {
   if (failed(splitBodyByPhase()))
     return failure();
 
-  reconstructSignatures();
+  if (failed(reconstructSignatures()))
+    return failure();
   emitStructuralOps(); // Also erases the original unified func.
 
   return success();
