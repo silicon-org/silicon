@@ -126,7 +126,7 @@ private:
   void dissolveExprsAndPins();
   int16_t findValuePhase(Value value);
   void fixupCrossPhaseRefs();
-  LogicalResult reconstructSignatures();
+  void reconstructSignatures();
   void createReturnOps();
   void emitStructuralOps();
 };
@@ -1025,7 +1025,7 @@ static Value cloneTypeOpIntoSig(Value bodyVal, OpBuilder &sigBuilder,
 /// were merged into the body before distribution, so type values are now in
 /// the per-phase bodies. We reconstruct sigs by cloning type op trees from
 /// the body using a body→sig mapping.
-LogicalResult PhaseSplitter2::reconstructSignatures() {
+void PhaseSplitter2::reconstructSignatures() {
   auto anyTy = hir::AnyType::get(funcOp.getContext());
   auto loc = funcOp.getLoc();
 
@@ -1100,12 +1100,9 @@ LogicalResult PhaseSplitter2::reconstructSignatures() {
         continue;
       Value typeVal = savedSigTypeOfArgs[uIdx];
       Value sigType = resolveTypeForSig(typeVal);
-      if (!sigType) {
-        emitBug(funcOp.getLoc())
-            << "failed to resolve type for argument " << uIdx << " in phase "
-            << phase << " during signature reconstruction";
-        return failure();
-      }
+      assert(sigType && "failed to resolve type for argument during "
+                        "signature reconstruction; all type values should be "
+                        "resolvable after cross-phase fixup");
       sigTypeOfArgs.push_back(sigType);
       ++ownArgIdx;
     }
@@ -1128,12 +1125,9 @@ LogicalResult PhaseSplitter2::reconstructSignatures() {
         sigType = resolveTypeForSig(split.returnTypeOfValues[ownResultIdx]);
       if (!sigType && uIdx < savedSigTypeOfResults.size())
         sigType = resolveTypeForSig(savedSigTypeOfResults[uIdx]);
-      if (!sigType) {
-        emitBug(funcOp.getLoc())
-            << "failed to resolve type for result " << uIdx << " in phase "
-            << phase << " during signature reconstruction";
-        return failure();
-      }
+      assert(sigType && "failed to resolve type for result during "
+                        "signature reconstruction; all type values should be "
+                        "resolvable after cross-phase fixup");
       sigTypeOfResults.push_back(sigType);
       ++ownResultIdx;
     }
@@ -1144,7 +1138,6 @@ LogicalResult PhaseSplitter2::reconstructSignatures() {
 
     hir::SignatureOp::create(sigBuilder, loc, sigTypeOfArgs, sigTypeOfResults);
   }
-  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -1318,8 +1311,7 @@ LogicalResult PhaseSplitter2::run() {
   if (failed(splitBodyByPhase()))
     return failure();
 
-  if (failed(reconstructSignatures()))
-    return failure();
+  reconstructSignatures();
   emitStructuralOps(); // Also erases the original unified func.
 
   return success();
