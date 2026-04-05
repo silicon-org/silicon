@@ -24,12 +24,6 @@
   We'll use this op to have a mechanism to capture the location of a named expression like `x`.
   When reporting phase errors, we can stop at `x` and indicate an error right there, instead of pointing the user at a definition like the `x: const int` arg of a function, which is far more confusing.
 
-## Phase Analysis
-
-- SplitPhases2: the splitter crashes when processing `uir.expr` ops in the signature region.
-  Root cause: `reconstructSignatures` → `isTriviallyMaterializable` hits a null value when the expr result is involved.
-  Test: `split-phases2.mlir` is XFAILed pending this fix.
-
 ## Phase Inference Redesign
 
 See `docs/design/phase-inference.md`, `docs/design/unified-dialect.md`, and `docs/design/control-flow.md` (FlattenCF section).
