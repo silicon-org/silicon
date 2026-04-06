@@ -198,4 +198,32 @@ def MIROpaqueUnpackOp : MIROp<"opaque_unpack", [Pure]> {
   let hasFolder = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Opaque List
+//===----------------------------------------------------------------------===//
+
+def MIROpaqueListCreateOp : MIROp<"opaque_list_create", [
+  MemoryEffects<[MemAlloc<DefaultResource>]>,
+]> {
+  let summary = "create an empty opaque list";
+  let description = [{
+    Allocates an empty opaque list for collecting hits during phase
+    execution. Entries are appended with `mir.opaque_list_push`.
+  }];
+  let results = (outs OpaqueListType:$result);
+  let assemblyFormat = "attr-dict";
+}
+
+def MIROpaqueListPushOp : MIROp<"opaque_list_push", [
+  MemoryEffects<[MemWrite<DefaultResource>]>,
+]> {
+  let summary = "append an entry to an opaque list";
+  let description = [{
+    Appends an opaque-packed entry to the given opaque list. The list
+    is mutated in place; there is no result.
+  }];
+  let arguments = (ins OpaqueListType:$list, OpaqueType:$entry);
+  let assemblyFormat = "$list `,` $entry attr-dict";
+}
+
 #endif // SILICON_MIR_OPS_TD

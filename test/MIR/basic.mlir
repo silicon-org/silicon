@@ -80,6 +80,12 @@ unrealized_conversion_cast to index {attr = #si.opaque<[#si.int<42>, #si.type<!s
 %opaque_ctx = mir.opaque_pack (%c42_int, %int_type) : (!si.int, !si.type)
 %opaque_a, %opaque_b = mir.opaque_unpack %opaque_ctx : !si.int, !si.type
 
+// Opaque list create/push
+// CHECK: mir.opaque_list_create
+%hits = mir.opaque_list_create
+// CHECK: mir.opaque_list_push
+mir.opaque_list_push %hits, %opaque_ctx
+
 // Evaluated func
 // CHECK: mir.evaluated_func @eval_test [#si.int<42> : !si.int]
 mir.evaluated_func @eval_test [#si.int<42> : !si.int]
