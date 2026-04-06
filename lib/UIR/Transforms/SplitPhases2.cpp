@@ -121,6 +121,7 @@ private:
   void groupPhases();
   void createPhaseFunctions();
   LogicalResult splitBodyByPhase();
+  void extractReplicates(Block &block);
   void distributeOps(Block &block);
   bool decomposeCall(CallOp callOp);
   void dissolveExprsAndPins();
@@ -350,6 +351,13 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
       op.erase();
   }
 
+  // Extract replicates from dyn exprs inside CF ops. This must happen before
+  // arg shifting, while all values are still in phase 0's body. The dyn expr
+  // bodies are moved into hir.replicate ops placed at the top level, assigned
+  // to the receiving phase. After arg shifting, RAUW updates refs in the
+  // replicate bodies to point to the shifted args in the correct phase.
+  extractReplicates(entryBlock);
+
   // Move shifted block args to their phase functions first, before capturing
   // return values (so that RAUW updates the return op's operands).
   // First pass: create new args in target phases (forward order for correct
@@ -414,6 +422,275 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
   createReturnOps();
 
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Replicate Extraction
+//===----------------------------------------------------------------------===//
+
+/// Extract dyn exprs from inside CF ops (uir.if, uir.loop) into
+/// hir.replicate ops. This runs while the entire body is still in phase 0,
+/// before arg shifting or op distribution.
+///
+/// For a `uir.if` whose branches contain `uir.expr pin +K` (dyn blocks),
+/// the transformation:
+/// 1. Creates opaque list ops before the if to hold hits vectors
+/// 2. Replaces each dyn expr in the if branches with hits-building code
+/// 3. Creates chained hir.replicate ops after the if for the receiving phase
+/// 4. Replaces the if's results with the replicate chain's results
+void PhaseSplitter2::extractReplicates(Block &block) {
+  auto loc = funcOp.getLoc();
+  auto anyTy = hir::AnyType::get(funcOp.getContext());
+
+  // Collect if ops that contain dyn exprs. We snapshot because we modify
+  // the block during iteration.
+  SmallVector<IfOp> ifsWithDynExprs;
+  for (auto &op : block) {
+    auto ifOp = dyn_cast<IfOp>(&op);
+    if (!ifOp)
+      continue;
+    // Check if any branch has a dyn expr (pinned with positive phase shift).
+    bool hasDyn = false;
+    for (auto &region : ifOp->getRegions()) {
+      region.walk([&](ExprOp expr) {
+        if (expr.getPin() && expr.getPhaseShift() > 0)
+          hasDyn = true;
+      });
+    }
+    if (hasDyn)
+      ifsWithDynExprs.push_back(ifOp);
+  }
+
+  for (auto ifOp : ifsWithDynExprs) {
+    int16_t ifPhase = analysis.getPhase(ifOp);
+
+    // # Collect Dyn Exprs per Branch
+    //
+    // For each branch (then/else), find pinned dyn exprs whose results are
+    // yielded by the branch. We only handle the case where each if result
+    // corresponds to a dyn expr yield in each branch.
+    auto &thenBlock = ifOp.getThenRegion().front();
+    auto thenYield = cast<YieldOp>(thenBlock.getTerminator());
+    auto *elseBlock =
+        !ifOp.getElseRegion().empty() ? &ifOp.getElseRegion().front() : nullptr;
+    YieldOp elseYield =
+        elseBlock ? cast<YieldOp>(elseBlock->getTerminator()) : nullptr;
+
+    // Find dyn exprs that produce the yield values. For each if result,
+    // we need a dyn expr in the then branch (and optionally else branch).
+    SmallVector<ExprOp> thenDynExprs, elseDynExprs;
+    for (auto yieldVal : thenYield.getValues()) {
+      auto expr = yieldVal.getDefiningOp<ExprOp>();
+      if (expr && expr.getPin() && expr.getPhaseShift() > 0)
+        thenDynExprs.push_back(expr);
+      else
+        thenDynExprs.push_back(nullptr);
+    }
+    if (elseYield) {
+      for (auto yieldVal : elseYield.getValues()) {
+        auto expr = yieldVal.getDefiningOp<ExprOp>();
+        if (expr && expr.getPin() && expr.getPhaseShift() > 0)
+          elseDynExprs.push_back(expr);
+        else
+          elseDynExprs.push_back(nullptr);
+      }
+    }
+
+    // For the first implementation, we require ALL if results to come from
+    // dyn exprs in both branches.
+    bool allDyn = true;
+    for (auto e : thenDynExprs)
+      if (!e)
+        allDyn = false;
+    for (auto e : elseDynExprs)
+      if (!e)
+        allDyn = false;
+    if (!allDyn)
+      continue;
+
+    unsigned numResults = ifOp.getNumResults();
+    int16_t dynPhase = ifPhase + thenDynExprs[0].getPhaseShift();
+
+    // # Create Hits Lists
+    //
+    // Before the if, create one opaque list per branch.
+    OpBuilder beforeIf(ifOp);
+    auto thenHits = hir::OpaqueListCreateOp::create(beforeIf, loc);
+    analysis.opPhases[thenHits] = ifPhase;
+    Value elseHitsVal;
+    if (elseBlock) {
+      auto elseHits = hir::OpaqueListCreateOp::create(beforeIf, loc);
+      analysis.opPhases[elseHits] = ifPhase;
+      elseHitsVal = elseHits.getResult();
+    }
+
+    // # Rewrite Branches to Build Hits
+    //
+    // In each branch, replace the dyn expr with:
+    //   %entry = hir.opaque_pack(<captured values from producing phase>)
+    //   hir.opaque_list_push %hits, %entry
+    // The dyn expr's body ops will be cloned into the replicate later.
+
+    // Info about one dyn expr's body, saved before the expr is erased.
+    struct DynExprInfo {
+      SmallVector<Operation *> bodyOps;
+      SmallVector<Value> yieldValues;
+    };
+
+    // Helper: rewrite one branch.
+    auto rewriteBranch = [&](Block &branchBlock, YieldOp yield,
+                             ArrayRef<ExprOp> dynExprs, Value hitsList) {
+      SmallVector<DynExprInfo> infos;
+      for (auto expr : dynExprs) {
+        DynExprInfo info;
+        auto &exprBlock = expr.getBody().front();
+        auto exprYield = cast<uir::YieldOp>(exprBlock.getTerminator());
+        info.yieldValues.append(exprYield.getValues().begin(),
+                                exprYield.getValues().end());
+        for (auto &op : exprBlock)
+          if (!op.hasTrait<OpTrait::IsTerminator>())
+            info.bodyOps.push_back(&op);
+        infos.push_back(std::move(info));
+      }
+
+      // Identify values captured from the producing phase (defined outside
+      // the dyn expr, used inside). For the simple case where the body just
+      // yields a func arg, there are no captured values — the func arg will
+      // be available in the receiving phase directly.
+      // For now, we pack no captured values — the body ops reference func
+      // args or other values that will be moved by distribution/arg shifting.
+      OpBuilder branchBuilder(&branchBlock, yield->getIterator());
+      auto entry =
+          hir::OpaquePackOp::create(branchBuilder, loc, anyTy, ValueRange{});
+      analysis.opPhases[entry] = ifPhase;
+      auto push = hir::OpaqueListPushOp::create(branchBuilder, loc, hitsList,
+                                                entry.getResult());
+      analysis.opPhases[push] = ifPhase;
+
+      // Erase the dyn exprs (their body ops will be cloned into replicates).
+      // First, disconnect uses: the yield operands that reference the expr
+      // results will be updated below.
+      for (auto expr : dynExprs) {
+        // The expr result is used by the branch yield. We'll remove the
+        // yield operands shortly, so just dropAllUses for now.
+        for (auto result : expr.getResults())
+          result.dropAllUses();
+        expr.erase();
+      }
+
+      // Rewrite the branch yield to have no value operands (the if becomes
+      // void). Keep type operands for any remaining yields.
+      yield.getValuesMutable().clear();
+      yield.getTypeOfValuesMutable().clear();
+
+      return infos;
+    };
+
+    auto thenInfos =
+        rewriteBranch(thenBlock, thenYield, thenDynExprs, thenHits.getResult());
+    SmallVector<DynExprInfo> elseInfos;
+    if (elseBlock)
+      elseInfos =
+          rewriteBranch(*elseBlock, elseYield, elseDynExprs, elseHitsVal);
+
+    // # Create Replicate Chain
+    //
+    // After the if, create chained replicates for each branch. For if-else,
+    // exactly one branch fires (0-or-1 hits). The chain threads results.
+    OpBuilder afterIf(ifOp->getBlock(), std::next(ifOp->getIterator()));
+
+    // Create a dummy initial value for the replicate chain. This is never
+    // observed for if-else (exactly one branch fires), but we need a valid
+    // SSA value. We use an empty opaque_pack.
+    SmallVector<Value> chainInits;
+    for (unsigned i = 0; i < numResults; ++i) {
+      auto init = hir::OpaquePackOp::create(afterIf, loc, anyTy, ValueRange{});
+      analysis.opPhases[init] = ifPhase;
+      chainInits.push_back(init.getResult());
+    }
+
+    // Helper: create a replicate from one branch's dyn expr info.
+    auto createReplicate =
+        [&](Value hitsList, SmallVector<DynExprInfo> &infos,
+            SmallVector<Value> &inits) -> SmallVector<Value> {
+      // Build the replicate body. Block args: hit entry, then threaded values.
+      auto replicateOp = hir::ReplicateOp::create(
+          afterIf, loc, SmallVector<Type>(numResults, anyTy), hitsList, inits);
+      analysis.opPhases[replicateOp] = dynPhase;
+
+      // The create call leaves the body region empty. Add an entry block
+      // with block args: 1 hit entry + N threaded values.
+      auto &bodyRegion = replicateOp.getBody();
+      auto *entryBlock = new Block();
+      bodyRegion.push_back(entryBlock);
+      entryBlock->addArgument(anyTy, loc); // hit entry
+      for (unsigned i = 0; i < numResults; ++i)
+        entryBlock->addArgument(anyTy, loc); // threaded values
+
+      OpBuilder bodyBuilder(entryBlock, entryBlock->end());
+
+      // Clone the dyn expr body ops into the replicate body.
+      // The ops reference values from the unified body (func args, etc.).
+      // After arg shifting and distribution, these refs will be updated.
+      IRMapping bodyMapping;
+      SmallVector<Value> yieldValues;
+      for (unsigned i = 0; i < numResults; ++i) {
+        auto &info = infos[i];
+        for (auto *op : info.bodyOps) {
+          auto *cloned = bodyBuilder.clone(*op, bodyMapping);
+          analysis.opPhases[cloned] = dynPhase;
+        }
+        // Map the yield value through the clone mapping.
+        for (auto val : info.yieldValues) {
+          auto mapped = bodyMapping.lookupOrDefault(val);
+          yieldValues.push_back(mapped);
+        }
+      }
+
+      // Create the yield terminator.
+      auto yield = hir::YieldOp::create(bodyBuilder, loc, yieldValues);
+      analysis.opPhases[yield] = dynPhase;
+
+      // Return the replicate results as the new chain inits.
+      SmallVector<Value> results;
+      for (auto r : replicateOp.getResults())
+        results.push_back(r);
+      return results;
+    };
+
+    // Then-branch replicate.
+    auto thenResults =
+        createReplicate(thenHits.getResult(), thenInfos, chainInits);
+
+    // Else-branch replicate (if present).
+    SmallVector<Value> finalResults = thenResults;
+    if (elseBlock) {
+      finalResults = createReplicate(elseHitsVal, elseInfos, thenResults);
+    }
+
+    // # Replace If Results
+    //
+    // The if's original results are replaced by the replicate chain output.
+    // Remove the if's result types and replace all uses.
+    for (auto [oldResult, newResult] :
+         llvm::zip(ifOp.getResults(), finalResults))
+      oldResult.replaceAllUsesWith(newResult);
+
+    // Rebuild the if without results (void if). We can't drop results
+    // from the existing op, so we build a new one.
+    OpBuilder rebuildBuilder(ifOp);
+    auto newIf = IfOp::create(rebuildBuilder, loc, /*results=*/TypeRange{},
+                              ifOp.getCondition(),
+                              /*resultTypes=*/ValueRange{});
+    analysis.opPhases[newIf] = ifPhase;
+
+    // Move the branches from the old if to the new if.
+    newIf.getThenRegion().takeBody(ifOp.getThenRegion());
+    if (!ifOp.getElseRegion().empty())
+      newIf.getElseRegion().takeBody(ifOp.getElseRegion());
+
+    ifOp.erase();
+  }
 }
 
 //===----------------------------------------------------------------------===//

@@ -834,3 +834,58 @@ uir.func @UnreachableSig() -> () {
 } {
   uir.return -> ()
 }
+
+//===----------------------------------------------------------------------===//
+// Dyn exprs inside if-else: each dyn block becomes a 0-or-1 replicate.
+// The producing phase (0) builds hits vectors; the receiving phase (1)
+// has chained replicates that stamp out the taken branch's body.
+
+// Phase 0: creates two hits lists, pushes into the taken branch's list.
+// CHECK-LABEL: hir.func private @DynIfElse.0(%cond) -> (ctx)
+// CHECK:       } {
+// CHECK:         %[[THEN_HITS:.+]] = hir.opaque_list_create
+// CHECK:         %[[ELSE_HITS:.+]] = hir.opaque_list_create
+// CHECK:         uir.if %cond {
+// CHECK:           %[[E1:.+]] = hir.opaque_pack()
+// CHECK:           hir.opaque_list_push %[[THEN_HITS]], %[[E1]]
+// CHECK:           uir.yield
+// CHECK:         } else {
+// CHECK:           %[[E2:.+]] = hir.opaque_pack()
+// CHECK:           hir.opaque_list_push %[[ELSE_HITS]], %[[E2]]
+// CHECK:           uir.yield
+// CHECK:         }
+// CHECK:         %[[CTX:.+]] = hir.opaque_pack(%[[THEN_HITS]], %[[ELSE_HITS]])
+// CHECK:         hir.return %[[CTX]]
+
+// Phase 1: two chained replicates consuming the hits vectors.
+// CHECK-LABEL: hir.func private @DynIfElse.1(%a, %b, %ctx) -> (result)
+// CHECK:       } {
+// CHECK:         %[[UNPACK:.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:         %[[INIT:.+]] = hir.opaque_pack()
+// CHECK:         %[[R1:.+]] = hir.replicate %{{.+}} in %[[UNPACK]]#0, (%{{.+}} = %[[INIT]]) {
+// CHECK:           hir.yield %a
+// CHECK:         }
+// CHECK:         %[[R2:.+]] = hir.replicate %{{.+}} in %[[UNPACK]]#1, (%{{.+}} = %[[R1]]) {
+// CHECK:           hir.yield %b
+// CHECK:         }
+// CHECK:         hir.return %[[R2]]
+uir.func @DynIfElse(%cond: 0, %a: 1, %b: 1) -> (result: 1) {
+  %bt = hir.bool_type
+  %it = hir.int_type
+  uir.signature (%bt, %it, %it) -> (%it)
+} {
+  %it = hir.int_type
+  %result = uir.if %cond : %it {
+    %then_r = uir.expr pin 1 : %it {
+      uir.yield %a : %it
+    }
+    uir.yield %then_r : %it
+  } else {
+    %else_it = hir.int_type
+    %else_r = uir.expr pin 1 : %else_it {
+      uir.yield %b : %else_it
+    }
+    uir.yield %else_r : %else_it
+  }
+  uir.return %result -> (%it)
+}
