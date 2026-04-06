@@ -190,7 +190,7 @@ hir.multiphase_func @empty_phases() -> (out) []
 
 // YieldOp must be inside an ExprOp
 func.func @yield_outside() {
-  // expected-error @below {{'hir.yield' op expects parent op 'hir.expr'}}
+  // expected-error @below {{'hir.yield' op expects parent op to be one of 'hir.expr, hir.replicate'}}
   hir.yield
 }
 
@@ -306,4 +306,27 @@ hir.unified_func @return_typeofvalues_too_many() -> () {
   %0 = hir.int_type
   // expected-error @below {{typeOfValues must match values size}}
   "hir.return"(%0) <{operandSegmentSizes = array<i32: 0, 1>}> : (!hir.any) -> ()
+}
+
+// -----
+
+// replicate: yield operand count mismatch with replicate results.
+func.func @replicate_yield_mismatch(%hits: !hir.any, %x: !hir.any) {
+  %r = hir.replicate %hit in %hits, (%a = %x) {
+    // expected-error @below {{has 0 operands but parent replicate has 1 results}}
+    hir.yield
+  }
+  return
+}
+
+// -----
+
+// replicate: body block arg count mismatch (too few).
+func.func @replicate_blockarg_mismatch(%hits: !hir.any, %x: !hir.any) {
+  // expected-error @below {{body has 1 block arguments but expected 2 (1 hit + 1 threaded)}}
+  "hir.replicate"(%hits, %x) ({
+  ^bb0(%hit: !hir.any):
+    hir.yield %hit : !hir.any
+  }) : (!hir.any, !hir.any) -> !hir.any
+  return
 }

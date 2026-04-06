@@ -139,16 +139,84 @@ def ExprOp : HIROp<"expr", [
 }
 
 def YieldOp : HIROp<"yield", [
-  HasParent<"ExprOp">,
+  HasParent<"ExprOp, ReplicateOp">,
   Pure,
   Terminator,
 ]> {
-  let summary = "Yield result values from an expression";
+  let summary = "Yield result values from an expression or replicate body";
   let arguments = (ins Variadic<AnyType>:$operands);
   let assemblyFormat = [{
     ($operands^ `:` type($operands))? attr-dict
   }];
   let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Replicate
+//===----------------------------------------------------------------------===//
+
+def ReplicateOp : HIROp<"replicate", [
+  RecursiveMemoryEffects,
+  SingleBlock,
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
+]> {
+  let summary = "stamp out body once per entry in a hits vector";
+  let description = [{
+    Consumes a hits vector from an earlier phase and stamps out its body
+    region once per entry, threading values between iterations.
+
+    The body's entry block has `1 + N` arguments: the first receives the
+    current hit entry (an opaque-packed bundle of captured values), and
+    the remaining N are threaded values that chain from one iteration to
+    the next. The body must be terminated by `hir.yield` with N operands
+    that become the threaded values for the next iteration.
+
+    The op's results are the threaded values from the last iteration.
+    For zero iterations (empty hits vector), the results are the initial
+    threaded values passed to the op.
+
+    All values have the implicit `!hir.any` type. The replicate is always
+    expanded by `SpecializeFuncs` and never lowered to MIR.
+  }];
+  let arguments = (ins
+    HIRAnyType:$hits,
+    Variadic<HIRAnyType>:$threadedInits
+  );
+  let results = (outs Variadic<HIRAnyType>:$results);
+  let regions = (region MinSizedRegion<1>:$body);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Hits Vector
+//===----------------------------------------------------------------------===//
+
+def OpaqueListCreateOp : HIROp<"opaque_list_create", [
+  MemoryEffects<[MemAlloc<DefaultResource>]>,
+]> {
+  let summary = "create an empty opaque list";
+  let description = [{
+    Allocates an empty opaque list for collecting hits during
+    earlier-phase execution. Entries are appended with
+    `hir.opaque_list_push` and the list is consumed by
+    `hir.replicate`.
+  }];
+  let results = (outs HIRAnyType:$result);
+  let assemblyFormat = "attr-dict";
+}
+
+def OpaqueListPushOp : HIROp<"opaque_list_push", [
+  MemoryEffects<[MemWrite<DefaultResource>]>,
+]> {
+  let summary = "append an entry to an opaque list";
+  let description = [{
+    Appends an opaque-packed entry to the given opaque list. The list
+    is mutated in place; there is no result. Used to build hits vectors
+    during earlier-phase execution.
+  }];
+  let arguments = (ins HIRAnyType:$list, HIRAnyType:$entry);
+  let assemblyFormat = "$list `,` $entry attr-dict";
 }
 
 //===----------------------------------------------------------------------===//

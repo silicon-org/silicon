@@ -171,3 +171,23 @@ hir.opaque_type
 // mir_constant
 hir.mir_constant #si.int<42> : !si.int
 hir.mir_constant #si.type<!si.int> : !si.type
+
+// opaque_list_create and opaque_list_push
+%list = hir.opaque_list_create
+%entry = hir.opaque_pack()
+hir.opaque_list_push %list, %entry
+
+// replicate with threaded values
+%rep1 = hir.replicate %hit1 in %list, (%x = %opaque_b) {
+  hir.yield %x : !hir.any
+}
+
+// replicate without threaded values (side-effect only)
+hir.replicate %hit2 in %list {
+  hir.yield
+}
+
+// replicate with multiple threaded values
+%rep2, %rep3 = hir.replicate %hit3 in %list, (%a = %opaque_a, %b = %opaque_b) {
+  hir.yield %b, %a : !hir.any, !hir.any
+}

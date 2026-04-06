@@ -304,11 +304,18 @@ LogicalResult SignatureOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult YieldOp::verify() {
-  auto exprOp = cast<ExprOp>((*this)->getParentOp());
-  if (getOperands().size() != exprOp.getResults().size())
-    return emitOpError() << "has " << getOperands().size()
-                         << " operands but parent expr has "
-                         << exprOp.getResults().size() << " results";
+  auto *parentOp = (*this)->getParentOp();
+  if (auto exprOp = dyn_cast<ExprOp>(parentOp)) {
+    if (getOperands().size() != exprOp.getResults().size())
+      return emitOpError() << "has " << getOperands().size()
+                           << " operands but parent expr has "
+                           << exprOp.getResults().size() << " results";
+  } else if (auto replicateOp = dyn_cast<ReplicateOp>(parentOp)) {
+    if (getOperands().size() != replicateOp.getResults().size())
+      return emitOpError() << "has " << getOperands().size()
+                           << " operands but parent replicate has "
+                           << replicateOp.getResults().size() << " results";
+  }
   return success();
 }
 
@@ -1313,4 +1320,114 @@ Value hir::getOrCreateTypeOf(OpBuilder &builder, Location loc, Value value) {
   if (value.getDefiningOp<ConstantUnitOp>())
     return UnitTypeOp::create(builder, loc).getResult();
   return TypeOfOp::create(builder, loc, value).getResult();
+}
+
+//===----------------------------------------------------------------------===//
+// ReplicateOp
+//===----------------------------------------------------------------------===//
+
+// Parse:
+//   hir.replicate %hit in %hits, (%x = %x_init, %y = %y_init) { body }
+//   hir.replicate %hit in %hits { body }
+ParseResult ReplicateOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto &builder = parser.getBuilder();
+  auto anyTy = AnyType::get(builder.getContext());
+
+  // Parse "%hit in %hits".
+  OpAsmParser::Argument hitArg;
+  hitArg.type = anyTy;
+  OpAsmParser::UnresolvedOperand hitsOperand;
+  if (parser.parseArgument(hitArg) || parser.parseKeyword("in") ||
+      parser.parseOperand(hitsOperand) ||
+      parser.resolveOperand(hitsOperand, anyTy, result.operands))
+    return failure();
+
+  // Parse optional threaded args: ", (%x = %x_init, ...)".
+  SmallVector<OpAsmParser::Argument> threadedArgs;
+  SmallVector<OpAsmParser::UnresolvedOperand> threadedInits;
+  if (succeeded(parser.parseOptionalComma())) {
+    if (parser.parseLParen())
+      return failure();
+    if (failed(parser.parseOptionalRParen())) {
+      do {
+        OpAsmParser::Argument arg;
+        arg.type = anyTy;
+        OpAsmParser::UnresolvedOperand init;
+        if (parser.parseArgument(arg) || parser.parseEqual() ||
+            parser.parseOperand(init))
+          return failure();
+        threadedArgs.push_back(arg);
+        threadedInits.push_back(init);
+      } while (succeeded(parser.parseOptionalComma()));
+      if (parser.parseRParen())
+        return failure();
+    }
+  }
+
+  // Resolve threaded init operands.
+  for (auto &init : threadedInits)
+    if (parser.resolveOperand(init, anyTy, result.operands))
+      return failure();
+
+  // Results: one per threaded arg.
+  result.addTypes(SmallVector<Type>(threadedArgs.size(), anyTy));
+
+  // Parse body region. Block args are: hit, then threaded args.
+  SmallVector<OpAsmParser::Argument> bodyArgs;
+  bodyArgs.push_back(hitArg);
+  bodyArgs.append(threadedArgs.begin(), threadedArgs.end());
+
+  auto *body = result.addRegion();
+  if (parser.parseRegion(*body, bodyArgs))
+    return failure();
+
+  return success();
+}
+
+void ReplicateOp::print(OpAsmPrinter &p) {
+  auto &body = getBody().front();
+  auto numThreaded = getThreadedInits().size();
+
+  // Print "%hit in %hits".
+  p << ' ';
+  p.printOperand(body.getArgument(0));
+  p << " in ";
+  p.printOperand(getHits());
+
+  // Print optional threaded args.
+  if (numThreaded > 0) {
+    p << ", (";
+    for (unsigned i = 0; i < numThreaded; ++i) {
+      if (i > 0)
+        p << ", ";
+      p.printOperand(body.getArgument(1 + i));
+      p << " = ";
+      p.printOperand(getThreadedInits()[i]);
+    }
+    p << ')';
+  }
+
+  // Print body.
+  p << ' ';
+  p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
+}
+
+LogicalResult ReplicateOp::verify() {
+  auto &body = getBody().front();
+  unsigned expectedBlockArgs = 1 + getThreadedInits().size();
+  if (body.getNumArguments() != expectedBlockArgs)
+    return emitOpError() << "body has " << body.getNumArguments()
+                         << " block arguments but expected "
+                         << expectedBlockArgs << " (1 hit + "
+                         << getThreadedInits().size() << " threaded)";
+  if (getResults().size() != getThreadedInits().size())
+    return emitOpError() << "has " << getResults().size() << " results but "
+                         << getThreadedInits().size()
+                         << " threaded init values";
+  return success();
+}
+
+void ReplicateOp::getAsmBlockArgumentNames(Region &region,
+                                           OpAsmSetValueNameFn setNameFn) {
+  // Block arg names were set by the parser; nothing extra needed.
 }
