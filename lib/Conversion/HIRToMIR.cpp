@@ -370,6 +370,22 @@ static LogicalResult convert(hir::OpaqueUnpackOp op,
   return success();
 }
 
+static LogicalResult convert(hir::OpaqueListCreateOp op,
+                             hir::OpaqueListCreateOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  auto listType = base::OpaqueListType::get(op.getContext());
+  rewriter.replaceOpWithNewOp<mir::MIROpaqueListCreateOp>(op, listType);
+  return success();
+}
+
+static LogicalResult convert(hir::OpaqueListPushOp op,
+                             hir::OpaqueListPushOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  rewriter.replaceOpWithNewOp<mir::MIROpaqueListPushOp>(op, adaptor.getList(),
+                                                        adaptor.getEntry());
+  return success();
+}
+
 static LogicalResult convert(UnrealizedConversionCastOp op,
                              UnrealizedConversionCastOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
@@ -797,6 +813,8 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::CallOp>(convert);
   patterns.add<hir::OpaquePackOp>(convert);
   patterns.add<hir::OpaqueUnpackOp>(convert);
+  patterns.add<hir::OpaqueListCreateOp>(convert);
+  patterns.add<hir::OpaqueListPushOp>(convert);
   patterns.add<UnrealizedConversionCastOp>(convert);
 
   ConversionConfig config;

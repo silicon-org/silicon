@@ -347,3 +347,21 @@ hir.func @OpaquePack(%a, %b) -> (ctx) {
   %opaque = hir.opaque_type
   hir.return %packed -> (%opaque)
 }
+
+//===----------------------------------------------------------------------===//
+// hir.opaque_list_create → mir.opaque_list_create
+// hir.opaque_list_push → mir.opaque_list_push
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: mir.func @OpaqueList
+hir.func @OpaqueList() -> () {
+  hir.signature () -> ()
+} {
+  // CHECK: %[[LIST:.+]] = mir.opaque_list_create
+  %list = hir.opaque_list_create
+  // CHECK: %[[ENTRY:.+]] = mir.opaque_pack() : ()
+  %entry = hir.opaque_pack()
+  // CHECK: mir.opaque_list_push %[[LIST]], %[[ENTRY]]
+  hir.opaque_list_push %list, %entry
+  hir.return -> ()
+}
