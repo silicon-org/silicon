@@ -100,4 +100,19 @@ def OpaqueType : BaseTypeDef<"Opaque"> {
   }];
 }
 
+def OpaqueListType : BaseTypeDef<"OpaqueList"> {
+  let mnemonic = "opaque_list";
+  let summary = "opaque list of packed values collected between phases";
+  let description = [{
+    A dynamic list of `si.opaque` entries built during earlier-phase
+    execution and consumed by `hir.replicate` ops in later phases.
+    Earlier phases use `opaque_list_create` and `opaque_list_push` to
+    build the list; the replicate op iterates over its entries to stamp
+    out hardware instances.
+
+    The list is heap-backed and mutable during interpretation. After
+    replicate expansion, it ceases to exist as a runtime value.
+  }];
+}
+
 #endif // SILICON_BASE_TYPES_TD

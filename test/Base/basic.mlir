@@ -16,8 +16,10 @@ func.func @types(
   %d: !si.type,
   // CHECK-SAME: %{{.*}}: !si.anyfunc
   %e: !si.anyfunc,
-  // CHECK-SAME: %{{.*}}: !si.opaque
-  %f: !si.opaque
+  // CHECK-SAME: %{{.*}}: !si.opaque,
+  %f: !si.opaque,
+  // CHECK-SAME: %{{.*}}: !si.opaque_list
+  %g: !si.opaque_list
 ) {
   return
 }
