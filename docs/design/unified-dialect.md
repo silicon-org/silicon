@@ -77,7 +77,7 @@ Each structured region must end with exactly one of these.
 |---|---|
 | `uir.yield` | Normal region completion, returning values to parent op |
 | `uir.break` | Exit enclosing loop with values |
-| `uir.continue` | Restart enclosing loop iteration |
+| `uir.continue` | Advance enclosing loop to next iteration with carried values |
 | `uir.return` | Return from enclosing function (structured early exit) |
 | `uir.unreachable` | Marks unreachable control flow |
 
