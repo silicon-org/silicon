@@ -152,7 +152,7 @@ func.func @loop_break(%cond: !hir.any, %val: !hir.any, %ty: !hir.any) -> !hir.an
     uir.if %cond {
       uir.break %val : %ty
     }
-    uir.yield
+    uir.continue
   }
   func.return %r : !hir.any
 }
@@ -181,7 +181,7 @@ func.func @loop_continue(%c1: !hir.any, %c2: !hir.any) {
     uir.if %c2 {
       uir.break
     }
-    uir.yield
+    uir.continue
   }
   func.return
 }
@@ -203,7 +203,7 @@ func.func @loop_void(%cond: !hir.any) {
     uir.if %cond {
       uir.break
     }
-    uir.yield
+    uir.continue
   }
   func.return
 }
@@ -264,12 +264,12 @@ func.func @nested_loops(%c1: !hir.any, %c2: !hir.any) {
       uir.if %c2 {
         uir.break
       }
-      uir.yield
+      uir.continue
     }
     uir.if %c1 {
       uir.break
     }
-    uir.yield
+    uir.continue
   }
   func.return
 }
@@ -284,7 +284,38 @@ func.func @loop_result_used(%cond: !hir.any, %val: !hir.any, %ty: !hir.any) -> !
     uir.if %cond {
       uir.break %val : %ty
     }
-    uir.yield
+    uir.continue
+  }
+  func.return %r : !hir.any
+}
+
+//===----------------------------------------------------------------------===//
+// loop with carried values
+//===----------------------------------------------------------------------===//
+
+// The loop-carried iteration arguments become block arguments of the loop
+// header. The entry branch passes the init values into the header, and each
+// uir.continue branches back to the header with the next-iteration values.
+// The break exits with the loop's result.
+// CHECK-LABEL: func.func @loop_carried
+// CHECK:         cf.br ^[[HEADER:.*]](%[[A:.*]], %[[B:.*]] : !hir.any, !hir.any)
+// CHECK:       ^[[HEADER]](%[[X:.*]]: !hir.any, %[[Y:.*]]: !hir.any):
+// CHECK:         cf.cond_br %{{.*}}, ^[[BREAK:.*]], ^[[CONT:.*]]
+// CHECK:       ^[[BREAK]]:
+// CHECK-NEXT:    cf.br ^[[EXIT:.*]](%[[X]] : !hir.any)
+// CHECK:       ^[[CONT]]:
+// CHECK-NEXT:    cf.br ^[[HEADER]](%[[Y]], %[[X]] : !hir.any, !hir.any)
+// CHECK:       ^[[EXIT]](%[[R:.*]]: !hir.any):
+// CHECK-NEXT:    cf.br ^[[AFTER:.*]]
+// CHECK:       ^[[AFTER]]:
+// CHECK-NEXT:    return %[[R]] : !hir.any
+func.func @loop_carried(%cond: !hir.any, %a: !hir.any, %b: !hir.any,
+                        %ta: !hir.any, %tb: !hir.any, %r_ty: !hir.any) -> !hir.any {
+  %r = uir.loop (%x = %a, %y = %b : %ta, %tb) : %r_ty {
+    uir.if %cond {
+      uir.break %x : %r_ty
+    }
+    uir.continue %y, %x : %tb, %ta
   }
   func.return %r : !hir.any
 }
@@ -349,7 +380,7 @@ hir.func @return_in_loop(%cond, %val, %ty) -> (result) {
     uir.if %cond {
       uir.return %val -> (%ty)
     }
-    uir.yield
+    uir.continue
   }
   hir.return %val -> (%ty)
 }
@@ -381,7 +412,7 @@ func.func @if_yield_and_break_in_loop(%cond: !hir.any, %val: !hir.any, %ty: !hir
     } else {
       uir.yield
     }
-    uir.yield
+    uir.continue
   }
   func.return %r : !hir.any
 }
@@ -436,7 +467,7 @@ func.func @loop_multiple_results(%cond: !hir.any, %a: !hir.any, %b: !hir.any,
     uir.if %cond {
       uir.break %a, %b : %ty1, %ty2
     }
-    uir.yield
+    uir.continue
   }
   func.return %r1, %r2 : !hir.any, !hir.any
 }
@@ -459,11 +490,11 @@ func.func @deeply_nested(%c1: !hir.any, %c2: !hir.any) {
         uir.if %c2 {
           uir.break
         }
-        uir.yield
+        uir.continue
       }
       uir.yield
     }
-    uir.yield
+    uir.continue
   }
   func.return
 }
@@ -488,7 +519,7 @@ func.func @immediate_break_loop(%val: !hir.any, %ty: !hir.any) -> !hir.any {
 }
 
 //===----------------------------------------------------------------------===//
-// infinite loop (just uir.yield, no break)
+// infinite loop (just uir.continue, no break)
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func.func @infinite_loop
@@ -497,7 +528,7 @@ func.func @immediate_break_loop(%val: !hir.any, %ty: !hir.any) -> !hir.any {
 // CHECK-NEXT:    cf.br ^[[HEADER]]
 func.func @infinite_loop() {
   uir.loop {
-    uir.yield
+    uir.continue
   }
   func.return
 }
@@ -507,7 +538,7 @@ func.func @infinite_loop() {
 //===----------------------------------------------------------------------===//
 
 // The then-branch yields from the if (continue body), and the else-branch
-// breaks out of the loop. After the if, uir.yield continues to the next
+// breaks out of the loop. After the if, uir.continue advances to the next
 // iteration (only reachable from the then-path through the merge block).
 
 // CHECK-LABEL: func.func @while_loop_pattern
@@ -533,7 +564,7 @@ func.func @while_loop_pattern(%cond: !hir.any) {
     } else {
       uir.break
     }
-    uir.yield
+    uir.continue
   }
   func.return
 }

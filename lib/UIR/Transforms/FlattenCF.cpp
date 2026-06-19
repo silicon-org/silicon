@@ -60,7 +60,7 @@ static LogicalResult lowerIfOp(IfOp ifOp) {
   bool thenYields = isa<YieldOp>(thenTerminator);
   Operation *elseTerminator =
       hasElse ? ifOp.getElseRegion().back().getTerminator() : nullptr;
-  bool elseYields = elseTerminator && isa<YieldOp>(elseTerminator);
+  bool elseYields = isa_and_nonnull<YieldOp>(elseTerminator);
   bool needsMerge = thenYields || elseYields;
 
   // Split the current block right after the if op. Everything after the
@@ -150,10 +150,13 @@ static LogicalResult lowerIfOp(IfOp ifOp) {
 
 /// Lower a uir.loop op into a loop header block + exit block.
 ///
-/// The loop body is spliced into the parent region. All `uir.yield` and
-/// `uir.continue` terminators become `cf.br ^header`. All `uir.break`
-/// terminators become `cf.br ^exit(values)`. `uir.return` terminators
-/// become `hir.return`.
+/// The loop body is spliced into the parent region. The first body block
+/// becomes the loop header and keeps the loop-carried iteration arguments as
+/// its block arguments. The entry branch passes the loop's `inits` into the
+/// header. All `uir.continue` terminators become `cf.br ^header(carried)`,
+/// passing the next-iteration values back to the header. All `uir.break`
+/// terminators become `cf.br ^exit(values)`. `uir.return` terminators become
+/// `hir.return`.
 static LogicalResult lowerLoopOp(LoopOp loopOp) {
   auto loc = loopOp.getLoc();
   auto anyTy = hir::AnyType::get(loopOp.getContext());
@@ -170,15 +173,18 @@ static LogicalResult lowerLoopOp(LoopOp loopOp) {
     exitBlock->addArgument(anyTy, loc);
 
   // Splice the loop body into the parent region. The first block of the
-  // body becomes the loop header.
+  // body becomes the loop header. Its block arguments are the loop-carried
+  // iteration arguments.
   auto *headerBlock = &loopOp.getBody().front();
+  SmallVector<Value> inits(loopOp.getInits());
   parentRegion->getBlocks().splice(Region::iterator(contBlock),
                                    loopOp.getBody().getBlocks());
 
-  // Branch from the current block to the loop header.
+  // Branch from the current block to the loop header, passing the initial
+  // iteration argument values.
   OpBuilder builder(loopOp.getContext());
   builder.setInsertionPointToEnd(currentBlock);
-  cf::BranchOp::create(builder, loc, headerBlock);
+  cf::BranchOp::create(builder, loc, headerBlock, inits);
 
   // Walk all blocks that came from the body and replace UIR terminators.
   // We iterate from headerBlock to contBlock (exclusive).
@@ -187,14 +193,10 @@ static LogicalResult lowerLoopOp(LoopOp loopOp) {
        it != end; ++it) {
     auto *term = it->getTerminator();
 
-    if (auto yieldOp = dyn_cast<YieldOp>(term)) {
-      // yield = continue to next iteration.
+    if (auto continueOp = dyn_cast<ContinueOp>(term)) {
+      // continue = advance to next iteration, passing the carried values.
       builder.setInsertionPoint(term);
-      cf::BranchOp::create(builder, loc, headerBlock);
-      term->erase();
-    } else if (auto continueOp = dyn_cast<ContinueOp>(term)) {
-      builder.setInsertionPoint(term);
-      cf::BranchOp::create(builder, loc, headerBlock);
+      cf::BranchOp::create(builder, loc, headerBlock, continueOp.getValues());
       term->erase();
     } else if (auto breakOp = dyn_cast<BreakOp>(term)) {
       // break = exit loop with values.

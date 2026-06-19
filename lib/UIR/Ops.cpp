@@ -28,6 +28,14 @@ static bool hasAncestorOp(Operation *op, StringRef name) {
   return false;
 }
 
+/// Find the nearest enclosing `uir.loop`, or null if there is none.
+static LoopOp getEnclosingLoop(Operation *op) {
+  for (auto *parent = op->getParentOp(); parent; parent = parent->getParentOp())
+    if (auto loopOp = dyn_cast<LoopOp>(parent))
+      return loopOp;
+  return {};
+}
+
 //===----------------------------------------------------------------------===//
 // BreakOp
 //===----------------------------------------------------------------------===//
@@ -43,8 +51,12 @@ LogicalResult BreakOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ContinueOp::verify() {
-  if (!hasAncestorOp(*this, "uir.loop"))
+  auto loopOp = getEnclosingLoop(*this);
+  if (!loopOp)
     return emitOpError("must be nested inside a 'uir.loop'");
+  if (getValues().size() != loopOp.getInits().size())
+    return emitOpError("carried value count must match enclosing loop's "
+                       "iteration argument count");
   return success();
 }
 
@@ -143,20 +155,59 @@ LogicalResult IfOp::verify() {
 // LoopOp
 //===----------------------------------------------------------------------===//
 
-// Parse: uir.loop : %ty1, %ty2 { ... }
-//        uir.loop { ... }
+// # Custom Parser for LoopOp
+//
+// The loop carries a list of initial values for its loop-carried iteration
+// arguments, each with a type operand, followed by the result type operands.
+// The iteration arguments become the body block's arguments. The accepted
+// forms are:
+//   uir.loop (%x = %a, %y = %b : %ta, %tb) : %r_ty1, %r_ty2 { ... }
+//   uir.loop : %r_ty1, %r_ty2 { ... }
+//   uir.loop (%x = %a : %ta) { ... }
+//   uir.loop { ... }
 ParseResult LoopOp::parse(OpAsmParser &parser, OperationState &result) {
   auto &builder = parser.getBuilder();
   auto anyTy = builder.getType<hir::AnyType>();
+
+  // Parse optional iteration arguments: `(%x = %init, ... : %ty, ...)`.
+  SmallVector<OpAsmParser::Argument> iterArgs;
+  SmallVector<OpAsmParser::UnresolvedOperand> initOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand> initTypeOperands;
+  if (succeeded(parser.parseOptionalLParen())) {
+    if (failed(parser.parseOptionalRParen())) {
+      do {
+        OpAsmParser::Argument arg;
+        arg.type = anyTy;
+        OpAsmParser::UnresolvedOperand init;
+        if (parser.parseArgument(arg) || parser.parseEqual() ||
+            parser.parseOperand(init))
+          return failure();
+        iterArgs.push_back(arg);
+        initOperands.push_back(init);
+      } while (succeeded(parser.parseOptionalComma()));
+      if (parser.parseColon() || parser.parseOperandList(initTypeOperands) ||
+          parser.parseRParen())
+        return failure();
+    }
+  }
 
   // Parse optional result type operands: `: %ty1, %ty2`.
   SmallVector<OpAsmParser::UnresolvedOperand> resultTypeOperands;
   if (succeeded(parser.parseOptionalColon())) {
     if (parser.parseOperandList(resultTypeOperands))
       return failure();
-    if (parser.resolveOperands(resultTypeOperands, anyTy, result.operands))
-      return failure();
   }
+
+  // Resolve operands in segment order: inits, initTypes, resultTypes.
+  if (parser.resolveOperands(initOperands, anyTy, result.operands) ||
+      parser.resolveOperands(initTypeOperands, anyTy, result.operands) ||
+      parser.resolveOperands(resultTypeOperands, anyTy, result.operands))
+    return failure();
+  result.addAttribute(getOperandSegmentSizeAttr(),
+                      builder.getDenseI32ArrayAttr(
+                          {static_cast<int32_t>(initOperands.size()),
+                           static_cast<int32_t>(initTypeOperands.size()),
+                           static_cast<int32_t>(resultTypeOperands.size())}));
 
   // Add result types.
   result.addTypes(SmallVector<Type>(resultTypeOperands.size(), anyTy));
@@ -165,15 +216,33 @@ ParseResult LoopOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
     return failure();
 
-  // Parse body region.
+  // Parse body region with the iteration arguments as block arguments.
   auto *body = result.addRegion();
-  if (parser.parseRegion(*body))
+  if (parser.parseRegion(*body, iterArgs))
     return failure();
 
   return success();
 }
 
 void LoopOp::print(OpAsmPrinter &p) {
+  // Print iteration arguments if any.
+  auto inits = getInits();
+  if (!inits.empty()) {
+    auto bodyArgs = getBody().front().getArguments();
+    p << " (";
+    for (auto [i, init] : llvm::enumerate(inits)) {
+      if (i)
+        p << ", ";
+      p.printOperand(bodyArgs[i]);
+      p << " = ";
+      p.printOperand(init);
+    }
+    p << " : ";
+    llvm::interleaveComma(getInitTypes(), p,
+                          [&](Value v) { p.printOperand(v); });
+    p << ')';
+  }
+
   // Print result type operands if any.
   if (!getResultTypes().empty()) {
     p << " : ";
@@ -182,7 +251,8 @@ void LoopOp::print(OpAsmPrinter &p) {
   }
 
   // Print attributes before region.
-  p.printOptionalAttrDictWithKeyword((*this)->getAttrs());
+  p.printOptionalAttrDictWithKeyword((*this)->getAttrs(),
+                                     {getOperandSegmentSizeAttr()});
 
   // Print body region.
   p << ' ';
@@ -192,6 +262,10 @@ void LoopOp::print(OpAsmPrinter &p) {
 LogicalResult LoopOp::verify() {
   // SingleBlock trait checks body has one block.
 
+  // Each initial value needs a corresponding type operand.
+  if (getInits().size() != getInitTypes().size())
+    return emitOpError("init count must match init type operand count");
+
   // Result count must match result type operand count.
   if (getNumResults() != getResultTypes().size())
     return emitOpError("result count must match result type operand count");
@@ -200,15 +274,20 @@ LogicalResult LoopOp::verify() {
 }
 
 LogicalResult LoopOp::verifyRegions() {
-  // A yield inside the loop body means "continue to next iteration" and must
-  // not carry values. Use uir.break to exit the loop with values.
-  auto *terminator = getBody().front().getTerminator();
-  if (auto yieldOp = dyn_cast<YieldOp>(terminator)) {
-    if (yieldOp.getValues().size() != 0)
-      return yieldOp.emitOpError(
-          "inside loop body must have no values (use 'uir.break' to exit with "
-          "values)");
-  }
+  // The body block has one argument per loop-carried iteration argument. The
+  // arity of `uir.continue` terminators is checked by ContinueOp's verifier.
+  auto &bodyBlock = getBody().front();
+  if (bodyBlock.getNumArguments() != getInits().size())
+    return emitOpError("body block argument count must match init count");
+
+  // The body block must be terminated by an op that advances or exits the
+  // loop. `uir.yield` only terminates `uir.expr` and `uir.if` regions.
+  auto *terminator = bodyBlock.getTerminator();
+  if (!isa<ContinueOp, BreakOp, ReturnOp, UnreachableOp>(terminator))
+    return terminator->emitOpError(
+        "cannot terminate a 'uir.loop' body; use 'uir.continue', 'uir.break', "
+        "'uir.return', or 'uir.unreachable'");
+
   return success();
 }
 

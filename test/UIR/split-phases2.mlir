@@ -614,7 +614,7 @@ uir.func @IfWithResult() -> (result: 0) {
 // CHECK:           uir.if %{{.+}} {
 // CHECK:             uir.break
 // CHECK:           }
-// CHECK:           uir.yield
+// CHECK:           uir.continue
 // CHECK:         }
 // CHECK:         hir.return
 uir.func @LoopSurvival() -> () {
@@ -625,7 +625,7 @@ uir.func @LoopSurvival() -> () {
     uir.if %cond {
       uir.break
     }
-    uir.yield
+    uir.continue
   }
   uir.return -> ()
 }
@@ -707,7 +707,7 @@ uir.func @BothBranchesReturn() -> (r: 0) {
 // CHECK:           } else {
 // CHECK:             uir.continue
 // CHECK:           }
-// CHECK:           uir.yield
+// CHECK:           uir.continue
 // CHECK:         }
 // CHECK:         hir.return
 uir.func @LoopBreakContinue() -> () {
@@ -720,7 +720,7 @@ uir.func @LoopBreakContinue() -> () {
     } else {
       uir.continue
     }
-    uir.yield
+    uir.continue
   }
   uir.return -> ()
 }
@@ -731,14 +731,14 @@ uir.func @LoopBreakContinue() -> () {
 // CHECK-LABEL: hir.func private @InfiniteLoop.0() -> ()
 // CHECK:       } {
 // CHECK:         uir.loop {
-// CHECK:           uir.yield
+// CHECK:           uir.continue
 // CHECK:         }
 // CHECK-NOT:     hir.return
 uir.func @InfiniteLoop() -> () {
   uir.signature () -> ()
 } {
   uir.loop {
-    uir.yield
+    uir.continue
   }
   uir.unreachable
 }

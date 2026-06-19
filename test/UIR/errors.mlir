@@ -105,15 +105,64 @@ uir.func @call_bad_callee(%a: 0) -> (result: 0) {
 
 // -----
 
-// Verify that uir.yield inside loop body must have no values.
-uir.func @loop_yield_with_values(%a: 0) -> () {
-  uir.signature (%a) -> ()
-} {
-  uir.loop {
-    // expected-error @below {{inside loop body must have no values (use 'uir.break' to exit with values)}}
-    uir.yield %a : %a
+// Verify that uir.continue rejects mismatched values/typeOfValues.
+func.func @continue_mismatch(%a: !hir.any) {
+  uir.loop (%x = %a : %a) {
+    // expected-error @below {{failed to verify that typeOfValues must match values size}}
+    "uir.continue"(%a, %a, %a) {operandSegmentSizes = array<i32: 2, 1>} : (!hir.any, !hir.any, !hir.any) -> ()
   }
-  uir.return -> ()
+  func.return
+}
+
+// -----
+
+// Verify that uir.loop checks init count against init type operand count.
+func.func @loop_init_type_mismatch(%a: !hir.any) {
+  // expected-error @below {{init count must match init type operand count}}
+  "uir.loop"(%a, %a, %a) ({
+  ^bb0(%x: !hir.any, %y: !hir.any):
+    uir.continue %x, %y : %a, %a
+  }) {operandSegmentSizes = array<i32: 2, 1, 0>} : (!hir.any, !hir.any, !hir.any) -> ()
+  func.return
+}
+
+// -----
+
+// Verify that uir.loop checks body block argument count against init count.
+func.func @loop_block_arg_mismatch(%a: !hir.any) {
+  // expected-error @below {{body block argument count must match init count}}
+  "uir.loop"(%a, %a, %a, %a) ({
+  ^bb0(%x: !hir.any):
+    uir.continue %x, %x : %a, %a
+  }) {operandSegmentSizes = array<i32: 2, 2, 0>} : (!hir.any, !hir.any, !hir.any, !hir.any) -> ()
+  func.return
+}
+
+// -----
+
+// Verify that uir.continue checks carried value count against the loop's
+// iteration argument count.
+func.func @continue_arity_mismatch(%a: !hir.any) {
+  uir.loop (%x = %a : %a) {
+    // expected-error @below {{carried value count must match enclosing loop's iteration argument count}}
+    uir.continue
+  }
+  func.return
+}
+
+// -----
+
+// Verify that a uir.continue nested inside a uir.if is checked against the
+// enclosing loop's iteration argument count.
+func.func @continue_nested_arity_mismatch(%cond: !hir.any, %a: !hir.any) {
+  uir.loop (%x = %a : %a) {
+    uir.if %cond {
+      // expected-error @below {{carried value count must match enclosing loop's iteration argument count}}
+      uir.continue %x, %x : %a, %a
+    }
+    uir.continue %x : %a
+  }
+  func.return
 }
 
 // -----

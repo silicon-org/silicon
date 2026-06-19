@@ -712,27 +712,31 @@ When all branches exit early, no merge block is emitted.
 
 ```mlir
 // Before (structured):
-%r = uir.loop : %r_ty {
+%r = uir.loop (%x = %init : %x_ty) : %r_ty {
+  %next = ...
   %done = ...
   uir.if %done {
     uir.break %value : %v_ty
   }
-  uir.yield
+  uir.continue %next : %x_ty
 }
 
 // After (block-based):
-cf.br ^loop_header
-^loop_header:
+cf.br ^loop_header(%init : !hir.any)
+^loop_header(%x: !hir.any):
   // (body ops, including lowered uir.if → cf.cond_br)
+  %next = ...
   ...
-  cf.br ^loop_header          // from uir.yield (continue)
-^loop_exit(%r: !hir.any):     // from uir.break
+  cf.br ^loop_header(%next : !hir.any)   // from uir.continue
+^loop_exit(%r: !hir.any):                // from uir.break
   ...
 ```
 
+The loop-carried iteration arguments become block arguments of the loop header.
+The entry branch passes the loop's initial values into the header, and each `uir.continue` branches back to the header with the next-iteration values, exactly like the `iter_args` threading in MLIR's scf-to-cf lowering.
 Only value results flow through the exit block — the loop's `resultTypes` operands are already visible outside.
 `uir.break` becomes `cf.br ^loop_exit(values)`.
-`uir.continue` (or `uir.yield` in the loop body) becomes `cf.br ^loop_header`.
+`uir.continue` becomes `cf.br ^loop_header(carried values)`.
 
 ### `uir.return` → `hir.return`
 

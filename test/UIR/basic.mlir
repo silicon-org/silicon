@@ -76,38 +76,36 @@ func.func @if_early_return(%cond: !hir.any, %a: !hir.any, %ty: !hir.any) {
   uir.unreachable
 }
 
+// A loop with no carried values and no results.
 // CHECK-LABEL: @loop_no_results
-func.func @loop_no_results(%cond: !hir.any) {
+// CHECK: uir.loop {
+func.func @loop_no_results() {
   uir.loop {
-    uir.if %cond {
-      uir.break
-    }
-    uir.yield
+    uir.continue
   }
   func.return
 }
 
+// A loop with result type operands but no carried values.
 // CHECK-LABEL: @loop_with_results
-func.func @loop_with_results(%cond: !hir.any, %val: !hir.any, %ty: !hir.any) {
+// CHECK: uir.loop : %{{.*}} {
+func.func @loop_with_results(%val: !hir.any, %ty: !hir.any) {
   %r = uir.loop : %ty {
-    uir.if %cond {
-      uir.break %val : %ty
-    }
-    uir.yield
+    uir.break %val : %ty
   }
   func.return
 }
 
-// CHECK-LABEL: @loop_with_continue
-func.func @loop_with_continue(%c1: !hir.any, %c2: !hir.any) {
-  uir.loop {
-    uir.if %c1 {
-      uir.continue
+// A loop carrying values, with the continue nested inside a uir.if to exercise
+// the carried-value arity check on a non-top-level continue.
+// CHECK-LABEL: @loop_carried
+// CHECK: uir.loop (%{{.*}} = %{{.*}}, %{{.*}} = %{{.*}} : %{{.*}}, %{{.*}}) : %{{.*}} {
+func.func @loop_carried(%cond: !hir.any, %a: !hir.any, %b: !hir.any, %ta: !hir.any, %tb: !hir.any, %r_ty: !hir.any) {
+  %r = uir.loop (%x = %a, %y = %b : %ta, %tb) : %r_ty {
+    uir.if %cond {
+      uir.continue %y, %x : %tb, %ta
     }
-    uir.if %c2 {
-      uir.break
-    }
-    uir.yield
+    uir.break %x : %r_ty
   }
   func.return
 }

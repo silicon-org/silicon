@@ -65,7 +65,7 @@ uir.func @BreakFromConstBlock(%cond: 0, %val: -1) -> (result: 0) {
       // expected-error @+1 {{break from a phase-shifted block is not allowed}}
       uir.break %val : %t
     }
-    uir.yield
+    uir.continue
   }
   uir.return %0 -> (%t)
 }
@@ -84,7 +84,7 @@ uir.func @ContinueFromConstBlock(%cond: 0) -> () {
       // expected-error @+1 {{continue from a phase-shifted block is not allowed}}
       uir.continue
     }
-    uir.yield
+    uir.continue
   }
   uir.return -> ()
 }
@@ -121,7 +121,7 @@ uir.func @BreakFromDynBlock(%x: 0) -> (result: 0) {
       // expected-error @+1 {{break from a phase-shifted block is not allowed}}
       uir.break %x : %t
     }
-    uir.yield
+    uir.continue
   }
   uir.return %0 -> (%t)
 }
@@ -140,7 +140,7 @@ uir.func @ContinueFromDynBlock(%x: 0) -> () {
       // expected-error @+1 {{continue from a phase-shifted block is not allowed}}
       uir.continue
     }
-    uir.yield
+    uir.continue
   }
   uir.return -> ()
 }
@@ -162,7 +162,7 @@ uir.func @BreakFromNestedDynBlock(%x: 0) -> (result: 0) {
         // expected-error @+1 {{break from a phase-shifted block is not allowed}}
         uir.break %x : %t
       }
-      uir.yield
+      uir.continue
     }
     uir.yield %1 : %t
   }
@@ -632,7 +632,7 @@ uir.func @BreakUnbalancedNonzeroLoop(%x: -1) -> (result: 0) {
         // expected-error @below {{break from a phase-shifted block is not allowed}}
         uir.break %x : %t
       }
-      uir.yield
+      uir.continue
     }
     uir.yield %1 : %t
   }
@@ -987,7 +987,7 @@ uir.func @MultiBreakOneError(%flag: 0, %a: 0, %b: 0) -> (result: 0) {
       // expected-error @below {{break from a phase-shifted block is not allowed}}
       uir.break %b : %t
     }
-    uir.yield
+    uir.continue
   }
   uir.return %0 -> (%t)
 }
@@ -1013,7 +1013,7 @@ uir.func @ContinueBreakMixed(%flag: 0, %a: 0) -> (result: 0) {
       // expected-error @below {{continue from a phase-shifted block is not allowed}}
       uir.continue
     }
-    uir.yield
+    uir.continue
   }
   uir.return %0 -> (%t)
 }
@@ -1140,7 +1140,7 @@ uir.func @LoopCallCascade(%flag: -1, %a: -1, %b: 0) -> (result: 0) {
     } else {
       uir.unreachable
     }
-    uir.yield
+    uir.continue
   }
   %ta2 = hir.int_type
   %tr2 = hir.int_type
@@ -1386,7 +1386,7 @@ uir.func @LoopDistinctBreakFloorError(%a: -1, %b: -1, %flag: 0) -> (result: -1) 
       // expected-note @below {{value provided here}}
       uir.break %b : %t
     }
-    uir.yield
+    uir.continue
   }
   // expected-remark @below {{required by return value at phase -1}}
   uir.return %r -> (%t)

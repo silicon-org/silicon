@@ -73,13 +73,9 @@ def YieldOp : UIROp<"yield", [
 ]> {
   let summary = "yield values from a region";
   let description = [{
-    Normal region completion. Returns values from a structured CF region
-    or expression region to the parent op. Each value has a corresponding
-    type operand, typically the result of an `hir.unify` between the
-    parent op's result type and the yielded value's type.
-
-    For void regions (e.g., loop body continuing to next iteration), the
-    op carries no operands.
+    Terminates and yields values from a `uir.expr` or `uir.if` region.
+    Each value has a corresponding type operand. For void regions the op
+    carries no operands.
   }];
   let arguments = (ins
     Variadic<HIRAnyType>:$values,
@@ -117,15 +113,27 @@ def BreakOp : UIROp<"break", [
 }
 
 def ContinueOp : UIROp<"continue", [
+  AttrSizedOperandSegments,
+  PredOpTrait<"typeOfValues must match values size",
+    CPred<"$values.size() == $typeOfValues.size()">>,
   Pure,
   Terminator,
 ]> {
-  let summary = "restart enclosing loop iteration";
+  let summary = "advance enclosing loop to next iteration";
   let description = [{
-    Restarts the nearest enclosing `uir.loop` iteration. Must be
-    transitively nested inside a `uir.loop` region.
+    Advances the nearest enclosing `uir.loop` to its next iteration. Must
+    be transitively nested inside a `uir.loop` region. Carries the
+    loop-carried values for the next iteration, one per loop iteration
+    argument, with a corresponding type operand for each value.
   }];
-  let assemblyFormat = [{ attr-dict }];
+  let arguments = (ins
+    Variadic<HIRAnyType>:$values,
+    Variadic<HIRAnyType>:$typeOfValues
+  );
+  let assemblyFormat = [{
+    ($values^ `:` $typeOfValues)?
+    attr-dict
+  }];
   let hasVerifier = 1;
 }
 
@@ -220,19 +228,27 @@ def IfOp : UIROp<"if", [
 }
 
 def LoopOp : UIROp<"loop", [
+  AttrSizedOperandSegments,
   RecursiveMemoryEffects,
   SingleBlock,
 ]> {
   let summary = "structured loop expression";
   let description = [{
     A structured loop expression with one region: the loop body.
-    The body has a single block terminated by `uir.yield` (which means
-    "continue to next iteration"). `uir.break` inside the body (possibly
-    nested in a `uir.if`) exits the loop with values.
+
+    The op carries a list of initial values for its loop-carried
+    iteration arguments, with a corresponding type operand for each
+    initial value. The body's single block has one block argument per
+    iteration argument, receiving the current iteration's value. The body
+    is terminated by `uir.continue`, which carries the loop-carried values
+    for the next iteration, or by `uir.break`, which exits the loop with
+    its result values. A `uir.break` nested in a `uir.if` exits the loop
+    as well.
 
     The op produces variadic results and carries result type operands.
-    `uir.break` carries type operands unified with the loop's result
-    type operands.
+    The result count is independent of the iteration argument count.
+    `uir.break` carries type operands unified with the loop's result type
+    operands.
 
     `while` and `for` loops desugar to `uir.loop`.
 
@@ -240,6 +256,8 @@ def LoopOp : UIROp<"loop", [
     For FlattenCF lowering, see `docs/design/control-flow.md`.
   }];
   let arguments = (ins
+    Variadic<HIRAnyType>:$inits,
+    Variadic<HIRAnyType>:$initTypes,
     Variadic<HIRAnyType>:$resultTypes
   );
   let results = (outs Variadic<HIRAnyType>:$results);

@@ -193,22 +193,30 @@ For FlattenCF lowering, see `docs/design/control-flow.md`, "FlattenCF: Structure
 #### `uir.loop`
 
 A structured loop expression with one region: the loop body.
-The body has a single block terminated by `uir.yield` (which means "continue to next iteration").
-`uir.break` inside the body (possibly nested in a `uir.if`) exits the loop with values.
+
+The op carries a list of initial values for its loop-carried iteration arguments, each with a type operand.
+The body's single block has one block argument per iteration argument, receiving the current iteration's value.
+The body is terminated by `uir.continue`, which carries the loop-carried values for the next iteration, or by `uir.break`, which exits the loop with its result values.
+A `uir.break` nested in a `uir.if` exits the loop as well.
 
 The op produces variadic results and carries **result type operands**, same as `uir.if`.
+The result count is independent of the iteration argument count.
 `uir.break` carries type operands that are unified with the loop's result types.
+
+The loop-carried values give the loop SSA state that flows from one iteration to the next, analogous to the `iter_args` of MLIR's `scf.for` and the before/after region values of `scf.while`.
+The initial values seed the first iteration's block arguments; each `uir.continue` supplies the values for the following iteration; the loop's results are produced by `uir.break`.
 
 ```mlir
 %r_ty = hir.inferrable : !hir.any
-%r = uir.loop : %r_ty {
+%r = uir.loop (%x = %init : %x_ty) : %r_ty {
+  %next = ...                         // computed from %x
   %done = ...
   uir.if %done {
     %v_ty = ...                       // type operand from %value's defining op
     %u = hir.unify %r_ty, %v_ty
     uir.break %value : %u
   }
-  uir.yield
+  uir.continue %next : %x_ty
 }
 ```
 
@@ -224,20 +232,20 @@ uir.loop {
   } else {
     uir.break
   }
-  uir.yield
+  uir.continue
 }
 
 // for i in 0..n { body }  (const loop, unrolled at compile time)
-uir.loop {
-  %done = <check i < n>
+uir.loop (%i = %zero : %i_ty) {
+  %done = <check %i < n>
   uir.if %done {
     <body>
-    <increment i>
+    %next = <increment %i>
     uir.yield
   } else {
     uir.break
   }
-  uir.yield
+  uir.continue %next : %i_ty
 }
 ```
 
@@ -259,18 +267,18 @@ Phase inference treats it like `uir.if`; see `docs/design/phase-inference.md`.
 
 #### `uir.yield`
 
-Normal region completion.
-Returns values from a structured CF region or expression region to the parent op.
+Terminates and yields values from a `uir.expr` or `uir.if` region to the parent op.
 Carries **type operands** for each value, which are unified with the parent op's result type operands during codegen (via `hir.unify`).
 
 This is the "happy path" terminator: "this region completed normally and produced these values."
+It does not terminate a `uir.loop` body; loops use `uir.continue` and `uir.break`.
 
 ```mlir
 // %u is typically the result of hir.unify between the parent's result type and %a's type
 uir.yield %a, %b : %u, %v
 ```
 
-For void regions (e.g., loop body continuing):
+For void regions:
 
 ```mlir
 uir.yield
@@ -291,8 +299,16 @@ For phase inference rules (`p(enclosing_block) = p(loop)` constraint), see `docs
 
 #### `uir.continue`
 
-Restarts the nearest enclosing `uir.loop` iteration.
+Advances the nearest enclosing `uir.loop` to its next iteration.
 Must be transitively nested inside a `uir.loop` region.
+Carries the loop-carried values for the next iteration, one per loop iteration argument, each with a **type operand**.
+The carried value count must match the enclosing loop's iteration argument count.
+
+```mlir
+uir.continue %next : %x_ty
+```
+
+For a loop with no iteration arguments, `uir.continue` carries no operands:
 
 ```mlir
 uir.continue

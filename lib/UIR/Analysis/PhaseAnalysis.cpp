@@ -709,7 +709,9 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
     return success();
   }
 
-  // LoopOp: anchored at blockPhase.
+  // LoopOp: anchored at blockPhase. Loop-carried iteration arguments live at
+  // the loop body's phase; their initial values are constrained to be
+  // available there, and the type operands one phase earlier.
   if (auto loopOp = dyn_cast<LoopOp>(op)) {
     auto it = opPhases.find(op);
     if (it != opPhases.end() && it->second <= blockPhase)
@@ -723,6 +725,25 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
       if (failed(constrainValue(typeVal, blockPhase - 1))) {
         emitRemark(loopOp.getLoc())
             << "required by loop result type at phase " << blockPhase - 1;
+        return failure();
+      }
+    }
+
+    // Iteration arguments are available at the loop body's phase.
+    for (auto arg : loopOp.getBody().front().getArguments())
+      actualPhase[arg] = blockPhase;
+
+    for (auto init : loopOp.getInits()) {
+      if (failed(constrainValue(init, blockPhase))) {
+        emitRemark(loopOp.getLoc())
+            << "required by loop init value at phase " << blockPhase;
+        return failure();
+      }
+    }
+    for (auto typeVal : loopOp.getInitTypes()) {
+      if (failed(constrainValue(typeVal, blockPhase - 1))) {
+        emitRemark(loopOp.getLoc())
+            << "required by loop init type at phase " << blockPhase - 1;
         return failure();
       }
     }
@@ -818,6 +839,21 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
       emitError(continueOp.getLoc())
           << "continue from a phase-shifted block is not allowed";
       return failure();
+    }
+    // The carried values flow into the loop's iteration arguments, which live
+    // at the loop's phase; their type operands one phase earlier.
+    for (auto value : continueOp.getValues()) {
+      if (failed(constrainValue(value, blockPhase))) {
+        emitRemark(continueOp.getLoc())
+            << "required by continue value at phase " << blockPhase;
+        return failure();
+      }
+    }
+    for (auto typeVal : continueOp.getTypeOfValues()) {
+      if (failed(constrainValue(typeVal, blockPhase - 1))) {
+        emitRemark(continueOp.getLoc()) << "required by continue type operand";
+        return failure();
+      }
     }
     return success();
   }

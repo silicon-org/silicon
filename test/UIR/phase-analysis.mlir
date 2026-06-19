@@ -1014,7 +1014,7 @@ uir.func @LoopSameBreakNoFloor(%x: -1, %flag: 0) -> (result: -1) {
     } else {
       uir.break %x : %t
     }
-    uir.yield
+    uir.continue
   }
   uir.return %r -> (%t)
 }
@@ -1037,7 +1037,7 @@ uir.func @LoopSingleBreakNoFloor(%x: -1, %flag: 0) -> (result: -1) {
     } else {
       uir.unreachable
     }
-    uir.yield
+    uir.continue
   }
   uir.return %r -> (%t)
 }
@@ -1061,7 +1061,7 @@ uir.func @LoopDistinctBreakFloorSatisfied(%a: 0, %b: 0, %flag: 0) -> (result: 0)
     } else {
       uir.break %b : %t
     }
-    uir.yield
+    uir.continue
   }
   uir.return %r -> (%t)
 }
@@ -1204,8 +1204,36 @@ uir.func @LoopOp(%cond: 0, %val: 0) -> (result: 0) {
     } else {
       uir.unreachable
     }
-    // CHECK: uir.yield {{.*}}pa.phase = "0"
-    uir.yield
+    // CHECK: uir.continue {{.*}}pa.phase = "0"
+    uir.continue
+  }
+  uir.return %0 -> (%t)
+}
+
+//===----------------------------------------------------------------------===//
+// uir.loop carrying a value across iterations. The iteration argument lives at
+// the loop body's phase (0); the init value and the continue's carried value
+// are constrained to be available there, and their type operands one phase
+// earlier (-1).
+
+// CHECK-LABEL: uir.func @LoopCarried
+uir.func @LoopCarried(%init: 0, %cond: 0) -> (result: 0) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%0)
+} {
+  %t = hir.int_type
+  // The iteration argument %x is at phase 0, so values derived from it are too.
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["0"]
+  %0 = uir.loop (%x = %init : %t) : %t {
+    // CHECK: hir.add {{.*}}pa.operands = ["0", "0"
+    %next = hir.add %x, %x : %t
+    uir.if %cond {
+      uir.break %x : %t
+    }
+    // The carried value flows into the next iteration's argument at phase 0.
+    // CHECK: uir.continue {{.*}}pa.phase = "0"
+    uir.continue %next : %t
   }
   uir.return %0 -> (%t)
 }
@@ -1628,7 +1656,7 @@ uir.func @LoopContinue(%c1: 0, %c2: 0) -> () {
     } else {
       uir.unreachable
     }
-    uir.yield
+    uir.continue
   }
   uir.return -> ()
 }
@@ -1806,14 +1834,14 @@ uir.func @NestedLoopConstContinue(%c1: 0, %c2: 0) -> () {
       } else {
         uir.unreachable
       }
-      uir.yield
+      uir.continue
     }
     uir.if %c2 {
       uir.break
     } else {
       uir.unreachable
     }
-    uir.yield
+    uir.continue
   }
   uir.return -> ()
 }
@@ -1843,7 +1871,7 @@ uir.func @NestedLoopResults(%a: 1, %cond: 0) -> (result: 1) {
       } else {
         uir.unreachable
       }
-      uir.yield
+      uir.continue
     }
     // Outer break carries the dyn value.
     uir.break %inner : %t
@@ -2378,7 +2406,7 @@ uir.func @BreakInBalanced(%x: 0) -> (result: 0) {
       }
       uir.unreachable
     }
-    uir.yield
+    uir.continue
   }
   uir.return %0 -> (%t)
 }
@@ -2426,7 +2454,7 @@ uir.func @BreakBalancedNonzeroLoop(%x: -1) -> (result: 0) {
         }
         uir.unreachable
       }
-      uir.yield
+      uir.continue
     }
     uir.yield %1 : %t
   }
@@ -2526,7 +2554,7 @@ uir.func @BreakDoubleBalancedConstLoop(%a: -1) -> (result: 0) {
         }
         uir.unreachable
       }
-      uir.yield
+      uir.continue
     }
     uir.yield %1 : %t
   }
@@ -2551,7 +2579,7 @@ uir.func @BreakInnerBalanced(%a: 0) -> (result: 0) {
         }
         uir.unreachable
       }
-      uir.yield
+      uir.continue
     }
     %z = uir.pin %inner, 0 : !hir.any
     %c0 = hir.constant_int 0 : %t
@@ -2582,7 +2610,7 @@ uir.func @BreakValueConstInBalanced(%a: -1) -> (result: 0) {
       }
       uir.unreachable
     }
-    uir.yield
+    uir.continue
   }
   uir.return %0 -> (%t)
 }
@@ -2825,8 +2853,8 @@ uir.func @DynWhileLoop(%flag: 1) -> (result: 1) {
       } else {
         uir.break
       }
-      // CHECK: uir.yield {{.*}}pa.phase = "1"
-      uir.yield
+      // CHECK: uir.continue {{.*}}pa.phase = "1"
+      uir.continue
     }
     %c0 = hir.constant_int 0 : %t
     uir.yield %c0 : %t
@@ -2864,7 +2892,7 @@ uir.func @LoopInConstArg(%flag: -1, %a: -1) -> (result: 0) {
     } else {
       uir.unreachable
     }
-    uir.yield
+    uir.continue
   }
   %ta = hir.int_type
   %tr = hir.int_type
@@ -2921,7 +2949,7 @@ uir.func @TwoBreaksBothBalanced(%flag: 0, %a: 0, %b: 0) -> (result: 0) {
       }
       uir.unreachable
     }
-    uir.yield
+    uir.continue
   }
   uir.return %0 -> (%t)
 }
@@ -3335,7 +3363,7 @@ uir.func @CallNonConstTypeOfArgs(%n: -1, %a: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// While loop pattern: loop { if !cond { break }; body; yield }.
+// While loop pattern: loop { if !cond { break }; body; continue }.
 
 // CHECK-LABEL: uir.func @WhileLoop
 uir.func @WhileLoop(%x: 0) -> (result: 0) {
@@ -3351,7 +3379,7 @@ uir.func @WhileLoop(%x: 0) -> (result: 0) {
     }
     %body = hir.add %x, %x : %t
     %p = uir.pin %body, 0 : !hir.any
-    uir.yield
+    uir.continue
   }
   uir.return %x -> (%t)
 }
@@ -3467,7 +3495,7 @@ uir.func @LoopInsideFloatingExpr(%cond: -1) -> (result: -1) {
       } else {
         uir.unreachable
       }
-      uir.yield
+      uir.continue
     }
     uir.yield %r : %ta
   }
