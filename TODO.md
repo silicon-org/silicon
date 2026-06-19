@@ -33,6 +33,10 @@ Old passes continue working on `hir.unified_func` and flat CF; new passes consum
 Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
 
 - SplitPhases2 replicate model (`extractReplicates`):
+  - Audit for overfitting; likely needs a rewrite.
+    The special-casing of void vs top-level dyn exprs and the juggling of lists of dyn expr ops smells like overfitting to a few examples rather than the real design.
+    The intended model is simpler: pull each dyn expr out one layer of control flow, generating that layer's hit lists, then iterate so the next layer's dyn exprs get pulled out one more layer, aggregating into further hit lists.
+    Check whether the current code actually implements this or just passes a handful of cases.
   - Captured values: pack producing-phase values used in the dyn body into hits entries (currently packs nothing); a captured value defined inside the producing CF region currently makes `fixupCrossPhaseRefs` emit a dominance-violating opaque_pack instead of erroring -- detect and reject loudly until supported
   - Loop replicate threading: `extractLoopReplicates` uses dummy empty-pack threaded inits; no real accumulation (`x = x + 1`) or zero-iteration pass-through. Needs the unified `uir.loop` to carry the threaded value at the dyn phase (PhaseAnalysis currently pins carried inits to the loop phase)
 - Phase 2: extend existing passes for region support (additive, old paths stay intact)
@@ -94,6 +98,11 @@ Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
 
 ## Phase Inference Design Review
 
+- Multiple `uir.continue` ops in a loop face the same challenge as multiple `uir.return` ops in a function.
+  If they carry different SSA values at a phase earlier than the continue op itself, that is an error.
+  Work out how this is solved for `uir.return`, draw conclusions, and tighten the design.
+  Related to the if-yield result-phase requirement below.
+
 - CF ops may need to lower-bound their result phases to their op phase.
   Consider: `uir.if` at phase 0 with a yield carrying `%a` at phase -1.
   Currently this produces an if result at -1 (transparent yield).
@@ -112,7 +121,7 @@ Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
     } else {
       uir.yield %a : %t
     }
-    uir.return %0 -> (%t)  // result at -1, but if can't decide until 0
+    uir.return %0 : %t  // result at -1, but if can't decide until 0
   }
   ```
 

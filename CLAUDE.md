@@ -21,6 +21,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - Never touch the build/ directory.
 - Never perform a clean rebuild, for example, by building the `clean` target.
 - Never run `ninja` without targets, since that builds too much of LLVM and MLIR.
+- Never use git worktrees for parallel work in this project; the LLVM, MLIR, and CIRCT builds are far too expensive and build artifacts cannot be meaningfully shared across worktrees, so every worktree triggers a massive rebuild.
 - When working on transformation passes, use `silicon-opt` and MLIR input files; these also make good lit tests later.
 - When working on the lexer, parser, AST, or syntax in general, use `silc`.
 - Add `--debug-only=<pass>` to `silicon-opt` to print all `LLVM_DEBUG(...)` lines in a pass.
