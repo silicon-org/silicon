@@ -32,6 +32,9 @@ See `docs/design/phase-inference.md`, `docs/design/unified-dialect.md`, and `doc
 Old passes continue working on `hir.unified_func` and flat CF; new passes consume `uir.*` ops.
 Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
 
+- SplitPhases2 replicate model (`extractReplicates`): only `uir.if` if-else is done so far
+  - Loops: extract dyn bodies inside `uir.loop` (`for const`) into a `hir.replicate`
+  - Captured values: pack producing-phase values used in the dyn body into hits entries (currently packs nothing)
 - Phase 2: extend existing passes for region support (additive, old paths stay intact)
   - InferTypes: walk into `uir.if`/`uir.expr`/`uir.loop` regions in addition to flat blocks
   - InferTypes: optimistic hoisting of type op trees out of regions for cross-boundary RAUW
