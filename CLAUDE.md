@@ -65,6 +65,7 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - If you notice a bug or failing test unrelated to your current changes, take a note of it in TODO.md for later fixing.
 - If a test breaks due to reasons unrelated to your change, consider marking it XFAIL and taking a note in TODO.md; it's likely that improvements to passes are correct and the tests break for other reasons.
 - Keep TODO.md terse: one line per sentence, individual bullets that point at where to look rather than spelling out the implementation, grouped under `#`/`##` headings by project; it is a todo list, not prose.
+- TODO.md is a current snapshot, not a work log: delete done items, and replace partially-done items with only the work that's left; don't track deltas, changes, or failure-mode explanations -- just enough breadcrumbs to know where to look and what to investigate.
 
 ## Documentation
 

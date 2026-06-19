@@ -889,3 +889,141 @@ uir.func @DynIfElse(%cond: 0, %a: 1, %b: 1) -> (result: 1) {
   }
   uir.return %result -> (%it)
 }
+
+//===----------------------------------------------------------------------===//
+// Dyn body inside a for-const loop: the producing phase (0) drives the loop
+// and pushes one hit per iteration; the receiving phase (1) has a single
+// replicate that stamps out the dyn body once per hit, threading the loop's
+// result value. Unlike if-else, a loop uses ONE replicate with N hits.
+
+// Phase 0: create one hits list, push once per iteration inside the loop.
+// CHECK-LABEL: hir.func private @DynLoop.0(%n) -> (ctx)
+// CHECK:       } {
+// CHECK:         %[[HITS:.+]] = hir.opaque_list_create
+// CHECK:         uir.loop {
+// CHECK:           %[[E:.+]] = hir.opaque_pack()
+// CHECK:           hir.opaque_list_push %[[HITS]], %[[E]]
+// CHECK:           uir.if %{{.+}} {
+// CHECK:             uir.break
+// CHECK:           }
+// CHECK:           uir.continue
+// CHECK:         }
+// CHECK:         %[[CTX:.+]] = hir.opaque_pack(%[[HITS]])
+// CHECK:         hir.return %[[CTX]]
+
+// Phase 1: a single replicate consuming the hits vector, threading the result.
+// CHECK-LABEL: hir.func private @DynLoop.1(%x, %ctx) -> (result)
+// CHECK:       } {
+// CHECK:         %[[UNPACK:.+]] = hir.opaque_unpack %ctx
+// CHECK:         %[[INIT:.+]] = hir.opaque_pack()
+// CHECK:         %[[R:.+]] = hir.replicate %{{.+}} in %[[UNPACK]], (%{{.+}} = %[[INIT]]) {
+// CHECK:           hir.yield %x
+// CHECK:         }
+// CHECK:         hir.return %[[R]]
+uir.func @DynLoop(%n: 0, %x: 1) -> (result: 1) {
+  %it = hir.int_type
+  uir.signature (%it, %it) -> (%it)
+} {
+  %it = hir.int_type
+  %cond = hir.int_type
+  %result = uir.loop : %it {
+    %next = uir.expr pin 1 : %it {
+      uir.yield %x : %it
+    }
+    uir.if %cond {
+      uir.break %next : %it
+    }
+    uir.continue
+  }
+  uir.return %result -> (%it)
+}
+
+//===----------------------------------------------------------------------===//
+// Dyn loop threading two values: a single replicate with two threaded values,
+// and still exactly one hit pushed per iteration (not one per dyn expr).
+
+// CHECK-LABEL: hir.func private @DynLoop2.0(%n) -> (ctx)
+// CHECK:       } {
+// CHECK:         %[[HITS2:.+]] = hir.opaque_list_create
+// CHECK:         uir.loop {
+// CHECK:           %[[E2:.+]] = hir.opaque_pack()
+// CHECK:           hir.opaque_list_push %[[HITS2]], %[[E2]]
+// CHECK-NOT:       hir.opaque_list_push
+// CHECK:           uir.if %{{.+}} {
+// CHECK:             uir.break
+// CHECK:           }
+// CHECK:           uir.continue
+// CHECK:         }
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @DynLoop2.1(%a, %b, %ctx) -> (ra, rb)
+// CHECK:       } {
+// CHECK:         %[[U2:.+]] = hir.opaque_unpack %ctx
+// CHECK:         %[[R2:.+]]:2 = hir.replicate %{{.+}} in %[[U2]], (%{{.+}} = %{{.+}}, %{{.+}} = %{{.+}}) {
+// CHECK:           hir.yield %a, %b
+// CHECK:         }
+// CHECK:         hir.return %[[R2]]#0, %[[R2]]#1
+uir.func @DynLoop2(%n: 0, %a: 1, %b: 1) -> (ra: 1, rb: 1) {
+  %it = hir.int_type
+  uir.signature (%it, %it, %it) -> (%it, %it)
+} {
+  %it = hir.int_type
+  %cond = hir.int_type
+  %ra, %rb = uir.loop : %it, %it {
+    %na = uir.expr pin 1 : %it {
+      uir.yield %a : %it
+    }
+    %nb = uir.expr pin 1 : %it {
+      uir.yield %b : %it
+    }
+    uir.if %cond {
+      uir.break %na, %nb : %it, %it
+    }
+    uir.continue
+  }
+  uir.return %ra, %rb -> (%it, %it)
+}
+
+//===----------------------------------------------------------------------===//
+// Side-effect-only dyn loop body: the loop has no results, and the dyn block
+// just runs a side effect each iteration. The receiving phase gets a replicate
+// with no threaded args (just side effects), one stamp per hit.
+
+// CHECK-LABEL: hir.func private @DynLoopSE.0(%n) -> (ctx)
+// CHECK:       } {
+// CHECK:         %[[HSE:.+]] = hir.opaque_list_create
+// CHECK:         uir.loop {
+// CHECK:           %[[ESE:.+]] = hir.opaque_pack()
+// CHECK:           hir.opaque_list_push %[[HSE]], %[[ESE]]
+// CHECK:           uir.if %{{.+}} {
+// CHECK:             uir.break
+// CHECK:           }
+// CHECK:           uir.continue
+// CHECK:         }
+// CHECK:         hir.return
+
+// CHECK-LABEL: hir.func private @DynLoopSE.1(%ctx) -> ()
+// CHECK:       } {
+// CHECK:         %[[USE:.+]] = hir.opaque_unpack %ctx
+// CHECK:         hir.replicate %{{.+}} in %[[USE]] {
+// CHECK:           func.call @dummyA()
+// CHECK:           hir.yield
+// CHECK:         }
+// CHECK:         hir.return
+uir.func @DynLoopSE(%n: 0) -> () {
+  %it = hir.int_type
+  uir.signature (%it) -> ()
+} {
+  %cond = hir.int_type
+  uir.loop {
+    uir.expr pin 1 {
+      func.call @dummyA() : () -> ()
+      uir.yield
+    }
+    uir.if %cond {
+      uir.break
+    }
+    uir.continue
+  }
+  uir.return -> ()
+}

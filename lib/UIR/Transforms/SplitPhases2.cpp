@@ -76,6 +76,14 @@ struct PhaseGroup {
   SmallVector<int16_t> phases;
 };
 
+/// Info about one dyn expr's body, saved before the expr is erased. The body
+/// ops are cloned into the receiving-phase replicate; the yield values become
+/// the replicate's threaded yield operands.
+struct DynExprInfo {
+  SmallVector<Operation *> bodyOps;
+  SmallVector<Value> yieldValues;
+};
+
 //===----------------------------------------------------------------------===//
 // PhaseSplitter2
 //===----------------------------------------------------------------------===//
@@ -122,6 +130,8 @@ private:
   void createPhaseFunctions();
   LogicalResult splitBodyByPhase();
   void extractReplicates(Block &block);
+  void extractIfReplicates(Block &block);
+  void extractLoopReplicates(Block &block);
   void distributeOps(Block &block);
   bool decomposeCall(CallOp callOp);
   void dissolveExprsAndPins();
@@ -427,10 +437,46 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
 //===----------------------------------------------------------------------===//
 // Replicate Extraction
 //===----------------------------------------------------------------------===//
+//
+// # Extract Dyn Bodies inside Control Flow into Replicates
+//
+// This implements the "replicate model" from `docs/design/control-flow.md`.
+// Control flow that runs at a producing phase but whose body produces values
+// at a later (dyn) phase is split into two pieces:
+//
+//   - The control flow op stays in the producing phase and builds a *hits
+//     vector*: an `hir.opaque_list_create` before the op and one
+//     `hir.opaque_list_push` per dyn body activation inside it.
+//   - The receiving (dyn) phase gets `hir.replicate` ops that consume the
+//     hits vector and stamp out the dyn body once per hit, threading values
+//     between iterations.
+//
+// Two shapes are handled:
+//
+//   - `uir.if` (`extractIfReplicates`): each branch's dyn block becomes its
+//     own 0-or-1 element replicate, chained so threaded values flow through
+//     both (the inactive branch passes them through unchanged).
+//   - `uir.loop` (`extractLoopReplicates`): the loop body's dyn block becomes
+//     a *single* replicate with N hits (one per iteration), since a loop
+//     activates its body N times rather than 0-or-1 times.
+//
+// CAPTURED VALUES ARE NOT YET HANDLED: the hit entries pack no per-iteration
+// captured values (empty `hir.opaque_pack`). Bodies that depend on the loop
+// index or other producing-phase per-iteration values are out of scope and
+// require a follow-up that bundles those into the hit entries.
+//
+//===----------------------------------------------------------------------===//
 
-/// Extract dyn exprs from inside CF ops (uir.if, uir.loop) into
-/// hir.replicate ops. This runs while the entire body is still in phase 0,
+/// Extract dyn exprs from inside `uir.if` and `uir.loop` ops into
+/// `hir.replicate` ops. This runs while the entire body is still in phase 0,
 /// before arg shifting or op distribution.
+void PhaseSplitter2::extractReplicates(Block &block) {
+  extractIfReplicates(block);
+  extractLoopReplicates(block);
+}
+
+/// Extract dyn exprs from inside `uir.if` ops into chained `hir.replicate`
+/// ops.
 ///
 /// For a `uir.if` whose branches contain `uir.expr pin +K` (dyn blocks),
 /// the transformation:
@@ -438,7 +484,7 @@ LogicalResult PhaseSplitter2::splitBodyByPhase() {
 /// 2. Replaces each dyn expr in the if branches with hits-building code
 /// 3. Creates chained hir.replicate ops after the if for the receiving phase
 /// 4. Replaces the if's results with the replicate chain's results
-void PhaseSplitter2::extractReplicates(Block &block) {
+void PhaseSplitter2::extractIfReplicates(Block &block) {
   auto loc = funcOp.getLoc();
   auto anyTy = hir::AnyType::get(funcOp.getContext());
 
@@ -530,12 +576,6 @@ void PhaseSplitter2::extractReplicates(Block &block) {
     //   %entry = hir.opaque_pack(<captured values from producing phase>)
     //   hir.opaque_list_push %hits, %entry
     // The dyn expr's body ops will be cloned into the replicate later.
-
-    // Info about one dyn expr's body, saved before the expr is erased.
-    struct DynExprInfo {
-      SmallVector<Operation *> bodyOps;
-      SmallVector<Value> yieldValues;
-    };
 
     // Helper: rewrite one branch.
     auto rewriteBranch = [&](Block &branchBlock, YieldOp yield,
@@ -690,6 +730,263 @@ void PhaseSplitter2::extractReplicates(Block &block) {
       newIf.getElseRegion().takeBody(ifOp.getElseRegion());
 
     ifOp.erase();
+  }
+}
+
+/// Extract dyn exprs from inside `uir.loop` ops into a single `hir.replicate`.
+///
+/// A `for const` loop runs at a producing phase and stamps out a dyn body
+/// once per iteration. Unlike `uir.if` (0-or-1 activations per branch, hence a
+/// chain of replicates), a loop activates its body N times, so a *single*
+/// replicate with an N-element hits vector receives the dyn body.
+///
+/// For a `uir.loop` whose body contains `uir.expr pin +K` (dyn blocks) and
+/// whose `uir.break` provides the loop's result values, the transformation:
+/// 1. Creates one opaque list before the loop to hold the hits vector.
+/// 2. Replaces each per-iteration dyn expr in the body with hits-building code
+///    (`opaque_pack()` + `opaque_list_push`), so the producing-phase loop
+///    appends one hit per iteration.
+/// 3. Creates a single `hir.replicate` after the loop, threading the loop's
+///    result values and cloning the dyn body into the replicate body.
+/// 4. Replaces the loop's results with the replicate's results.
+///
+/// The replicate threads the loop's result values: the `uir.break` operands
+/// identify which dyn expr produces each result, and that expr's body becomes
+/// the replicate body that recomputes the threaded value each iteration.
+///
+/// THREADING/INIT LIMITATION: the replicate's threaded init values are dummy
+/// empty `opaque_pack`s, mirroring the `uir.if` case. This is well-defined for
+/// the supported shape (the dyn body recomputes its value from receiving-phase
+/// values each iteration), but does NOT yet express true accumulation across
+/// iterations (`x = x + 1`) or zero-iteration pass-through of an incoming
+/// value. Representing those requires the unified `uir.loop` to carry the
+/// threaded value at the dyn phase, which PhaseAnalysis currently disallows
+/// (loop-carried inits live at the loop's producing phase). See the TODO.md
+/// entry on loop replicate threading.
+void PhaseSplitter2::extractLoopReplicates(Block &block) {
+  auto loc = funcOp.getLoc();
+  auto anyTy = hir::AnyType::get(funcOp.getContext());
+
+  // Collect loop ops that contain dyn exprs. Snapshot because we modify the
+  // block during iteration.
+  SmallVector<LoopOp> loopsWithDynExprs;
+  for (auto &op : block) {
+    auto loopOp = dyn_cast<LoopOp>(&op);
+    if (!loopOp)
+      continue;
+    bool hasDyn = false;
+    loopOp.getBody().walk([&](ExprOp expr) {
+      if (expr.getPin() && expr.getPhaseShift() > 0)
+        hasDyn = true;
+    });
+    if (hasDyn)
+      loopsWithDynExprs.push_back(loopOp);
+  }
+
+  for (auto loopOp : loopsWithDynExprs) {
+    int16_t loopPhase = analysis.getPhase(loopOp);
+    auto &bodyBlock = loopOp.getBody().front();
+
+    // # Identify the Loop's Dyn Exprs
+    //
+    // We support two shapes (anything else is left untouched for a later, more
+    // general implementation):
+    //
+    //   - Value-threading: the loop has results, provided by `uir.break` ops
+    //     (often nested in `uir.if`: a top-level dyn body, then a conditional
+    //     `uir.break`, then `uir.continue`). Every break operand must be the
+    //     result of a top-level `uir.expr pin +K` dyn expr, one per loop
+    //     result, and all breaks must agree on these operands. These become
+    //     the replicate's threaded values.
+    //   - Side-effect-only: the loop has no results, and the dyn body is a
+    //     top-level void `uir.expr pin +K`. This becomes a replicate with no
+    //     threaded args (see control-flow.md "side-effect-only" replicate).
+    unsigned numResults = loopOp.getNumResults();
+
+    // Collect top-level dyn exprs in program order. `threadedExprs` are the
+    // ones whose results thread loop results; `sideEffectExprs` are void.
+    SmallVector<ExprOp> topLevelDynExprs;
+    for (auto &op : bodyBlock) {
+      auto expr = dyn_cast<ExprOp>(&op);
+      if (expr && expr.getPin() && expr.getPhaseShift() > 0)
+        topLevelDynExprs.push_back(expr);
+    }
+    if (topLevelDynExprs.empty())
+      continue;
+    int16_t dynPhase = loopPhase + topLevelDynExprs.front().getPhaseShift();
+
+    SmallVector<BreakOp> breaks;
+    loopOp.getBody().walk([&](BreakOp b) { breaks.push_back(b); });
+
+    // Determine the result-threading dyn exprs from the breaks, in result
+    // order. For a result-less loop this list is empty (side-effect-only).
+    SmallVector<ExprOp> threadedExprs;
+    if (numResults > 0) {
+      if (breaks.empty())
+        continue;
+      bool allDyn = true;
+      for (auto breakVal : breaks.front().getValues()) {
+        auto expr = breakVal.getDefiningOp<ExprOp>();
+        if (expr && expr.getPin() && expr.getPhaseShift() > 0 &&
+            expr->getBlock() == &bodyBlock)
+          threadedExprs.push_back(expr);
+        else
+          allDyn = false;
+      }
+      if (!allDyn || threadedExprs.size() != numResults)
+        continue;
+      bool breaksAgree = llvm::all_of(breaks, [&](BreakOp b) {
+        return llvm::equal(b.getValues(), breaks.front().getValues());
+      });
+      if (!breaksAgree)
+        continue;
+    } else {
+      // Side-effect-only: every top-level dyn expr must be void, and no break
+      // may carry values.
+      bool allVoid = llvm::all_of(
+          topLevelDynExprs, [](ExprOp e) { return e.getNumResults() == 0; });
+      bool breaksVoid =
+          llvm::all_of(breaks, [](BreakOp b) { return b.getValues().empty(); });
+      if (!allVoid || !breaksVoid)
+        continue;
+    }
+
+    // The replicate body is assembled from all top-level dyn exprs in program
+    // order; only the threaded ones contribute yield values. The set of dyn
+    // exprs to extract is exactly the top-level ones.
+    auto &dynExprs = topLevelDynExprs;
+
+    // # Create the Hits List
+    //
+    // Before the loop, create a single opaque list to collect one hit per
+    // iteration.
+    OpBuilder beforeLoop(loopOp);
+    auto hits = hir::OpaqueListCreateOp::create(beforeLoop, loc);
+    analysis.opPhases[hits] = loopPhase;
+
+    // # Save the Dyn Body
+    //
+    // Record each top-level dyn expr's body ops (cloned into the replicate
+    // below, in program order) and, for the threaded ones, their yield values.
+    // `exprYields` maps a threaded dyn expr to its yielded values so the
+    // replicate yield can be built in result order.
+    SmallVector<DynExprInfo> infos;
+    DenseMap<Operation *, SmallVector<Value>> exprYields;
+    for (auto expr : dynExprs) {
+      DynExprInfo info;
+      auto &exprBlock = expr.getBody().front();
+      auto exprYield = cast<uir::YieldOp>(exprBlock.getTerminator());
+      exprYields[expr] = SmallVector<Value>(exprYield.getValues());
+      for (auto &op : exprBlock)
+        if (!op.hasTrait<OpTrait::IsTerminator>())
+          info.bodyOps.push_back(&op);
+      infos.push_back(std::move(info));
+    }
+
+    // # Push One Hit per Iteration
+    //
+    // Append exactly one hit to the list each time the loop body runs, so the
+    // receiving phase's replicate stamps out the body once per iteration. The
+    // push is placed at the position of the first dyn expr (on the loop body's
+    // main path, terminated by `uir.continue`), not once per dyn expr —
+    // multiple threaded results still correspond to a single iteration.
+    //
+    // For now, we pack no captured values — the dyn body ops reference func
+    // args or other values resolved by distribution/arg shifting later.
+    {
+      OpBuilder pushBuilder(dynExprs.front());
+      auto entry =
+          hir::OpaquePackOp::create(pushBuilder, loc, anyTy, ValueRange{});
+      analysis.opPhases[entry] = loopPhase;
+      auto push = hir::OpaqueListPushOp::create(pushBuilder, loc,
+                                                hits.getResult(), entry);
+      analysis.opPhases[push] = loopPhase;
+    }
+
+    // Drop the dyn exprs and disconnect every break from their results. The
+    // loop becomes void: each break carries no values and the loop has no
+    // results.
+    for (auto b : breaks) {
+      b.getValuesMutable().clear();
+      b.getTypeOfValuesMutable().clear();
+    }
+    for (auto expr : dynExprs) {
+      for (auto result : expr.getResults())
+        result.dropAllUses();
+      expr.erase();
+    }
+
+    // # Create the Replicate
+    //
+    // After the loop, create a single replicate threading the loop's result
+    // values across all N iterations. The dyn body is cloned into the
+    // replicate body and recomputed once per hit.
+    OpBuilder afterLoop(loopOp->getBlock(), std::next(loopOp->getIterator()));
+
+    // Dummy initial threaded values (see the threading limitation note).
+    SmallVector<Value> inits;
+    for (unsigned i = 0; i < numResults; ++i) {
+      auto init =
+          hir::OpaquePackOp::create(afterLoop, loc, anyTy, ValueRange{});
+      analysis.opPhases[init] = loopPhase;
+      inits.push_back(init.getResult());
+    }
+
+    auto replicateOp = hir::ReplicateOp::create(
+        afterLoop, loc, SmallVector<Type>(numResults, anyTy), hits.getResult(),
+        inits);
+    analysis.opPhases[replicateOp] = dynPhase;
+
+    // The create call leaves the body region empty. Add an entry block with
+    // block args: 1 hit entry + N threaded values.
+    auto &bodyRegion = replicateOp.getBody();
+    auto *replBlock = new Block();
+    bodyRegion.push_back(replBlock);
+    replBlock->addArgument(anyTy, loc); // hit entry
+    for (unsigned i = 0; i < numResults; ++i)
+      replBlock->addArgument(anyTy, loc); // threaded values
+
+    OpBuilder replBuilder(replBlock, replBlock->end());
+
+    // Clone all top-level dyn bodies into the replicate body, in program
+    // order. The ops reference values from the unified body (func args, etc.);
+    // after arg shifting and distribution, those refs are updated to the
+    // receiving phase's args.
+    IRMapping bodyMapping;
+    for (auto &info : infos)
+      for (auto *op : info.bodyOps) {
+        auto *cloned = replBuilder.clone(*op, bodyMapping);
+        analysis.opPhases[cloned] = dynPhase;
+      }
+
+    // The yield threads the loop's result values, in result order, taken from
+    // the result-feeding dyn exprs (empty for a side-effect-only loop).
+    SmallVector<Value> yieldValues;
+    for (auto expr : threadedExprs)
+      for (auto val : exprYields[expr])
+        yieldValues.push_back(bodyMapping.lookupOrDefault(val));
+
+    auto yield = hir::YieldOp::create(replBuilder, loc, yieldValues);
+    analysis.opPhases[yield] = dynPhase;
+
+    // # Replace Loop Results
+    //
+    // The loop's original results are replaced by the replicate's results.
+    for (auto [oldResult, newResult] :
+         llvm::zip(loopOp.getResults(), replicateOp.getResults()))
+      oldResult.replaceAllUsesWith(newResult);
+
+    // Rebuild the loop without results (void loop). We can't drop results from
+    // the existing op, so build a new one and move the body over.
+    OpBuilder rebuildBuilder(loopOp);
+    auto newLoop = LoopOp::create(rebuildBuilder, loc, /*results=*/TypeRange{},
+                                  /*inits=*/ValueRange{},
+                                  /*initTypes=*/ValueRange{},
+                                  /*resultTypes=*/ValueRange{});
+    analysis.opPhases[newLoop] = loopPhase;
+    newLoop.getBody().takeBody(loopOp.getBody());
+
+    loopOp.erase();
   }
 }
 
