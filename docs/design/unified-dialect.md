@@ -168,7 +168,7 @@ Early return from one branch:
 ```mlir
 %r_ty = hir.inferrable : !hir.any
 %r = uir.if %cond : %r_ty {
-  uir.return %c42 -> (%int_ty)
+  uir.return %c42 : %int_ty
 } else {
   %y_ty = ...
   %u = hir.unify %r_ty, %y_ty
@@ -180,9 +180,9 @@ Early return from all branches:
 
 ```mlir
 uir.if %cond {
-  uir.return %a -> (%ty)
+  uir.return %a : %ty
 } else {
-  uir.return %b -> (%ty)
+  uir.return %b : %ty
 }
 uir.unreachable
 ```
@@ -325,7 +325,7 @@ Unlike `hir.return` (which terminates the function body's block in flat CFG), `u
 Carries the same operands as `hir.return`: return values and their type operands.
 
 ```mlir
-uir.return %val -> (%ty)
+uir.return %val : %ty
 ```
 
 For phase inference rules (`p(enclosing_block) = p(function_body)` constraint), see `docs/design/phase-inference.md`, Example 10.
@@ -338,9 +338,9 @@ Emitted by codegen after structured CF ops where all regions exit early (e.g., a
 
 ```mlir
 uir.if %cond {
-  uir.return %a -> (%ty)
+  uir.return %a : %ty
 } else {
-  uir.return %b -> (%ty)
+  uir.return %b : %ty
 }
 uir.unreachable
 ```

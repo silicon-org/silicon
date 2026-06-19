@@ -79,7 +79,7 @@ uir.func @sig_arg_mismatch(%a: 0) -> () {
   // expected-error @below {{has 0 argument types but parent function has 1 arguments}}
   uir.signature () -> ()
 } {
-  uir.return -> ()
+  uir.return
 }
 
 // -----
@@ -100,7 +100,7 @@ uir.func @call_bad_callee(%a: 0) -> (result: 0) {
 } {
   // expected-error @below {{'nonexistent' does not reference a valid function}}
   %r = uir.call @nonexistent(%a) : (%a) -> (%a) (!hir.any) -> !hir.any [0] -> [0]
-  uir.return %r -> (%a)
+  uir.return %r : %a
 }
 
 // -----

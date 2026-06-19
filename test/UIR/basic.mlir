@@ -18,17 +18,17 @@ func.func @yield_values(%a: !hir.any, %a_ty: !hir.any, %b: !hir.any, %b_ty: !hir
 
 // CHECK-LABEL: @return_void
 func.func @return_void() {
-  uir.return -> ()
+  uir.return
 }
 
 // CHECK-LABEL: @return_values
 func.func @return_values(%a: !hir.any, %a_ty: !hir.any) {
-  uir.return %a -> (%a_ty)
+  uir.return %a : %a_ty
 }
 
 // CHECK-LABEL: @return_multiple
 func.func @return_multiple(%a: !hir.any, %b: !hir.any, %a_ty: !hir.any, %b_ty: !hir.any) {
-  uir.return %a, %b -> (%a_ty, %b_ty)
+  uir.return %a, %b : %a_ty, %b_ty
 }
 
 // CHECK-LABEL: @unreachable
@@ -69,9 +69,9 @@ func.func @if_else_with_results(%cond: !hir.any, %a: !hir.any, %b: !hir.any, %a_
 // CHECK-LABEL: @if_early_return
 func.func @if_early_return(%cond: !hir.any, %a: !hir.any, %ty: !hir.any) {
   uir.if %cond {
-    uir.return %a -> (%ty)
+    uir.return %a : %ty
   } else {
-    uir.return %a -> (%ty)
+    uir.return %a : %ty
   }
   uir.unreachable
 }
@@ -189,28 +189,28 @@ func.func @pin_multiple(%a: !hir.any, %b: !hir.any) {
 uir.func @simple_func(%x: 0, %y: 0) -> (result: 0) {
   uir.signature (%x, %y) -> (%x)
 } {
-  uir.return %x -> (%x)
+  uir.return %x : %x
 }
 
 // CHECK-LABEL: uir.func @const_arg
 uir.func @const_arg(%N: -1, %x: 0) -> (result: 0) {
   uir.signature (%N, %x) -> (%x)
 } {
-  uir.return %x -> (%x)
+  uir.return %x : %x
 }
 
 // CHECK-LABEL: uir.func @no_args
 uir.func @no_args() -> () {
   uir.signature () -> ()
 } {
-  uir.return -> ()
+  uir.return
 }
 
 // CHECK-LABEL: uir.func @with_module
 uir.func @with_module(%x: 0) -> (result: 0) attributes {isModule} {
   uir.signature (%x) -> (%x)
 } {
-  uir.return %x -> (%x)
+  uir.return %x : %x
 }
 
 // CHECK-LABEL: uir.split_func @split_witness
@@ -226,5 +226,5 @@ uir.func @caller(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
   %r = uir.call @simple_func(%a, %a) : (%a, %a) -> (%a) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
-  uir.return %r -> (%a)
+  uir.return %r : %a
 }

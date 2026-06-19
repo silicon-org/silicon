@@ -9,7 +9,7 @@ uir.func @A() -> () {
 } {
   %type_type = hir.type_type
   %r = uir.call @B() : () -> () () -> !hir.any [] -> [0]
-  uir.return -> ()
+  uir.return
 }
 
 uir.func @B() -> () {
@@ -17,5 +17,5 @@ uir.func @B() -> () {
 } {
   %type_type = hir.type_type
   %r = uir.call @A() : () -> () () -> !hir.any [] -> [0]
-  uir.return -> ()
+  uir.return
 }

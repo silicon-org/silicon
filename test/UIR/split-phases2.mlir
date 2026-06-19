@@ -22,7 +22,7 @@ uir.func @SinglePhase() -> () {
   uir.signature () -> ()
 } {
   func.call @dummyA() : () -> ()
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -53,7 +53,7 @@ uir.func @TwoPhase(%T: -1, %x: 0) -> (result: 0) {
   %type_type = hir.type_type
   uir.signature (%type_type, %T) -> (%T)
 } {
-  uir.return %x -> (%T)
+  uir.return %x : %T
 }
 
 //===----------------------------------------------------------------------===//
@@ -86,7 +86,7 @@ uir.func @InternalPhase() -> () {
     uir.yield %r : %r
   }
   func.call @dummyB() : () -> ()
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -105,7 +105,7 @@ uir.func @TwoArgsOnePhase(%a: -1, %b: -1) -> (result: 0) {
   uir.signature (%type_type, %type_type) -> (%type_type)
 } {
   %type_type2 = hir.type_type
-  uir.return %a -> (%type_type2)
+  uir.return %a : %type_type2
 }
 
 //===----------------------------------------------------------------------===//
@@ -129,7 +129,7 @@ uir.func @Caller() -> () {
   %T = hir.int_type
   %x = hir.int_type
   %r = uir.call @TwoPhase(%T, %x) : (%type_type, %T) -> (%T) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -156,7 +156,7 @@ uir.func @ExprCrossPhase() -> (result: 0) {
     %r = hir.int_type
     uir.yield %r : %r
   }
-  uir.return %v -> (%type_type)
+  uir.return %v : %type_type
 }
 
 //===----------------------------------------------------------------------===//
@@ -183,7 +183,7 @@ uir.func @DepType(%N: -1, %B: 0) -> (result: 0) {
   uir.signature (%int_type, %b_type_sig) -> (%b_type_sig)
 } {
   %b_type_body = hir.uint_type %N
-  uir.return %B -> (%b_type_body)
+  uir.return %B : %b_type_body
 }
 
 //===----------------------------------------------------------------------===//
@@ -209,7 +209,7 @@ uir.func @ChainedDepType(%A: -1, %B: 0, %C: 0) -> () {
   %c_type = hir.uint_type %b_type
   uir.signature (%int_type, %b_type, %c_type) -> ()
 } {
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -242,7 +242,7 @@ uir.func @SigWithCall(%A: -1, %B: 0) -> () {
   }
   uir.signature (%int_type, %b_type) -> ()
 } {
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -262,7 +262,7 @@ uir.func @SharedType(%A: -1, %B: 0, %C: 0) -> () {
   }
   uir.signature (%int_type, %bt, %bt) -> ()
 } {
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -313,7 +313,7 @@ uir.func @DeepChain(%A: -3, %B: -2, %C: -1, %D: 0) -> () {
   }
   uir.signature (%int_type, %bt, %ct, %dt) -> ()
 } {
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -325,7 +325,7 @@ uir.func @ThreeArgCallee(%a: -2, %b: -1, %c: 0) -> (r: 0) {
   uir.signature (%tt, %tt, %tt) -> (%tt)
 } {
   %tt = hir.type_type
-  uir.return %c -> (%tt)
+  uir.return %c : %tt
 }
 
 // A callee with 3 results (all at phase 0).
@@ -334,7 +334,7 @@ uir.func @ThreeResultCallee(%x: 0) -> (r1: 0, r2: 0, r3: 0) {
   uir.signature (%tt) -> (%tt, %tt, %tt)
 } {
   %tt = hir.type_type
-  uir.return %x, %x, %x -> (%tt, %tt, %tt)
+  uir.return %x, %x, %x : %tt, %tt, %tt
 }
 
 //===----------------------------------------------------------------------===//
@@ -347,7 +347,7 @@ uir.func @CallVoid() -> () {
   uir.signature () -> ()
 } {
   uir.call @SinglePhase() : () -> () () -> () [] -> []
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -377,7 +377,7 @@ uir.func @CallThreeArgs() -> () {
   %b = hir.int_type
   %c = hir.int_type
   %r = uir.call @ThreeArgCallee(%a, %b, %c) : (%tt, %tt, %tt) -> (%tt) (!hir.any, !hir.any, !hir.any) -> !hir.any [-2, -1, 0] -> [0]
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -393,7 +393,7 @@ uir.func @CallThreeResults() -> () {
   %tt = hir.type_type
   %x = hir.int_type
   %r1, %r2, %r3 = uir.call @ThreeResultCallee(%x) : (%tt) -> (%tt, %tt, %tt) (!hir.any) -> (!hir.any, !hir.any, !hir.any) [0] -> [0, 0, 0]
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -421,7 +421,7 @@ uir.func @NestedCalls() -> () {
   %r1 = uir.call @TwoPhase(%T1, %x1) : (%tt, %T1) -> (%T1) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
   %T2 = hir.int_type
   %r2 = uir.call @TwoPhase(%T2, %r1) : (%tt, %T2) -> (%T2) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -485,7 +485,7 @@ uir.func @SixPhase(%a: -3, %b: -1, %c: 1) -> (r1: -2, r2: 0, r3: 2) {
     %unused = hir.int_type
     uir.yield %unused : %unused
   }
-  uir.return %a, %b, %c -> (%tt, %tt, %tt)
+  uir.return %a, %b, %c : %tt, %tt, %tt
 }
 
 //===----------------------------------------------------------------------===//
@@ -545,7 +545,7 @@ uir.func @CallSixPhase() -> () {
   %b = hir.int_type {arg_b}
   %c = hir.int_type {arg_c}
   %r1, %r2, %r3 = uir.call @SixPhase(%a, %b, %c) : (%tt, %tt, %tt) -> (%tt, %tt, %tt) (!hir.any, !hir.any, !hir.any) -> (!hir.any, !hir.any, !hir.any) [-3, -1, 1] -> [-2, 0, 2]
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -573,7 +573,7 @@ uir.func @IfSurvival() -> () {
     func.call @dummyB() : () -> ()
     uir.yield
   }
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -602,7 +602,7 @@ uir.func @IfWithResult() -> (result: 0) {
     %b = hir.int_type
     uir.yield %b : %b
   }
-  uir.return %r -> (%tt)
+  uir.return %r : %tt
 }
 
 //===----------------------------------------------------------------------===//
@@ -627,7 +627,7 @@ uir.func @LoopSurvival() -> () {
     }
     uir.continue
   }
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -645,7 +645,7 @@ uir.func @PinDissolution() -> (result: 0) {
   %v = hir.int_type
   %tt = hir.type_type
   %pinned = uir.pin %v, 0 : !hir.any
-  uir.return %pinned -> (%tt)
+  uir.return %pinned : %tt
 }
 
 //===----------------------------------------------------------------------===//
@@ -655,7 +655,7 @@ uir.func @PinDissolution() -> (result: 0) {
 // CHECK-LABEL: hir.func private @EarlyReturn.0() -> (result)
 // CHECK:       } {
 // CHECK:         uir.if %{{.+}} {
-// CHECK:           uir.return %{{.+}} -> (
+// CHECK:           uir.return %{{.+}} :
 // CHECK:         }
 // CHECK:         uir.unreachable
 uir.func @EarlyReturn() -> (result: 0) {
@@ -666,7 +666,7 @@ uir.func @EarlyReturn() -> (result: 0) {
   %v = hir.int_type
   %tt = hir.type_type
   uir.if %cond {
-    uir.return %v -> (%tt)
+    uir.return %v : %tt
   }
   uir.unreachable
 }
@@ -689,9 +689,9 @@ uir.func @BothBranchesReturn() -> (r: 0) {
   %v = hir.int_type
   %tt = hir.type_type
   uir.if %v {
-    uir.return %v -> (%tt)
+    uir.return %v : %tt
   } else {
-    uir.return %v -> (%tt)
+    uir.return %v : %tt
   }
   uir.unreachable
 }
@@ -722,7 +722,7 @@ uir.func @LoopBreakContinue() -> () {
     }
     uir.continue
   }
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -766,7 +766,7 @@ uir.func @UnreachableIfThen() -> () {
   } else {
     uir.yield
   }
-  uir.return -> ()
+  uir.return
 }
 
 // IfOp else region ending with unreachable.
@@ -787,7 +787,7 @@ uir.func @UnreachableIfElse() -> () {
   } else {
     uir.unreachable
   }
-  uir.return -> ()
+  uir.return
 }
 
 // LoopOp body ending with unreachable.
@@ -803,7 +803,7 @@ uir.func @UnreachableLoopBody() -> () {
   uir.loop {
     uir.unreachable
   }
-  uir.return -> ()
+  uir.return
 }
 
 // ExprOp body ending with unreachable. The expr creates an internal
@@ -821,7 +821,7 @@ uir.func @UnreachableExprBody() -> () {
   uir.expr pin -1 {
     uir.unreachable
   }
-  uir.return -> ()
+  uir.return
 }
 
 // FuncOp signature ending with unreachable.
@@ -832,7 +832,7 @@ uir.func @UnreachableExprBody() -> () {
 uir.func @UnreachableSig() -> () {
   uir.unreachable
 } {
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -887,7 +887,7 @@ uir.func @DynIfElse(%cond: 0, %a: 1, %b: 1) -> (result: 1) {
     }
     uir.yield %else_r : %else_it
   }
-  uir.return %result -> (%it)
+  uir.return %result : %it
 }
 
 //===----------------------------------------------------------------------===//
@@ -935,7 +935,7 @@ uir.func @DynLoop(%n: 0, %x: 1) -> (result: 1) {
     }
     uir.continue
   }
-  uir.return %result -> (%it)
+  uir.return %result : %it
 }
 
 //===----------------------------------------------------------------------===//
@@ -981,7 +981,7 @@ uir.func @DynLoop2(%n: 0, %a: 1, %b: 1) -> (ra: 1, rb: 1) {
     }
     uir.continue
   }
-  uir.return %ra, %rb -> (%it, %it)
+  uir.return %ra, %rb : %it, %it
 }
 
 //===----------------------------------------------------------------------===//
@@ -1025,5 +1025,5 @@ uir.func @DynLoopSE(%n: 0) -> () {
     }
     uir.continue
   }
-  uir.return -> ()
+  uir.return
 }

@@ -15,8 +15,8 @@ uir.func @Constant() -> (result: 0) {
   %t = hir.int_type
   // CHECK: hir.constant_int 42 {{.*}} {{.*}}pa.phase = "float"
   %c42 = hir.constant_int 42 : %t
-  // CHECK: uir.return {{.*}} -> ({{.*}}) {{.*}}pa.phase = "0"
-  uir.return %c42 -> (%t)
+  // CHECK: uir.return {{.*}} : {{.*}} {{.*}}pa.phase = "0"
+  uir.return %c42 : %t
 }
 
 // Identity: single arg passed through.
@@ -26,8 +26,8 @@ uir.func @Identity(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t = hir.int_type
-  // CHECK: uir.return {{.*}} -> ({{.*}}) {{.*}}pa.phase = "0"
-  uir.return %x -> (%t)
+  // CHECK: uir.return {{.*}} : {{.*}} {{.*}}pa.phase = "0"
+  uir.return %x : %t
 }
 
 // Pure ops with body-phase args: no slack, diamond DAG stays at 0.
@@ -45,7 +45,7 @@ uir.func @PureOps(%a: 0, %b: 0) -> (result: 0) {
   %diff = hir.sub %a, %b : %t
   // CHECK: hir.mul {{.*}} {{.*}}pa.phase = "0"
   %prod = hir.mul %sum, %diff : %t
-  uir.return %prod -> (%t)
+  uir.return %prod : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -58,8 +58,8 @@ uir.func @SinglePhase() -> () {
 } {
   // CHECK: func.call @dummyA() {{.*}}pa.phase = "0"
   func.call @dummyA() : () -> ()
-  // CHECK: uir.return -> () {{.*}}pa.phase = "0"
-  uir.return -> ()
+  // CHECK: uir.return {{.*}}pa.phase = "0"
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -74,8 +74,8 @@ uir.func @ConstIdentity(%x: -1) -> (result: 0) {
   uir.signature (%t0) -> (%t1)
 } {
   %t = hir.int_type
-  // CHECK: uir.return {{.*}} -> ({{.*}}) {{.*}}pa.phase = "0"
-  uir.return %x -> (%t)
+  // CHECK: uir.return {{.*}} : {{.*}} {{.*}}pa.phase = "0"
+  uir.return %x : %t
 }
 
 // Dyn arg basics: identity pass-through, dyn+literal, dyn+dyn, and a diamond
@@ -105,10 +105,10 @@ uir.func @DynArg(%a: 1, %b: 1) -> (r0: 1, r1: 1, r2: 1, r3: 1) {
   // CHECK: hir.mul {{.*}}pa.phase = "1"
   %prod = hir.mul %sum, %xm1 : %t
   // Return at phase 0, all value operands at phase 1.
-  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK: uir.return {{.*}} : {{.*}}
   // CHECK-SAME: pa.operands = ["1", "1", "1", "1", "float", "float", "float", "float"]
   // CHECK-SAME: pa.phase = "0"
-  uir.return %a, %sum, %ab, %prod -> (%t, %t, %t, %t)
+  uir.return %a, %sum, %ab, %prod : %t, %t, %t, %t
 }
 
 // CHECK-LABEL: uir.func @ConstArg
@@ -131,8 +131,8 @@ uir.func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
   // CHECK: hir.add {{.*}} {{.*}}pa.phase = "0"
   %0 = hir.add %a, %b : %t
   // Return type operand needs phase 0 - 1 = -1. %t is at -1 — satisfies!
-  // CHECK: uir.return {{.*}} -> ({{.*}}) {{.*}}pa.phase = "0"
-  uir.return %0 -> (%t)
+  // CHECK: uir.return {{.*}} : {{.*}} {{.*}}pa.phase = "0"
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -177,7 +177,7 @@ uir.func @PureOpFloats(%a: -1, %b: -1, %c: -1) -> (r0: 0, r1: 0, r2: 0, r3: 0) {
   // CHECK: hir.sub {{.*}} {{.*}}pa.phase = "-1"
   %3 = hir.sub %abc, %ac : %t
   // Return type operand needs 0-1 = -1. %ta is at -2, satisfies.
-  uir.return %0, %1, %2, %3 -> (%ta, %t, %t, %t)
+  uir.return %0, %1, %2, %3 : %ta, %t, %t, %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -202,8 +202,8 @@ uir.func @ConstReturn(%x: -1, %y: -1) -> (r0: -1, r1: -1, r2: -1) {
   // CHECK: hir.add %x, %y {{.*}} {{.*}}pa.phase = "-1"
   %xy = hir.add %x, %y : %t
   // Return op at body block phase 0.
-  // CHECK: uir.return {{.*}} -> ({{.*}}) {{.*}}pa.phase = "0"
-  uir.return %x, %sum, %xy -> (%t, %t, %t)
+  // CHECK: uir.return {{.*}} : {{.*}} {{.*}}pa.phase = "0"
+  uir.return %x, %sum, %xy : %t, %t, %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -219,7 +219,7 @@ uir.func @PureNoSlack(%a: -1) -> (result: -1) {
   %lit = hir.constant_int 1 : %t
   // CHECK: hir.add {{.*}}pa.phase = "-1"
   %sum = hir.add %a, %lit : %t
-  uir.return %sum -> (%t)
+  uir.return %sum : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -247,7 +247,7 @@ uir.func @LetPinConstraint(%a: -1) -> (result: 0) {
   %pinY = uir.pin %y, 0 : !hir.any
   // CHECK: hir.add {{.*}}pa.phase = "0"
   %sum = hir.add %x, %pinY : %t
-  uir.return %sum -> (%t)
+  uir.return %sum : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -262,8 +262,8 @@ uir.func @ConstLiteralReturn() -> (result: -1) {
   // CHECK: hir.constant_int 42 {{.*}} {{.*}}pa.phase = "float"
   %c42 = hir.constant_int 42 : %t
   // Return op at body block phase 0, value is float.
-  // CHECK: uir.return {{.*}} -> ({{.*}}) {{.*}}pa.phase = "0"
-  uir.return %c42 -> (%t)
+  // CHECK: uir.return {{.*}} : {{.*}} {{.*}}pa.phase = "0"
+  uir.return %c42 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -280,10 +280,10 @@ uir.func @DeepConst(%x: -2) -> (r0: -2, r1: -2) {
   %c1 = hir.constant_int 1 : %t
   // CHECK: hir.add {{.*}}pa.phase = "-2"
   %sum = hir.add %x, %c1 : %t
-  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK: uir.return {{.*}} : {{.*}}
   // CHECK-SAME: pa.operands = ["-2", "-2", "float", "float"]
   // CHECK-SAME: pa.phase = "0"
-  uir.return %x, %sum -> (%t, %t)
+  uir.return %x, %sum : %t, %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -300,10 +300,10 @@ uir.func @DeepDyn(%x: 2) -> (r0: 2, r1: 2) {
   %c1 = hir.constant_int 1 : %t
   // CHECK: hir.add {{.*}}pa.phase = "2"
   %sum = hir.add %x, %c1 : %t
-  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK: uir.return {{.*}} : {{.*}}
   // CHECK-SAME: pa.operands = ["2", "2", "float", "float"]
   // CHECK-SAME: pa.phase = "0"
-  uir.return %x, %sum -> (%t, %t)
+  uir.return %x, %sum : %t, %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -320,7 +320,7 @@ uir.func @MixedDepth(%a: -2, %b: -1) -> (result: 0) {
   // CHECK: hir.add {{.*}}pa.operands = ["-2", "-1", "float"]
   // CHECK-SAME: pa.phase = "-1"
   %sum = hir.add %a, %b : %t
-  uir.return %sum -> (%t)
+  uir.return %sum : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -344,7 +344,7 @@ uir.func @PinnedPureOps(%a: 0, %b: 0) -> (result: 0) {
   %pdiff = uir.pin %diff, 0 : !hir.any
   // CHECK: hir.mul {{.*}} {{.*}}pa.phase = "0"
   %prod = hir.mul %psum, %pdiff : %t
-  uir.return %prod -> (%t)
+  uir.return %prod : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -371,7 +371,7 @@ uir.func @PinAbsorbsSlack(%a: -1, %b: -1) -> (result: 0) {
   // Combine pinned results.
   // CHECK: hir.add {{.*}} {{.*}}pa.phase = "0"
   %r = hir.add %x, %y : %t
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -391,7 +391,7 @@ uir.func @MixedConstBody(%a: -1, %b: -1, %c: 0) -> (result: 0) {
   %ab = hir.add %a, %b : %t
   // CHECK: hir.add {{.*}}, %c {{.*}} {{.*}}pa.phase = "0"
   %abc = hir.add %ab, %c : %t
-  uir.return %abc -> (%t)
+  uir.return %abc : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -408,10 +408,10 @@ uir.func @MixedDynBody(%x: 0, %y: 1) -> (result: 1) {
   // CHECK: hir.add {{.*}}pa.operands = ["0", "1", "float"]
   // CHECK-SAME: pa.phase = "1"
   %sum = hir.add %x, %y : %t
-  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK: uir.return {{.*}} : {{.*}}
   // CHECK-SAME: pa.operands = ["1", "float"]
   // CHECK-SAME: pa.phase = "0"
-  uir.return %sum -> (%t)
+  uir.return %sum : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -429,7 +429,7 @@ uir.func @PinnedExpr(%a: -1) -> (result: 0) {
     %sum = hir.add %a, %a : %t
     uir.yield %sum : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -450,10 +450,10 @@ uir.func @DynPinnedExpr(%x: 0) -> (result: 1) {
     uir.yield %x : %t
   }
   // Return at phase 0, result value at phase 0 (propagated through yield).
-  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK: uir.return {{.*}} : {{.*}}
   // CHECK-SAME: pa.operands = ["0", "float"]
   // CHECK-SAME: pa.phase = "0"
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -479,7 +479,7 @@ uir.func @NestedConstBlocks(%a: -2) -> (result: 0) {
     }
     uir.yield %inner : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -498,7 +498,7 @@ uir.func @ConstBlockStatement(%a: -1) -> () {
     func.call @sideEffectC() : () -> ()
     uir.yield
   }
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -528,7 +528,7 @@ uir.func @PinInConstBlock(%a: -1) -> (result: 0) {
     %prod = hir.mul %y, %c2 : %t
     uir.yield %prod : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -550,10 +550,10 @@ uir.func @NestedDynBlocks() -> (result: 2) {
     uir.yield %inner : %t
   }
   // Region result at demanded phase 2 (not rescheduled through yields).
-  // CHECK: uir.return {{.*}} -> ({{.*}})
+  // CHECK: uir.return {{.*}} : {{.*}}
   // CHECK-SAME: pa.operands = ["2", "float"]
   // CHECK-SAME: pa.phase = "0"
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -577,7 +577,7 @@ uir.func @DynConstNesting() -> (result: 1) {
     // CHECK: uir.yield {{.*}}pa.phase = "1"
     uir.yield %inner : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -592,7 +592,7 @@ uir.func @MakeValue() -> (result: 0) {
 } {
   %t = hir.int_type
   %c = hir.constant_int 1 : %t
-  uir.return %c -> (%t)
+  uir.return %c : %t
 }
 
 // CHECK-LABEL: uir.func @FloatingExprTightening
@@ -616,7 +616,7 @@ uir.func @FloatingExprTightening() -> (r0: 0, r1: -1) {
     %b = uir.call @MakeValue() : () -> (%rb) () -> !hir.any [] -> [0]
     uir.yield %a, %b : %ta, %tb
   }
-  uir.return %x, %y -> (%t, %t)
+  uir.return %x, %y : %t, %t
 }
 
 // CHECK-LABEL: uir.func @FloatingExprTransitivePure
@@ -643,7 +643,7 @@ uir.func @FloatingExprTransitivePure() -> (r0: 0, r1: -1) {
     %b2 = hir.add %b, %c1 : %t
     uir.yield %a2, %b2 : %ta, %tb
   }
-  uir.return %x, %y -> (%t, %t)
+  uir.return %x, %y : %t, %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -667,7 +667,7 @@ uir.func @FloatingExpr(%a: -1) -> (result: 0) {
     %sum = hir.add %a, %a : %t
     uir.yield %sum : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -687,7 +687,7 @@ uir.func @DeadExprStatement(%a: 0, %b: 0) -> () {
     // CHECK: uir.yield {{.*}}pa.phase = "0"
     uir.yield
   }
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -704,7 +704,7 @@ uir.func @SignaturePhases(%a: -1, %b: 0) -> (result: 0) {
   // CHECK: uir.signature ({{.*}}) -> ({{.*}}) {{.*}}pa.phase = "0"
   uir.signature (%0, %1) -> (%2)
 } {
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -721,7 +721,7 @@ uir.func @PinnedOpViaDFS(%a: 0) -> (result: 0) {
   // CHECK: uir.pin {{.*}}, 0 {{.*}} {{.*}}pa.phase = "0"
   %pinned = uir.pin %sum, 0 : !hir.any
   // The return uses %pinned — resolveValue sees it's already resolved at 0.
-  uir.return %pinned -> (%t)
+  uir.return %pinned : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -741,7 +741,7 @@ uir.func @IfOp(%cond: 0) -> (result: 0) {
     // CHECK: uir.yield {{.*}} {{.*}}pa.phase = "0"
     uir.yield %cond : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -769,7 +769,7 @@ uir.func @ShortCircuitAnd(%x: 0, %lo: 0, %hi: 0) -> (result: 0) {
     // CHECK: uir.yield {{.*}} {{.*}}pa.phase = "0"
     uir.yield %cfalse : %bt
   }
-  uir.return %r -> (%bt)
+  uir.return %r : %bt
 }
 
 //===----------------------------------------------------------------------===//
@@ -794,7 +794,7 @@ uir.func @ConstCondIf(%flag: -1) -> (result: 0) {
     // CHECK: uir.yield {{.*}} {{.*}}pa.phase = "0"
     uir.yield %c0 : %t
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -825,7 +825,7 @@ uir.func @IfTransparentYield(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
     uir.yield %b : %t
   }
   // CHECK: uir.return {{.*}}pa.operands = ["-1", "float"]
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -855,7 +855,7 @@ uir.func @AsymmetricPureFloat(%a: -1, %b: 0) -> (result: 0) {
     // CHECK: uir.yield {{.*}}pa.phase = "0"
     uir.yield %sum2 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -881,7 +881,7 @@ uir.func @IfSameValueNoFloor(%sel: 0, %x: -1) -> (result: -1) {
   } else {
     uir.yield %x : %t
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -902,7 +902,7 @@ uir.func @IfSameValueNoFloorDyn(%sel: 0, %x: 1) -> (result: 1) {
   } else {
     uir.yield %x : %t
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -924,7 +924,7 @@ uir.func @IfDistinctValuesFloorSatisfied(%sel: 0, %a: 0, %b: 0) -> (result: 0) {
   } else {
     uir.yield %b : %t
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -945,7 +945,7 @@ uir.func @IfDistinctValuesDynFloorSatisfied(%sel: 0, %a: 1, %b: 1) -> (result: 1
   } else {
     uir.yield %b : %t
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -966,11 +966,11 @@ uir.func @IfOneBranchReturnsNoFloor(%sel: 0, %a: 0, %b: -1) -> (result: 0) {
   // on the if (only one yield). Result at -1 from the yield operand.
   // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["-1"]
   %r = uir.if %sel : %t {
-    uir.return %a -> (%t)
+    uir.return %a : %t
   } else {
     uir.yield %b : %t
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -988,9 +988,9 @@ uir.func @IfBothReturnNoIfFloor(%sel: 0, %a: 0, %b: 0) -> (result: 0) {
   %t = hir.int_type
   // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0"
   uir.if %sel {
-    uir.return %a -> (%t)
+    uir.return %a : %t
   } else {
-    uir.return %b -> (%t)
+    uir.return %b : %t
   }
   uir.unreachable
 }
@@ -1016,7 +1016,7 @@ uir.func @LoopSameBreakNoFloor(%x: -1, %flag: 0) -> (result: -1) {
     }
     uir.continue
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1039,7 +1039,7 @@ uir.func @LoopSingleBreakNoFloor(%x: -1, %flag: 0) -> (result: -1) {
     }
     uir.continue
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1063,7 +1063,7 @@ uir.func @LoopDistinctBreakFloorSatisfied(%a: 0, %b: 0, %flag: 0) -> (result: 0)
     }
     uir.continue
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1076,7 +1076,7 @@ uir.func @FuncSingleReturnNoFloor(%x: -1) -> (result: -1) {
   uir.signature (%t0) -> (%t1)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1091,9 +1091,9 @@ uir.func @FuncSameReturnNoFloor(%x: -1, %flag: 0) -> (result: -1) {
 } {
   %t = hir.int_type
   uir.if %flag {
-    uir.return %x -> (%t)
+    uir.return %x : %t
   }
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1110,9 +1110,9 @@ uir.func @FuncDistinctReturnFloorSatisfied(%a: 0, %b: 0, %flag: 0) -> (result: 0
 } {
   %t = hir.int_type
   uir.if %flag {
-    uir.return %a -> (%t)
+    uir.return %a : %t
   }
-  uir.return %b -> (%t)
+  uir.return %b : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1141,7 +1141,7 @@ uir.func @ConstBlockWorkaround(%a: -1, %b: -1, %flag: -1) -> (result: 0) {
     uir.yield %sel : %t
   }
   %pinned = uir.pin %chosen, 0 : !hir.any
-  uir.return %pinned -> (%t)
+  uir.return %pinned : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1161,7 +1161,7 @@ uir.func @IfDynReturn(%x: 1, %y: 1, %cond: 0) -> (result: 1) {
   } else {
     uir.yield %y : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1181,9 +1181,9 @@ uir.func @IfWithEarlyReturn(%x: -1, %y: 0) -> (result: 0) {
   uir.if %cmp {
     %sum = hir.add %x, %c1 : %t
     // CHECK: uir.return {{.*}}pa.phase = "0"
-    uir.return %sum -> (%t)
+    uir.return %sum : %t
   }
-  uir.return %y -> (%t)
+  uir.return %y : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1207,7 +1207,7 @@ uir.func @LoopOp(%cond: 0, %val: 0) -> (result: 0) {
     // CHECK: uir.continue {{.*}}pa.phase = "0"
     uir.continue
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1235,7 +1235,7 @@ uir.func @LoopCarried(%init: 0, %cond: 0) -> (result: 0) {
     // CHECK: uir.continue {{.*}}pa.phase = "0"
     uir.continue %next : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1255,7 +1255,7 @@ uir.func @SideEffectsInCF(%cond: 0) -> () {
     func.call @dummyB() : () -> ()
     uir.yield
   }
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -1269,12 +1269,12 @@ uir.func @EarlyReturn(%cond: 0, %val: 0) -> (result: 0) {
 } {
   %t = hir.int_type
   uir.if %cond {
-    // CHECK: uir.return {{.*}} -> ({{.*}}) {{.*}}pa.phase = "0"
-    uir.return %val -> (%t)
+    // CHECK: uir.return {{.*}} : {{.*}} {{.*}}pa.phase = "0"
+    uir.return %val : %t
   } else {
     uir.yield
   }
-  uir.return %val -> (%t)
+  uir.return %val : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1288,9 +1288,9 @@ uir.func @AllBranchesReturn(%cond: 0, %val: 0) -> (result: 0) {
 } {
   %t = hir.int_type
   uir.if %cond {
-    uir.return %val -> (%t)
+    uir.return %val : %t
   } else {
-    uir.return %val -> (%t)
+    uir.return %val : %t
   }
   // CHECK: uir.unreachable {{.*}}pa.phase = "0"
   uir.unreachable
@@ -1306,7 +1306,7 @@ uir.func @CallTarget(%x: 0, %y: 0) -> (result: 0) {
   uir.signature (%t0, %t1) -> (%t2)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 // CHECK-LABEL: uir.func @CallAllZero
@@ -1317,7 +1317,7 @@ uir.func @CallAllZero(%a: 0) -> (result: 0) {
   %ta = hir.int_type
   // CHECK: uir.call @CallTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
   %r = uir.call @CallTarget(%a, %a) : (%ta, %ta) -> (%ta) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
-  uir.return %r -> (%ta)
+  uir.return %r : %ta
 }
 
 //===----------------------------------------------------------------------===//
@@ -1329,7 +1329,7 @@ uir.func @SingleArgTarget(%x: 0) -> (result: 0) {
   uir.signature (%t0) -> (%t1)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 // CHECK-LABEL: uir.func @ChainedCalls
@@ -1346,7 +1346,7 @@ uir.func @ChainedCalls(%x: 0) -> (result: 0) {
   %tr2 = hir.int_type
   // CHECK: uir.call @SingleArgTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
   %outer = uir.call @SingleArgTarget(%inner) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [0] -> [0]
-  uir.return %outer -> (%tr2)
+  uir.return %outer : %tr2
 }
 
 //===----------------------------------------------------------------------===//
@@ -1365,7 +1365,7 @@ uir.func @CallWithLiterals() -> (result: 0) {
   %tr = hir.int_type
   // CHECK: uir.call @CallTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
   %r = uir.call @CallTarget(%c10, %c20) : (%ta, %tb) -> (%tr) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
-  uir.return %r -> (%tr)
+  uir.return %r : %tr
 }
 
 //===----------------------------------------------------------------------===//
@@ -1381,7 +1381,7 @@ uir.func @CallWithConstArg(%a: -1) -> (result: 0) {
   %tr = hir.int_type
   // CHECK: uir.call @SingleArgTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
   %r = uir.call @SingleArgTarget(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
-  uir.return %r -> (%tr)
+  uir.return %r : %tr
 }
 
 //===----------------------------------------------------------------------===//
@@ -1415,7 +1415,7 @@ uir.func @SequentialCalls(%a: 0, %b: 0) -> (result: 0) {
   %tr3 = hir.int_type
   // CHECK: uir.call @CallTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
   %call3 = uir.call @CallTarget(%y, %b) : (%ta3, %tb3) -> (%tr3) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
-  uir.return %call3 -> (%tr3)
+  uir.return %call3 : %tr3
 }
 
 //===----------------------------------------------------------------------===//
@@ -1428,7 +1428,7 @@ uir.func @ConstArgTarget(%n: -1, %x: 0) -> (result: 0) {
   uir.signature (%t0, %t1) -> (%t2)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 // CHECK-LABEL: uir.func @CallConstArg
@@ -1442,7 +1442,7 @@ uir.func @CallConstArg(%n: -1, %a: 0) -> (result: 0) {
   // %n is at -1 (satisfies -1), %a is at 0 (satisfies 0).
   // CHECK: uir.call @ConstArgTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
   %r = uir.call @ConstArgTarget(%n, %a) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1455,7 +1455,7 @@ uir.func @ConstArgDynResult(%c: -1) -> (result: 1) {
   uir.signature (%t) -> (%t2)
 } {
   %t3 = hir.int_type
-  uir.return %c -> (%t3)
+  uir.return %c : %t3
 }
 
 // CHECK-LABEL: uir.func @CallBothOffsets
@@ -1472,7 +1472,7 @@ uir.func @CallBothOffsets(%x: -2) -> (result: 0) {
     %v = uir.call @ConstArgDynResult(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [1]
     uir.yield %v : %tr
   }
-  uir.return %r -> (%tr)
+  uir.return %r : %tr
 }
 
 //===----------------------------------------------------------------------===//
@@ -1484,7 +1484,7 @@ uir.func @TakesConst(%x: -1) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // CHECK-LABEL: uir.func @TripleConstChain
@@ -1514,7 +1514,7 @@ uir.func @TripleConstChain(%x: -3) -> (result: 0) {
   // Last call stays at body phase 0.
   // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "0"
   %r3 = uir.call @TakesConst(%r2) : (%t3) -> (%tr3) (!hir.any) -> !hir.any [-1] -> [0]
-  uir.return %r3 -> (%tr3)
+  uir.return %r3 : %tr3
 }
 
 //===----------------------------------------------------------------------===//
@@ -1528,7 +1528,7 @@ uir.func @ReturnsDyn(%x: 0) -> (result: 1) {
   uir.signature (%t) -> (%t2)
 } {
   %t3 = hir.int_type
-  uir.return %x -> (%t3)
+  uir.return %x : %t3
 }
 
 // Triple dyn chain with floating expr wrappers. Each call has dyn result
@@ -1564,7 +1564,7 @@ uir.func @TripleDynChain(%x: -3) -> (result: 0) {
     %v3 = uir.call @ReturnsDyn(%r2) : (%t3) -> (%tr3) (!hir.any) -> !hir.any [0] -> [1]
     uir.yield %v3 : %tr3
   }
-  uir.return %r3 -> (%tr3)
+  uir.return %r3 : %tr3
 }
 
 //===----------------------------------------------------------------------===//
@@ -1591,7 +1591,7 @@ uir.func @OffsetCancel(%x: -2) -> (result: 0) {
   // Outer call at body phase 0: const arg at -1, %r1 at -1 satisfies.
   // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "0"
   %r2 = uir.call @TakesConst(%r1) : (%t2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
-  uir.return %r2 -> (%tr2)
+  uir.return %r2 : %tr2
 }
 
 //===----------------------------------------------------------------------===//
@@ -1616,7 +1616,7 @@ uir.func @DeepViaBlocks(%x: -3) -> (result: 0) {
     uir.yield %1 : %t2
   }
   %p = uir.pin %0, 0 : !hir.any
-  uir.return %p -> (%t2)
+  uir.return %p : %t2
 }
 
 //===----------------------------------------------------------------------===//
@@ -1632,7 +1632,7 @@ uir.func @IfNoElse(%cond: 0) -> () {
     func.call @dummyA() : () -> ()
     uir.yield
   }
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -1658,7 +1658,7 @@ uir.func @LoopContinue(%c1: 0, %c2: 0) -> () {
     }
     uir.continue
   }
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -1682,7 +1682,7 @@ uir.func @NestedExprInIf(%cond: 0, %a: -1) -> (result: 0) {
   } else {
     uir.yield %a : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1717,7 +1717,7 @@ uir.func @IfInConstInLoop(%flag: -1, %a: -1, %b: -1, %x: 0) -> (result: 0) {
     %sum = hir.add %pinned, %x : %t
     uir.break %sum : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1754,7 +1754,7 @@ uir.func @DeepNesting(%a: -1, %b: -1) -> (result: 0) {
   }
   // CHECK: uir.pin {{.*}}pa.phase = "0"
   %pinned = uir.pin %val, 0 : !hir.any
-  uir.return %pinned -> (%t)
+  uir.return %pinned : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1777,7 +1777,7 @@ uir.func @TypeOperandConstraint(%n: -1) -> (result: 0) {
   %t = hir.int_type
   // CHECK: hir.add {{.*}} {{.*}}pa.phase = "-1"
   %0 = hir.add %n, %n : %t
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1795,7 +1795,7 @@ uir.func @PinAndFloatingConsumer(%a: 0) -> (result: 0) {
   // Pin processes first (root), resolveValue skips on second visit (return).
   // CHECK: uir.pin {{.*}}, 0 {{.*}} {{.*}}pa.phase = "0"
   %p = uir.pin %sum, 0 : !hir.any
-  uir.return %p -> (%t)
+  uir.return %p : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1809,7 +1809,7 @@ uir.func @PureZeroOperands() -> (result: 0) {
   // hir.int_type is ConstantLike, floats to any phase.
   // CHECK: hir.int_type {{.*}}pa.phase = "float"
   %t = hir.int_type
-  uir.return %t -> (%t)
+  uir.return %t : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1843,7 +1843,7 @@ uir.func @NestedLoopConstContinue(%c1: 0, %c2: 0) -> () {
     }
     uir.continue
   }
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -1876,7 +1876,7 @@ uir.func @NestedLoopResults(%a: 1, %cond: 0) -> (result: 1) {
     // Outer break carries the dyn value.
     uir.break %inner : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1904,7 +1904,7 @@ uir.func @MultiResultLoopPhases(%a: 1) -> (r0: 1, r1: 0) {
     uir.break %sum, %v : %t, %t2
   }
   // CHECK: uir.return {{.*}}pa.operands = ["1", "0", "float", "float"]
-  uir.return %r0, %r1 -> (%t, %t2)
+  uir.return %r0, %r1 : %t, %t2
 }
 
 //===----------------------------------------------------------------------===//
@@ -1927,7 +1927,7 @@ uir.func @IfTransparentDynYield(%sel: 0, %a: 1, %b: 1) -> (result: 1) {
     uir.yield %b : %t
   }
   // CHECK: uir.return {{.*}}pa.operands = ["1", "float"]
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1944,7 +1944,7 @@ uir.func @ExprTransparentDynYield(%a: 1) -> (result: 1) {
   %0 = uir.expr pin : %t {
     uir.yield %a : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1961,7 +1961,7 @@ uir.func @LoopTransparentDynBreak(%a: 1) -> (result: 1) {
   %0 = uir.loop : %t {
     uir.break %a : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -1972,7 +1972,7 @@ uir.func @VoidTarget(%n: -1, %x: 0) -> () {
   %t1 = hir.int_type
   uir.signature (%t0, %t1) -> ()
 } {
-  uir.return -> ()
+  uir.return
 }
 
 // CHECK-LABEL: uir.func @ZeroUseCall
@@ -1986,7 +1986,7 @@ uir.func @ZeroUseCall(%n: -1, %a: 0) -> () {
   // Zero-use call at blockPhase 0. Arg 0 at 0+(-1)=-1, arg 1 at 0+0=0.
   // CHECK: uir.call @VoidTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
   uir.call @VoidTarget(%n, %a) : (%ta, %tb) -> () (!hir.any, !hir.any) -> () [-1, 0] -> []
-  uir.return -> ()
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -2005,7 +2005,7 @@ uir.func @ChainedTypeOf(%a: 0) -> (result: 0) {
   %tta = hir.type_of %ta
   // Use %tta as the return type operand (needs phase 0-1 = -1; %tta at -2
   // satisfies since -2 <= -1).
-  uir.return %a -> (%tta)
+  uir.return %a : %tta
 }
 
 //===----------------------------------------------------------------------===//
@@ -2028,7 +2028,7 @@ uir.func @PureTypeOperandEarliest(%a: -1) -> (result: 0) {
   // CHECK: hir.add {{.*}} {{.*}}pa.phase = "0"
   %0 = hir.add %a, %a : %ut
   %rt = hir.int_type
-  uir.return %0 -> (%rt)
+  uir.return %0 : %rt
 }
 
 //===----------------------------------------------------------------------===//
@@ -2048,7 +2048,7 @@ uir.func @MixedDepthDependentTypes(%A: -2, %B: -1, %x: -1, %y: 0) -> (result: 0)
   %ta = hir.uint_type %A
   // CHECK: hir.uint_type %B {{.*}}pa.phase = "-1"
   %tb = hir.uint_type %B
-  uir.return %y -> (%tb)
+  uir.return %y : %tb
 }
 
 //===----------------------------------------------------------------------===//
@@ -2071,7 +2071,7 @@ uir.func @TypeArithMixedDepth(%A: -2, %B: -1, %x: 0) -> (result: 0) {
   %ab = hir.add %A, %B : %t
   // CHECK: hir.uint_type {{.*}}pa.phase = "-1"
   %ut = hir.uint_type %ab
-  uir.return %x -> (%ut)
+  uir.return %x : %ut
 }
 
 //===----------------------------------------------------------------------===//
@@ -2093,7 +2093,7 @@ uir.func @WidenType(%N: -1, %x: 0) -> (result: 0) {
   %np1 = hir.add %N, %one : %t
   // CHECK: hir.uint_type {{.*}}pa.phase = "-1"
   %ut = hir.uint_type %np1
-  uir.return %x -> (%ut)
+  uir.return %x : %ut
 }
 
 //===----------------------------------------------------------------------===//
@@ -2109,7 +2109,7 @@ uir.func @DeepDependentType(%N: -2, %x: -1) -> (result: 0) {
 } {
   // CHECK: hir.uint_type {{.*}}pa.phase = "-2"
   %rt = hir.uint_type %N
-  uir.return %x -> (%rt)
+  uir.return %x : %rt
 }
 
 //===----------------------------------------------------------------------===//
@@ -2130,7 +2130,7 @@ uir.func @ComputedTypeAdd(%A: -1, %B: -1, %x: 0) -> (result: 0) {
   %ab = hir.add %A, %B : %t
   // CHECK: hir.uint_type {{.*}}pa.phase = "-1"
   %ut = hir.uint_type %ab
-  uir.return %x -> (%ut)
+  uir.return %x : %ut
 }
 
 //===----------------------------------------------------------------------===//
@@ -2156,7 +2156,7 @@ uir.func @ChainedTypeComputation(%A: -1, %B: -1, %C: -1, %x: 0) -> (result: 0) {
   %abc = hir.add %ab, %C : %t
   // CHECK: hir.uint_type {{.*}}pa.phase = "-1"
   %ut = hir.uint_type %abc
-  uir.return %x -> (%ut)
+  uir.return %x : %ut
 }
 
 //===----------------------------------------------------------------------===//
@@ -2171,7 +2171,7 @@ uir.func @SigReturnDependent(%N: -1, %x: 0) -> (result: 0) {
   uir.signature (%t0, %ut) -> (%ut)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2189,7 +2189,7 @@ uir.func @SigReturnComputedType(%N: -1, %M: -1) -> (result: 0) {
 } {
   %t = hir.int_type
   %fortytwo = hir.constant_int 42 : %t
-  uir.return %fortytwo -> (%t)
+  uir.return %fortytwo : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2207,7 +2207,7 @@ uir.func @SigDynReturnDependent(%N: -1, %x: 0) -> (result: 1) {
   %r = uir.expr pin 1 : %t {
     uir.yield %x : %t
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2225,7 +2225,7 @@ uir.func @SigConstReturnDependent(%N: -2) -> (result: -1) {
   %r = uir.expr pin -1 : %t {
     uir.yield %fortytwo : %t
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2242,7 +2242,7 @@ uir.func @SigArgTypesDifferentPhases(%N: -2, %y: -1, %x: 0) -> (result: 0) {
 } {
   %t = hir.int_type
   %zero = hir.constant_int 0 : %t
-  uir.return %zero -> (%t)
+  uir.return %zero : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2253,7 +2253,7 @@ uir.func @NeedsConstChain(%v: -1) -> (result: 0) {
   uir.signature (%0) -> (%0)
 } {
   %t = hir.int_type
-  uir.return %v -> (%t)
+  uir.return %v : %t
 }
 
 // CHECK-LABEL: uir.func @SequentialConstChain
@@ -2282,7 +2282,7 @@ uir.func @SequentialConstChain(%a: -1) -> (result: 0) {
   %tr = hir.int_type
   // CHECK: uir.call @NeedsConstChain({{.*}}) {{.*}}pa.phase = "0"
   %r = uir.call @NeedsConstChain(%z) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
-  uir.return %r -> (%tr)
+  uir.return %r : %tr
 }
 
 //===----------------------------------------------------------------------===//
@@ -2293,7 +2293,7 @@ uir.func @NeedsConstInterleaved(%v: -1) -> (result: 0) {
   uir.signature (%0) -> (%0)
 } {
   %t = hir.int_type
-  uir.return %v -> (%t)
+  uir.return %v : %t
 }
 
 // CHECK-LABEL: uir.func @InterleavedConstBody
@@ -2317,7 +2317,7 @@ uir.func @InterleavedConstBody(%a: -1, %b: 0) -> (result: 0) {
   %nc = uir.call @NeedsConstInterleaved(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
   // CHECK: hir.add {{.*}}pa.phase = "0"
   %r = hir.add %nc, %y : %t
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2332,7 +2332,7 @@ uir.func @ReturnDynConst(%x: 0) -> (result: 0) {
   uir.expr pin 1 {
     uir.expr pin -1 {
       // CHECK: uir.return {{.*}}pa.phase = "0"
-      uir.return %x -> (%t)
+      uir.return %x : %t
     }
     uir.unreachable
   }
@@ -2351,7 +2351,7 @@ uir.func @ReturnConstDyn(%x: 0) -> (result: 0) {
   uir.expr pin -1 {
     uir.expr pin 1 {
       // CHECK: uir.return {{.*}}pa.phase = "0"
-      uir.return %x -> (%t)
+      uir.return %x : %t
     }
     uir.unreachable
   }
@@ -2374,7 +2374,7 @@ uir.func @ReturnSixLevels(%x: 0) -> (result: 0) {
           uir.expr pin -1 {
             uir.expr pin 1 {
               // CHECK: uir.return {{.*}}pa.phase = "0"
-              uir.return %x -> (%t)
+              uir.return %x : %t
             }
             uir.unreachable
           }
@@ -2408,7 +2408,7 @@ uir.func @BreakInBalanced(%x: 0) -> (result: 0) {
     }
     uir.continue
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2431,7 +2431,7 @@ uir.func @ContinueInBalanced() -> (result: 0) {
     %c42 = hir.constant_int 42 : %t
     uir.break %c42 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2458,7 +2458,7 @@ uir.func @BreakBalancedNonzeroLoop(%x: -1) -> (result: 0) {
     }
     uir.yield %1 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2475,7 +2475,7 @@ uir.func @ReturnBalancedInIf(%flag: 0, %x: 0) -> (result: 0) {
     uir.expr pin 1 {
       uir.expr pin -1 {
         // CHECK: uir.return {{.*}}pa.phase = "0"
-        uir.return %x -> (%t)
+        uir.return %x : %t
       }
       uir.unreachable
     }
@@ -2484,7 +2484,7 @@ uir.func @ReturnBalancedInIf(%flag: 0, %x: 0) -> (result: 0) {
     uir.yield
   }
   %c0 = hir.constant_int 0 : %t
-  uir.return %c0 -> (%t)
+  uir.return %c0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2506,7 +2506,7 @@ uir.func @BalancedDynConstValue() -> (result: 1) {
     // CHECK: uir.yield {{.*}}pa.phase = "1"
     uir.yield %1 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2523,7 +2523,7 @@ uir.func @CfSucceedsWhereValueFails(%x: 0) -> (result: 0) {
       %c1 = hir.constant_int 1 : %t
       %sum = hir.add %x, %c1 : %t
       // CHECK: uir.return {{.*}}pa.phase = "0"
-      uir.return %sum -> (%t)
+      uir.return %sum : %t
     }
     uir.unreachable
   }
@@ -2558,7 +2558,7 @@ uir.func @BreakDoubleBalancedConstLoop(%a: -1) -> (result: 0) {
     }
     uir.yield %1 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2585,7 +2585,7 @@ uir.func @BreakInnerBalanced(%a: 0) -> (result: 0) {
     %c0 = hir.constant_int 0 : %t
     uir.break %c0 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2612,7 +2612,7 @@ uir.func @BreakValueConstInBalanced(%a: -1) -> (result: 0) {
     }
     uir.continue
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2626,7 +2626,7 @@ uir.func @MultiConsumerCompute(%x: 0) -> (result: 0) {
   %t = hir.int_type
   %c1 = hir.constant_int 1 : %t
   %r = hir.add %x, %c1 : %t
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 uir.func @MultiConsumerNeedsConst(%x: -1) -> (result: 0) {
@@ -2634,7 +2634,7 @@ uir.func @MultiConsumerNeedsConst(%x: -1) -> (result: 0) {
   uir.signature (%0) -> (%0)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2649,7 +2649,7 @@ uir.func @SharedNeedsConst(%x: -1) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 //===----------------------------------------------------------------------===//
@@ -2671,7 +2671,7 @@ uir.func @AllLiterals() -> (result: 0) {
   %diff = hir.sub %c30, %c5 : %t
   // CHECK: hir.mul {{.*}}pa.phase = "float"
   %prod = hir.mul %sum, %diff : %t
-  uir.return %prod -> (%t)
+  uir.return %prod : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2684,7 +2684,7 @@ uir.func @DynCallStatementDeferred(%x: 0) -> (result: 1) {
 } {
   %t2 = hir.int_type
   %0 = uir.expr pin 1 : %t2 { uir.yield %x : %t2 }
-  uir.return %0 -> (%t2)
+  uir.return %0 : %t2
 }
 
 // CHECK-LABEL: uir.func @DynCallStatement
@@ -2702,7 +2702,7 @@ uir.func @DynCallStatement(%a: 0) -> (result: 0) {
   }
   %c42 = hir.constant_int 42 : %t
   // CHECK: uir.return {{.*}}pa.phase = "0"
-  uir.return %c42 -> (%t)
+  uir.return %c42 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2722,7 +2722,7 @@ uir.func @ZeroUseInConst(%a: -1) -> (result: 0) {
     %c0 = hir.constant_int 0 : %t
     uir.yield %c0 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2742,7 +2742,7 @@ uir.func @ZeroUseInDyn(%a: 1) -> (result: 1) {
     %c0 = hir.constant_int 0 : %t
     uir.yield %c0 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2767,7 +2767,7 @@ uir.func @MultiZeroUse(%a: -1, %b: 0) -> (result: 0) {
   // CHECK: func.call @side_effect_multi(%b) {{.*}}pa.phase = "0"
   func.call @side_effect_multi(%b) : (!hir.any) -> ()
   %c0 = hir.constant_int 0 : %t
-  uir.return %c0 -> (%t)
+  uir.return %c0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2792,7 +2792,7 @@ uir.func @ZeroUseNested(%a: -1, %flag: -1) -> (result: 0) {
     %c0 = hir.constant_int 0 : %t
     uir.yield %c0 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2811,7 +2811,7 @@ uir.func @LoopDynReturn(%x: 1) -> (result: 1) {
     %sum = hir.add %x, %c1 : %t
     uir.break %sum : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2830,7 +2830,7 @@ uir.func @LoopConstReturn(%x: -1) -> (result: -1) {
     %sum = hir.add %x, %c1 : %t
     uir.break %sum : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2859,7 +2859,7 @@ uir.func @DynWhileLoop(%flag: 1) -> (result: 1) {
     %c0 = hir.constant_int 0 : %t
     uir.yield %c0 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2871,7 +2871,7 @@ uir.func @FloatedLoopOuter(%x: -1) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // CHECK-LABEL: uir.func @LoopInConstArg
@@ -2898,7 +2898,7 @@ uir.func @LoopInConstArg(%flag: -1, %a: -1) -> (result: 0) {
   %tr = hir.int_type
   // CHECK: uir.call @FloatedLoopOuter({{.*}}) {{.*}}pa.phase = "0"
   %r = uir.call @FloatedLoopOuter(%loopr) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
-  uir.return %r -> (%tr)
+  uir.return %r : %tr
 }
 
 // CHECK-LABEL: uir.func @SharedTwoConsumers
@@ -2918,7 +2918,7 @@ uir.func @SharedTwoConsumers(%a: -1, %b: 0) -> (result: 0) {
   // CHECK: hir.add {{.*}}, %b {{.*}}pa.phase = "0"
   %sum = hir.add %ap1, %b : %t
   %r2 = hir.add %r1, %sum : %t
-  uir.return %r2 -> (%t)
+  uir.return %r2 : %t
 }
 
 // CHECK-LABEL: uir.func @TwoBreaksBothBalanced
@@ -2951,7 +2951,7 @@ uir.func @TwoBreaksBothBalanced(%flag: 0, %a: 0, %b: 0) -> (result: 0) {
     }
     uir.continue
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2981,7 +2981,7 @@ uir.func @BreakValuesDifferentPhases(%flag: 0, %a: -1, %b: 0) -> (result: 0) {
     // CHECK: uir.break {{.*}}pa.phase = "0"
     uir.break %sum2 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // CHECK-LABEL: uir.func @MultiConsumerFixed
@@ -3004,7 +3004,7 @@ uir.func @MultiConsumerFixed(%a: -1) -> (result: 0) {
   %c42 = hir.constant_int 42 : %t
   // CHECK: hir.add {{.*}}pa.phase = "0"
   %sum = hir.add %nc, %c42 : %t
-  uir.return %sum -> (%t)
+  uir.return %sum : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3019,7 +3019,7 @@ uir.func @ComplexCallee(%x: -1) -> (result: 1) {
   %0 = uir.expr pin 1 : %t2 {
     uir.yield %x : %t2
   }
-  uir.return %0 -> (%t2)
+  uir.return %0 : %t2
 }
 
 uir.func @ComplexCalleePin(%x: 0) -> (result: 0) {
@@ -3027,7 +3027,7 @@ uir.func @ComplexCalleePin(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // CHECK-LABEL: uir.func @DynCallInConstOk
@@ -3050,7 +3050,7 @@ uir.func @DynCallInConstOk(%a: -3) -> (result: 0) {
     %pinned = uir.call @ComplexCalleePin(%r) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [0] -> [0]
     uir.yield %pinned : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3065,7 +3065,7 @@ uir.func @MultiResultTarget(%x: 0) -> (r0: 0, r1: 1) {
   uir.signature (%t0) -> (%t1, %t2)
 } {
   %t = hir.int_type
-  uir.return %x, %x -> (%t, %t)
+  uir.return %x, %x : %t, %t
 }
 
 // CHECK-LABEL: uir.func @MultiResultCall
@@ -3085,7 +3085,7 @@ uir.func @MultiResultCall(%a: -1) -> (r0: 0, r1: 0) {
     uir.yield %v0, %v1 : %tr0, %tr1
   }
   %t = hir.int_type
-  uir.return %r0, %r1 -> (%t, %t)
+  uir.return %r0, %r1 : %t, %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3103,7 +3103,7 @@ uir.func @Spread(%x: 0) -> (r0: -1, r1: 0, r2: 1) {
   %c1 = hir.constant_int 1 : %t
   %c2 = hir.constant_int 2 : %t
   %c3 = hir.constant_int 3 : %t
-  uir.return %c1, %c2, %c3 -> (%t, %t, %t)
+  uir.return %c1, %c2, %c3 : %t, %t, %t
 }
 
 // CHECK-LABEL: uir.func @SpreadCallAllResults
@@ -3125,7 +3125,7 @@ uir.func @SpreadCallAllResults(%a: -1) -> (result: 0) {
   %t = hir.int_type
   %sum01 = hir.add %r0, %r1 : %t
   %sum = hir.add %sum01, %r2 : %t
-  uir.return %sum -> (%t)
+  uir.return %sum : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3149,7 +3149,7 @@ uir.func @SpreadCallPartialUse(%a: -1) -> (result: 0) {
     uir.yield %v0, %v1, %v2 : %tr0, %tr1, %tr2
   }
   %t = hir.int_type
-  uir.return %r2 -> (%t)
+  uir.return %r2 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3171,7 +3171,7 @@ uir.func @TypeOfMultiConsumer(%a: 0) -> (result: 0) {
   // CHECK: hir.add {{.*}}, %a : {{.*}} {{.*}}pa.phase = "0"
   %sum2 = hir.add %sum1, %a : %ta
   %t = hir.int_type
-  uir.return %sum2 -> (%t)
+  uir.return %sum2 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3183,7 +3183,7 @@ uir.func @TypedResultTarget(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // CHECK-LABEL: uir.func @CallWithTypeOfResults
@@ -3196,7 +3196,7 @@ uir.func @CallWithTypeOfResults(%a: 0) -> (result: 0) {
   %tr = hir.int_type
   // CHECK: uir.call @TypedResultTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
   %r = uir.call @TypedResultTarget(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
-  uir.return %r -> (%tr)
+  uir.return %r : %tr
 }
 
 //===----------------------------------------------------------------------===//
@@ -3218,7 +3218,7 @@ uir.func @MultiResultIf(%cond: 0, %a: 0, %b: 0) -> (r0: 0, r1: 0) {
   } else {
     uir.yield %b, %a : %t, %t
   }
-  uir.return %r0, %r1 -> (%t, %t)
+  uir.return %r0, %r1 : %t, %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3240,7 +3240,7 @@ uir.func @PureFloatInIf(%cond: 0, %a: -1) -> (result: 0) {
   } else {
     uir.yield %a : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3257,14 +3257,14 @@ uir.func @ReturnInPinnedExpr(%cond: 0, %val: 0) -> (result: 0) {
   // funcBodyPhase, so it's allowed.
   uir.if %cond {
     uir.expr pin {
-      // CHECK: uir.return {{.*}} -> ({{.*}}) {{.*}}pa.phase = "0"
-      uir.return %val -> (%t)
+      // CHECK: uir.return {{.*}} : {{.*}} {{.*}}pa.phase = "0"
+      uir.return %val : %t
     }
     uir.yield
   } else {
     uir.yield
   }
-  uir.return %val -> (%t)
+  uir.return %val : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3280,7 +3280,7 @@ uir.func @ConstantIntTypeOperand() -> (result: 0) {
   %t = hir.int_type
   // CHECK: hir.constant_int {{.*}} {{.*}}pa.phase = "float"
   %c = hir.constant_int 42 : %t
-  uir.return %c -> (%t)
+  uir.return %c : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3294,7 +3294,7 @@ uir.func @InferrableFloats() -> (result: 0) {
   // CHECK: hir.inferrable {{.*}}pa.phase = "float"
   %inf = hir.inferrable
   %t = hir.int_type
-  uir.return %inf -> (%t)
+  uir.return %inf : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3313,7 +3313,7 @@ uir.func @UnifyPhase(%a: -1, %b: 0) -> (result: 0) {
   // unify: effectively pure, earliest = max(-2, -1) = -1.
   // CHECK: hir.unify {{.*}} {{.*}}pa.phase = "-1"
   %t = hir.unify %ta, %tb
-  uir.return %a -> (%t)
+  uir.return %a : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3330,7 +3330,7 @@ uir.func @CoerceTypePhase(%a: 0) -> (result: 0) {
   // CHECK: hir.coerce_type {{.*}} {{.*}}pa.phase = "0"
   %c = hir.coerce_type %a, %ty
   %t = hir.int_type
-  uir.return %c -> (%t)
+  uir.return %c : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3341,7 +3341,7 @@ uir.func @TypedArgTarget(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // CHECK-LABEL: uir.func @CallNonConstTypeOfArgs
@@ -3359,7 +3359,7 @@ uir.func @CallNonConstTypeOfArgs(%n: -1, %a: 0) -> (result: 0) {
   %tr = hir.int_type
   // CHECK: uir.call @TypedArgTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
   %r = uir.call @TypedArgTarget(%a) : (%ut) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
-  uir.return %r -> (%tr)
+  uir.return %r : %tr
 }
 
 //===----------------------------------------------------------------------===//
@@ -3381,7 +3381,7 @@ uir.func @WhileLoop(%x: 0) -> (result: 0) {
     %p = uir.pin %body, 0 : !hir.any
     uir.continue
   }
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3409,7 +3409,7 @@ uir.func @ConstLoop(%x: -1) -> (result: 0) {
     }
     uir.yield %1 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3432,7 +3432,7 @@ uir.func @LoopBreakSlack(%a: -1, %b: -1) -> (result: 0) {
   // Loop result at 0 (demanded phase; the add inside is rescheduled to -1
   // by the post-pass but region results are not re-propagated).
   // CHECK: uir.return {{.*}}pa.operands = ["0", "float"]
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3466,7 +3466,7 @@ uir.func @IfInsideFloatingExpr(%cond: -1) -> (result: -1) {
     }
     uir.yield %r : %ta
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3499,7 +3499,7 @@ uir.func @LoopInsideFloatingExpr(%cond: -1) -> (result: -1) {
     }
     uir.yield %r : %ta
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3528,7 +3528,7 @@ uir.func @PinnedInsideFloatingExpr(%a: -2) -> (result: -1) {
     }
     uir.yield %inner : %ta
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3557,7 +3557,7 @@ uir.func @FloatingInsideFloating(%a: -2) -> (result: -1) {
     }
     uir.yield %inner : %ta
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3596,7 +3596,7 @@ uir.func @DeepNestedTightening(%cond: -2) -> (result: -1) {
     }
     uir.yield %inner : %ta
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3645,7 +3645,7 @@ uir.func @BigPureTree(%a: -3, %b: -2, %c: -1, %d: 0) -> (result: 0) {
   // final: max(-1, 0) = 0
   // CHECK: hir.mul {{.*}}pa.phase = "0"
   %result = hir.mul %left, %right : %t
-  uir.return %result -> (%t)
+  uir.return %result : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3689,7 +3689,7 @@ uir.func @MultiUse(%x: -2) -> (result: 0) {
   %s2 = hir.add %s1, %u2 : %t
   // CHECK: hir.add {{.*}}pa.phase = "0"
   %s3 = hir.add %s2, %u3 : %t
-  uir.return %s3 -> (%t)
+  uir.return %s3 : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3717,7 +3717,7 @@ uir.func @ShortCircuitAndMixed(%a: -1, %b: 0) -> (result: 0) {
   } else {
     uir.yield %false_val : %t
   }
-  uir.return %result -> (%t)
+  uir.return %result : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3730,7 +3730,7 @@ uir.func @NeedsConstBool(%x: -1) -> (result: 0) {
   uir.signature (%t0) -> (%t1)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3763,7 +3763,7 @@ uir.func @NestedShortCircuit(%a: -1, %b: -1, %c: 0) -> (result: 0) {
     // CHECK: uir.yield {{.*}}pa.phase = "0"
     uir.yield %c : %t
   }
-  uir.return %result -> (%t)
+  uir.return %result : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3793,7 +3793,7 @@ uir.func @Factorial(%n: -1) -> (result: 0) {
     %prod = hir.mul %n, %rec : %t
     uir.yield %prod : %t
   }
-  uir.return %result -> (%t)
+  uir.return %result : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3822,7 +3822,7 @@ uir.func @DeepRecurse(%n: -2) -> (result: 0) {
     %rec = uir.call @DeepRecurse(%nm1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-2] -> [0]
     uir.yield %rec : %t
   }
-  uir.return %result -> (%t)
+  uir.return %result : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3848,7 +3848,7 @@ uir.func @IsOdd(%n: -1) -> (result: 0) {
     %rec = uir.call @IsEven(%nm1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
     uir.yield %rec : %t
   }
-  uir.return %result -> (%t)
+  uir.return %result : %t
 }
 
 // CHECK-LABEL: uir.func @IsEven
@@ -3874,7 +3874,7 @@ uir.func @IsEven(%n: -1) -> (result: 0) {
     %rec = uir.call @IsOdd(%nm1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
     uir.yield %rec : %t
   }
-  uir.return %result -> (%t)
+  uir.return %result : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -3903,5 +3903,5 @@ uir.func @RecursiveChain(%n: -1, %acc: 1) -> (result: 1) {
     %rec = uir.call @RecursiveChain(%nm1, %acc) : (%ta, %tb) -> (%tr) (!hir.any, !hir.any) -> !hir.any [-1, 1] -> [1]
     uir.yield %rec : %t
   }
-  uir.return %result -> (%t)
+  uir.return %result : %t
 }

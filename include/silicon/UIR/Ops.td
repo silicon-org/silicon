@@ -159,8 +159,7 @@ def ReturnOp : UIROp<"return", [
     Variadic<HIRAnyType>:$typeOfValues
   );
   let assemblyFormat = [{
-    ($values^)?
-    `->` `(` $typeOfValues `)`
+    ($values^ `:` $typeOfValues)?
     attr-dict
   }];
 }

@@ -337,9 +337,9 @@ hir.func @if_both_return(%cond, %a, %ty) -> (result) {
   hir.signature (%cond, %a, %ty) -> (%ty)
 } {
   uir.if %cond {
-    uir.return %a -> (%ty)
+    uir.return %a : %ty
   } else {
-    uir.return %a -> (%ty)
+    uir.return %a : %ty
   }
   uir.unreachable
 }
@@ -358,7 +358,7 @@ hir.func @if_one_return_one_yield(%cond, %a, %b, %ty) -> (result) {
   hir.signature (%cond, %a, %b, %ty) -> (%ty)
 } {
   %r = uir.if %cond : %ty {
-    uir.return %a -> (%ty)
+    uir.return %a : %ty
   } else {
     uir.yield %b : %ty
   }
@@ -378,7 +378,7 @@ hir.func @return_in_loop(%cond, %val, %ty) -> (result) {
 } {
   uir.loop {
     uir.if %cond {
-      uir.return %val -> (%ty)
+      uir.return %val : %ty
     }
     uir.continue
   }

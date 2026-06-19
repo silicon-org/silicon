@@ -10,7 +10,7 @@ uir.func @PureOpTooLateHelper(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -29,7 +29,7 @@ uir.func @PureOpTooLate(%a: 0) -> (result: 0) {
     %v = uir.call @PureOpTooLateHelper(%sum) : (%tr) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
     uir.yield %v : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -44,7 +44,7 @@ uir.func @ReturnFromConstBlock(%val: 0) -> (result: 0) {
   %t = hir.int_type
   uir.expr pin -1 {
     // expected-error @+1 {{return from a phase-shifted block is not allowed}}
-    uir.return %val -> (%t)
+    uir.return %val : %t
   }
   uir.unreachable
 }
@@ -67,7 +67,7 @@ uir.func @BreakFromConstBlock(%cond: 0, %val: -1) -> (result: 0) {
     }
     uir.continue
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -86,7 +86,7 @@ uir.func @ContinueFromConstBlock(%cond: 0) -> () {
     }
     uir.continue
   }
-  uir.return -> ()
+  uir.return
 }
 
 // -----
@@ -101,7 +101,7 @@ uir.func @ReturnFromDynBlock(%x: 0) -> (result: 0) {
   %t = hir.int_type
   uir.expr pin 1 {
     // expected-error @+1 {{return from a phase-shifted block is not allowed}}
-    uir.return %x -> (%t)
+    uir.return %x : %t
   }
   uir.unreachable
 }
@@ -123,7 +123,7 @@ uir.func @BreakFromDynBlock(%x: 0) -> (result: 0) {
     }
     uir.continue
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -142,7 +142,7 @@ uir.func @ContinueFromDynBlock(%x: 0) -> () {
     }
     uir.continue
   }
-  uir.return -> ()
+  uir.return
 }
 
 // -----
@@ -166,7 +166,7 @@ uir.func @BreakFromNestedDynBlock(%x: 0) -> (result: 0) {
     }
     uir.yield %1 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -180,7 +180,7 @@ uir.func @IdentityHelper(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -196,7 +196,7 @@ uir.func @BlockArgInConstBlock(%a: 0) -> (result: 0) {
     %v = uir.call @IdentityHelper(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
     uir.yield %v : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -209,7 +209,7 @@ uir.func @BlockArgInSignature(%a: 0) -> () {
   // expected-remark @+1 {{required by signature type of arg 0}}
   uir.signature (%a) -> ()
 } {
-  uir.return -> ()
+  uir.return
 }
 
 // -----
@@ -222,7 +222,7 @@ uir.func @CallFeasibilityTarget(%n: -1) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %n -> (%t2)
+  uir.return %n : %t2
 }
 
 // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -233,7 +233,7 @@ uir.func @CallFeasibilityError(%a: 0) -> (result: 0) {
   %ta = hir.int_type
   // expected-remark @+1 {{required by call argument 0 at phase -1}}
   %r = uir.call @CallFeasibilityTarget(%a) : (%ta) -> (%ta) (!hir.any) -> !hir.any [-1] -> [0]
-  uir.return %r -> (%ta)
+  uir.return %r : %ta
 }
 
 // -----
@@ -251,7 +251,7 @@ uir.func @ConstReturnBodyArg(%x: 0) -> (result: -1) {
 } {
   %t = hir.int_type
   // expected-remark @+1 {{required by return value at phase -1}}
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 // -----
@@ -271,7 +271,7 @@ uir.func @ConstReturnPureOp(%x: 0) -> (result: -1) {
   // expected-remark @+1 {{required by operand at phase -1}}
   %sum = hir.add %x, %c1 : %t
   // expected-remark @+1 {{required by return value at phase -1}}
-  uir.return %sum -> (%t)
+  uir.return %sum : %t
 }
 
 // -----
@@ -285,7 +285,7 @@ uir.func @ConstReturnCallHelper(%a: 0) -> (result: 0) {
   uir.signature (%t0) -> (%t1)
 } {
   %t = hir.int_type
-  uir.return %a -> (%t)
+  uir.return %a : %t
 }
 
 uir.func @ConstReturnCall(%x: 0) -> (result: -1) {
@@ -298,7 +298,7 @@ uir.func @ConstReturnCall(%x: 0) -> (result: -1) {
   // expected-error @+1 {{call result 0 at phase 0 cannot satisfy requirement for phase -1}}
   %r = uir.call @ConstReturnCallHelper(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
   // expected-remark @+1 {{required by return value at phase -1}}
-  uir.return %r -> (%tr)
+  uir.return %r : %tr
 }
 
 // -----
@@ -318,7 +318,7 @@ uir.func @DynPinAtBlockPhase(%a: 1) -> (result: 1) {
   %sum = hir.add %a, %c1 : %t
   // expected-remark @+1 {{required by pin at phase 0}}
   %x = uir.pin %sum, 0 : !hir.any
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 // -----
@@ -334,7 +334,7 @@ uir.func @DynReturnMismatch(%a: 1) -> (result: 0) {
 } {
   %t = hir.int_type
   // expected-remark @+1 {{required by return value at phase 0}}
-  uir.return %a -> (%t)
+  uir.return %a : %t
 }
 
 // -----
@@ -358,7 +358,7 @@ uir.func @DynCondIf(%flag: 1) -> (result: 1) {
   } else {
     uir.yield %c0 : %t
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 // -----
@@ -375,7 +375,7 @@ uir.func @StackedConstReturnMismatch(%x: -1) -> (result: -2) {
 } {
   %t = hir.int_type
   // expected-remark @+1 {{required by return value at phase -2}}
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 // -----
@@ -390,7 +390,7 @@ uir.func @NestedIdentityHelper(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 // expected-error @+1 {{value at phase -1 cannot satisfy requirement for phase -2}}
@@ -411,7 +411,7 @@ uir.func @NestedConstBlockError(%a: -1) -> (result: 0) {
     }
     uir.yield %inner : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -426,7 +426,7 @@ uir.func @DynBlockCallHelper() -> (result: 0) {
 } {
   %t = hir.int_type
   %c42 = hir.constant_int 42 : %t
-  uir.return %c42 -> (%t)
+  uir.return %c42 : %t
 }
 
 uir.func @DynBlockPhaseMismatch() -> (result: 0) {
@@ -442,7 +442,7 @@ uir.func @DynBlockPhaseMismatch() -> (result: 0) {
     uir.yield %v : %t
   }
   // expected-remark @+1 {{required by return value at phase 0}}
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -460,7 +460,7 @@ uir.func @PureBoundaryError(%a: 0) -> (result: -1) {
   // expected-remark @+1 {{required by operand at phase -1}}
   %sum = hir.add %a, %lit : %t
   // expected-remark @+1 {{required by return value at phase -1}}
-  uir.return %sum -> (%t)
+  uir.return %sum : %t
 }
 
 // -----
@@ -473,7 +473,7 @@ uir.func @BoundaryCallHelper(%x: -1) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // expected-error @+1 {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -485,7 +485,7 @@ uir.func @CallBoundaryError(%a: 0) -> (result: 0) {
   %tr = hir.int_type
   // expected-remark @+1 {{required by call argument 0 at phase -1}}
   %r = uir.call @BoundaryCallHelper(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
-  uir.return %r -> (%tr)
+  uir.return %r : %tr
 }
 
 // -----
@@ -499,7 +499,7 @@ uir.func @DynResultHelper(%x: 0) -> (result: 1) {
   uir.signature (%t) -> (%t2)
 } {
   %t3 = hir.int_type
-  uir.return %x -> (%t3)
+  uir.return %x : %t3
 }
 
 uir.func @DynResultBoundaryError(%a: 0) -> (result: 0) {
@@ -511,7 +511,7 @@ uir.func @DynResultBoundaryError(%a: 0) -> (result: 0) {
   // expected-error @+1 {{call result 0 at phase 1 cannot satisfy requirement for phase 0}}
   %r = uir.call @DynResultHelper(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [1]
   // expected-remark @+1 {{required by return value at phase 0}}
-  uir.return %r -> (%tr)
+  uir.return %r : %tr
 }
 
 // -----
@@ -525,7 +525,7 @@ uir.func @IdentityHelper2(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -551,7 +551,7 @@ uir.func @OrErrorInConstBlock(%a: -1, %b: 0) -> (result: 0) {
     %v = uir.call @IdentityHelper2(%or) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
     uir.yield %v : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -566,7 +566,7 @@ uir.func @NeedsConstForPin(%x: -1) -> (result: 0) {
   uir.signature (%t0) -> (%t1)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 uir.func @PinPreventsFloat(%a: -1) -> (result: 0) {
@@ -584,7 +584,7 @@ uir.func @PinPreventsFloat(%a: -1) -> (result: 0) {
   %tr = hir.int_type
   // expected-remark @below {{required by call argument 0 at phase -1}}
   %r = uir.call @NeedsConstForPin(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
-  uir.return %r -> (%tr)
+  uir.return %r : %tr
 }
 
 // -----
@@ -603,7 +603,7 @@ uir.func @ReturnAlmostCancels(%x: 0) -> (result: 0) {
         uir.expr pin 1 {
           uir.expr pin -1 {
             // expected-error @below {{return from a phase-shifted block is not allowed}}
-            uir.return %x -> (%t)
+            uir.return %x : %t
           }
           uir.unreachable
         }
@@ -636,7 +636,7 @@ uir.func @BreakUnbalancedNonzeroLoop(%x: -1) -> (result: 0) {
     }
     uir.yield %1 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -650,7 +650,7 @@ uir.func @BalancedIdentity(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -670,7 +670,7 @@ uir.func @BalancedConstDynValueError(%a: 0) -> (result: 0) {
     %r = uir.call @BalancedIdentity(%1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
     uir.yield %r : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -683,7 +683,7 @@ uir.func @BalancedIdentity2(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // expected-error @below {{value at phase 1 cannot satisfy requirement for phase 0}}
@@ -706,7 +706,7 @@ uir.func @BalancedDynConstDynValueError(%a: 1) -> (result: 1) {
     }
     uir.yield %1 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -719,7 +719,7 @@ uir.func @BottleneckIdentity(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -740,7 +740,7 @@ uir.func @PureBottleneckSingle(%a: -1, %b: -1, %c: 0) -> (result: 0) {
     %r = uir.call @BottleneckIdentity(%abc) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
     uir.yield %r : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -753,7 +753,7 @@ uir.func @BottleneckIdentity2(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -775,7 +775,7 @@ uir.func @PureBottleneckTwo(%a: -1, %b: 0, %c: 0) -> (result: 0) {
     %r = uir.call @BottleneckIdentity2(%abc) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
     uir.yield %r : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -788,7 +788,7 @@ uir.func @BottleneckIdentity3(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -811,7 +811,7 @@ uir.func @PureBottleneckNested(%a: -1, %b: -1, %c: 0) -> (result: 0) {
     %call = uir.call @BottleneckIdentity3(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
     uir.yield %call : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -829,7 +829,7 @@ uir.func @SigReturnTypeError(%N: 0) -> (result: 0) {
 } {
   %t = hir.int_type
   %fortytwo = hir.constant_int 42 : %t
-  uir.return %fortytwo -> (%t)
+  uir.return %fortytwo : %t
 }
 
 // -----
@@ -850,7 +850,7 @@ uir.func @SigConstReturnTypeError(%N: -1) -> (result: -1) {
   %r = uir.expr pin -1 : %t {
     uir.yield %fortytwo : %t
   }
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 // -----
@@ -865,7 +865,7 @@ uir.func @DynCallDeferred(%x: 0) -> (result: 1) {
 } {
   %t2 = hir.int_type
   %0 = uir.expr pin 1 : %t2 { uir.yield %x : %t2 }
-  uir.return %0 -> (%t2)
+  uir.return %0 : %t2
 }
 
 uir.func @DynCallPin(%x: 0) -> (result: 0) {
@@ -873,7 +873,7 @@ uir.func @DynCallPin(%x: 0) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // expected-error @below {{value at phase -1 cannot satisfy requirement for phase -2}}
@@ -898,7 +898,7 @@ uir.func @DynCallInConstError(%a: -1) -> (result: 0) {
     %pinned = uir.call @DynCallPin(%r) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [0] -> [0]
     uir.yield %pinned : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -913,7 +913,7 @@ uir.func @MultiConsumerComputeErr(%x: 0) -> (result: 0) {
   %t = hir.int_type
   %c1 = hir.constant_int 1 : %t
   %r = hir.add %x, %c1 : %t
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 uir.func @MultiConsumerNeedsConstErr(%x: -1) -> (result: 0) {
@@ -921,7 +921,7 @@ uir.func @MultiConsumerNeedsConstErr(%x: -1) -> (result: 0) {
   uir.signature (%0) -> (%0)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 uir.func @MultiConsumerError(%a: -1) -> (result: 0) {
@@ -939,7 +939,7 @@ uir.func @MultiConsumerError(%a: -1) -> (result: 0) {
   // expected-remark @below {{required by call argument 0 at phase -1}}
   %nc = uir.call @MultiConsumerNeedsConstErr(%r) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
   %sum = hir.add %nc, %r : %t
-  uir.return %sum -> (%t)
+  uir.return %sum : %t
 }
 
 // -----
@@ -956,7 +956,7 @@ uir.func @ReturnBalancedInConst(%x: 0) -> (result: 0) {
     uir.expr pin 1 {
       uir.expr pin -1 {
         // expected-error @below {{return from a phase-shifted block is not allowed}}
-        uir.return %x -> (%t)
+        uir.return %x : %t
       }
       uir.unreachable
     }
@@ -989,7 +989,7 @@ uir.func @MultiBreakOneError(%flag: 0, %a: 0, %b: 0) -> (result: 0) {
     }
     uir.continue
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -1015,7 +1015,7 @@ uir.func @ContinueBreakMixed(%flag: 0, %a: 0) -> (result: 0) {
     }
     uir.continue
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -1028,7 +1028,7 @@ uir.func @SharedNeedsConstErr(%x: -1) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -1048,7 +1048,7 @@ uir.func @SharedOpError(%a: -1, %b: 0) -> (result: 0) {
   %r1 = uir.call @SharedNeedsConstErr(%bp1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
   %sum = hir.add %bp1, %bp1 : %t
   %r2 = hir.add %r1, %sum : %t
-  uir.return %r2 -> (%t)
+  uir.return %r2 : %t
 }
 
 // -----
@@ -1062,7 +1062,7 @@ uir.func @FloatedIfOuter(%x: -1) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 uir.func @FloatedIfInner(%y: -1) -> (result: 0) {
@@ -1070,7 +1070,7 @@ uir.func @FloatedIfInner(%y: -1) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %y -> (%t2)
+  uir.return %y : %t2
 }
 
 // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -1096,7 +1096,7 @@ uir.func @CallInFloatedIf(%a: -1, %b: 0) -> (result: 0) {
   %ta2 = hir.int_type
   %tr2 = hir.int_type
   %r2 = uir.call @FloatedIfOuter(%ifr) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
-  uir.return %r2 -> (%tr2)
+  uir.return %r2 : %tr2
 }
 
 // -----
@@ -1110,7 +1110,7 @@ uir.func @FloatedLoopOuter2(%x: -1) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %x -> (%t2)
+  uir.return %x : %t2
 }
 
 uir.func @FloatedLoopInner(%y: -1) -> (result: 0) {
@@ -1118,7 +1118,7 @@ uir.func @FloatedLoopInner(%y: -1) -> (result: 0) {
   uir.signature (%t) -> (%t)
 } {
   %t2 = hir.int_type
-  uir.return %y -> (%t2)
+  uir.return %y : %t2
 }
 
 // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -1145,7 +1145,7 @@ uir.func @LoopCallCascade(%flag: -1, %a: -1, %b: 0) -> (result: 0) {
   %ta2 = hir.int_type
   %tr2 = hir.int_type
   %r2 = uir.call @FloatedLoopOuter2(%loopr) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
-  uir.return %r2 -> (%tr2)
+  uir.return %r2 : %tr2
 }
 
 // -----
@@ -1162,7 +1162,7 @@ uir.func @CascadeAdd(%x: 0, %y: 0) -> (result: 0) {
 } {
   %t = hir.int_type
   %r = hir.add %x, %y : %t
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
@@ -1197,7 +1197,7 @@ uir.func @NestedCallCascade(%a: -1, %b: 0) -> (result: -1) {
     uir.yield %r : %t
   }
   // expected-remark @below {{required by return value at phase -1}}
-  uir.return %outer -> (%t)
+  uir.return %outer : %t
 }
 
 // -----
@@ -1220,7 +1220,7 @@ uir.func @ZeroUseError(%a: -1, %b: 0) -> (result: 0) {
     %c0 = hir.constant_int 0 : %t
     uir.yield %c0 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -1242,7 +1242,7 @@ uir.func @LoopConstReturnError(%x: 0) -> (result: -1) {
     uir.break %sum : %t
   }
   // expected-remark @below {{required by return value at phase -1}}
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -1259,7 +1259,7 @@ uir.func @DeferredForLoop() -> (result: 1) {
     %c42 = hir.constant_int 42 : %t
     uir.yield %c42 : %t
   }
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 uir.func @LoopDynBreakError() -> (result: 0) {
@@ -1276,7 +1276,7 @@ uir.func @LoopDynBreakError() -> (result: 0) {
     uir.break %call : %t
   }
   // expected-remark @below {{required by return value at phase 0}}
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -1303,7 +1303,7 @@ uir.func @IfConstReturnError(%x: -1, %y: 0) -> (result: -1) {
     uir.yield %y : %t
   }
   // expected-remark @below {{required by return value at phase -1}}
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -1333,7 +1333,7 @@ uir.func @IfDistinctYieldFloorError(%sel: -1, %a: -1, %b: -1) -> (result: -1) {
     uir.yield %b : %t
   }
   // expected-remark @below {{required by return value at phase -1}}
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 // -----
@@ -1361,7 +1361,7 @@ uir.func @NestedIfFloorError(%a: -1, %b: -1, %c: -1) -> (result: -1) {
     uir.yield %b : %t
   }
   // expected-remark @below {{required by return value at phase -1}}
-  uir.return %0 -> (%t)
+  uir.return %0 : %t
 }
 
 // -----
@@ -1389,7 +1389,7 @@ uir.func @LoopDistinctBreakFloorError(%a: -1, %b: -1, %flag: 0) -> (result: -1) 
     uir.continue
   }
   // expected-remark @below {{required by return value at phase -1}}
-  uir.return %r -> (%t)
+  uir.return %r : %t
 }
 
 // -----
@@ -1409,10 +1409,10 @@ uir.func @FuncDistinctReturnFloorError(%a: -1, %b: -1, %flag: 0) -> (result: -1)
   %t = hir.int_type
   uir.if %flag {
     // expected-note @below {{return value provided here}}
-    uir.return %a -> (%t)
+    uir.return %a : %t
   }
   // expected-note @below {{return value provided here}}
-  uir.return %b -> (%t)
+  uir.return %b : %t
 }
 
 // -----
@@ -1428,7 +1428,7 @@ uir.func @NeedsDoubleConstArg(%x: -2) -> (result: 0) {
   uir.signature (%t0) -> (%t1)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 uir.func @IfInConstFloorError(%a: -2, %b: -2, %flag: -1) -> (result: 0) {
@@ -1455,7 +1455,7 @@ uir.func @IfInConstFloorError(%a: -2, %b: -2, %flag: -1) -> (result: 0) {
   %tr = hir.int_type
   // expected-remark @below {{required by call argument 0 at phase -2}}
   %result = uir.call @NeedsDoubleConstArg(%sel) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-2] -> [0]
-  uir.return %result -> (%tr)
+  uir.return %result : %tr
 }
 
 // -----
@@ -1471,7 +1471,7 @@ uir.func @NeedsConstBoolFloor(%x: -1) -> (result: 0) {
   uir.signature (%t0) -> (%t1)
 } {
   %t = hir.int_type
-  uir.return %x -> (%t)
+  uir.return %x : %t
 }
 
 uir.func @ShortCircuitFloorError(%a: -1, %b: -1) -> (result: 0) {
@@ -1494,5 +1494,5 @@ uir.func @ShortCircuitFloorError(%a: -1, %b: -1) -> (result: 0) {
   %tr = hir.int_type
   // expected-remark @below {{required by call argument 0 at phase -1}}
   %r = uir.call @NeedsConstBoolFloor(%and) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
-  uir.return %r -> (%tr)
+  uir.return %r : %tr
 }
