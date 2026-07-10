@@ -179,7 +179,10 @@ def ReplicateOp : HIROp<"replicate", [
     correspond one-to-one to the body's block arguments. Bodies have no
     results and no threaded values; state flowing from one instantiation
     to the next goes through variables of the receiving phase. The body
-    is terminated by `hir.yield` with no operands.
+    is terminated by `hir.yield` with no operands, or by an exit
+    terminator such as `uir.return` when an early exit of the producing
+    phase rides the record: if the exit fires during expansion, it
+    terminates the receiving phase's function.
 
     All values have the implicit `!hir.any` type. The replicate is always
     expanded by `SpecializeFuncs` and never lowered to MIR.
@@ -267,9 +270,12 @@ def PickOp : HIROp<"pick", [
     choice's payload values for the alternative's block arguments. The
     i-th alternative region handles tag i.
 
-    Picks are valued: each alternative is terminated by `hir.yield`
-    whose operands become the pick's results. All values have the
-    implicit `!hir.any` type. The pick is always expanded by
+    Picks are valued: an alternative on a rejoining path is terminated
+    by `hir.yield` whose operands become the pick's results. An
+    alternative on an exit path is terminated by an exit terminator
+    such as `uir.return` instead; the pick's results never materialize
+    on such a path and their consumers are unreachable. All values have
+    the implicit `!hir.any` type. The pick is always expanded by
     `SpecializeFuncs` and never lowered to MIR; a pick whose choice
     value was never produced during phase evaluation is an internal
     compiler error at expansion time.

@@ -228,3 +228,28 @@ uir.func @caller(%a: 0) -> (result: 0) {
   %r = uir.call @simple_func(%a, %a) : (%a, %a) -> (%a) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
   uir.return %r : %a
 }
+
+// # Exit Terminators in Replicate/Pick Bodies
+//
+// Receiving-phase replicate/pick bodies may terminate in uir.return instead
+// of hir.yield: the exit path of the producing phase reconstructs itself in
+// the receiving phase, and pick results never materialize on such paths.
+
+func.func @pick_with_return(%choice: !hir.any, %ty: !hir.any) {
+  %r = hir.pick %choice : !hir.any [
+    0 (%a): {
+      uir.return %a : %ty
+    }
+    1 (%b): {
+      hir.yield %b : !hir.any
+    }
+  ]
+  return
+}
+
+func.func @replicate_with_return(%hits: !hir.any, %ty: !hir.any) {
+  hir.replicate (%f) in %hits {
+    uir.return %f : %ty
+  }
+  return
+}
