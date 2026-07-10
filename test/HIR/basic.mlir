@@ -193,6 +193,9 @@ hir.replicate () in %list {
 hir.write_var %var, %opaque_b : %var_ty
 %var_val = hir.read_var %var : %var_ty
 
+// choice type constructor
+hir.choice_type
+
 // choice construction
 %choice0 = hir.choice 0 ()
 %choice1 = hir.choice 1 (%opaque_a, %opaque_b)

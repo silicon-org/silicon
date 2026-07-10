@@ -170,6 +170,15 @@ static LogicalResult convert(hir::OpaqueTypeOp op,
   return success();
 }
 
+static LogicalResult convert(hir::ChoiceTypeOp op,
+                             hir::ChoiceTypeOp::Adaptor adaptor,
+                             ConversionPatternRewriter &rewriter) {
+  auto type = base::ChoiceType::get(op.getContext());
+  auto attr = base::TypeAttr::get(op.getContext(), type);
+  rewriter.replaceOpWithNewOp<mir::ConstantOp>(op, attr);
+  return success();
+}
+
 static LogicalResult convert(hir::FuncTypeOp op,
                              hir::FuncTypeOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
@@ -434,7 +443,7 @@ static bool isResolvableType(Value typeVal,
 
   // Simple type constructors always resolve.
   if (isa<hir::BoolTypeOp, hir::IntTypeOp, hir::UnitTypeOp, hir::TypeTypeOp,
-          hir::AnyfuncTypeOp, hir::OpaqueTypeOp>(defOp))
+          hir::AnyfuncTypeOp, hir::OpaqueTypeOp, hir::ChoiceTypeOp>(defOp))
     return true;
 
   // UIntTypeOp can always be lowered: either to a mir.constant if the width
@@ -561,6 +570,8 @@ static Type resolveHIRType(Value typeVal,
     return base::AnyfuncType::get(ctx);
   if (isa<hir::OpaqueTypeOp>(defOp))
     return base::OpaqueType::get(ctx);
+  if (isa<hir::ChoiceTypeOp>(defOp))
+    return base::ChoiceType::get(ctx);
   if (auto uintOp = dyn_cast<hir::UIntTypeOp>(defOp)) {
     auto widthVal = uintOp.getWidth();
     // Check for hir.constant_int (not ConstantLike).
@@ -785,6 +796,7 @@ void HIRToMIRPass::runOnOperation() {
   patterns.add<hir::UIntTypeOp>(convert);
   patterns.add<hir::AnyfuncTypeOp>(convert);
   patterns.add<hir::OpaqueTypeOp>(convert);
+  patterns.add<hir::ChoiceTypeOp>(convert);
   patterns.add<hir::FuncTypeOp>(convert);
   patterns.add<hir::InferrableOp>(convert);
   patterns.add<hir::TypeOfOp>(convert);

@@ -165,6 +165,15 @@ hir.func @OpaqueTypes() -> () {
   hir.return -> ()
 }
 
+// CHECK-LABEL: mir.func @ChoiceTypes
+hir.func @ChoiceTypes() -> () {
+  hir.signature () -> ()
+} {
+  // CHECK: mir.constant #si.type<!si.choice>
+  %choice_type = hir.choice_type
+  hir.return -> ()
+}
+
 // Opaque args block lowering — the opaque context must be resolved through
 // specialization first. The function stays as HIR until then.
 // CHECK-LABEL: hir.func @OpaqueArg(%a) -> (result)

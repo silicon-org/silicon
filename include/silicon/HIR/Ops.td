@@ -224,6 +224,19 @@ def OpaqueListPushOp : HIROp<"opaque_list_push", [
 // Choices
 //===----------------------------------------------------------------------===//
 
+def ChoiceTypeOp : HIROp<"choice_type", [Pure]> {
+  let summary = "type constructor for choice values";
+  let description = [{
+    Constructs the type of choice values as an SSA value, for use as the
+    type operand of control flow results and yields that carry a choice
+    across a phase boundary. Mirrors `hir.opaque_type`: choice values are
+    `!hir.any` like all HIR values, and the concrete `!si.choice` type
+    only materializes during HIR-to-MIR conversion.
+  }];
+  let results = (outs HIRAnyType:$result);
+  let assemblyFormat = "attr-dict";
+}
+
 def ChoiceOp : HIROp<"choice", [Pure]> {
   let summary = "construct a choice value";
   let description = [{
