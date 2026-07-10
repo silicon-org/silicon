@@ -1499,6 +1499,55 @@ uir.func @ShortCircuitFloorError(%a: -1, %b: -1) -> (result: 0) {
 // -----
 
 //===----------------------------------------------------------------------===//
+// References get no special treatment from the floor rule (§11): an if at
+// phase 0 selecting between two const references cannot deliver the selected
+// reference at -1, exactly like any other value.
+
+uir.func @NeedsConstRef(%r: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %c = hir.constant_int 1 : %t
+  uir.return %c : %t
+}
+
+uir.func @SelectRefFloorError(%sel: 0, %x: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %v0 = uir.expr pin -1 : %t {
+    %v = hir.var : %t
+    hir.write_var %v, %x : %t
+    uir.yield %v : %t
+  }
+  %v1 = uir.expr pin -1 : %t {
+    %v = hir.var : %t
+    hir.write_var %v, %x : %t
+    uir.yield %v : %t
+  }
+  // expected-error @below {{result at phase -1 is selected by control flow at phase 0; result phase must be >= 0}}
+  %sel_ref = uir.if %sel : %t {
+    // expected-note @below {{value provided here}}
+    uir.yield %v0 : %t
+  } else {
+    // expected-note @below {{value provided here}}
+    uir.yield %v1 : %t
+  }
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // expected-remark @below {{required by call argument 0 at phase -1}}
+  %r = uir.call @NeedsConstRef(%sel_ref) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %r : %tr
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
 // Ordinary causality on the reference operand: a write cannot consume a
 // reference before the phase that creates it. (Home-phase legality is an
 // evaluation-time check, not a PhaseAnalysis error; see sampling-model.md §11.)
@@ -1621,6 +1670,349 @@ uir.func @FloorErrorOnSecondDemand(%sel: 0, %a: -1, %b: -1) -> (result: 0) {
   // expected-remark @below {{required by call argument 0 at phase -1}}
   %c = uir.call @FloorSecondDemandHelper(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
   uir.return %c : %tr
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Type operand diagnostics: each op kind that carries type operands reports
+// its own demand context when the type value arrives too late. All cases use
+// a computed type (hir.uint_type %N) so the type cannot float.
+
+// If result type: demand at blockPhase - 1 = -1, %N at 0.
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @IfResultTypeTooLate(%N: 0, %sel: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  // expected-remark @below {{required by operand at phase -1}}
+  %ut = hir.uint_type %N
+  // expected-remark @below {{required by if result type at phase -1}}
+  %r = uir.if %sel : %ut {
+    uir.yield %sel : %ut
+  } else {
+    uir.yield %sel : %ut
+  }
+  uir.return %r : %ut
+}
+
+// -----
+
+// Loop result type: demand at blockPhase - 1 = -1, %N at 0.
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @LoopResultTypeTooLate(%N: 0, %x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  // expected-remark @below {{required by operand at phase -1}}
+  %ut = hir.uint_type %N
+  // expected-remark @below {{required by loop result type at phase -1}}
+  %r = uir.loop : %ut {
+    uir.break %x : %ut
+  }
+  uir.return %r : %ut
+}
+
+// -----
+
+// Pinned expr result type: expr at -1, demand at -2, %N at 0.
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -2}}
+uir.func @ExprResultTypeTooLate(%N: 0, %x: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  // expected-remark @below {{required by operand at phase -2}}
+  %ut = hir.uint_type %N
+  // expected-remark @below {{required by expr result type at phase -2}}
+  %r = uir.expr pin -1 : %ut {
+    uir.yield %x : %ut
+  }
+  uir.return %r : %ut
+}
+
+// -----
+
+// Loop init value: the iteration argument lives at the loop's phase 0, the
+// init value arrives at phase 1.
+
+uir.func @LoopInitDynHelper() -> (result: 1) {
+  %t = hir.int_type
+  uir.signature () -> (%t)
+} {
+  %t = hir.int_type
+  %r = uir.expr pin 1 : %t {
+    %c = hir.constant_int 1 : %t
+    uir.yield %c : %t
+  }
+  uir.return %r : %t
+}
+
+uir.func @LoopInitTooLate(%x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %tr = hir.int_type
+  // expected-error @below {{call result 0 at phase 1 cannot satisfy requirement for phase 0}}
+  %d = uir.call @LoopInitDynHelper() : () -> (%tr) () -> !hir.any [] -> [1]
+  // expected-remark @below {{required by loop init value at phase 0}}
+  %r = uir.loop (%it = %d : %t) : %t {
+    uir.break %it : %t
+  }
+  uir.return %r : %t
+}
+
+// -----
+
+// Loop init type: demand at blockPhase - 1 = -1, %N at 0.
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @LoopInitTypeTooLate(%N: 0, %x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  // expected-remark @below {{required by operand at phase -1}}
+  %ut = hir.uint_type %N
+  // expected-remark @below {{required by loop init type at phase -1}}
+  %r = uir.loop (%it = %x : %ut) : %t {
+    uir.break %it : %t
+  }
+  uir.return %r : %t
+}
+
+// -----
+
+// Continue carried value: flows into the next iteration's argument at the
+// loop's phase 0, but arrives at phase 1.
+
+uir.func @ContinueDynHelper() -> (result: 1) {
+  %t = hir.int_type
+  uir.signature () -> (%t)
+} {
+  %t = hir.int_type
+  %r = uir.expr pin 1 : %t {
+    %c = hir.constant_int 1 : %t
+    uir.yield %c : %t
+  }
+  uir.return %r : %t
+}
+
+uir.func @ContinueValueTooLate(%x: 0, %flag: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %tr = hir.int_type
+  // expected-error @below {{call result 0 at phase 1 cannot satisfy requirement for phase 0}}
+  %d = uir.call @ContinueDynHelper() : () -> (%tr) () -> !hir.any [] -> [1]
+  %r = uir.loop (%it = %x : %t) : %t {
+    uir.if %flag {
+      uir.break %it : %t
+    }
+    // expected-remark @below {{required by continue value at phase 0}}
+    uir.continue %d : %t
+  }
+  uir.return %r : %t
+}
+
+// -----
+
+// Continue type operand: demand at blockPhase - 1 = -1, %N at 0.
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @ContinueTypeTooLate(%N: 0, %x: 0, %flag: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // expected-remark @below {{required by operand at phase -1}}
+  %ut = hir.uint_type %N
+  %r = uir.loop (%it = %x : %t) : %t {
+    uir.if %flag {
+      uir.break %it : %t
+    }
+    // expected-remark @below {{required by continue type operand}}
+    uir.continue %it : %ut
+  }
+  uir.return %r : %t
+}
+
+// -----
+
+// Call typeOfArgs: arg offset 0, type demand at -1, %N at 0.
+
+uir.func @CallArgTypeTarget(%x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  uir.return %x : %t
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @CallArgTypeTooLate(%N: 0, %x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  // expected-remark @below {{required by operand at phase -1}}
+  %ut = hir.uint_type %N
+  %tr = hir.int_type
+  // expected-remark @below {{required by type of call argument 0}}
+  %r = uir.call @CallArgTypeTarget(%x) : (%ut) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+  uir.return %r : %tr
+}
+
+// -----
+
+// Call typeOfResults: result offset 0, type demand at -1, %N at 0.
+
+uir.func @CallResultTypeTarget(%x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  uir.return %x : %t
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @CallResultTypeTooLate(%N: 0, %x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %ta = hir.int_type
+  // expected-remark @below {{required by operand at phase -1}}
+  %ut = hir.uint_type %N
+  // expected-remark @below {{required by type of call result 0}}
+  %r = uir.call @CallResultTypeTarget(%x) : (%ta) -> (%ut) (!hir.any) -> !hir.any [0] -> [0]
+  uir.return %r : %ut
+}
+
+// -----
+
+// Return type operand: result at phase 0, type demand at -1, %N at 0.
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @ReturnTypeTooLate(%N: 0, %x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  // expected-remark @below {{required by operand at phase -1}}
+  %ut = hir.uint_type %N
+  // expected-remark @below {{required by return type operand}}
+  uir.return %x : %ut
+}
+
+// -----
+
+// Yield type operand: the if result is demanded at 0, so the yield's type
+// operand is demanded at -1; %N at 0. The if's own result type uses a
+// floating int_type so only the yield's type operand fails.
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @YieldTypeTooLate(%N: 0, %sel: 0, %a: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // expected-remark @below {{required by operand at phase -1}}
+  %ut = hir.uint_type %N
+  %r = uir.if %sel : %t {
+    // expected-remark @below {{required by yield type operand}}
+    uir.yield %a : %ut
+  } else {
+    uir.yield %a : %t
+  }
+  // expected-remark @below {{required by return value at phase 0}}
+  uir.return %r : %t
+}
+
+// -----
+
+// Side-effecting op demand context: the var reference is demanded at -1 by a
+// const call arg, anchoring the floating expr at -1; processing the block
+// fails on the write consuming the phase-0 value, and the remark chain
+// includes the side-effecting op that carried the demand.
+
+uir.func @VarRefConstTarget(%r: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %c = hir.constant_int 1 : %t
+  uir.return %c : %t
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @SideEffectDemandContext(%a: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %te = hir.int_type
+  %v = uir.expr : %te {
+    // expected-remark @below {{required by side-effecting op at phase -1}}
+    %v0 = hir.var : %t
+    // expected-remark @below {{required by operand at phase -1}}
+    hir.write_var %v0, %a : %t
+    // expected-remark @below {{required by yield operand}}
+    uir.yield %v0 : %te
+  }
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // expected-remark @below {{required by call argument 0 at phase -1}}
+  %r = uir.call @VarRefConstTarget(%v) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %r : %tr
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Variable declared with a computed type that arrives too late: the varType
+// operand of hir.var follows the -1 rule like any other type operand.
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @VarTypeTooLate(%N: 0, %x: 0) -> () {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0, %t1) -> ()
+} {
+  // expected-remark @below {{required by operand at phase -1}}
+  %ut = hir.uint_type %N
+  // expected-remark @below {{required by operand at phase -1}}
+  %v = hir.var : %ut
+  hir.write_var %v, %x : %ut
+  uir.return
 }
 
 // -----

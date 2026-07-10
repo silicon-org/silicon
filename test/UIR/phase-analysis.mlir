@@ -4373,3 +4373,160 @@ uir.func @LoopSameValueUnderLaterCF(%x: 0, %flag: 1) -> (result: 0) {
   // CHECK-SAME: pa.operands = ["0", "float"]
   uir.return %r : %t
 }
+
+//===----------------------------------------------------------------------===//
+// Variable with a computed type: the varType operand follows the -1 rule, so
+// a type computed from a const (-1) value is available for a phase-0 var.
+
+// CHECK-LABEL: uir.func @VarComputedType
+uir.func @VarComputedType(%N: -1, %x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  // CHECK: hir.uint_type {{.*}}pa.phase = "-1"
+  %ut = hir.uint_type %N
+  // CHECK: hir.var {{.*}}pa.operands = ["-1"]
+  // CHECK-SAME: pa.phase = "0"
+  %v = hir.var : %ut
+  hir.write_var %v, %x : %ut
+  // CHECK: hir.read_var {{.*}}pa.phase = "0"
+  %r = hir.read_var %v : %ut
+  uir.return %r : %ut
+}
+
+//===----------------------------------------------------------------------===//
+// References as function arguments (§11 acid test): a reference arriving as
+// an opaque block argument is indistinguishable from a locally declared var.
+// Reads and writes anchor at their block phase; only ordinary causality
+// applies to the reference operand.
+
+// CHECK-LABEL: uir.func @RefAsFuncArg
+uir.func @RefAsFuncArg(%r: 0, %x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  // CHECK: hir.write_var %r, %x {{.*}}pa.operands = ["0", "0", "float"]
+  // CHECK-SAME: pa.phase = "0"
+  hir.write_var %r, %x : %t
+  // CHECK: hir.read_var %r {{.*}}pa.phase = "0"
+  // CHECK-SAME: pa.results = ["0"]
+  %v = hir.read_var %r : %t
+  uir.return %v : %t
+}
+
+// A const reference argument read from a later phase: same as a ref yielded
+// out of a const region, without any local hir.var in sight.
+// CHECK-LABEL: uir.func @ConstRefArgReadLater
+uir.func @ConstRefArgReadLater(%r: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  // CHECK: hir.read_var %r {{.*}}pa.operands = ["-1", "float"]
+  // CHECK-SAME: pa.phase = "0"
+  // CHECK-SAME: pa.results = ["0"]
+  %v = hir.read_var %r : %t
+  uir.return %v : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Control flow selecting between references (§11 routing table): references
+// are ordinary opaque values to the analysis, so an if at phase 0 selecting
+// two refs floors the selected ref at 0, and reads through it anchor at
+// their own block phase.
+
+// CHECK-LABEL: uir.func @SelectRefThenRead
+uir.func @SelectRefThenRead(%sel: 0, %x: 0) -> (r0: 0, r1: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2, %t3)
+} {
+  %t = hir.int_type
+  %v0 = hir.var : %t
+  hir.write_var %v0, %x : %t
+  %v1 = hir.var : %t
+  hir.write_var %v1, %x : %t
+  // Selection between two distinct refs at phase 0.
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["0"]
+  %v = uir.if %sel : %t {
+    uir.yield %v0 : %t
+  } else {
+    uir.yield %v1 : %t
+  }
+  // Read through the selected ref at phase 0.
+  // CHECK: hir.read_var {{.*}}pa.phase = "0"
+  %a = hir.read_var %v : %t
+  // Read through the selected ref from a dyn region at phase 1.
+  %b = uir.expr pin 1 : %t {
+    // CHECK: hir.read_var {{.*}}pa.phase = "1"
+    %b0 = hir.read_var %v : %t
+    uir.yield %b0 : %t
+  }
+  uir.return %a, %b : %t, %t
+}
+
+//===----------------------------------------------------------------------===//
+// Loop choice-ification across a phase boundary: a loop inside a const block
+// (op at -1) breaking with distinct dyn (+1) values. The result rides two
+// phases later than the op — an obligation for SortPhases, derived from
+// result phase > op phase in the phase map.
+
+// CHECK-LABEL: uir.func @ConstLoopSelectsDynValues
+uir.func @ConstLoopSelectsDynValues(%flag: -1, %x: 1, %y: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-1", pa.results = ["1"]
+  %r = uir.expr pin -1 : %t {
+    // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "-1", pa.results = ["1"]
+    %l = uir.loop : %t {
+      uir.if %flag {
+        uir.break %x : %t
+      } else {
+        uir.break %y : %t
+      }
+      uir.continue
+    }
+    uir.yield %l : %t
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Per-result floor independence: on a multi-result if, a same-SSA-value
+// result keeps the value's earlier phase while a sibling result selecting
+// distinct values is floored at the op phase.
+
+// CHECK-LABEL: uir.func @IfPerResultFloor
+uir.func @IfPerResultFloor(%sel: 0, %c: -1, %a: 0, %b: 0) -> (r0: -1, r1: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  %t4 = hir.int_type
+  %t5 = hir.int_type
+  uir.signature (%t0, %t1, %t2, %t3) -> (%t4, %t5)
+} {
+  %t = hir.int_type
+  // Result 0: both branches yield the same const value — exempt, phase -1.
+  // Result 1: distinct values — floored at the op phase 0.
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["-1", "0"]
+  %r0, %r1 = uir.if %sel : %t, %t {
+    uir.yield %c, %a : %t, %t
+  } else {
+    uir.yield %c, %b : %t, %t
+  }
+  uir.return %r0, %r1 : %t, %t
+}
