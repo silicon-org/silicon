@@ -4530,3 +4530,76 @@ uir.func @IfPerResultFloor(%sel: 0, %c: -1, %a: 0, %b: 0) -> (r0: -1, r1: 0) {
   }
   uir.return %r0, %r1 : %t, %t
 }
+
+//===----------------------------------------------------------------------===//
+// Never results (bottom phase, like Rust's `!`): a CF result that no
+// control-flow path provides never materializes, so every consumer is
+// unreachable. It gets the bottom phase "never", which satisfies any demand.
+
+// A loop without breaks: `let x = loop {}`.
+// CHECK-LABEL: uir.func @LoopNeverBreaks
+uir.func @LoopNeverBreaks() -> (result: 0) {
+  %t = hir.int_type
+  uir.signature () -> (%t)
+} {
+  %t = hir.int_type
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["never"]
+  %r = uir.loop : %t {
+    uir.continue
+  }
+  // CHECK: uir.return
+  // CHECK-SAME: pa.operands = ["never", "float"]
+  uir.return %r : %t
+}
+
+// A valued if whose branches both return: no yield provides the result.
+// CHECK-LABEL: uir.func @IfBothReturnValued
+uir.func @IfBothReturnValued(%sel: 0, %a: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["never"]
+  %r = uir.if %sel : %t {
+    uir.return %a : %t
+  } else {
+    uir.return %a : %t
+  }
+  uir.return %r : %t
+}
+
+// Never satisfies even const demands: the bottom phase passes a call's
+// const arg requirement and a const function result without error.
+uir.func @NeverConstTarget(%x: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %c = hir.constant_int 1 : %t
+  uir.return %c : %t
+}
+
+// CHECK-LABEL: uir.func @NeverCoercesToAnyPhase
+uir.func @NeverCoercesToAnyPhase() -> (r0: 0, r1: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature () -> (%t0, %t1)
+} {
+  %t = hir.int_type
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.results = ["never"]
+  %r = uir.loop : %t {
+    uir.continue
+  }
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // Const call arg (demand at -1) accepts the never value.
+  // CHECK: uir.call @NeverConstTarget({{.*}}) {{.*}}pa.phase = "0"
+  %c = uir.call @NeverConstTarget(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  // Const function result (demand at -1) accepts the never value too.
+  // CHECK: uir.return
+  // CHECK-SAME: pa.operands = ["0", "never", "float", "float"]
+  uir.return %c, %r : %tr, %t
+}

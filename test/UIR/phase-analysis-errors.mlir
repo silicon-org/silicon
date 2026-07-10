@@ -2018,48 +2018,6 @@ uir.func @VarTypeTooLate(%N: 0, %x: 0) -> () {
 // -----
 
 //===----------------------------------------------------------------------===//
-// A demanded loop result without any break never materializes; any consumer
-// is unreachable. This must be a diagnostic, not a crash.
-
-uir.func @LoopNeverBreaks() -> (result: 0) {
-  %t = hir.int_type
-  uir.signature () -> (%t)
-} {
-  %t = hir.int_type
-  // expected-error @below {{no control-flow path provides a value for this result}}
-  %r = uir.loop : %t {
-    uir.continue
-  }
-  // expected-remark @below {{required by return value at phase 0}}
-  uir.return %r : %t
-}
-
-// -----
-
-//===----------------------------------------------------------------------===//
-// Same for a valued if whose branches both return: no yield provides the
-// result.
-
-uir.func @IfBothReturnValued(%sel: 0, %a: 0) -> (result: 0) {
-  %t0 = hir.int_type
-  %t1 = hir.int_type
-  %t2 = hir.int_type
-  uir.signature (%t0, %t1) -> (%t2)
-} {
-  %t = hir.int_type
-  // expected-error @below {{no control-flow path provides a value for this result}}
-  %r = uir.if %sel : %t {
-    uir.return %a : %t
-  } else {
-    uir.return %a : %t
-  }
-  // expected-remark @below {{required by return value at phase 0}}
-  uir.return %r : %t
-}
-
-// -----
-
-//===----------------------------------------------------------------------===//
 // A floating expr that no demand ever reaches has no phase. That is fine for
 // dead pure contents, but side effects must execute at a well-defined phase
 // regardless of whether their results are used.

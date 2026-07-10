@@ -31,6 +31,12 @@ namespace uir {
 ///    directly from the phase map and reconstructs the selection with
 ///    `hir.pick` in the receiving phase.
 ///
+/// Two sentinel phases sit below all real phases and satisfy any demand:
+/// `kFloatPhase` marks pure values that can materialize at any phase, and
+/// `kNeverPhase` (bottom, like Rust's `!`) marks CF results that no
+/// control-flow path provides — such a value never exists at runtime, so
+/// every consumer is unreachable and no phase requirement can bind it.
+///
 /// The algorithm has five steps:
 /// 1. Pre-walk: collect terminators (break/continue per loop,
 ///    return/signature ops).
@@ -51,6 +57,14 @@ namespace uir {
 ///     return signalPassFailure();  // diagnostics already emitted
 ///   // use analysis.opPhases / analysis.actualPhase
 struct PhaseAnalysis {
+  /// Sentinel phase for pure values that float to any demanded phase.
+  static constexpr int16_t kFloatPhase = INT16_MIN;
+
+  /// Sentinel phase (bottom) for values no control-flow path ever produces,
+  /// such as the result of a loop without breaks or of an if whose branches
+  /// all return. Satisfies any demand; consumers are unreachable at runtime.
+  static constexpr int16_t kNeverPhase = INT16_MIN + 1;
+
   PhaseAnalysis(FuncOp funcOp) : funcOp(funcOp) {}
 
   /// Run the phase analysis. Returns failure if phase errors are detected

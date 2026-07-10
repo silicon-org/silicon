@@ -19,7 +19,8 @@ using namespace uir;
 namespace {
 /// Test pass that runs PhaseAnalysis on each `uir.func` and annotates every op
 /// with a `{phase = N}` attribute showing the computed phase. Floating
-/// constants (INT16_MIN) are annotated as `{phase = "float"}`.
+/// constants are annotated as `{phase = "float"}`, never-produced results as
+/// `"never"`.
 struct TestPhaseAnalysis2Pass
     : public PassWrapper<TestPhaseAnalysis2Pass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestPhaseAnalysis2Pass)
@@ -40,10 +41,13 @@ struct TestPhaseAnalysis2Pass
 
       auto *ctx = funcOp.getContext();
 
-      // Turn a phase value into a string attribute: "float" or "-1", "0", etc.
+      // Turn a phase value into a string attribute: "float", "never", or
+      // "-1", "0", etc.
       auto phaseAttr = [&](int16_t phase) -> StringAttr {
-        if (phase == INT16_MIN)
+        if (phase == PhaseAnalysis::kFloatPhase)
           return StringAttr::get(ctx, "float");
+        if (phase == PhaseAnalysis::kNeverPhase)
+          return StringAttr::get(ctx, "never");
         return StringAttr::get(ctx, std::to_string(phase));
       };
 

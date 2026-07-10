@@ -231,7 +231,11 @@ LogicalResult PhaseAnalysis::run() {
         if (resultIt == actualPhase.end())
           continue;
         auto providers = resultProviders(op, result.getResultNumber());
-        assert(!providers.empty() && "recorded result must have a provider");
+        if (providers.empty()) {
+          assert(resultIt->second == kNeverPhase &&
+                 "provider-less result must be at the bottom phase");
+          continue;
+        }
         int16_t recomputed = INT16_MIN;
         for (auto &[value, term] : providers)
           recomputed = std::max(recomputed, actualPhase.at(value));
@@ -263,7 +267,7 @@ LogicalResult PhaseAnalysis::run() {
     int16_t earliest = INT16_MIN;
     if (isa<hir::TypeOfOp>(op)) {
       earliest = actualPhase.at(op->getOperand(0));
-      if (earliest != INT16_MIN)
+      if (earliest > kNeverPhase)
         earliest -= 1;
     } else {
       for (auto &operand : op->getOpOperands()) {
@@ -271,7 +275,8 @@ LogicalResult PhaseAnalysis::run() {
         if (valIt == actualPhase.end())
           continue;
         int16_t opActual = valIt->second;
-        if (isTypeOperand(operand) && opActual != INT16_MIN)
+        // The ±1 shifts only apply to real phases, not the sentinels.
+        if (isTypeOperand(operand) && opActual > kNeverPhase)
           opActual += 1;
         earliest = std::max(earliest, opActual);
       }
@@ -368,10 +373,10 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
   if (op->hasTrait<OpTrait::ConstantLike>()) {
     LLVM_DEBUG(dbgs() << INDENT << "constrainValue(constant, <=" << latest
                       << "): float\n");
-    opPhases[op] = INT16_MIN;
+    opPhases[op] = kFloatPhase;
     for (auto r : op->getResults())
-      actualPhase[r] = INT16_MIN;
-    return INT16_MIN;
+      actualPhase[r] = kFloatPhase;
+    return kFloatPhase;
   }
 
   LLVM_DEBUG({
@@ -385,7 +390,9 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
     auto inputPhase = constrainValue(typeOfOp.getInput(), latest + 1);
     if (failed(inputPhase))
       return failure();
-    int16_t resolved = (*inputPhase == INT16_MIN) ? INT16_MIN : *inputPhase - 1;
+    // Sentinel phases (float/never) pass through unshifted.
+    int16_t resolved =
+        (*inputPhase <= kNeverPhase) ? *inputPhase : *inputPhase - 1;
     LLVM_DEBUG(dbgs() << INDENT << "  => phase " << resolved << "\n");
     opPhases[op] = resolved;
     actualPhase[typeOfOp.getResult()] = resolved;
@@ -649,12 +656,14 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
   // the floor: no selection occurs.
   auto termEntries = resultProviders(regionOp, resultIdx);
 
-  // A demanded result that no terminator provides (a loop without breaks, an
-  // if whose branches all return) never materializes; any consumer is
-  // unreachable. Reject loudly instead of leaving the result phaseless.
+  // A result that no terminator provides (a loop without breaks, an if whose
+  // branches all return) never materializes: every consumer is unreachable at
+  // runtime, like Rust's `!`. It gets the bottom phase, which satisfies any
+  // demand.
   if (termEntries.empty()) {
-    return emitError(regionOp->getLoc())
-           << "no control-flow path provides a value for this result";
+    LLVM_DEBUG(dbgs() << INDENT << "  => never (no providers)\n");
+    actualPhase[result] = kNeverPhase;
+    return success();
   }
 
   bool selects = selectsDistinctValues(termEntries);
