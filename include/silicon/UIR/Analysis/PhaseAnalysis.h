@@ -50,10 +50,6 @@ namespace uir {
 ///    recorded region result phases from the final value and op phases (the
 ///    DFS records demand-time phases, which may be looser).
 ///
-/// See `tmp/design/sampling-model.md` for the full specification (it
-/// supersedes `docs/design/phase-inference.md`; the docs are rewritten at
-/// milestone M6).
-///
 /// Usage:
 ///   PhaseAnalysis analysis(funcOp);
 ///   if (failed(analysis.run()))

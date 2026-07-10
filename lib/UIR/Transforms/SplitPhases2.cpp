@@ -14,7 +14,7 @@
 // split, and `hir.multiphase_func` structural ops for groups of consecutive
 // internal phases.
 //
-// The algorithm follows `docs/design/phase-splits.md`:
+// The algorithm:
 // 1. Determine phase range from the analysis + declared arg/result phases.
 // 2. Group phases by external visibility (arg/result phases are boundaries).
 // 3. Create per-phase `hir.func` ops.

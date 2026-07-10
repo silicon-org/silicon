@@ -27,8 +27,6 @@ def FlattenCFPass : Pass<"flatten-cf", "mlir::ModuleOp"> {
     This pass runs after SplitPhases and before PhaseEvalLoop. After
     this pass, no UIR ops remain in the IR (except `uir.split_func`
     witnesses).
-
-    See `docs/design/control-flow.md` for the FlattenCF design.
   }];
   let dependentDialects = [
     "mlir::cf::ControlFlowDialect",
@@ -51,8 +49,6 @@ def SplitPhases2Pass : Pass<"split-phases2", "mlir::ModuleOp"> {
     After this pass, `uir.func` and `uir.call` ops are gone. Structured CF
     ops (`uir.if`, `uir.loop`) survive in the per-phase `hir.func` bodies
     and are lowered by FlattenCF.
-
-    See `docs/design/phase-splits.md` and `docs/design/phase-inference.md`.
   }];
   let dependentDialects = [
     "silicon::hir::HIRDialect",

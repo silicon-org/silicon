@@ -49,6 +49,8 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 ## Conventions
 
 - Code lives in the `silicon` C++ namespace.
+- Code and its comments must stand on their own: never refer to design documents from code; fold the needed context into a concise but sufficient comment instead. Design docs are for the high-level picture and may reference code, not the other way around.
+- Code comments document only the exact current state of the code: no future plans, no prior ways things worked, no prose describing a change, no deltas, timelines, or milestones. Those belong in commit messages, TODO.md, and design docs.
 - One sentence per line in Markdown files; don't break long lines.
 - Run clang-format on changed C++ files before git add and git commit.
 - Never run clang-format on `.td` (tablegen) files; it mangles the trait and argument lists, fighting the established vertical layout. Format `.td` files by hand to match the surrounding style.

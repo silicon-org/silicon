@@ -209,9 +209,6 @@ def IfOp : UIROp<"if", [
 
     The `else` region may be omitted for if-without-else, in which case
     the op produces no results.
-
-    For phase inference rules, see `docs/design/phase-inference.md`.
-    For FlattenCF lowering, see `docs/design/control-flow.md`.
   }];
   let arguments = (ins
     HIRAnyType:$condition,
@@ -250,9 +247,6 @@ def LoopOp : UIROp<"loop", [
     operands.
 
     `while` and `for` loops desugar to `uir.loop`.
-
-    For phase inference rules, see `docs/design/phase-inference.md`.
-    For FlattenCF lowering, see `docs/design/control-flow.md`.
   }];
   let arguments = (ins
     Variadic<HIRAnyType>:$inits,
@@ -292,9 +286,6 @@ def ExprOp : UIROp<"expr", [
 
     Like `uir.if`, carries result type operands and produces type
     results alongside value results.
-
-    For codegen and phase inference details, see
-    `docs/design/phase-inference.md`.
   }];
   let arguments = (ins
     OptionalAttr<UnitAttr>:$pin,

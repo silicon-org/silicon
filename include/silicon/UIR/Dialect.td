@@ -26,8 +26,6 @@ def UIRDialect : Dialect {
     All UIR ops are lowered away by two passes:
     - **SplitPhases** consumes unified function ops and phase grouping ops.
     - **FlattenCF** consumes structured control flow ops and their terminators.
-
-    See `docs/design/unified-dialect.md` for the full design.
   }];
 
   // UIR ops use !hir.any as operand/result types. The HIR dialect must be
