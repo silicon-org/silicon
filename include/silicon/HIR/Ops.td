@@ -18,6 +18,7 @@ include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "silicon/Base/Attributes.td"
 include "silicon/HIR/Dialect.td"
+include "silicon/HIR/OpInterfaces.td"
 include "silicon/HIR/Types.td"
 
 // Base class for the operations in this dialect.
@@ -28,12 +29,20 @@ class HIROp<string mnemonic, list<Trait> traits = []> :
 // Constants
 //===----------------------------------------------------------------------===//
 
-def ConstantIntOp : HIROp<"constant_int", [Pure]> {
+def ConstantIntOp : HIROp<"constant_int", [
+  Pure,
+  DeclareOpInterfaceMethods<TypeOperandsOpInterface>,
+]> {
   let summary = "constant integer value";
   let arguments = (ins IntAttr:$value, HIRAnyType:$typeOperand);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = [{
     custom<IntAttr>($value) `:` $typeOperand attr-dict
+  }];
+  let extraClassDefinition = [{
+    bool $cppClass::isTypeOperand(::mlir::OpOperand &operand) {
+      return &operand == &getTypeOperandMutable();
+    }
   }];
 }
 
@@ -286,7 +295,10 @@ def CoerceToI1Op : HIROp<"coerce_to_i1", [Pure]> {
   let assemblyFormat = "$input attr-dict";
 }
 
-def CoerceTypeOp : HIROp<"coerce_type", [Pure]> {
+def CoerceTypeOp : HIROp<"coerce_type", [
+  Pure,
+  DeclareOpInterfaceMethods<TypeOperandsOpInterface>,
+]> {
   let summary = "Coerce a value to a given type";
   let arguments = (ins HIRAnyType:$input, HIRAnyType:$typeOperand);
   let results = (outs HIRAnyType:$result);
@@ -294,6 +306,11 @@ def CoerceTypeOp : HIROp<"coerce_type", [Pure]> {
     $input `,` $typeOperand attr-dict
   }];
   let hasCanonicalizeMethod = 1;
+  let extraClassDefinition = [{
+    bool $cppClass::isTypeOperand(::mlir::OpOperand &operand) {
+      return &operand == &getTypeOperandMutable();
+    }
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -316,10 +333,18 @@ def InferrableOp : HIROp<"inferrable", []> {
 }
 
 class HIRBinaryOp<string mnemonic>
-    : HIROp<mnemonic, [Pure]> {
+    : HIROp<mnemonic, [
+        Pure,
+        DeclareOpInterfaceMethods<TypeOperandsOpInterface>,
+      ]> {
   let arguments = (ins HIRAnyType:$lhs, HIRAnyType:$rhs, HIRAnyType:$resultType);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$lhs `,` $rhs `:` $resultType attr-dict";
+  let extraClassDefinition = [{
+    bool $cppClass::isTypeOperand(::mlir::OpOperand &operand) {
+      return &operand == &getResultTypeMutable();
+    }
+  }];
 }
 
 // Arithmetic
@@ -375,6 +400,7 @@ def UnifyOp : HIROp<"unify", [
 
 def VarOp : HIROp<"var", [
   MemoryEffects<[MemAlloc<DefaultResource>]>,
+  DeclareOpInterfaceMethods<TypeOperandsOpInterface>,
 ]> {
   let summary = "declare a mutable variable";
   let description = [{
@@ -389,10 +415,16 @@ def VarOp : HIROp<"var", [
   let arguments = (ins HIRAnyType:$varType);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "`:` $varType attr-dict";
+  let extraClassDefinition = [{
+    bool $cppClass::isTypeOperand(::mlir::OpOperand &operand) {
+      return &operand == &getVarTypeMutable();
+    }
+  }];
 }
 
 def ReadVarOp : HIROp<"read_var", [
   MemoryEffects<[MemRead<DefaultResource>]>,
+  DeclareOpInterfaceMethods<TypeOperandsOpInterface>,
 ]> {
   let summary = "read the current value of a variable";
   let description = [{
@@ -411,10 +443,16 @@ def ReadVarOp : HIROp<"read_var", [
   let arguments = (ins HIRAnyType:$var, HIRAnyType:$varType);
   let results = (outs HIRAnyType:$result);
   let assemblyFormat = "$var `:` $varType attr-dict";
+  let extraClassDefinition = [{
+    bool $cppClass::isTypeOperand(::mlir::OpOperand &operand) {
+      return &operand == &getVarTypeMutable();
+    }
+  }];
 }
 
 def WriteVarOp : HIROp<"write_var", [
   MemoryEffects<[MemWrite<DefaultResource>]>,
+  DeclareOpInterfaceMethods<TypeOperandsOpInterface>,
 ]> {
   let summary = "write a new value to a variable";
   let description = [{
@@ -427,6 +465,11 @@ def WriteVarOp : HIROp<"write_var", [
   }];
   let arguments = (ins HIRAnyType:$var, HIRAnyType:$value, HIRAnyType:$varType);
   let assemblyFormat = "$var `,` $value `:` $varType attr-dict";
+  let extraClassDefinition = [{
+    bool $cppClass::isTypeOperand(::mlir::OpOperand &operand) {
+      return &operand == &getVarTypeMutable();
+    }
+  }];
 }
 
 def FuncOp : HIROp<"func", [

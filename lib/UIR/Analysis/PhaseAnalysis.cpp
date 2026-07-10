@@ -8,7 +8,6 @@
 
 #include "silicon/HIR/Ops.h"
 #include "silicon/UIR/Analysis/PhaseAnalysis.h"
-#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
 using namespace mlir;
@@ -22,23 +21,12 @@ using namespace uir;
 /// type rather than carrying data. Type operands must be available one phase
 /// before the value they describe (the "-1 rule").
 ///
-/// Uses tablegen-generated Mutable accessors to identify type operands without
-/// hardcoding indices.
-///
-/// NOTE: When adding a new HIR op with type operands, add a case here.
-/// See also the corresponding op definitions in HIR/Ops.td.
+/// Ops declare their type operands via `TypeOperandsOpInterface`; all
+/// operands of ops without the interface are plain value operands.
 static bool isTypeOperand(OpOperand &operand) {
-  return TypeSwitch<Operation *, bool>(operand.getOwner())
-      .Case<hir::AddOp, hir::SubOp, hir::MulOp, hir::DivOp, hir::ModOp,
-            hir::AndOp, hir::OrOp, hir::XorOp, hir::ShlOp, hir::ShrOp,
-            hir::EqOp, hir::NeqOp, hir::LtOp, hir::GtOp, hir::GeqOp,
-            hir::LeqOp>(
-          [&](auto op) { return &operand == &op.getResultTypeMutable(); })
-      .Case<hir::ConstantIntOp, hir::CoerceTypeOp>(
-          [&](auto op) { return &operand == &op.getTypeOperandMutable(); })
-      .Case<hir::VarOp, hir::ReadVarOp, hir::WriteVarOp>(
-          [&](auto op) { return &operand == &op.getVarTypeMutable(); })
-      .Default([](auto) { return false; });
+  if (auto iface = dyn_cast<hir::TypeOperandsOpInterface>(operand.getOwner()))
+    return iface.isTypeOperand(operand);
+  return false;
 }
 
 /// Walk the function IR and populate the terminator mappings. Uses manual

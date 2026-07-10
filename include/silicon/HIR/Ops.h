@@ -20,6 +20,9 @@
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
+// Pull in the generated op interface declarations.
+#include "silicon/HIR/Interfaces.h.inc"
+
 // Pull in the generated dialect definition.
 #define GET_OP_CLASSES
 #include "silicon/HIR/Ops.h.inc"

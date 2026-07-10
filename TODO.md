@@ -20,6 +20,7 @@
   Once a structured CF op is inlined, its blocks and regions are inserted ahead of that op, such that the linear region/block scan will naturally visit the newly-inlined region.
   For inspiration, look at how the SCF-to-CF lowering in MLIR does things.
 - Improve UIR op parsing/printing (e.g. uir.call, maybe others) to not print the implied `!hir.any` type
+- Consider migrating `hir::getTypeOf` (Ops.cpp) to op-declared information, e.g. a `getTypeOfResult` method on `TypeOperandsOpInterface`; it currently hardcodes the op-to-type-operand mapping in a TypeSwitch.
 - Add an HIR identifier op that just pass through an operand to its result.
   We'll use this op to have a mechanism to capture the location of a named expression like `x`.
   When reporting phase errors, we can stop at `x` and indicate an error right there, instead of pointing the user at a definition like the `x: const int` arg of a function, which is far more confusing.

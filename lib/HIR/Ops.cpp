@@ -33,6 +33,9 @@ static void printIntAttr(OpAsmPrinter &printer, Operation *op,
   printer << value.getValue();
 }
 
+// Pull in the generated op interface definitions.
+#include "silicon/HIR/Interfaces.cpp.inc"
+
 // Pull in the generated dialect definition.
 #define GET_OP_CLASSES
 #include "silicon/HIR/Ops.cpp.inc"
