@@ -226,4 +226,76 @@ def MIROpaqueListPushOp : MIROp<"opaque_list_push", [
   let assemblyFormat = "$list `,` $entry attr-dict";
 }
 
+//===----------------------------------------------------------------------===//
+// Variables
+//===----------------------------------------------------------------------===//
+
+def MIRVarOp : MIROp<"var", [
+  MemoryEffects<[MemAlloc<DefaultResource>]>,
+]> {
+  let summary = "declare a mutable variable";
+  let description = [{
+    Declares a mutable variable holding values of the reference's inner
+    type and produces a reference to it. Storage is per call frame; the
+    interpreter models it as a mutable cell. Reading a variable that was
+    never written is poison.
+
+    Must not be `Pure`: two distinct variables are distinct mutable
+    cells, and the `MemAlloc` effect keeps CSE from merging them.
+  }];
+  let results = (outs RefType:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def MIRReadVarOp : MIROp<"read_var", [
+  MemoryEffects<[MemRead<DefaultResource>]>,
+  TypesMatchWith<"result type matches the reference's inner type",
+                 "var", "result",
+                 "llvm::cast<silicon::base::RefType>($_self).getInnerType()">,
+]> {
+  let summary = "read the current value of a variable";
+  let description = [{
+    Reads the current value of a variable. The result type is the
+    reference's inner type.
+  }];
+  let arguments = (ins RefType:$var);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$var attr-dict `:` type($var)";
+}
+
+def MIRWriteVarOp : MIROp<"write_var", [
+  MemoryEffects<[MemWrite<DefaultResource>]>,
+  TypesMatchWith<"value type matches the reference's inner type",
+                 "var", "value",
+                 "llvm::cast<silicon::base::RefType>($_self).getInnerType()">,
+]> {
+  let summary = "write a new value to a variable";
+  let description = [{
+    Writes a new value to a variable. The value type is the reference's
+    inner type.
+  }];
+  let arguments = (ins RefType:$var, AnyType:$value);
+  let assemblyFormat = "$var `,` $value attr-dict `:` type($var)";
+}
+
+//===----------------------------------------------------------------------===//
+// Choices
+//===----------------------------------------------------------------------===//
+
+def MIRChoiceOp : MIROp<"choice", [Pure]> {
+  let summary = "construct a choice value";
+  let description = [{
+    Constructs a choice value: the tag of the taken alternative of a
+    branch-shaped control flow region, plus the payload of values
+    crossing the phase boundary out of that alternative. The interpreter
+    evaluates this op to a `#si.choice` attribute, which drives the
+    expansion of the consuming `hir.pick` during specialization.
+  }];
+  let arguments = (ins I32Attr:$tag, Variadic<AnyType>:$payload);
+  let results = (outs ChoiceType:$result);
+  let assemblyFormat = [{
+    $tag ` ` `(` ($payload^ `:` type($payload))? `)` attr-dict
+  }];
+}
+
 #endif // SILICON_MIR_OPS_TD

@@ -148,3 +148,25 @@ mir.func @BoolToI1(%cond: !si.bool) -> () {
   mir.return
 }
 
+
+// variables
+// CHECK-LABEL: mir.func @Variables
+mir.func @Variables(%x: !si.uint<8>) -> () {
+  // CHECK: [[VAR:%.+]] = mir.var : <!si.uint<8>>
+  %v = mir.var : <!si.uint<8>>
+  // CHECK: mir.write_var [[VAR]], %x : <!si.uint<8>>
+  mir.write_var %v, %x : <!si.uint<8>>
+  // CHECK: mir.read_var [[VAR]] : <!si.uint<8>>
+  %r = mir.read_var %v : <!si.uint<8>>
+  mir.return
+}
+
+// choice construction
+// CHECK-LABEL: mir.func @Choices
+mir.func @Choices(%x: !si.int, %y: !si.uint<8>) -> () {
+  // CHECK: mir.choice 0 ()
+  %c0 = mir.choice 0 ()
+  // CHECK: mir.choice 1 (%x, %y : !si.int, !si.uint<8>)
+  %c1 = mir.choice 1 (%x, %y : !si.int, !si.uint<8>)
+  mir.return
+}

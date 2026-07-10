@@ -150,3 +150,19 @@ mir.func @call_wrong_result_type() -> () {
   %r = mir.call @callee_returns_int() : () -> !si.bool
   mir.return
 }
+
+// -----
+
+mir.func @read_var_type_mismatch(%v: !si.ref<!si.uint<8>>) -> () {
+  // expected-error @below {{failed to verify that result type matches the reference's inner type}}
+  %r = "mir.read_var"(%v) : (!si.ref<!si.uint<8>>) -> !si.int
+  mir.return
+}
+
+// -----
+
+mir.func @write_var_type_mismatch(%v: !si.ref<!si.uint<8>>, %x: !si.int) -> () {
+  // expected-error @below {{failed to verify that value type matches the reference's inner type}}
+  "mir.write_var"(%v, %x) : (!si.ref<!si.uint<8>>, !si.int) -> ()
+  mir.return
+}
