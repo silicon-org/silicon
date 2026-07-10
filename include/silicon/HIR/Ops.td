@@ -139,11 +139,11 @@ def ExprOp : HIROp<"expr", [
 }
 
 def YieldOp : HIROp<"yield", [
-  HasParent<"ExprOp, ReplicateOp">,
+  HasParent<"ExprOp, ReplicateOp, PickOp">,
   Pure,
   Terminator,
 ]> {
-  let summary = "Yield result values from an expression or replicate body";
+  let summary = "Yield result values from an expression, replicate, or pick body";
   let arguments = (ins Variadic<AnyType>:$operands);
   let assemblyFormat = [{
     ($operands^ `:` type($operands))? attr-dict
@@ -160,32 +160,24 @@ def ReplicateOp : HIROp<"replicate", [
   SingleBlock,
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
 ]> {
-  let summary = "stamp out body once per entry in a hits vector";
+  let summary = "stamp out body once per record in a hit list";
   let description = [{
-    Consumes a hits vector from an earlier phase and stamps out its body
-    region once per entry, threading values between iterations.
+    Consumes a hit list from an earlier phase and stamps out its body
+    region once per record in the list, substituting the record's
+    snapshot values for the body's block arguments.
 
-    The body's entry block has `1 + N` arguments: the first receives the
-    current hit entry (an opaque-packed bundle of captured values), and
-    the remaining N are threaded values that chain from one iteration to
-    the next. The body must be terminated by `hir.yield` with N operands
-    that become the threaded values for the next iteration.
-
-    The op's results are the threaded values from the last iteration.
-    For zero iterations (empty hits vector), the results are the initial
-    threaded values passed to the op.
+    Each record in the hit list is an opaque-packed bundle whose fields
+    correspond one-to-one to the body's block arguments. Bodies have no
+    results and no threaded values; state flowing from one instantiation
+    to the next goes through variables of the receiving phase. The body
+    is terminated by `hir.yield` with no operands.
 
     All values have the implicit `!hir.any` type. The replicate is always
     expanded by `SpecializeFuncs` and never lowered to MIR.
   }];
-  let arguments = (ins
-    HIRAnyType:$hits,
-    Variadic<HIRAnyType>:$threadedInits
-  );
-  let results = (outs Variadic<HIRAnyType>:$results);
+  let arguments = (ins HIRAnyType:$hits);
   let regions = (region MinSizedRegion<1>:$body);
   let hasCustomAssemblyFormat = 1;
-  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -217,6 +209,54 @@ def OpaqueListPushOp : HIROp<"opaque_list_push", [
   }];
   let arguments = (ins HIRAnyType:$list, HIRAnyType:$entry);
   let assemblyFormat = "$list `,` $entry attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Choices
+//===----------------------------------------------------------------------===//
+
+def ChoiceOp : HIROp<"choice", [Pure]> {
+  let summary = "construct a choice value";
+  let description = [{
+    Constructs a choice value: the tag of the taken alternative of a
+    branch-shaped control flow region, plus the payload of snapshot
+    values crossing the phase boundary out of that alternative. Choices
+    are constructed per arm in the producing phase and consumed by
+    `hir.pick` in the receiving phase.
+
+    Tags are dense per control flow op: the i-th alternative of the
+    consuming `hir.pick` handles tag i.
+  }];
+  let arguments = (ins I32Attr:$tag, Variadic<HIRAnyType>:$payload);
+  let results = (outs HIRAnyType:$result);
+  let assemblyFormat = [{
+    $tag `(` $payload `)` attr-dict
+  }];
+}
+
+def PickOp : HIROp<"pick", [
+  RecursiveMemoryEffects,
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
+]> {
+  let summary = "instantiate the taken alternative of a choice";
+  let description = [{
+    Consumes a choice value from an earlier phase and instantiates
+    exactly the alternative named by the choice's tag, substituting the
+    choice's payload values for the alternative's block arguments. The
+    i-th alternative region handles tag i.
+
+    Picks are valued: each alternative is terminated by `hir.yield`
+    whose operands become the pick's results. All values have the
+    implicit `!hir.any` type. The pick is always expanded by
+    `SpecializeFuncs` and never lowered to MIR; a pick whose choice
+    value was never produced during phase evaluation is an internal
+    compiler error at expansion time.
+  }];
+  let arguments = (ins HIRAnyType:$choice);
+  let results = (outs Variadic<HIRAnyType>:$results);
+  let regions = (region VariadicRegion<SizedRegion<1>>:$alternatives);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -329,12 +369,65 @@ def UnifyOp : HIROp<"unify", [
   let hasCanonicalizeMethod = 1;
 }
 
-def StoreOp : HIROp<"store", []> {
-  let summary = "store a value into a variable";
-  let arguments = (ins HIRAnyType:$target, HIRAnyType:$value, HIRAnyType:$valueType);
-  let assemblyFormat = "$target `,` $value `:` $valueType attr-dict";
+//===----------------------------------------------------------------------===//
+// Variables
+//===----------------------------------------------------------------------===//
+
+def VarOp : HIROp<"var", [
+  MemoryEffects<[MemAlloc<DefaultResource>]>,
+]> {
+  let summary = "declare a mutable variable";
+  let description = [{
+    Declares a mutable variable holding values of the given type and
+    produces a reference to it. Storage is per call frame. The variable's
+    home phase is the phase of this op; `hir.write_var` is legal only at
+    the home phase, and `hir.read_var` at the home phase or later.
+
+    Must not be `Pure`: two distinct variables are distinct mutable
+    cells, and the `MemAlloc` effect keeps CSE from merging them.
+  }];
+  let arguments = (ins HIRAnyType:$varType);
+  let results = (outs HIRAnyType:$result);
+  let assemblyFormat = "`:` $varType attr-dict";
 }
 
+def ReadVarOp : HIROp<"read_var", [
+  MemoryEffects<[MemRead<DefaultResource>]>,
+]> {
+  let summary = "read the current value of a variable";
+  let description = [{
+    Reads the current value of a variable. Like `hir.write_var`, the read
+    inherits the phase of the surrounding control flow region; it does not
+    float to consumer demand. A read at the variable's home phase observes
+    the value at this op's program-order position; a read at a later phase
+    observes the frozen final value. To sample a variable at a specific
+    program-order position from a later phase, the read is explicitly
+    wrapped in a const region that places it at the home phase, and only
+    the snapshot value crosses the phase boundary.
+
+    The `varType` operand carries the variable's value type, matching the
+    type operand of the defining `hir.var`.
+  }];
+  let arguments = (ins HIRAnyType:$var, HIRAnyType:$varType);
+  let results = (outs HIRAnyType:$result);
+  let assemblyFormat = "$var `:` $varType attr-dict";
+}
+
+def WriteVarOp : HIROp<"write_var", [
+  MemoryEffects<[MemWrite<DefaultResource>]>,
+]> {
+  let summary = "write a new value to a variable";
+  let description = [{
+    Writes a new value to a variable. Writes are legal only at the
+    variable's home phase; PhaseAnalysis reports writes from any other
+    phase as errors.
+
+    The `varType` operand carries the variable's value type, matching the
+    type operand of the defining `hir.var`.
+  }];
+  let arguments = (ins HIRAnyType:$var, HIRAnyType:$value, HIRAnyType:$varType);
+  let assemblyFormat = "$var `,` $value `:` $varType attr-dict";
+}
 
 def FuncOp : HIROp<"func", [
   IsolatedFromAbove,

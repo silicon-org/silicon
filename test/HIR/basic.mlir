@@ -42,7 +42,6 @@ func.func @Foo(%arg0: !hir.any, %arg1: !hir.any, %arg2: !hir.any, %arg3: i1) {
   hir.gt %arg0, %arg1 : %arg2
   hir.leq %arg0, %arg1 : %arg2
   hir.geq %arg0, %arg1 : %arg2
-  hir.store %arg0, %arg1 : %arg2
   cf.br ^bb1(%arg0 : !hir.any)
 ^bb1(%0: !hir.any):
   cf.cond_br %arg3, ^bb1(%0 : !hir.any), ^bb2
@@ -177,17 +176,44 @@ hir.mir_constant #si.type<!si.int> : !si.type
 %entry = hir.opaque_pack()
 hir.opaque_list_push %list, %entry
 
-// replicate with threaded values
-%rep1 = hir.replicate %hit1 in %list, (%x = %opaque_b) {
-  hir.yield %x : !hir.any
-}
-
-// replicate without threaded values (side-effect only)
-hir.replicate %hit2 in %list {
+// replicate with record fields
+hir.replicate (%f1, %f2) in %list {
+  hir.add %f1, %f2 : %opaque_a
   hir.yield
 }
 
-// replicate with multiple threaded values
-%rep2, %rep3 = hir.replicate %hit3 in %list, (%a = %opaque_a, %b = %opaque_b) {
-  hir.yield %b, %a : !hir.any, !hir.any
+// replicate without record fields
+hir.replicate () in %list {
+  hir.yield
 }
+
+// variables
+%var_ty = hir.int_type
+%var = hir.var : %var_ty
+hir.write_var %var, %opaque_b : %var_ty
+%var_val = hir.read_var %var : %var_ty
+
+// choice construction
+%choice0 = hir.choice 0 ()
+%choice1 = hir.choice 1 (%opaque_a, %opaque_b)
+
+// pick without results
+hir.pick %choice0 [
+  0 (): {
+    hir.yield
+  }
+  1 (%a, %b): {
+    hir.add %a, %b : %opaque_a
+    hir.yield
+  }
+]
+
+// pick with results
+%pick1, %pick2 = hir.pick %choice1 : !hir.any, !hir.any [
+  0 (): {
+    hir.yield %opaque_a, %opaque_b : !hir.any, !hir.any
+  }
+  1 (%a, %b): {
+    hir.yield %b, %a : !hir.any, !hir.any
+  }
+]

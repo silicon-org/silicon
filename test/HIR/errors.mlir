@@ -190,7 +190,7 @@ hir.multiphase_func @empty_phases() -> (out) []
 
 // YieldOp must be inside an ExprOp
 func.func @yield_outside() {
-  // expected-error @below {{'hir.yield' op expects parent op to be one of 'hir.expr, hir.replicate'}}
+  // expected-error @below {{'hir.yield' op expects parent op to be one of 'hir.expr, hir.replicate, hir.pick'}}
   hir.yield
 }
 
@@ -310,23 +310,46 @@ hir.unified_func @return_typeofvalues_too_many() -> () {
 
 // -----
 
-// replicate: yield operand count mismatch with replicate results.
+// replicate: bodies have no results, so yields must carry no operands.
 func.func @replicate_yield_mismatch(%hits: !hir.any, %x: !hir.any) {
-  %r = hir.replicate %hit in %hits, (%a = %x) {
-    // expected-error @below {{has 0 operands but parent replicate has 1 results}}
-    hir.yield
+  hir.replicate (%a) in %hits {
+    // expected-error @below {{has 1 operands but parent replicate has no results}}
+    hir.yield %a : !hir.any
   }
   return
 }
 
 // -----
 
-// replicate: body block arg count mismatch (too few).
-func.func @replicate_blockarg_mismatch(%hits: !hir.any, %x: !hir.any) {
-  // expected-error @below {{body has 1 block arguments but expected 2 (1 hit + 1 threaded)}}
-  "hir.replicate"(%hits, %x) ({
-  ^bb0(%hit: !hir.any):
-    hir.yield %hit : !hir.any
-  }) : (!hir.any, !hir.any) -> !hir.any
+// pick: must have at least one alternative.
+func.func @pick_no_alternatives(%choice: !hir.any) {
+  // expected-error @below {{must have at least one alternative}}
+  "hir.pick"(%choice) : (!hir.any) -> ()
+  return
+}
+
+// -----
+
+// pick: yield operand count must match pick result count.
+func.func @pick_yield_mismatch(%choice: !hir.any, %x: !hir.any) {
+  %r = hir.pick %choice : !hir.any [
+    0 (): {
+      // expected-error @below {{has 0 operands but parent pick has 1 results}}
+      hir.yield
+    }
+  ]
+  return
+}
+
+// -----
+
+// pick: alternative tags must be dense region indices.
+func.func @pick_bad_tag(%choice: !hir.any) {
+  hir.pick %choice [
+    // expected-error @below {{expected tag 0, got 1}}
+    1 (): {
+      hir.yield
+    }
+  ]
   return
 }

@@ -310,11 +310,15 @@ LogicalResult YieldOp::verify() {
       return emitOpError() << "has " << getOperands().size()
                            << " operands but parent expr has "
                            << exprOp.getResults().size() << " results";
-  } else if (auto replicateOp = dyn_cast<ReplicateOp>(parentOp)) {
-    if (getOperands().size() != replicateOp.getResults().size())
+  } else if (isa<ReplicateOp>(parentOp)) {
+    if (!getOperands().empty())
       return emitOpError() << "has " << getOperands().size()
-                           << " operands but parent replicate has "
-                           << replicateOp.getResults().size() << " results";
+                           << " operands but parent replicate has no results";
+  } else if (auto pickOp = dyn_cast<PickOp>(parentOp)) {
+    if (getOperands().size() != pickOp.getResults().size())
+      return emitOpError() << "has " << getOperands().size()
+                           << " operands but parent pick has "
+                           << pickOp.getResults().size() << " results";
   }
   return success();
 }
@@ -1327,58 +1331,28 @@ Value hir::getOrCreateTypeOf(OpBuilder &builder, Location loc, Value value) {
 //===----------------------------------------------------------------------===//
 
 // Parse:
-//   hir.replicate %hit in %hits, (%x = %x_init, %y = %y_init) { body }
-//   hir.replicate %hit in %hits { body }
+//   hir.replicate (%a, %b) in %hits { body }
+//   hir.replicate () in %hits { body }
 ParseResult ReplicateOp::parse(OpAsmParser &parser, OperationState &result) {
   auto &builder = parser.getBuilder();
   auto anyTy = AnyType::get(builder.getContext());
 
-  // Parse "%hit in %hits".
-  OpAsmParser::Argument hitArg;
-  hitArg.type = anyTy;
+  // Parse the record field block args: "(%a, %b)".
+  SmallVector<OpAsmParser::Argument> fieldArgs;
+  if (parser.parseArgumentList(fieldArgs, AsmParser::Delimiter::Paren))
+    return failure();
+  for (auto &arg : fieldArgs)
+    arg.type = anyTy;
+
+  // Parse "in %hits".
   OpAsmParser::UnresolvedOperand hitsOperand;
-  if (parser.parseArgument(hitArg) || parser.parseKeyword("in") ||
-      parser.parseOperand(hitsOperand) ||
+  if (parser.parseKeyword("in") || parser.parseOperand(hitsOperand) ||
       parser.resolveOperand(hitsOperand, anyTy, result.operands))
     return failure();
 
-  // Parse optional threaded args: ", (%x = %x_init, ...)".
-  SmallVector<OpAsmParser::Argument> threadedArgs;
-  SmallVector<OpAsmParser::UnresolvedOperand> threadedInits;
-  if (succeeded(parser.parseOptionalComma())) {
-    if (parser.parseLParen())
-      return failure();
-    if (failed(parser.parseOptionalRParen())) {
-      do {
-        OpAsmParser::Argument arg;
-        arg.type = anyTy;
-        OpAsmParser::UnresolvedOperand init;
-        if (parser.parseArgument(arg) || parser.parseEqual() ||
-            parser.parseOperand(init))
-          return failure();
-        threadedArgs.push_back(arg);
-        threadedInits.push_back(init);
-      } while (succeeded(parser.parseOptionalComma()));
-      if (parser.parseRParen())
-        return failure();
-    }
-  }
-
-  // Resolve threaded init operands.
-  for (auto &init : threadedInits)
-    if (parser.resolveOperand(init, anyTy, result.operands))
-      return failure();
-
-  // Results: one per threaded arg.
-  result.addTypes(SmallVector<Type>(threadedArgs.size(), anyTy));
-
-  // Parse body region. Block args are: hit, then threaded args.
-  SmallVector<OpAsmParser::Argument> bodyArgs;
-  bodyArgs.push_back(hitArg);
-  bodyArgs.append(threadedArgs.begin(), threadedArgs.end());
-
+  // Parse the body region with the record fields as block args.
   auto *body = result.addRegion();
-  if (parser.parseRegion(*body, bodyArgs))
+  if (parser.parseRegion(*body, fieldArgs))
     return failure();
 
   return success();
@@ -1386,48 +1360,106 @@ ParseResult ReplicateOp::parse(OpAsmParser &parser, OperationState &result) {
 
 void ReplicateOp::print(OpAsmPrinter &p) {
   auto &body = getBody().front();
-  auto numThreaded = getThreadedInits().size();
 
-  // Print "%hit in %hits".
-  p << ' ';
-  p.printOperand(body.getArgument(0));
-  p << " in ";
+  // Print "(%a, %b) in %hits".
+  p << " (";
+  llvm::interleaveComma(body.getArguments(), p,
+                        [&](BlockArgument arg) { p.printOperand(arg); });
+  p << ") in ";
   p.printOperand(getHits());
-
-  // Print optional threaded args.
-  if (numThreaded > 0) {
-    p << ", (";
-    for (unsigned i = 0; i < numThreaded; ++i) {
-      if (i > 0)
-        p << ", ";
-      p.printOperand(body.getArgument(1 + i));
-      p << " = ";
-      p.printOperand(getThreadedInits()[i]);
-    }
-    p << ')';
-  }
 
   // Print body.
   p << ' ';
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
 }
 
-LogicalResult ReplicateOp::verify() {
-  auto &body = getBody().front();
-  unsigned expectedBlockArgs = 1 + getThreadedInits().size();
-  if (body.getNumArguments() != expectedBlockArgs)
-    return emitOpError() << "body has " << body.getNumArguments()
-                         << " block arguments but expected "
-                         << expectedBlockArgs << " (1 hit + "
-                         << getThreadedInits().size() << " threaded)";
-  if (getResults().size() != getThreadedInits().size())
-    return emitOpError() << "has " << getResults().size() << " results but "
-                         << getThreadedInits().size()
-                         << " threaded init values";
+void ReplicateOp::getAsmBlockArgumentNames(Region &region,
+                                           OpAsmSetValueNameFn setNameFn) {
+  // Block arg names were set by the parser; nothing extra needed.
+}
+
+//===----------------------------------------------------------------------===//
+// PickOp
+//===----------------------------------------------------------------------===//
+
+// Parse:
+//   hir.pick %choice : !hir.any, !hir.any [
+//     0 (%a, %b): { body }
+//     1 (): { body }
+//   ]
+ParseResult PickOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto &builder = parser.getBuilder();
+  auto anyTy = AnyType::get(builder.getContext());
+
+  // Parse the choice operand.
+  OpAsmParser::UnresolvedOperand choiceOperand;
+  if (parser.parseOperand(choiceOperand) ||
+      parser.resolveOperand(choiceOperand, anyTy, result.operands))
+    return failure();
+
+  // Parse the optional result types: ": !hir.any, !hir.any".
+  if (succeeded(parser.parseOptionalColon())) {
+    SmallVector<Type> resultTypes;
+    if (parser.parseTypeList(resultTypes))
+      return failure();
+    result.addTypes(resultTypes);
+  }
+
+  // Parse the alternatives: "[ 0 (%a, %b): { body } ... ]". Each
+  // alternative's tag must equal its region index.
+  if (parser.parseLSquare())
+    return failure();
+  unsigned regionIdx = 0;
+  while (failed(parser.parseOptionalRSquare())) {
+    uint32_t tag;
+    auto tagLoc = parser.getCurrentLocation();
+    if (parser.parseInteger(tag))
+      return failure();
+    if (tag != regionIdx)
+      return parser.emitError(tagLoc)
+             << "expected tag " << regionIdx << ", got " << tag;
+    SmallVector<OpAsmParser::Argument> payloadArgs;
+    if (parser.parseArgumentList(payloadArgs, AsmParser::Delimiter::Paren) ||
+        parser.parseColon())
+      return failure();
+    for (auto &arg : payloadArgs)
+      arg.type = anyTy;
+    auto *region = result.addRegion();
+    if (parser.parseRegion(*region, payloadArgs))
+      return failure();
+    ++regionIdx;
+  }
+
   return success();
 }
 
-void ReplicateOp::getAsmBlockArgumentNames(Region &region,
-                                           OpAsmSetValueNameFn setNameFn) {
+void PickOp::print(OpAsmPrinter &p) {
+  p << ' ';
+  p.printOperand(getChoice());
+  if (!getResults().empty()) {
+    p << " : ";
+    llvm::interleaveComma(getResultTypes(), p);
+  }
+  p << " [";
+  for (auto [tag, region] : llvm::enumerate(getAlternatives())) {
+    if (tag > 0)
+      p << ' ';
+    p << tag << " (";
+    llvm::interleaveComma(region.getArguments(), p,
+                          [&](BlockArgument arg) { p.printOperand(arg); });
+    p << "): ";
+    p.printRegion(region, /*printEntryBlockArgs=*/false);
+  }
+  p << ']';
+}
+
+LogicalResult PickOp::verify() {
+  if (getAlternatives().empty())
+    return emitOpError() << "must have at least one alternative";
+  return success();
+}
+
+void PickOp::getAsmBlockArgumentNames(Region &region,
+                                      OpAsmSetValueNameFn setNameFn) {
   // Block arg names were set by the parser; nothing extra needed.
 }

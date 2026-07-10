@@ -36,8 +36,8 @@ static bool isTypeOperand(OpOperand &operand) {
           [&](auto op) { return &operand == &op.getResultTypeMutable(); })
       .Case<hir::ConstantIntOp, hir::CoerceTypeOp>(
           [&](auto op) { return &operand == &op.getTypeOperandMutable(); })
-      .Case<hir::StoreOp>(
-          [&](auto op) { return &operand == &op.getValueTypeMutable(); })
+      .Case<hir::VarOp, hir::ReadVarOp, hir::WriteVarOp>(
+          [&](auto op) { return &operand == &op.getVarTypeMutable(); })
       .Default([](auto) { return false; });
 }
 
