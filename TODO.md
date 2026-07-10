@@ -24,39 +24,16 @@
   We'll use this op to have a mechanism to capture the location of a named expression like `x`.
   When reporting phase errors, we can stop at `x` and indicate an error right there, instead of pointing the user at a definition like the `x: const int` arg of a function, which is far more confusing.
 
-## Phase Inference Redesign
+## Phase Inference Redesign (sampling model)
 
-See `docs/design/phase-inference.md`, `docs/design/unified-dialect.md`, and `docs/design/control-flow.md` (FlattenCF section).
+The semantics were settled in a design interview on 2026-07-08.
+**Read `tmp/design/sampling-model.md` (the model) and `tmp/design/implementation-plan.md` (ops, pass architecture, milestones M0-M6) before touching anything here.**
+The old replicate design in `docs/design/control-flow.md` and the transparent-yield/futures model in `docs/design/phase-inference.md` are superseded where they conflict; docs get rewritten at M6.
 
-**Migration strategy:** Build new passes additively alongside the old ones.
-Old passes continue working on `hir.unified_func` and flat CF; new passes consume `uir.*` ops.
-Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
-
-- SplitPhases2 replicate model (`extractReplicates`):
-  - Audit for overfitting; likely needs a rewrite.
-    The special-casing of void vs top-level dyn exprs and the juggling of lists of dyn expr ops smells like overfitting to a few examples rather than the real design.
-    The intended model is simpler: pull each dyn expr out one layer of control flow, generating that layer's hit lists, then iterate so the next layer's dyn exprs get pulled out one more layer, aggregating into further hit lists.
-    Check whether the current code actually implements this or just passes a handful of cases.
-  - Captured values: pack producing-phase values used in the dyn body into hits entries (currently packs nothing); a captured value defined inside the producing CF region currently makes `fixupCrossPhaseRefs` emit a dominance-violating opaque_pack instead of erroring -- detect and reject loudly until supported
-  - Loop replicate threading: `extractLoopReplicates` uses dummy empty-pack threaded inits; no real accumulation (`x = x + 1`) or zero-iteration pass-through. Needs the unified `uir.loop` to carry the threaded value at the dyn phase (PhaseAnalysis currently pins carried inits to the loop phase)
-- Phase 2: extend existing passes for region support (additive, old paths stay intact)
-  - InferTypes: walk into `uir.if`/`uir.expr`/`uir.loop` regions in addition to flat blocks
-  - InferTypes: optimistic hoisting of type op trees out of regions for cross-boundary RAUW
-  - CheckCalls: walk into regions to find calls inside structured CF
-  - CheckTypes: walk into regions, check `uir.yield`/`uir.break` type consistency
-- Phase 3: switch codegen and pipeline (one atomic change, mark failing tests `XFAIL: *`)
-  - Codegen: emit `uir.if` instead of `cf.cond_br` + merge blocks for if/else
-  - Codegen: emit `uir.loop` instead of `cf.br` back-edges for while/loop
-  - Codegen: emit `uir.return` for early returns inside structured CF (+ `uir.unreachable` after)
-  - Codegen: emit `uir.expr`/`uir.pin` for `const { ... }` / `dyn { ... }` / `let` bindings
-  - Codegen: create `hir.inferrable` for region op result types, `hir.unify` inside regions at yield
-  - Codegen: inlinability check after emitting `uir.expr` (inline trivial, replace with `uir.pin`)
-  - Pipeline: swap old `SplitPhases` → new `SplitPhases`, verify all tests pass
-- Phase 4: cleanup (remove old code)
-  - Remove old `SplitPhases` pass
-  - Remove old `TestPhaseAnalysis` pass and `PhaseAnalysis`
-  - Delete `hir.unified_func`, `hir.unified_call`, `hir.split_func`, `hir.expr`, `hir.yield`
-  - Fix remaining XFAILed tests
+- SplitPhases2's `extractIfReplicates`/`extractLoopReplicates` are confirmed overfitted (tests only cover the exact special-cased shapes, silent skips everywhere); deleted and replaced by the SortPhases pass at M2/M3.
+- Milestones: M0 ops (var/read_var/write_var, choice/pick, replicate without threading) → M1 PhaseAnalysis updates → M2 SortPhases → M3 SplitPhases rewrite → M4 evaluation (interpreter lists/choices/vars, SpecializeFuncs expansion) → M5 language surface (assignment, loops, var, definite-return check) → M6 docs rewrite + old-stack removal.
+- InferTypes/CheckCalls/CheckTypes region support (walk into `uir.if`/`uir.expr`/`uir.loop`, optimistic type-tree hoisting) still needed; slot in before/alongside M2.
+- Old-stack removal (old `SplitPhases`, `TestPhaseAnalysis`, `hir.unified_func`/`unified_call`/`split_func`/`expr`/`yield`) folds into M6.
 
 ## Dialect Review: Missing Error Handling
 
@@ -98,43 +75,11 @@ Once all pieces work, switch codegen to UIR, swap passes, then remove old code.
 
 ## Phase Inference Design Review
 
-- Multiple `uir.continue` ops in a loop face the same challenge as multiple `uir.return` ops in a function.
-  If they carry different SSA values at a phase earlier than the continue op itself, that is an error.
-  Work out how this is solved for `uir.return`, draw conclusions, and tighten the design.
-  Related to the if-yield result-phase requirement below.
+Settled by the sampling model (`tmp/design/sampling-model.md`); kept here until the M6 docs rewrite lands them:
 
-- CF ops may need to lower-bound their result phases to their op phase.
-  Consider: `uir.if` at phase 0 with a yield carrying `%a` at phase -1.
-  Currently this produces an if result at -1 (transparent yield).
-  But the if decides at phase 0 — it can't produce a value for phase -1,
-  because the decision of which branch to take isn't available until phase 0.
-  The earliest phase a CF result can be at is `p(CF)` (when the decision is made).
-  A phase +1 result is fine (future). A phase -1 result is problematic.
-  Think about whether CF ops should clamp `actualPhase[result] = max(p(CF), yieldedPhase)`.
-  Example:
-
-  ```mlir
-  uir.func @test(%cond: 0, %a: -1) -> (result: -1) {
-    ...
-    %0 = uir.if %cond : %t {
-      uir.yield %a : %t   // %a at -1, but if decides at 0
-    } else {
-      uir.yield %a : %t
-    }
-    uir.return %0 : %t  // result at -1, but if can't decide until 0
-  }
-  ```
-
-- Review how `const { dyn { expr } }` and `dyn { const { expr } }` should behave for value results.
-  Currently by the spec, `const { dyn { 42 } }` is an error: the dyn block pins its result at `p(const)+1 = 0`, but the const block demands `p(const) = -1`.
-  This means `const { dyn { ... } }` is ALWAYS an error as a value expression (the dyn block is one phase too late), while `dyn { const { ... } }` can work (earlier values carry to later phases).
-  For control flow (return/break/continue), balanced nesting DOES cancel because only `p(enclosing_block) = p(target)` is checked.
-  Open questions:
-  - Should `dyn { ... }` inside a const block be treated as "transparent" when the inner result is trivially available earlier (e.g., a literal)?
-  - Should the result phase of a block expression be the block's phase, or the phase of the actual result expression inside?
-  - Is the asymmetry between `const { dyn { ... } }` (always error) and `dyn { const { ... } }` (can succeed) intentional and desirable?
-  - What are the implications for returning dyn values from const contexts?
-    See `tmp/phase-inference/42-balanced-nesting-values.si` for test cases exploring this.
+- Multiple `uir.continue`/`uir.return` with earlier-phase values: floor rule with SSA-identity-only same-value exemption (§7); later-phase values choice-ify.
+- CF result phase lower bound: yes — a CF op at phase p selecting distinct values cannot deliver at a phase < p (causality); the transparent-yield "future" for later phases is replaced by choice-ification (§7).
+- `const { dyn { expr } }` value results: governed by the causality rule — a phase p op can never consume a phase > p value; block result phase is the yielded value's phase, and the asymmetry vs `dyn { const { ... } }` is intentional.
 
 ## Language Cleanup
 
