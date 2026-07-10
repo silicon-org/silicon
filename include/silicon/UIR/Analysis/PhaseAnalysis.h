@@ -31,12 +31,15 @@ namespace uir {
 ///    directly from the phase map and reconstructs the selection with
 ///    `hir.pick` in the receiving phase.
 ///
-/// The algorithm has four steps:
+/// The algorithm has five steps:
 /// 1. Pre-walk: collect terminators (break/continue per loop,
 ///    return/signature ops).
 /// 2. Constrain blocks containing function-interface terminators to phase ≤ 0.
 /// 3. Structural setup: processBlock(sig, 0) and processBlock(body, 0).
 /// 4. Demand-driven constraints: push from declared arg/result phases.
+/// 5. Final recompute: reschedule pure ops to max(operand phases) and refresh
+///    recorded region result phases from the final value and op phases (the
+///    DFS records demand-time phases, which may be looser).
 ///
 /// See `tmp/design/sampling-model.md` for the full specification (it
 /// supersedes `docs/design/phase-inference.md`; the docs are rewritten at
@@ -99,9 +102,21 @@ private:
   /// Push demand through yield/break to a specific result of a region-bearing
   /// op. The constraint forwards through the terminator operands; the result
   /// phase is recorded as the max over the contributing values, floored at
-  /// the op phase when the op selects between distinct values.
+  /// the op phase when the op selects between distinct values. The recorded
+  /// phase uses demand-time value phases; the final recompute in `run()`
+  /// refreshes it once all phases are settled.
   LogicalResult constrainRegionResult(Operation *regionOp, unsigned resultIdx,
                                       int16_t latest);
+
+  /// Collect the (value, terminator) pairs providing a given result of a
+  /// region-bearing op: yields for exprs/ifs, breaks for loops. Terminators
+  /// that do not carry the result are omitted.
+  SmallVector<std::pair<Value, Operation *>, 2>
+  resultProviders(Operation *regionOp, unsigned resultIdx);
+
+  /// Whether a set of result providers selects between distinct SSA values.
+  static bool
+  selectsDistinctValues(ArrayRef<std::pair<Value, Operation *>> providers);
 
   /// Push blockPhase down to all ops in a block (including the terminator).
   LogicalResult processBlock(Block &block, int16_t blockPhase);

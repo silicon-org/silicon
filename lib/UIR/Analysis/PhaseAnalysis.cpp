@@ -185,12 +185,45 @@ LogicalResult PhaseAnalysis::run() {
     }
   }
 
-  // Step 5: Reschedule pure ops to their earliest possible phase. During the
-  // DFS, pure ops were assigned their demanded phase (`latest`). Now that all
-  // phases are final, recompute each pure op's phase as max(operand phases).
-  // Walk in pre-order so operands are visited before their consumers.
-  LLVM_DEBUG(dbgs() << "  step 5: reschedule pure ops\n");
-  funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+  // Step 5: Final recompute. During the DFS, pure ops were assigned their
+  // demanded phase (`latest`), and region result phases were recorded from
+  // demand-time value phases and op phases; both can be tighter in the final
+  // solution. Recompute pure ops as max(operand phases), and region results
+  // as the max over their providing terminator values, floored at the final
+  // op phase when the op selects between distinct values. Walk in post-order
+  // so providers are final before their consumers: region contents before
+  // the region op itself, block ops in order.
+  LLVM_DEBUG(dbgs() << "  step 5: recompute pure ops and region results\n");
+  funcOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
+    // Region results: refresh recorded phases from the final value phases.
+    if (isa<ExprOp, IfOp, LoopOp>(op)) {
+      for (auto result : op->getResults()) {
+        auto resultIt = actualPhase.find(result);
+        if (resultIt == actualPhase.end())
+          continue;
+        auto providers = resultProviders(op, result.getResultNumber());
+        assert(!providers.empty() && "recorded result must have a provider");
+        int16_t recomputed = INT16_MIN;
+        for (auto &[value, term] : providers)
+          recomputed = std::max(recomputed, actualPhase.at(value));
+        if (!isa<ExprOp>(op) && selectsDistinctValues(providers))
+          recomputed = std::max(recomputed, getPhase(op));
+        assert(recomputed <= resultIt->second &&
+               "region result phases only tighten");
+        if (recomputed < resultIt->second) {
+          LLVM_DEBUG({
+            dbgs() << "    result " << result.getResultNumber() << ": "
+                   << resultIt->second << " => " << recomputed << ": ";
+            op->print(dbgs(), OpPrintingFlags().skipRegions());
+            dbgs() << "\n";
+          });
+          resultIt->second = recomputed;
+        }
+      }
+      return;
+    }
+
+    // Pure ops: reschedule to their earliest possible phase.
     if (!hir::isEffectivelyPure(op) || op->hasTrait<OpTrait::IsTerminator>() ||
         op->getNumRegions() > 0)
       return;
@@ -228,6 +261,52 @@ LogicalResult PhaseAnalysis::run() {
   });
 
   return success();
+}
+
+/// Collect the (value, terminator) pairs that provide a given result of a
+/// region-bearing op: the single yield for exprs, the branch yields for ifs,
+/// and the breaks for loops. Terminators that do not carry the result (e.g.
+/// early returns, unreachable) are omitted.
+SmallVector<std::pair<Value, Operation *>, 2>
+PhaseAnalysis::resultProviders(Operation *regionOp, unsigned resultIdx) {
+  SmallVector<std::pair<Value, Operation *>, 2> providers;
+  auto addTerm = [&](Operation *term) {
+    ValueRange values;
+    if (auto yieldOp = dyn_cast<YieldOp>(term))
+      values = yieldOp.getValues();
+    else if (auto breakOp = dyn_cast<BreakOp>(term))
+      values = breakOp.getValues();
+    else
+      return;
+    if (resultIdx < values.size())
+      providers.push_back({values[resultIdx], term});
+  };
+
+  if (auto exprOp = dyn_cast<ExprOp>(regionOp)) {
+    addTerm(exprOp.getBody().front().getTerminator());
+  } else if (auto ifOp = dyn_cast<IfOp>(regionOp)) {
+    addTerm(ifOp.getThenRegion().front().getTerminator());
+    if (!ifOp.getElseRegion().empty())
+      addTerm(ifOp.getElseRegion().front().getTerminator());
+  } else if (auto loopOp = dyn_cast<LoopOp>(regionOp)) {
+    auto it = loopBreaks.find(loopOp);
+    if (it != loopBreaks.end())
+      for (auto breakOp : it->second)
+        addTerm(breakOp);
+  } else {
+    llvm_unreachable("unexpected region op in resultProviders");
+  }
+  return providers;
+}
+
+/// Whether a set of result providers selects between distinct SSA values.
+/// Same-SSA-value results are exempt from the result phase floor: no
+/// selection occurs and the value forwards at its own phase.
+bool PhaseAnalysis::selectsDistinctValues(
+    ArrayRef<std::pair<Value, Operation *>> providers) {
+  return providers.size() > 1 && !llvm::all_of(providers, [&](auto &entry) {
+           return entry.first == providers[0].first;
+         });
 }
 
 // NOLINTBEGIN(misc-no-recursion)
@@ -539,26 +618,8 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
   // Gather the values provided for this result to detect whether the op
   // selects between distinct values. Same-SSA-value results are exempt from
   // the floor: no selection occurs.
-  auto getTermValue = [&](Operation *term) -> Value {
-    if (auto yieldOp = dyn_cast<YieldOp>(term)) {
-      auto values = yieldOp.getValues();
-      if (resultIdx < values.size())
-        return values[resultIdx];
-    } else if (auto breakOp = dyn_cast<BreakOp>(term)) {
-      auto values = breakOp.getValues();
-      if (resultIdx < values.size())
-        return values[resultIdx];
-    }
-    return {};
-  };
-  SmallVector<std::pair<Value, Operation *>, 2> termEntries;
-  for (auto *term : terms)
-    if (auto v = getTermValue(term))
-      termEntries.push_back({v, term});
-  bool selects =
-      termEntries.size() > 1 && !llvm::all_of(termEntries, [&](auto &entry) {
-        return entry.first == termEntries[0].first;
-      });
+  auto termEntries = resultProviders(regionOp, resultIdx);
+  bool selects = selectsDistinctValues(termEntries);
 
   // Make sure the CF op has a resolved phase. A result can be demanded before
   // the op's block was processed when the op is nested in a floating expr;
