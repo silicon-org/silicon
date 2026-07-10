@@ -28,12 +28,13 @@
 ## Phase Inference Redesign (sampling model)
 
 The semantics were settled in a design interview on 2026-07-08.
-**Read `tmp/design/sampling-model.md` (the model) and `tmp/design/implementation-plan.md` (ops, pass architecture, milestones M0-M6) before touching anything here.**
+**Read `docs/design/sampling-model.md` (the model), `docs/design/function-exit-choices.md` (early exits), and `docs/design/implementation-plan.md` (ops, pass architecture, milestones M0-M6) before touching anything here.**
 The old replicate design in `docs/design/control-flow.md` and the transparent-yield/futures model in `docs/design/phase-inference.md` are superseded where they conflict; docs get rewritten at M6.
 
-- Milestones: M0 ops done → M1 PhaseAnalysis updates done (2026-07-10, incl. design-review fixes) → M2 SortPhases (next; new pass replacing the deleted SplitPhases2 replicate extraction) → M3 SplitPhases rewrite → M4 evaluation (interpreter lists/choices/vars, SpecializeFuncs expansion) → M5 language surface (assignment, loops, var, definite-return check) → M6 docs rewrite + old-stack removal.
+- Milestones: M0 ops done → M1 PhaseAnalysis updates done (2026-07-10, incl. design-review fixes) → M2 sorting stage (next; stages 1-4 of the merged SplitPhases pass behind a sort-only option — there is no separate SortPhases pass) → M3 distribution (stages 5-6: straight-line distribution, function-level exit chains + next-phase picks per docs/design/function-exit-choices.md) → M4 evaluation (interpreter lists/choices/vars, SpecializeFuncs expansion) → M5 language surface (assignment, loops, var, definite-return check) → M6 docs rewrite + old-stack removal.
+- Early-exit design settled 2026-07-10 (docs/design/function-exit-choices.md): exit chains built at return sites, receiving phases keep multiple returns, picks born at split time, forward-only.
 - Floating-expr fallback settled 2026-07-10 (see implementation-plan.md): undemanded effectful floating exprs default to their block phase; a cap-at-block-phase alternative was rejected (breaks dyn-direction sliding of argument sub-exprs). Watch item: removing an expr's only consumer shifts its effects to the block phase — revisit if this bites.
-- Never-produced CF results get the bottom phase `never` in PhaseAnalysis (settled 2026-07-10); a language-level never *type* (Rust `!`, `TyKind::Never`-style, coerces to any type) is a separate type-system feature for M5+; SortPhases (M2) must treat `never` results as unreachable, not as choice-ification obligations.
+- Never-produced CF results get the bottom phase `never` in PhaseAnalysis (settled 2026-07-10); a language-level never *type* (Rust `!`, `TyKind::Never`-style, coerces to any type) is a separate type-system feature for M5+; The sorting stage (M2) must treat `never` results as unreachable, not as choice-ification obligations.
 - PhaseAnalysis loose ends: only entry blocks of body/signature are processed in run() while collectTerminators walks all blocks — decide whether pre-FlattenCF multi-block regions are legal and verify or handle; step-3b return-value collection guards `i < values.size()` instead of asserting the verifier invariant.
 - InferTypes/CheckCalls/CheckTypes region support (walk into `uir.if`/`uir.expr`/`uir.loop`, optimistic type-tree hoisting) still needed; slot in before/alongside M2.
 - Old-stack removal (old `SplitPhases`, `TestPhaseAnalysis`, `hir.unified_func`/`unified_call`/`split_func`/`expr`/`yield`) folds into M6.
@@ -78,7 +79,7 @@ The old replicate design in `docs/design/control-flow.md` and the transparent-yi
 
 ## Phase Inference Design Review
 
-Settled by the sampling model (`tmp/design/sampling-model.md`); kept here until the M6 docs rewrite lands them:
+Settled by the sampling model (`docs/design/sampling-model.md`); kept here until the M6 docs rewrite lands them:
 
 - Multiple `uir.continue`/`uir.return` with earlier-phase values: floor rule with SSA-identity-only same-value exemption (§7); later-phase values choice-ify.
 - CF result phase lower bound: yes — a CF op at phase p selecting distinct values cannot deliver at a phase < p (causality); the transparent-yield "future" for later phases is replaced by choice-ification (§7).
