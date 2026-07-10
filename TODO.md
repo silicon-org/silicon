@@ -30,8 +30,8 @@ The semantics were settled in a design interview on 2026-07-08.
 **Read `tmp/design/sampling-model.md` (the model) and `tmp/design/implementation-plan.md` (ops, pass architecture, milestones M0-M6) before touching anything here.**
 The old replicate design in `docs/design/control-flow.md` and the transparent-yield/futures model in `docs/design/phase-inference.md` are superseded where they conflict; docs get rewritten at M6.
 
-- SplitPhases2's `extractIfReplicates`/`extractLoopReplicates` are confirmed overfitted (tests only cover the exact special-cased shapes, silent skips everywhere); deleted and replaced by the SortPhases pass at M2/M3.
-- Milestones: M0 ops (var/read_var/write_var, choice/pick, replicate without threading) → M1 PhaseAnalysis updates → M2 SortPhases → M3 SplitPhases rewrite → M4 evaluation (interpreter lists/choices/vars, SpecializeFuncs expansion) → M5 language surface (assignment, loops, var, definite-return check) → M6 docs rewrite + old-stack removal.
+- Milestones: M0 ops done → M1 PhaseAnalysis updates (next) → M2 SortPhases (new pass replacing the deleted SplitPhases2 replicate extraction) → M3 SplitPhases rewrite → M4 evaluation (interpreter lists/choices/vars, SpecializeFuncs expansion) → M5 language surface (assignment, loops, var, definite-return check) → M6 docs rewrite + old-stack removal.
+- M1 scope: var home-phase rules (write@home only, read@home-or-later, reads/writes inherit the surrounding CF region phase), choice-ification obligations, causality-rule diagnostics, silent-skip fixes; HIRToMIR patterns for var/choice ops land when exercised (M4).
 - InferTypes/CheckCalls/CheckTypes region support (walk into `uir.if`/`uir.expr`/`uir.loop`, optimistic type-tree hoisting) still needed; slot in before/alongside M2.
 - Old-stack removal (old `SplitPhases`, `TestPhaseAnalysis`, `hir.unified_func`/`unified_call`/`split_func`/`expr`/`yield`) folds into M6.
 
