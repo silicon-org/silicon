@@ -76,6 +76,12 @@ struct PhaseAnalysis {
   /// Look up the resolved phase for a value. Asserts if not found.
   int16_t getValuePhase(Value value) const;
 
+  /// Annotate every op in the function with its resolved phase (`pa.phase`)
+  /// and the phases of its operands and results (`pa.operands`,
+  /// `pa.results`), for lit testing. Sentinel phases print as "float" and
+  /// "never"; values without a resolved phase print as "?".
+  void annotate() const;
+
   FuncOp funcOp;
 
   /// The resolved phase for each op (for the test pass annotation).

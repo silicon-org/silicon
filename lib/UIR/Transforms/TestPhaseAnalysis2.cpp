@@ -18,9 +18,9 @@ using namespace uir;
 
 namespace {
 /// Test pass that runs PhaseAnalysis on each `uir.func` and annotates every op
-/// with a `{phase = N}` attribute showing the computed phase. Floating
-/// constants are annotated as `{phase = "float"}`, never-produced results as
-/// `"never"`.
+/// with `pa.phase`/`pa.operands`/`pa.results` attributes showing the computed
+/// phases. Floating constants are annotated as "float", never-produced results
+/// as "never".
 struct TestPhaseAnalysis2Pass
     : public PassWrapper<TestPhaseAnalysis2Pass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestPhaseAnalysis2Pass)
@@ -38,52 +38,7 @@ struct TestPhaseAnalysis2Pass
         signalPassFailure();
         return;
       }
-
-      auto *ctx = funcOp.getContext();
-
-      // Turn a phase value into a string attribute: "float", "never", or
-      // "-1", "0", etc.
-      auto phaseAttr = [&](int16_t phase) -> StringAttr {
-        if (phase == PhaseAnalysis::kFloatPhase)
-          return StringAttr::get(ctx, "float");
-        if (phase == PhaseAnalysis::kNeverPhase)
-          return StringAttr::get(ctx, "never");
-        return StringAttr::get(ctx, std::to_string(phase));
-      };
-
-      // Build an array of phase strings for a range of values.
-      auto valuePhases = [&](auto values) -> ArrayAttr {
-        SmallVector<Attribute> attrs;
-        for (Value v : values) {
-          auto it = analysis.actualPhase.find(v);
-          if (it != analysis.actualPhase.end())
-            attrs.push_back(phaseAttr(it->second));
-          else
-            attrs.push_back(StringAttr::get(ctx, "?"));
-        }
-        return ArrayAttr::get(ctx, attrs);
-      };
-
-      // Annotate each op with its phase, plus operand and result phases.
-      // Ops without an opPhase entry still get result annotations if their
-      // results have actualPhase entries (e.g., floating exprs with pure
-      // contents where only the result phase was resolved via
-      // constrainRegionResult).
-      auto annotate = [&](Region &region) {
-        region.walk([&](Operation *op) {
-          auto it = analysis.opPhases.find(op);
-          if (it != analysis.opPhases.end())
-            op->setAttr("pa.phase", phaseAttr(it->second));
-
-          if (op->getNumOperands() > 0)
-            op->setAttr("pa.operands", valuePhases(op->getOperands()));
-
-          if (op->getNumResults() > 0)
-            op->setAttr("pa.results", valuePhases(op->getResults()));
-        });
-      };
-      annotate(funcOp.getSignature());
-      annotate(funcOp.getBody());
+      analysis.annotate();
     }
   }
 };

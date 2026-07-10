@@ -36,6 +36,7 @@
 #include "silicon/UIR/Analysis/PhaseAnalysis.h"
 #include "silicon/UIR/Ops.h"
 #include "silicon/UIR/Passes.h"
+#include "silicon/UIR/SortPhases.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/IRMapping.h"
@@ -1330,6 +1331,23 @@ struct SplitPhases2Pass
   void runOnOperation() override {
     auto module = getOperation();
     auto &symbolTable = getAnalysis<SymbolTable>();
+
+    // Sort-only mode: rewrite each function's content across its phase
+    // boundaries and stop, without creating per-phase functions. Calls are
+    // decomposed against `uir.split_func` witnesses already present in the
+    // input (in a full run, callees are split before their callers).
+    if (sortOnly) {
+      for (auto funcOp : module.getOps<FuncOp>()) {
+        PhaseAnalysis analysis(funcOp);
+        if (failed(analysis.run()))
+          return signalPassFailure();
+        if (failed(sortPhases(funcOp, analysis, symbolTable)))
+          return signalPassFailure();
+        if (annotatePhases)
+          analysis.annotate();
+      }
+      return;
+    }
 
     // Collect all uir.func ops and run phase analysis.
     SmallVector<std::pair<FuncOp, std::unique_ptr<PhaseAnalysis>>> funcs;

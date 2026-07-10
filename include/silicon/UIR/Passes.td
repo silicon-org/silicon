@@ -49,7 +49,22 @@ def SplitPhases2Pass : Pass<"split-phases2", "mlir::ModuleOp"> {
     After this pass, `uir.func` and `uir.call` ops are gone. Structured CF
     ops (`uir.if`, `uir.loop`) survive in the per-phase `hir.func` bodies
     and are lowered by FlattenCF.
+
+    With the `sort-only` option, the pass stops after the sorting stage:
+    each `uir.func` is rewritten in place such that no control flow region
+    contains content of a phase different from the region's own phase
+    (phase grouping dissolved, calls decomposed, earlier-phase content
+    hoisted, later-phase content extracted into replicate/pick receiving
+    constructs), without creating any per-phase functions. The
+    `annotate-phases` option additionally annotates all ops with the
+    maintained phase map, for testing.
   }];
+  let options = [
+    Option<"sortOnly", "sort-only", "bool", "false",
+           "Stop after the sorting stage, leaving rewritten uir.func ops">,
+    Option<"annotatePhases", "annotate-phases", "bool", "false",
+           "Annotate ops with the maintained phase map (testing)">,
+  ];
   let dependentDialects = [
     "silicon::hir::HIRDialect",
     "mlir::cf::ControlFlowDialect",

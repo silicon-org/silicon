@@ -1026,3 +1026,44 @@ int16_t PhaseAnalysis::getValuePhase(Value value) const {
   assert(it != actualPhase.end() && "value phase not computed");
   return it->second;
 }
+
+/// Annotate every op in the function with its resolved phase and the phases
+/// of its operands and results. Ops without an opPhase entry still get
+/// operand/result annotations (e.g., floating exprs with pure contents where
+/// only the result phase was resolved).
+void PhaseAnalysis::annotate() const {
+  FuncOp func = funcOp;
+  auto *ctx = func.getContext();
+
+  auto phaseAttr = [&](int16_t phase) -> StringAttr {
+    if (phase == kFloatPhase)
+      return StringAttr::get(ctx, "float");
+    if (phase == kNeverPhase)
+      return StringAttr::get(ctx, "never");
+    return StringAttr::get(ctx, std::to_string(phase));
+  };
+
+  auto valuePhases = [&](auto values) -> ArrayAttr {
+    SmallVector<Attribute> attrs;
+    for (Value v : values) {
+      auto it = actualPhase.find(v);
+      if (it != actualPhase.end())
+        attrs.push_back(phaseAttr(it->second));
+      else
+        attrs.push_back(StringAttr::get(ctx, "?"));
+    }
+    return ArrayAttr::get(ctx, attrs);
+  };
+
+  for (auto &region : func->getRegions()) {
+    region.walk([&](Operation *op) {
+      auto it = opPhases.find(op);
+      if (it != opPhases.end())
+        op->setAttr("pa.phase", phaseAttr(it->second));
+      if (op->getNumOperands() > 0)
+        op->setAttr("pa.operands", valuePhases(op->getOperands()));
+      if (op->getNumResults() > 0)
+        op->setAttr("pa.results", valuePhases(op->getResults()));
+    });
+  }
+}
