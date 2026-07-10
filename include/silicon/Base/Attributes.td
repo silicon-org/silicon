@@ -106,4 +106,26 @@ def OpaqueAttr
   }];
 }
 
+def ChoiceAttr
+    : BaseAttrDef<"Choice", [DeclareAttrInterfaceMethods<TypedAttrInterface>]> {
+  let mnemonic = "choice";
+  let summary = "a constant choice value";
+  let description = [{
+    An attribute representing a constant choice value: the tag of the
+    taken alternative plus its payload of constant values. This is the
+    constant form of `si.choice`, produced when the interpreter evaluates
+    a `mir.choice` op.
+
+    Example: `#si.choice<1, [#si.int<42>]>` represents alternative 1 taken
+    with a single integer payload value.
+  }];
+  let parameters = (ins
+    "uint32_t":$tag,
+    OptionalArrayRefParameter<"mlir::Attribute">:$elements
+  );
+  let assemblyFormat = [{
+    `<` $tag `,` `[` (`]`) : ($elements^ `]`)? `>`
+  }];
+}
+
 #endif // SILICON_BASE_ATTRIBUTES_TD

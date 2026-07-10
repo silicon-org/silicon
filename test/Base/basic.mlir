@@ -19,7 +19,13 @@ func.func @types(
   // CHECK-SAME: %{{.*}}: !si.opaque,
   %f: !si.opaque,
   // CHECK-SAME: %{{.*}}: !si.opaque_list
-  %g: !si.opaque_list
+  %g: !si.opaque_list,
+  // CHECK-SAME: %{{.*}}: !si.ref<!si.uint<8>>
+  %h: !si.ref<!si.uint<8>>,
+  // CHECK-SAME: %{{.*}}: !si.ref<!si.int>
+  %i: !si.ref<!si.int>,
+  // CHECK-SAME: %{{.*}}: !si.choice
+  %j: !si.choice
 ) {
   return
 }
@@ -46,5 +52,11 @@ func.func @attrs() {
   %4 = mir.constant #si.opaque<[]> : !si.opaque
   // CHECK: mir.constant #si.opaque<[#si.int<1> : !si.int, #si.int<2> : !si.int]>
   %5 = mir.constant #si.opaque<[#si.int<1>, #si.int<2>]> : !si.opaque
+  // CHECK: mir.constant #si.choice<0, []>
+  %6 = mir.constant #si.choice<0, []> : !si.choice
+  // CHECK: mir.constant #si.choice<1, [#si.int<42> : !si.int]>
+  %7 = mir.constant #si.choice<1, [#si.int<42>]> : !si.choice
+  // CHECK: mir.constant #si.choice<2, [#si.choice<0, []> : !si.choice, #si.opaque<[]> : !si.opaque]>
+  %8 = mir.constant #si.choice<2, [#si.choice<0, []>, #si.opaque<[]>]> : !si.choice
   return
 }

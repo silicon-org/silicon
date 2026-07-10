@@ -63,3 +63,9 @@ Type UnitAttr::getType() const { return UnitType::get(getContext()); }
 //===----------------------------------------------------------------------===//
 
 Type OpaqueAttr::getType() const { return OpaqueType::get(getContext()); }
+
+//===----------------------------------------------------------------------===//
+// ChoiceAttr
+//===----------------------------------------------------------------------===//
+
+Type ChoiceAttr::getType() const { return ChoiceType::get(getContext()); }

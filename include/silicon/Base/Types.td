@@ -100,6 +100,35 @@ def OpaqueType : BaseTypeDef<"Opaque"> {
   }];
 }
 
+def RefType : BaseTypeDef<"Ref"> {
+  let mnemonic = "ref";
+  let summary = "reference to a mutable variable";
+  let description = [{
+    A reference to a mutable variable holding a value of the inner type.
+    Variables are created by `mir.var`, written with `mir.write_var`, and
+    read with `mir.read_var`. During interpretation a reference denotes a
+    mutable cell in the current call frame.
+
+    Example: `si.ref<si.uint<8>>` is a reference to a variable holding an
+    8-bit unsigned integer.
+  }];
+  let parameters = (ins "mlir::Type":$innerType);
+  let assemblyFormat = "`<` $innerType `>`";
+}
+
+def ChoiceType : BaseTypeDef<"Choice"> {
+  let mnemonic = "choice";
+  let summary = "tagged alternative crossing a phase boundary";
+  let description = [{
+    A choice value identifies which alternative of a branch-shaped control
+    flow region was taken during an earlier phase, along with that
+    alternative's payload of snapshot values. Choices are constructed per
+    arm by `choice` ops in the producing phase and consumed by `pick` ops
+    in the receiving phase, which instantiate exactly the tagged
+    alternative.
+  }];
+}
+
 def OpaqueListType : BaseTypeDef<"OpaqueList"> {
   let mnemonic = "opaque_list";
   let summary = "opaque list of packed values collected between phases";
