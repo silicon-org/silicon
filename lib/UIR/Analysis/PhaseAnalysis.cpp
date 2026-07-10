@@ -69,11 +69,13 @@ void PhaseAnalysis::collectTerminators() {
     walkBlock(block, /*currentLoop=*/nullptr);
 }
 
-/// Run the phase analysis. The algorithm has four steps:
+/// Run the phase analysis. The algorithm has five steps:
 /// 1. Pre-walk: collect terminators.
 /// 2. Constrain blocks containing function terminators to phase ≤ 0.
 /// 3. Structural setup: processBlock(sig, 0) and processBlock(body, 0).
 /// 4. Demand-driven constraints: push from declared arg/result phases.
+///    Then reject undemanded floating exprs containing side effects.
+/// 5. Final recompute: reschedule pure ops, refresh region result phases.
 LogicalResult PhaseAnalysis::run() {
   LLVM_DEBUG(dbgs() << "Analyzing phases in " << funcOp.getSymNameAttr()
                     << "\n");
@@ -183,6 +185,33 @@ LogicalResult PhaseAnalysis::run() {
         }
       }
     }
+  }
+
+  // Step 4b: Floating exprs that no demand ever reached have no phase. Pure
+  // contents are dead code, but side-effecting contents would silently never
+  // be scheduled — whether an effect executes must not depend on whether its
+  // results are used. Reject loudly.
+  {
+    auto walkResult = funcOp->walk([&](ExprOp exprOp) -> WalkResult {
+      if (exprOp.getPin() || opPhases.count(exprOp))
+        return WalkResult::advance();
+      auto inner = exprOp->walk([&](Operation *op) -> WalkResult {
+        if (op == exprOp || hir::isEffectivelyPure(op) ||
+            op->hasTrait<OpTrait::ConstantLike>() ||
+            op->hasTrait<OpTrait::IsTerminator>() ||
+            isa<ExprOp, IfOp, LoopOp>(op))
+          return WalkResult::advance();
+        auto diag = emitError(exprOp.getLoc())
+                    << "floating expression is never used, but contains ops "
+                       "with side effects";
+        diag.attachNote(op->getLoc()) << "side-effecting op here";
+        return WalkResult::interrupt();
+      });
+      return inner.wasInterrupted() ? WalkResult::interrupt()
+                                    : WalkResult::advance();
+    });
+    if (walkResult.wasInterrupted())
+      return failure();
   }
 
   // Step 5: Final recompute. During the DFS, pure ops were assigned their
@@ -595,8 +624,8 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
     auto phase = constrainTermOperand(exprOp.getBody().front().getTerminator());
     if (failed(phase))
       return failure();
-    if (*phase)
-      actualPhase[result] = **phase;
+    assert(*phase && "expr yield must carry all results");
+    actualPhase[result] = **phase;
     return success();
   }
 
@@ -619,6 +648,15 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
   // selects between distinct values. Same-SSA-value results are exempt from
   // the floor: no selection occurs.
   auto termEntries = resultProviders(regionOp, resultIdx);
+
+  // A demanded result that no terminator provides (a loop without breaks, an
+  // if whose branches all return) never materializes; any consumer is
+  // unreachable. Reject loudly instead of leaving the result phaseless.
+  if (termEntries.empty()) {
+    return emitError(regionOp->getLoc())
+           << "no control-flow path provides a value for this result";
+  }
+
   bool selects = selectsDistinctValues(termEntries);
 
   // Make sure the CF op has a resolved phase. A result can be demanded before

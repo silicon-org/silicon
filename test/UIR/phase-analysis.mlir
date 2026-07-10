@@ -4266,6 +4266,26 @@ uir.func @IfSameValueUnderLaterCF(%x: 0, %cond: 1) -> (result: 0) {
   uir.return %r : %t
 }
 
+// An unused floating expr with only pure contents is dead code and stays
+// legal (no phase assigned, no error); only side-effecting contents in an
+// undemanded floating expr are rejected.
+// CHECK-LABEL: uir.func @UnusedFloatingPure
+uir.func @UnusedFloatingPure(%x: 0) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0) -> ()
+} {
+  %t = hir.int_type
+  // Nothing is resolved for the dead expr: no phase, unresolved ("?")
+  // operand and result annotations.
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["?"], pa.results = ["?"]}
+  %r = uir.expr : %t {
+    %sum = hir.add %x, %x : %t
+    uir.yield %sum : %t
+  }
+  // CHECK: uir.return {{.*}}pa.phase = "0"
+  uir.return
+}
+
 // Same-value if whose yielded pure op is rescheduled by the final recompute:
 // the result was demanded (and initially recorded) at phase 1, but the add
 // settles at 0, and the recompute refreshes the result to 0 — the

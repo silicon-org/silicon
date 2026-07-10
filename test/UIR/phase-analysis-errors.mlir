@@ -1626,6 +1626,71 @@ uir.func @FloorErrorOnSecondDemand(%sel: 0, %a: -1, %b: -1) -> (result: 0) {
 // -----
 
 //===----------------------------------------------------------------------===//
+// A demanded loop result without any break never materializes; any consumer
+// is unreachable. This must be a diagnostic, not a crash.
+
+uir.func @LoopNeverBreaks() -> (result: 0) {
+  %t = hir.int_type
+  uir.signature () -> (%t)
+} {
+  %t = hir.int_type
+  // expected-error @below {{no control-flow path provides a value for this result}}
+  %r = uir.loop : %t {
+    uir.continue
+  }
+  // expected-remark @below {{required by return value at phase 0}}
+  uir.return %r : %t
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Same for a valued if whose branches both return: no yield provides the
+// result.
+
+uir.func @IfBothReturnValued(%sel: 0, %a: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  // expected-error @below {{no control-flow path provides a value for this result}}
+  %r = uir.if %sel : %t {
+    uir.return %a : %t
+  } else {
+    uir.return %a : %t
+  }
+  // expected-remark @below {{required by return value at phase 0}}
+  uir.return %r : %t
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// A floating expr that no demand ever reaches has no phase. That is fine for
+// dead pure contents, but side effects must execute at a well-defined phase
+// regardless of whether their results are used.
+
+func.func private @sideEffectF()
+
+uir.func @UnusedFloatingSideEffect() -> () {
+  uir.signature () -> ()
+} {
+  %t = hir.int_type
+  // expected-error @below {{floating expression is never used, but contains ops with side effects}}
+  %r = uir.expr : %t {
+    // expected-note @below {{side-effecting op here}}
+    func.call @sideEffectF() : () -> ()
+    %c = hir.constant_int 1 : %t
+    uir.yield %c : %t
+  }
+  uir.return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
 // Causality on a call's earlier half under later-phase CF: the call anchors at
 // the if's phase 1, its const arg (offset -1) demands phase 0, but is fed the
 // phase-1 dyn value. The D-rule places the earlier half at phase 0 regardless
