@@ -31,7 +31,7 @@ The semantics were settled in a design interview on 2026-07-08.
 The old replicate design in `docs/design/control-flow.md` and the transparent-yield/futures model in `docs/design/phase-inference.md` are superseded where they conflict; docs get rewritten at M6.
 
 - Milestones: M0 ops done → M1 PhaseAnalysis updates (next) → M2 SortPhases (new pass replacing the deleted SplitPhases2 replicate extraction) → M3 SplitPhases rewrite → M4 evaluation (interpreter lists/choices/vars, SpecializeFuncs expansion) → M5 language surface (assignment, loops, var, definite-return check) → M6 docs rewrite + old-stack removal.
-- M1 scope: var home-phase rules (write@home only, read@home-or-later, reads/writes inherit the surrounding CF region phase), choice-ification obligations, causality-rule diagnostics, silent-skip fixes; HIRToMIR patterns for var/choice ops land when exercised (M4).
+- M1 scope (revised 2026-07-09, ref-opacity interview; see sampling-model.md §11): var ops are ordinary side-effecting ops anchored at their block phase, NO home-phase rules in PhaseAnalysis (home is `(cell, home)` runtime data, checks happen at eval in M4); choice-ification obligations, causality-rule diagnostics, silent-skip fixes; HIRToMIR patterns for var/choice ops land when exercised (M4).
 - InferTypes/CheckCalls/CheckTypes region support (walk into `uir.if`/`uir.expr`/`uir.loop`, optimistic type-tree hoisting) still needed; slot in before/alongside M2.
 - Old-stack removal (old `SplitPhases`, `TestPhaseAnalysis`, `hir.unified_func`/`unified_call`/`split_func`/`expr`/`yield`) folds into M6.
 

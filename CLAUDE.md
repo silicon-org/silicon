@@ -23,6 +23,11 @@ The failure mode to avoid has happened before: patching MLIR ops and passes into
 Symptoms to treat as red flags: special-casing one op shape while silently skipping others, workarounds for "impossible" IR that the design says shouldn't exist, checks that paper over a rule violation instead of erroring, or a pass that needs to know details that the design says it shouldn't need.
 Redesign, not code patching.
 
+Apply the *generalization test* before implementing any rule that inspects where an SSA value comes from: would it still work if the value arrived opaquely -- as a function argument, out of an aggregate, from a phase or region boundary?
+If not, the rule is a workaround for a missing design decision; pause and interview the user instead of coding.
+Needing to chase through IR structure to recover a fact ("trace the def chain to find the real X") is the same red flag: the fact wants to live somewhere else -- on the value, in a type, or in runtime data -- and which of those is a design decision, not an implementation detail.
+The user's mental model of the design has plenty of unexplored corners ("unknown unknowns"); when an implementation forces such a corner, a terse design interview (one concrete question at a time) is always welcome and beats delivering a working-but-strange implementation.
+
 ## Build, Test, and Project Layout
 
 See @docs/getting-started.md for build commands, project layout, and where to start.

@@ -3925,3 +3925,138 @@ uir.func @RecursiveChain(%n: -1, %acc: 1) -> (result: 1) {
   }
   uir.return %result : %t
 }
+
+//===----------------------------------------------------------------------===//
+// Variables (sampling-model.md §11): references are opaque values, and
+// PhaseAnalysis knows nothing about home phases (write@home and
+// read@home-or-later are evaluation-time checks). The analysis only anchors
+// hir.var/read_var/write_var at their block phase like any side-effecting op,
+// applies the -1 rule to the varType operand, and enforces ordinary causality
+// on the reference operand.
+
+// Declare, write, read, all at phase 0.
+// CHECK-LABEL: uir.func @VarSamePhase
+uir.func @VarSamePhase(%x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  // CHECK: hir.var {{.*}}pa.phase = "0"
+  // CHECK-SAME: pa.results = ["0"]
+  %v = hir.var : %t
+  // CHECK: hir.write_var {{.*}}pa.operands = ["0", "0", "float"]
+  // CHECK-SAME: pa.phase = "0"
+  hir.write_var %v, %x : %t
+  // CHECK: hir.read_var {{.*}}pa.phase = "0"
+  // CHECK-SAME: pa.results = ["0"]
+  %r = hir.read_var %v : %t
+  uir.return %r : %t
+}
+
+// Var declared and written inside a const region; the reference escapes via
+// the yield and a phase-0 read observes the frozen value. The read anchors at
+// its own block phase (0), not at the var's phase.
+// CHECK-LABEL: uir.func @ConstVarReadLater
+uir.func @ConstVarReadLater(%x: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-1"
+  %v = uir.expr pin -1 : %t {
+    // CHECK: hir.var {{.*}}pa.phase = "-1"
+    %v0 = hir.var : %t
+    // CHECK: hir.write_var {{.*}}pa.phase = "-1"
+    hir.write_var %v0, %x : %t
+    uir.yield %v0 : %t
+  }
+  // CHECK: hir.read_var {{.*}}pa.operands = ["-1", "float"]
+  // CHECK-SAME: pa.phase = "0"
+  // CHECK-SAME: pa.results = ["0"]
+  %r = hir.read_var %v : %t
+  uir.return %r : %t
+}
+
+// Read of a phase-0 var inside a dyn region: the read inherits the region
+// phase (+1); reads are never retro-anchored to the var's phase.
+// CHECK-LABEL: uir.func @DynReadOfVar
+uir.func @DynReadOfVar(%x: 0) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %v = hir.var : %t
+  hir.write_var %v, %x : %t
+  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1"
+  %r = uir.expr pin 1 : %t {
+    // CHECK: hir.read_var {{.*}}pa.phase = "1"
+    // CHECK-SAME: pa.results = ["1"]
+    %r0 = hir.read_var %v : %t
+    uir.yield %r0 : %t
+  }
+  uir.return %r : %t
+}
+
+// Sampling a const var from phase 0: the read is explicitly wrapped in a
+// const region at the var's phase, positioned between two writes; only the
+// snapshot value crosses the phase boundary as an ordinary phase -1 value.
+// CHECK-LABEL: uir.func @VarSamplePosition
+uir.func @VarSamplePosition(%x: -1, %y: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %v = uir.expr pin -1 : %t {
+    %v0 = hir.var : %t
+    hir.write_var %v0, %x : %t
+    uir.yield %v0 : %t
+  }
+  // Sample positioned after the first write, before the second.
+  %snap = uir.expr pin -1 : %t {
+    // CHECK: hir.read_var {{.*}}pa.phase = "-1"
+    // CHECK-SAME: pa.results = ["-1"]
+    %s = hir.read_var %v : %t
+    uir.yield %s : %t
+  }
+  uir.expr pin -1 {
+    // CHECK: hir.write_var {{.*}}pa.phase = "-1"
+    hir.write_var %v, %y : %t
+    uir.yield
+  }
+  // The snapshot is an ordinary phase -1 value, usable at phase 0.
+  // CHECK: uir.return
+  // CHECK-SAME: pa.operands = ["-1", "float"]
+  uir.return %snap : %t
+}
+
+// D-rule: a phase-0 write nested under phase-1 control flow keeps its early
+// phase and stays legal; it executes unconditionally per the D-rule (SortPhases
+// hoists it out of the region later).
+// CHECK-LABEL: uir.func @DRuleWriteUnderLaterCF
+uir.func @DRuleWriteUnderLaterCF(%x: 0, %cond: 1) -> () {
+  %t0 = hir.int_type
+  %t1 = hir.bool_type
+  uir.signature (%t0, %t1) -> ()
+} {
+  %t = hir.int_type
+  %v = hir.var : %t
+  hir.write_var %v, %x : %t
+  uir.expr pin 1 {
+    // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "1"
+    uir.if %cond {
+      uir.expr pin -1 {
+        // CHECK: hir.write_var {{.*}}pa.phase = "0"
+        hir.write_var %v, %x : %t
+        uir.yield
+      }
+      uir.yield
+    }
+    uir.yield
+  }
+  uir.return
+}

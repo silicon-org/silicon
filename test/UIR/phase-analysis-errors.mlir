@@ -1496,3 +1496,46 @@ uir.func @ShortCircuitFloorError(%a: -1, %b: -1) -> (result: 0) {
   %r = uir.call @NeedsConstBoolFloor(%and) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
   uir.return %r : %tr
 }
+// -----
+
+//===----------------------------------------------------------------------===//
+// Ordinary causality on the reference operand: a write cannot consume a
+// reference before the phase that creates it. (Home-phase legality is an
+// evaluation-time check, not a PhaseAnalysis error; see sampling-model.md §11.)
+
+uir.func @WriteBeforeRefExists(%x: -1) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0) -> ()
+} {
+  %t = hir.int_type
+  // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+  %v = hir.var : %t
+  uir.expr pin -1 {
+    // expected-remark @below {{required by operand at phase -1}}
+    hir.write_var %v, %x : %t
+    uir.yield
+  }
+  uir.return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Same causality rule for reads: the reference does not exist yet at -1.
+
+uir.func @ReadBeforeRefExists(%x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+  %v = hir.var : %t
+  hir.write_var %v, %x : %t
+  %r = uir.expr pin -1 : %t {
+    // expected-remark @below {{required by operand at phase -1}}
+    %r0 = hir.read_var %v : %t
+    uir.yield %r0 : %t
+  }
+  uir.return %x : %t
+}
