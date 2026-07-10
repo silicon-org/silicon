@@ -1539,3 +1539,86 @@ uir.func @ReadBeforeRefExists(%x: 0) -> (result: 0) {
   }
   uir.return %x : %t
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// If nested in a floating expr with its result demanded at -1: the demand
+// resolves the floating expr at -1, which anchors the if and checks its
+// condition. Previously region ops without a resolved phase were silently
+// skipped, leaving the condition unchecked.
+
+uir.func @FloatingIfCondHelper(%x: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  uir.return %x : %t
+}
+
+// expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
+uir.func @FloatingIfCondTooLate(%sel: 0, %a: -1, %b: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  %r = uir.expr : %t {
+    // expected-remark @below {{required by if condition at phase -1}}
+    %s = uir.if %sel : %t {
+      uir.yield %a : %t
+    } else {
+      uir.yield %b : %t
+    }
+    // expected-remark @below {{required by yield operand}}
+    uir.yield %s : %t
+  }
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // expected-remark @below {{required by call argument 0 at phase -1}}
+  %c = uir.call @FloatingIfCondHelper(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %c : %tr
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Result phase floor hit by a second, tighter demand: the pin records the
+// floored result phase 0, then the const call arg demands -1 and re-enters
+// the floor check.
+
+uir.func @FloorSecondDemandHelper(%x: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  uir.return %x : %t
+}
+
+uir.func @FloorErrorOnSecondDemand(%sel: 0, %a: -1, %b: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // expected-error @below {{result at phase -1 is selected by control flow at phase 0; result phase must be >= 0}}
+  %r = uir.if %sel : %t {
+    // expected-note @below {{value provided here}}
+    uir.yield %a : %t
+  } else {
+    // expected-note @below {{value provided here}}
+    uir.yield %b : %t
+  }
+  %p = uir.pin %r, 0 : !hir.any
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // expected-remark @below {{required by call argument 0 at phase -1}}
+  %c = uir.call @FloorSecondDemandHelper(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %c : %tr
+}

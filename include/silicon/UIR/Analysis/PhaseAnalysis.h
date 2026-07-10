@@ -24,7 +24,12 @@ namespace uir {
 /// 2. **Side-effecting ops:** demand goes UP to the parent block, the block
 ///    adjusts its phase, then pushes DOWN to all ops.
 /// 3. **Region op results:** demand passes through the yield transparently
-///    to the inner value.
+///    to the inner value. When a merging CF op (if/loop) selects between
+///    distinct values, the result phase is the max over the contributing
+///    values, floored at the op's phase. A result phase *later* than the op
+///    phase is a choice-ification obligation: SortPhases derives those
+///    directly from the phase map and reconstructs the selection with
+///    `hir.pick` in the receiving phase.
 ///
 /// The algorithm has four steps:
 /// 1. Pre-walk: collect terminators (break/continue per loop,
@@ -90,7 +95,9 @@ private:
   FailureOr<int16_t> constrainBlock(Block &block, int16_t demandedPhase);
 
   /// Push demand through yield/break to a specific result of a region-bearing
-  /// op. The constraint forwards through the terminator operand transparently.
+  /// op. The constraint forwards through the terminator operands; the result
+  /// phase is recorded as the max over the contributing values, floored at
+  /// the op phase when the op selects between distinct values.
   LogicalResult constrainRegionResult(Operation *regionOp, unsigned resultIdx,
                                       int16_t latest);
 

@@ -805,13 +805,14 @@ uir.func @ConstCondIf(%flag: -1) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// If with const args: if at phase 0 yields distinct const values. Result is
-// demanded at phase 0, so the floor (p(result) >= p(block) = 0) is satisfied.
-// The actual result phase is -1 (from the yield operands), which is fine
-// because the floor only rejects when the demanded phase < block phase.
+// If with const args: if at phase 0 yields distinct const values. The demand
+// at phase 0 satisfies the floor (p(result) >= p(block) = 0), and the
+// recorded result phase is floored at the op's phase: the selection happens
+// at phase 0, so the result cannot be delivered at -1 even though both
+// yielded values are available there.
 
-// CHECK-LABEL: uir.func @IfTransparentYield
-uir.func @IfTransparentYield(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
+// CHECK-LABEL: uir.func @IfDistinctConstYields
+uir.func @IfDistinctConstYields(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
   %t0 = hir.int_type
   %t1 = hir.int_type
   %t2 = hir.int_type
@@ -819,9 +820,8 @@ uir.func @IfTransparentYield(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
   uir.signature (%t0, %t1, %t2) -> (%t3)
 } {
   %t = hir.int_type
-  // If anchored at block phase 0.
-  // Result at -1 (transparent yield), not 0.
-  // CHECK: uir.if {{.*}} attributes {pa.operands = ["-1", "float"], pa.phase = "0", pa.results = ["-1"]
+  // If anchored at block phase 0; result floored at the op phase.
+  // CHECK: uir.if {{.*}} attributes {pa.operands = ["-1", "float"], pa.phase = "0", pa.results = ["0"]
   %r = uir.if %sel : %t {
     // CHECK: uir.yield {{.*}}pa.operands = ["-1", "float"]
     // CHECK-SAME: pa.phase = "0"
@@ -832,7 +832,7 @@ uir.func @IfTransparentYield(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
     uir.yield %b : %t
   }
   // CHECK: uir.return
-  // CHECK-SAME: pa.operands = ["-1", "float"]
+  // CHECK-SAME: pa.operands = ["0", "float"]
   uir.return %r : %t
 }
 
@@ -4059,4 +4059,135 @@ uir.func @DRuleWriteUnderLaterCF(%x: 0, %cond: 1) -> () {
     uir.yield
   }
   uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Selection between values at different phases: the result phase is the max
+// over the contributing values — a selection delivers when its latest
+// alternative is available — regardless of terminator order.
+
+// CHECK-LABEL: uir.func @IfMixedPhaseYields
+uir.func @IfMixedPhaseYields(%sel: 0, %c: -1, %d: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // Then-branch yields the dyn value, else the const value: max(1, -1) = 1.
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
+  %r = uir.if %sel : %t {
+    uir.yield %d : %t
+  } else {
+    uir.yield %c : %t
+  }
+  uir.return %r : %t
+}
+
+// CHECK-LABEL: uir.func @IfMixedPhaseYieldsSwapped
+uir.func @IfMixedPhaseYieldsSwapped(%sel: 0, %c: -1, %d: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
+  %r = uir.if %sel : %t {
+    uir.yield %c : %t
+  } else {
+    uir.yield %d : %t
+  }
+  uir.return %r : %t
+}
+
+// Loop version: breaks provide values at different phases.
+// CHECK-LABEL: uir.func @LoopMixedPhaseBreaks
+uir.func @LoopMixedPhaseBreaks(%flag: 0, %c: -1, %d: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
+  %r = uir.loop : %t {
+    uir.if %flag {
+      uir.break %d : %t
+    } else {
+      uir.break %c : %t
+    }
+    uir.continue
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Later-phase CF result: an if inside a const block selecting between dyn
+// values. The result rides two phases later than the op — a choice-ification
+// obligation for SortPhases, derived from result phase > op phase.
+
+// CHECK-LABEL: uir.func @ConstIfSelectsDynValues
+uir.func @ConstIfSelectsDynValues(%sel: -1, %x: 1, %y: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-1", pa.results = ["1"]
+  %r = uir.expr pin -1 : %t {
+    // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "-1", pa.results = ["1"]
+    %s = uir.if %sel : %t {
+      uir.yield %x : %t
+    } else {
+      uir.yield %y : %t
+    }
+    uir.yield %s : %t
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// If nested in a floating expr with distinct const values demanded at -1: the
+// demand resolves the floating expr (and with it the if) at -1 before the
+// floor check runs, so the selection legally happens at -1. Previously the
+// floor check was silently skipped for region ops without a resolved phase.
+
+uir.func @FloatingIfHelper(%x: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  uir.return %x : %t
+}
+
+// CHECK-LABEL: uir.func @FloatingIfResolvedByDemand
+uir.func @FloatingIfResolvedByDemand(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  %r = uir.expr : %t {
+    // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "-1", pa.results = ["-1"]
+    %s = uir.if %sel : %t {
+      uir.yield %a : %t
+    } else {
+      uir.yield %b : %t
+    }
+    uir.yield %s : %t
+  }
+  %ta = hir.int_type
+  %tr = hir.int_type
+  // CHECK: uir.call @FloatingIfHelper({{.*}}) {{.*}}pa.phase = "0"
+  %c = uir.call @FloatingIfHelper(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  uir.return %c : %tr
 }

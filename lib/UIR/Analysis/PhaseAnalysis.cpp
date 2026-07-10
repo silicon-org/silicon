@@ -456,22 +456,28 @@ FailureOr<int16_t> PhaseAnalysis::constrainBlock(Block &block,
 }
 
 /// Push demand through yield/break to a specific result of a region-bearing op.
-/// Yields and breaks are transparent conduits — they just forward
-/// constrainValue to the corresponding operand and propagate the resolved phase
-/// to the region result.
+/// Yields and breaks forward the demand to the corresponding operand.
 ///
-/// For merging CF ops (IfOp, LoopOp), a result phase floor applies: when
-/// multiple terminators provide distinct SSA values for a result, the result
-/// phase must be >= the block phase (the CF op performs a selection at its
-/// block phase, so the result can't be known earlier). When all terminators
-/// provide the same SSA value, no floor applies — no selection occurs.
+/// For merging CF ops (IfOp, LoopOp), the result phase floor applies: when
+/// multiple terminators provide distinct SSA values for a result, the CF op
+/// performs a selection at its own phase, so the result cannot be delivered
+/// earlier. A demand below the op phase is an error, and the recorded result
+/// phase is the max over the contributing values, floored at the op phase.
+/// When all terminators provide the same SSA value no selection occurs and the
+/// result forwards at the value's own phase.
+///
+/// A recorded result phase *later* than the op phase is a choice-ification
+/// obligation: SortPhases replaces the value by a choice crossing the phase
+/// boundary and reconstructs the selection with `hir.pick` in the receiving
+/// phase. SortPhases derives these obligations directly from the phase map.
 LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
                                                    unsigned resultIdx,
                                                    int16_t latest) {
   SaveAndRestore guard(depth, depth + 2);
 
   // Skip if this result already satisfies the demand.
-  auto resultIt = actualPhase.find(regionOp->getResult(resultIdx));
+  auto result = regionOp->getResult(resultIdx);
+  auto resultIt = actualPhase.find(result);
   if (resultIt != actualPhase.end() && resultIt->second <= latest)
     return success();
 
@@ -482,7 +488,11 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
     dbgs() << "\n";
   });
 
-  auto constrainTermOperand = [&](Operation *term) -> LogicalResult {
+  // Constrain the value and type operand a terminator provides for this
+  // result. Returns the value's resolved phase, or nullopt if the terminator
+  // does not carry this result (e.g. uir.return, uir.unreachable).
+  auto constrainTermOperand =
+      [&](Operation *term) -> FailureOr<std::optional<int16_t>> {
     auto getOperands = [&](Operation *t) -> std::pair<ValueRange, ValueRange> {
       if (auto yieldOp = dyn_cast<YieldOp>(t))
         return {yieldOp.getValues(), yieldOp.getTypeOfValues()};
@@ -493,13 +503,14 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
 
     auto [values, typeOfValues] = getOperands(term);
 
+    std::optional<int16_t> valuePhase;
     if (resultIdx < values.size()) {
       auto phase = constrainValue(values[resultIdx], latest);
       if (failed(phase)) {
         emitRemark(term->getLoc()) << "required by yield operand";
         return failure();
       }
-      actualPhase[regionOp->getResult(resultIdx)] = *phase;
+      valuePhase = *phase;
     }
 
     if (resultIdx < typeOfValues.size()) {
@@ -509,11 +520,37 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
       }
     }
 
-    return success();
+    return valuePhase;
   };
 
-  // Get the value operand for `resultIdx` from a yield or break terminator.
-  // Returns a null Value for other terminators (return, unreachable).
+  // Exprs are transparent single-terminator conduits.
+  if (auto exprOp = dyn_cast<ExprOp>(regionOp)) {
+    auto phase = constrainTermOperand(exprOp.getBody().front().getTerminator());
+    if (failed(phase))
+      return failure();
+    if (*phase)
+      actualPhase[result] = **phase;
+    return success();
+  }
+
+  // Collect the terminators feeding this result of a merging CF op.
+  SmallVector<Operation *, 2> terms;
+  if (auto ifOp = dyn_cast<IfOp>(regionOp)) {
+    terms.push_back(ifOp.getThenRegion().front().getTerminator());
+    if (!ifOp.getElseRegion().empty())
+      terms.push_back(ifOp.getElseRegion().front().getTerminator());
+  } else if (auto loopOp = dyn_cast<LoopOp>(regionOp)) {
+    auto it = loopBreaks.find(loopOp);
+    if (it != loopBreaks.end())
+      for (auto breakOp : it->second)
+        terms.push_back(breakOp);
+  } else {
+    return success();
+  }
+
+  // Gather the values provided for this result to detect whether the op
+  // selects between distinct values. Same-SSA-value results are exempt from
+  // the floor: no selection occurs.
   auto getTermValue = [&](Operation *term) -> Value {
     if (auto yieldOp = dyn_cast<YieldOp>(term)) {
       auto values = yieldOp.getValues();
@@ -526,83 +563,54 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
     }
     return {};
   };
+  SmallVector<std::pair<Value, Operation *>, 2> termEntries;
+  for (auto *term : terms)
+    if (auto v = getTermValue(term))
+      termEntries.push_back({v, term});
+  bool selects =
+      termEntries.size() > 1 && !llvm::all_of(termEntries, [&](auto &entry) {
+        return entry.first == termEntries[0].first;
+      });
 
-  // Check the result phase floor for merging CF ops. When multiple terminators
-  // provide distinct SSA values for a result, the result phase is floored at
-  // the block phase — the CF op performs a selection that can't happen earlier.
-  // Each entry is a (value, terminator) pair for diagnostic purposes.
-  auto checkFloor =
-      [&](SmallVectorImpl<std::pair<Value, Operation *>> &termEntries)
-      -> LogicalResult {
-    if (termEntries.size() <= 1)
-      return success();
-    bool allSame = llvm::all_of(termEntries, [&](auto &entry) {
-      return entry.first == termEntries[0].first;
-    });
-    if (allSame)
-      return success();
-
-    auto phaseIt = opPhases.find(regionOp);
-    if (phaseIt == opPhases.end())
-      return success(); // Not yet processed; floor check deferred.
-    int16_t blockPhase = phaseIt->second;
-    if (latest < blockPhase) {
-      auto diag = emitError(regionOp->getLoc())
-                  << "result at phase " << latest
-                  << " is selected by control flow at phase " << blockPhase
-                  << "; result phase must be >= " << blockPhase;
-      for (auto &[val, term] : termEntries)
-        diag.attachNote(term->getLoc()) << "value provided here";
+  // Make sure the CF op has a resolved phase. A result can be demanded before
+  // the op's block was processed when the op is nested in a floating expr;
+  // constraining the enclosing block at the demanded phase resolves the
+  // floating exprs on the way and processes their contents.
+  if (opPhases.find(regionOp) == opPhases.end()) {
+    if (failed(constrainBlock(*regionOp->getBlock(), latest)))
       return failure();
-    }
-    return success();
-  };
+    assert(opPhases.find(regionOp) != opPhases.end() &&
+           "region op must be processed after constraining its block");
+  }
+  int16_t opPhase = opPhases.find(regionOp)->second;
 
-  if (auto exprOp = dyn_cast<ExprOp>(regionOp))
-    return constrainTermOperand(exprOp.getBody().front().getTerminator());
-
-  if (auto ifOp = dyn_cast<IfOp>(regionOp)) {
-    // Collect values for the floor check before constraining.
-    SmallVector<std::pair<Value, Operation *>, 2> termEntries;
-    auto *thenTerm = ifOp.getThenRegion().front().getTerminator();
-    if (auto v = getTermValue(thenTerm))
-      termEntries.push_back({v, thenTerm});
-    if (!ifOp.getElseRegion().empty()) {
-      auto *elseTerm = ifOp.getElseRegion().front().getTerminator();
-      if (auto v = getTermValue(elseTerm))
-        termEntries.push_back({v, elseTerm});
-    }
-    if (failed(checkFloor(termEntries)))
-      return failure();
-
-    if (failed(
-            constrainTermOperand(ifOp.getThenRegion().front().getTerminator())))
-      return failure();
-    if (!ifOp.getElseRegion().empty())
-      if (failed(constrainTermOperand(
-              ifOp.getElseRegion().front().getTerminator())))
-        return failure();
-    return success();
+  // Result phase floor: a selection between distinct values cannot be
+  // delivered earlier than the phase at which the CF op performs it.
+  if (selects && latest < opPhase) {
+    auto diag = emitError(regionOp->getLoc())
+                << "result at phase " << latest
+                << " is selected by control flow at phase " << opPhase
+                << "; result phase must be >= " << opPhase;
+    for (auto &[val, term] : termEntries)
+      diag.attachNote(term->getLoc()) << "value provided here";
+    return failure();
   }
 
-  if (auto loopOp = dyn_cast<LoopOp>(regionOp)) {
-    // Collect values for the floor check before constraining.
-    SmallVector<std::pair<Value, Operation *>, 2> termEntries;
-    auto it = loopBreaks.find(loopOp);
-    if (it != loopBreaks.end())
-      for (auto breakOp : it->second)
-        if (auto v = getTermValue(breakOp))
-          termEntries.push_back({v, breakOp});
-    if (failed(checkFloor(termEntries)))
+  // Constrain all contributing terminator operands and record the result
+  // phase: the max over the contributing values, floored at the op phase for
+  // selections.
+  std::optional<int16_t> resultPhase;
+  for (auto *term : terms) {
+    auto phase = constrainTermOperand(term);
+    if (failed(phase))
       return failure();
-
-    if (it != loopBreaks.end())
-      for (auto breakOp : it->second)
-        if (failed(constrainTermOperand(breakOp)))
-          return failure();
-    return success();
+    if (*phase)
+      resultPhase = std::max(resultPhase.value_or(INT16_MIN), **phase);
   }
-
+  if (selects)
+    resultPhase = std::max(resultPhase.value_or(INT16_MIN), opPhase);
+  if (resultPhase)
+    actualPhase[result] = *resultPhase;
   return success();
 }
 
