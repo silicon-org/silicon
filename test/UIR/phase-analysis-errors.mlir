@@ -1622,3 +1622,76 @@ uir.func @FloorErrorOnSecondDemand(%sel: 0, %a: -1, %b: -1) -> (result: 0) {
   %c = uir.call @FloorSecondDemandHelper(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
   uir.return %c : %tr
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Causality on a call's earlier half under later-phase CF: the call anchors at
+// the if's phase 1, its const arg (offset -1) demands phase 0, but is fed the
+// phase-1 dyn value. The D-rule places the earlier half at phase 0 regardless
+// of the surrounding CF, so the argument arrives too late.
+
+uir.func @EarlierHalfErrTarget(%n: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %c = hir.constant_int 1 : %t
+  uir.return %c : %t
+}
+
+// expected-error @below {{value at phase 1 cannot satisfy requirement for phase 0}}
+uir.func @CallEarlierHalfArgTooLate(%d: 1, %cond: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.bool_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %r = uir.expr pin 1 : %t {
+    %s = uir.if %cond : %t {
+      %ta = hir.int_type
+      %tr = hir.int_type
+      // expected-remark @below {{required by call argument 0 at phase 0}}
+      %v = uir.call @EarlierHalfErrTarget(%d) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+      uir.yield %v : %t
+    } else {
+      uir.yield %d : %t
+    }
+    uir.yield %s : %t
+  }
+  uir.return %r : %t
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Causality on a var write under later-phase CF: the write sits in a const
+// block under phase-1 CF and anchors at phase 0 (D-rule), but consumes the
+// phase-1 dyn value. A phase-0 op can never consume a phase-1 value, no matter
+// what CF surrounds it.
+
+// expected-error @below {{value at phase 1 cannot satisfy requirement for phase 0}}
+uir.func @DRuleWriteConsumesLaterValue(%x: 0, %d: 1, %cond: 1) -> () {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.bool_type
+  uir.signature (%t0, %t1, %t2) -> ()
+} {
+  %t = hir.int_type
+  %v = hir.var : %t
+  hir.write_var %v, %x : %t
+  uir.expr pin 1 {
+    uir.if %cond {
+      uir.expr pin -1 {
+        // expected-remark @below {{required by operand at phase 0}}
+        hir.write_var %v, %d : %t
+        uir.yield
+      }
+      uir.yield
+    }
+    uir.yield
+  }
+  uir.return
+}

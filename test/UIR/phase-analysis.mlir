@@ -4191,3 +4191,105 @@ uir.func @FloatingIfResolvedByDemand(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
   %c = uir.call @FloatingIfHelper(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
   uir.return %c : %tr
 }
+
+//===----------------------------------------------------------------------===//
+// D-rule with a call's earlier half: a call under phase-1 control flow anchors
+// at phase 1, and its const arg (offset -1) demands phase 0. The phase-0
+// earlier half runs unconditionally per the D-rule, so consuming a phase-0
+// value there is legal.
+
+uir.func @EarlierHalfTarget(%n: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  %c = hir.constant_int 1 : %t
+  uir.return %c : %t
+}
+
+// CHECK-LABEL: uir.func @DRuleCallEarlierHalfUnderLaterCF
+uir.func @DRuleCallEarlierHalfUnderLaterCF(%x: 0, %d: 1, %cond: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.bool_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1"
+  %r = uir.expr pin 1 : %t {
+    // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "1"
+    %s = uir.if %cond : %t {
+      %ta = hir.int_type
+      %tr = hir.int_type
+      // Call at the if's block phase 1; const arg demand at 1-1 = 0,
+      // satisfied by %x at 0 across the later-phase control flow.
+      // CHECK: uir.call @EarlierHalfTarget(%x) {{.*}}pa.phase = "1"
+      %v = uir.call @EarlierHalfTarget(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+      uir.yield %v : %t
+    } else {
+      uir.yield %d : %t
+    }
+    uir.yield %s : %t
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// SSA-identity exemption under later-phase CF: an if at phase 1 whose branches
+// both yield the same phase-0 SSA value performs no selection, so the result
+// keeps phase 0 — earlier than the op — and neither the floor nor a
+// choice-ification obligation applies.
+
+// CHECK-LABEL: uir.func @IfSameValueUnderLaterCF
+uir.func @IfSameValueUnderLaterCF(%x: 0, %cond: 1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.bool_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["0"]
+  %r = uir.expr pin 1 : %t {
+    // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["0"]
+    %s = uir.if %cond : %t {
+      uir.yield %x : %t
+    } else {
+      uir.yield %x : %t
+    }
+    uir.yield %s : %t
+  }
+  // The result is an ordinary phase-0 value outside the dyn block.
+  // CHECK: uir.return
+  // CHECK-SAME: pa.operands = ["0", "float"]
+  uir.return %r : %t
+}
+
+// Loop version: both breaks carry the same phase-0 SSA value out of a loop at
+// phase 1. No selection, result at phase 0.
+// CHECK-LABEL: uir.func @LoopSameValueUnderLaterCF
+uir.func @LoopSameValueUnderLaterCF(%x: 0, %flag: 1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.bool_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["0"]
+  %r = uir.expr pin 1 : %t {
+    // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["0"]
+    %l = uir.loop : %t {
+      uir.if %flag {
+        uir.break %x : %t
+      } else {
+        uir.break %x : %t
+      }
+      uir.continue
+    }
+    uir.yield %l : %t
+  }
+  // CHECK: uir.return
+  // CHECK-SAME: pa.operands = ["0", "float"]
+  uir.return %r : %t
+}
