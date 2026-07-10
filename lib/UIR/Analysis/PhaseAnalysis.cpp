@@ -641,7 +641,7 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
       for (auto breakOp : it->second)
         terms.push_back(breakOp);
   } else {
-    return success();
+    llvm_unreachable("unexpected region op in constrainRegionResult");
   }
 
   // Gather the values provided for this result to detect whether the op
