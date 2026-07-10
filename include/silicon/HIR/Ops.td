@@ -407,7 +407,10 @@ def VarOp : HIROp<"var", [
     Declares a mutable variable holding values of the given type and
     produces a reference to it. Storage is per call frame. The variable's
     home phase is the phase of this op; `hir.write_var` is legal only at
-    the home phase, and `hir.read_var` at the home phase or later.
+    the home phase, and `hir.read_var` at the home phase or later. The
+    reference is an opaque SSA value and the home phase is evaluation-time
+    data carried alongside the storage cell: home-phase legality is checked
+    when reads and writes execute, not by PhaseAnalysis.
 
     Must not be `Pure`: two distinct variables are distinct mutable
     cells, and the `MemAlloc` effect keeps CSE from merging them.
@@ -435,7 +438,10 @@ def ReadVarOp : HIROp<"read_var", [
     observes the frozen final value. To sample a variable at a specific
     program-order position from a later phase, the read is explicitly
     wrapped in a const region that places it at the home phase, and only
-    the snapshot value crosses the phase boundary.
+    the snapshot value crosses the phase boundary. Reading at a phase
+    earlier than the home phase is illegal; this is checked when the read
+    executes, since the reference is opaque and the home phase is
+    evaluation-time data.
 
     The `varType` operand carries the variable's value type, matching the
     type operand of the defining `hir.var`.
@@ -457,8 +463,10 @@ def WriteVarOp : HIROp<"write_var", [
   let summary = "write a new value to a variable";
   let description = [{
     Writes a new value to a variable. Writes are legal only at the
-    variable's home phase; PhaseAnalysis reports writes from any other
-    phase as errors.
+    variable's home phase. Since the reference is an opaque SSA value and
+    the home phase is evaluation-time data, this is checked when the write
+    executes; PhaseAnalysis treats the write as an ordinary side-effecting
+    op anchored at its block phase.
 
     The `varType` operand carries the variable's value type, matching the
     type operand of the defining `hir.var`.

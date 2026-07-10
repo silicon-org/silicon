@@ -38,7 +38,9 @@ namespace uir {
 /// 3. Structural setup: processBlock(sig, 0) and processBlock(body, 0).
 /// 4. Demand-driven constraints: push from declared arg/result phases.
 ///
-/// See `docs/design/phase-inference.md` for the full specification.
+/// See `tmp/design/sampling-model.md` for the full specification (it
+/// supersedes `docs/design/phase-inference.md`; the docs are rewritten at
+/// milestone M6).
 ///
 /// Usage:
 ///   PhaseAnalysis analysis(funcOp);
