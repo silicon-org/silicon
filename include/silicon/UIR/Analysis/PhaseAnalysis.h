@@ -42,7 +42,10 @@ namespace uir {
 ///    return/signature ops).
 /// 2. Constrain blocks containing function-interface terminators to phase ≤ 0.
 /// 3. Structural setup: processBlock(sig, 0) and processBlock(body, 0).
-/// 4. Demand-driven constraints: push from declared arg/result phases.
+/// 4. Demand-driven constraints: push from declared arg/result phases. Then
+///    default undemanded floating exprs with anchored content (side effects,
+///    pins) to their block phase — effects execute where they stand when no
+///    consumer pulls them elsewhere; dead pure exprs stay phaseless.
 /// 5. Final recompute: reschedule pure ops to max(operand phases) and refresh
 ///    recorded region result phases from the final value and op phases (the
 ///    DFS records demand-time phases, which may be looser).

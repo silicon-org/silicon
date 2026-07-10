@@ -4267,8 +4267,8 @@ uir.func @IfSameValueUnderLaterCF(%x: 0, %cond: 1) -> (result: 0) {
 }
 
 // An unused floating expr with only pure contents is dead code and stays
-// legal (no phase assigned, no error); only side-effecting contents in an
-// undemanded floating expr are rejected.
+// phaseless; only anchored content (side effects, pins) triggers the
+// block-phase fallback.
 // CHECK-LABEL: uir.func @UnusedFloatingPure
 uir.func @UnusedFloatingPure(%x: 0) -> () {
   %t0 = hir.int_type
@@ -4284,6 +4284,99 @@ uir.func @UnusedFloatingPure(%x: 0) -> () {
   }
   // CHECK: uir.return {{.*}}pa.phase = "0"
   uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Undemanded floating exprs with side effects fall back to their block
+// phase: effects execute where they stand when no consumer pulls them
+// elsewhere, as if the expression statement stood alone.
+
+func.func private @sideEffectG()
+
+// CHECK-LABEL: uir.func @UnusedEffectDefaultsToBlockPhase
+uir.func @UnusedEffectDefaultsToBlockPhase() -> () {
+  uir.signature () -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "0"
+  %r = uir.expr : %t {
+    // CHECK: func.call @sideEffectG() {{.*}}pa.phase = "0"
+    func.call @sideEffectG() : () -> ()
+    %c = hir.constant_int 1 : %t
+    uir.yield %c : %t
+  }
+  uir.return
+}
+
+// The fallback is the block phase, not phase 0: inside a const block the
+// unused effect runs at -1.
+// CHECK-LABEL: uir.func @UnusedEffectInConstBlock
+uir.func @UnusedEffectInConstBlock() -> () {
+  uir.signature () -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr pin -1 attributes {{{.*}}pa.phase = "-1"
+  uir.expr pin -1 {
+    // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "-1"
+    %r = uir.expr : %t {
+      // CHECK: func.call @sideEffectG() {{.*}}pa.phase = "-1"
+      func.call @sideEffectG() : () -> ()
+      %c = hir.constant_int 1 : %t
+      uir.yield %c : %t
+    }
+    uir.yield
+  }
+  uir.return
+}
+
+// Nested undemanded floating exprs: the outer expr transitively contains the
+// effect and defaults first; the inner one then sees the outer's phase.
+// CHECK-LABEL: uir.func @NestedUnusedEffect
+uir.func @NestedUnusedEffect() -> () {
+  uir.signature () -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "0"
+  %r = uir.expr : %t {
+    // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "0"
+    %inner = uir.expr : %t {
+      // CHECK: func.call @sideEffectG() {{.*}}pa.phase = "0"
+      func.call @sideEffectG() : () -> ()
+      %c = hir.constant_int 1 : %t
+      uir.yield %c : %t
+    }
+    uir.yield %inner : %t
+  }
+  uir.return
+}
+
+// The block phase is only a fallback, not a cap: an effectful floating expr
+// whose only consumer sits one phase later slides to the consumer's phase.
+// (Floating exprs encapsulate sub-expressions in argument position; the
+// whole block adjusts to consumer demands in both directions.)
+// CHECK-LABEL: uir.func @EffectSlidesToDynDemand
+uir.func @EffectSlidesToDynDemand() -> (result: 1) {
+  %t = hir.int_type
+  uir.signature () -> (%t)
+} {
+  %t = hir.int_type
+  %tg = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "1"
+  %g = uir.expr : %tg {
+    %tr = hir.int_type
+    // CHECK: uir.call @MakeValue() {{.*}}pa.phase = "1"
+    %v = uir.call @MakeValue() : () -> (%tr) () -> !hir.any [] -> [0]
+    uir.yield %v : %tg
+  }
+  // Sole consumer at +1.
+  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1"
+  %r = uir.expr pin 1 : %t {
+    %c1 = hir.constant_int 1 : %t
+    // CHECK: hir.add {{.*}}pa.phase = "1"
+    %sum = hir.add %g, %c1 : %t
+    uir.yield %sum : %t
+  }
+  uir.return %r : %t
 }
 
 // Same-value if whose yielded pure op is rescheduled by the final recompute:

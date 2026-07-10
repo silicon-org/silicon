@@ -2018,29 +2018,6 @@ uir.func @VarTypeTooLate(%N: 0, %x: 0) -> () {
 // -----
 
 //===----------------------------------------------------------------------===//
-// A floating expr that no demand ever reaches has no phase. That is fine for
-// dead pure contents, but side effects must execute at a well-defined phase
-// regardless of whether their results are used.
-
-func.func private @sideEffectF()
-
-uir.func @UnusedFloatingSideEffect() -> () {
-  uir.signature () -> ()
-} {
-  %t = hir.int_type
-  // expected-error @below {{floating expression is never used, but contains ops with side effects}}
-  %r = uir.expr : %t {
-    // expected-note @below {{side-effecting op here}}
-    func.call @sideEffectF() : () -> ()
-    %c = hir.constant_int 1 : %t
-    uir.yield %c : %t
-  }
-  uir.return
-}
-
-// -----
-
-//===----------------------------------------------------------------------===//
 // Causality on a call's earlier half under later-phase CF: the call anchors at
 // the if's phase 1, its const arg (offset -1) demands phase 0, but is fed the
 // phase-1 dyn value. The D-rule places the earlier half at phase 0 regardless

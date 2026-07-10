@@ -74,7 +74,8 @@ void PhaseAnalysis::collectTerminators() {
 /// 2. Constrain blocks containing function terminators to phase ≤ 0.
 /// 3. Structural setup: processBlock(sig, 0) and processBlock(body, 0).
 /// 4. Demand-driven constraints: push from declared arg/result phases.
-///    Then reject undemanded floating exprs containing side effects.
+///    Then default undemanded floating exprs with anchored content to their
+///    block phase.
 /// 5. Final recompute: reschedule pure ops, refresh region result phases.
 LogicalResult PhaseAnalysis::run() {
   LLVM_DEBUG(dbgs() << "Analyzing phases in " << funcOp.getSymNameAttr()
@@ -188,28 +189,52 @@ LogicalResult PhaseAnalysis::run() {
   }
 
   // Step 4b: Floating exprs that no demand ever reached have no phase. Pure
-  // contents are dead code, but side-effecting contents would silently never
-  // be scheduled — whether an effect executes must not depend on whether its
-  // results are used. Reject loudly.
+  // contents are dead code and stay phaseless, but anchored contents (side
+  // effects, pins) must execute at a well-defined phase regardless of whether
+  // any result is used: such exprs fall back to their block phase, as if the
+  // expression statement stood alone. Walk in pre-order so a nested floating
+  // expr sees its parent's (possibly just defaulted) phase.
   {
-    auto walkResult = funcOp->walk([&](ExprOp exprOp) -> WalkResult {
-      if (exprOp.getPin() || opPhases.count(exprOp))
-        return WalkResult::advance();
+    // Whether the expr transitively contains anchored (non-floating) content.
+    auto hasAnchoredContent = [](ExprOp exprOp) {
       auto inner = exprOp->walk([&](Operation *op) -> WalkResult {
         if (op == exprOp || hir::isEffectivelyPure(op) ||
             op->hasTrait<OpTrait::ConstantLike>() ||
             op->hasTrait<OpTrait::IsTerminator>() ||
             isa<ExprOp, IfOp, LoopOp>(op))
           return WalkResult::advance();
-        auto diag = emitError(exprOp.getLoc())
-                    << "floating expression is never used, but contains ops "
-                       "with side effects";
-        diag.attachNote(op->getLoc()) << "side-effecting op here";
         return WalkResult::interrupt();
       });
-      return inner.wasInterrupted() ? WalkResult::interrupt()
-                                    : WalkResult::advance();
-    });
+      return inner.wasInterrupted();
+    };
+
+    auto walkResult =
+        funcOp->walk<WalkOrder::PreOrder>([&](ExprOp exprOp) -> WalkResult {
+          if (exprOp.getPin() || opPhases.count(exprOp) ||
+              !hasAnchoredContent(exprOp))
+            return WalkResult::advance();
+
+          // The fallback phase is the parent block's phase: 0 for the func
+          // body, otherwise the parent op's phase (already resolved — the
+          // pre-order walk defaults enclosing floating exprs first).
+          auto *parentOp = exprOp->getParentOp();
+          int16_t blockPhase =
+              isa<FuncOp>(parentOp) ? 0 : opPhases.find(parentOp)->second;
+          LLVM_DEBUG(dbgs() << "    defaulting floating expr to block phase "
+                            << blockPhase << "\n");
+          opPhases[exprOp] = blockPhase;
+
+          for (auto typeVal : exprOp.getResultTypes()) {
+            if (failed(constrainValue(typeVal, blockPhase - 1))) {
+              emitRemark(exprOp.getLoc())
+                  << "required by expr result type at phase " << blockPhase - 1;
+              return WalkResult::interrupt();
+            }
+          }
+          if (failed(processBlock(exprOp.getBody().front(), blockPhase)))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
+        });
     if (walkResult.wasInterrupted())
       return failure();
   }
