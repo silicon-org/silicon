@@ -187,6 +187,17 @@ hir.replicate () in %list {
   hir.yield
 }
 
+// replicate and pick with attributes
+hir.replicate () in %list {
+  hir.yield
+} {foo = "bar"}
+%choice_attr = hir.choice 0 ()
+hir.pick %choice_attr [
+  0 (): {
+    hir.yield
+  }
+] {foo = "bar"}
+
 // variables
 %var_ty = hir.int_type
 %var = hir.var : %var_ty

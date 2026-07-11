@@ -1355,7 +1355,8 @@ ParseResult ReplicateOp::parse(OpAsmParser &parser, OperationState &result) {
 
   // Parse the body region with the record fields as block args.
   auto *body = result.addRegion();
-  if (parser.parseRegion(*body, fieldArgs))
+  if (parser.parseRegion(*body, fieldArgs) ||
+      parser.parseOptionalAttrDict(result.attributes))
     return failure();
 
   return success();
@@ -1374,6 +1375,7 @@ void ReplicateOp::print(OpAsmPrinter &p) {
   // Print body.
   p << ' ';
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
+  p.printOptionalAttrDict((*this)->getAttrs());
 }
 
 void ReplicateOp::getAsmBlockArgumentNames(Region &region,
@@ -1432,6 +1434,8 @@ ParseResult PickOp::parse(OpAsmParser &parser, OperationState &result) {
       return failure();
     ++regionIdx;
   }
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
 
   return success();
 }
@@ -1454,6 +1458,7 @@ void PickOp::print(OpAsmPrinter &p) {
     p.printRegion(region, /*printEntryBlockArgs=*/false);
   }
   p << ']';
+  p.printOptionalAttrDict((*this)->getAttrs());
 }
 
 LogicalResult PickOp::verify() {
