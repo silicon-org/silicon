@@ -41,6 +41,7 @@ Needing to chase through IR structure to recover a fact ("trace the def chain to
 
 A clean stop is a success, equal in value to working code: "this rule doesn't generalize" and "this design cannot be made consistent; recommend discarding it" are valid task outcomes.
 Never absorb a design problem silently into code -- surface it, even mid-task.
+Before committing any nontrivial pass or design change, run the design-review skill on the diff; its PATCH and DESIGN-FLAW findings are stop signals, not fix lists.
 The user's mental model of the design has plenty of unexplored corners ("unknown unknowns"); when an implementation forces such a corner, a terse design interview (one concrete question at a time) is always welcome and beats delivering a working-but-strange implementation.
 
 ## Build, Test, and Project Layout
