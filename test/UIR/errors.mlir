@@ -257,34 +257,6 @@ uir.func @phase_yield_mismatch(%c: 0, %x: 0) -> () {
 
 // -----
 
-// Verify that signature-region phase returns cannot carry function results.
-uir.func @sig_phase_with_values(%a: 0) -> (result: 0) {
-  %p = uir.phase 0 {
-    %t = hir.int_type
-    // expected-error @below {{cannot carry function results in the signature region}}
-    uir.phase_return %a : %t yield %t
-  }
-  uir.signature (%p) -> (%p)
-} {
-  uir.return %a : %a
-}
-
-// -----
-
-// Verify that body-region phase returns carry exactly the function results
-// declared at the phase's number.
-uir.func @phase_result_count(%x: 0) -> (result: 0) {
-  uir.signature (%x) -> (%x)
-} {
-  uir.phase 0 {
-    // expected-error @below {{carries 0 function results but the enclosing function declares 1 results at phase 0}}
-    uir.phase_return
-  }
-  uir.unreachable
-}
-
-// -----
-
 // Verify that uir.phase_call rejects a non-existent callee.
 uir.func @phase_call_bad_callee(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)

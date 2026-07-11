@@ -957,9 +957,6 @@ void PhaseOp::print(OpAsmPrinter &p) {
 }
 
 LogicalResult PhaseOp::verifyRegions() {
-  auto funcOp = cast<FuncOp>((*this)->getParentOp());
-  bool inSignature = (*this)->getParentRegion() == &funcOp.getSignature();
-
   // The block must end in a phase return, or in unreachable when all paths
   // exit early through phase returns nested in structured control flow.
   auto *terminator = getBody().front().getTerminator();
@@ -978,15 +975,10 @@ LogicalResult PhaseOp::verifyRegions() {
   if (returnWalkResult.wasInterrupted())
     return failure();
 
-  // The function results that belong to this phase.
-  unsigned numPhaseResults = 0;
-  for (auto resultPhase : funcOp.getResultPhases())
-    if (resultPhase == getPhase())
-      ++numPhaseResults;
-
-  // Every phase return in the region provides this op's results and, in the
-  // body region, the function results declared at this phase. Signature
-  // phases compute only type-level values and carry no function results.
+  // Every phase return in the region provides this op's results. Which
+  // function result values it must carry is part of the sorted-form contract
+  // diagnosed by function splitting, not the verifier; the rules are the
+  // same in the body and signature regions.
   bool anyPhaseReturn = false;
   auto walkResult = getBody().walk([&](PhaseReturnOp op) {
     anyPhaseReturn = true;
@@ -994,19 +986,6 @@ LogicalResult PhaseOp::verifyRegions() {
       op.emitOpError() << "yields " << op.getYields().size()
                        << " values but enclosing 'uir.phase' has "
                        << getNumResults() << " results";
-      return WalkResult::interrupt();
-    }
-    if (inSignature) {
-      if (!op.getValues().empty()) {
-        op.emitOpError() << "cannot carry function results in the signature "
-                            "region";
-        return WalkResult::interrupt();
-      }
-    } else if (op.getValues().size() != numPhaseResults) {
-      op.emitOpError() << "carries " << op.getValues().size()
-                       << " function results but the enclosing function "
-                          "declares "
-                       << numPhaseResults << " results at phase " << getPhase();
       return WalkResult::interrupt();
     }
     return WalkResult::advance();

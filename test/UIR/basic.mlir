@@ -270,6 +270,26 @@ uir.func @sig_phases(%a: -1) -> (result: 0) {
   uir.return %a : %t
 }
 
+// Signature and body regions follow the same rules: signature phases may
+// use the same control flow and exit arrangements as body phases.
+// CHECK-LABEL: uir.func @sig_phase_early_exit
+uir.func @sig_phase_early_exit(%c: -1) -> (result: 0) {
+  %p = uir.phase -1 {
+    uir.if %c {
+      %t = hir.int_type
+      uir.phase_return yield %t
+    } else {
+      %t = hir.bool_type
+      uir.phase_return yield %t
+    }
+    uir.unreachable
+  }
+  uir.signature (%p) -> (%p)
+} {
+  %t = hir.int_type
+  uir.return %c : %t
+}
+
 // Early exits: phase returns may sit inside structured CF; when all paths
 // exit early, the phase block ends in uir.unreachable. Different exits may
 // yield different values.

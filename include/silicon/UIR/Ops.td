@@ -462,9 +462,9 @@ def SortedPhases : OpDocGroup {
   let summary = "Sorted phases";
   let description = [{
     Ops expressing the output of phase sorting: each region of a `uir.func`
-    holds one `uir.phase` op per phase, in increasing phase order, with
-    values flowing between phases as ordinary SSA values. This form is the
-    IR contract consumed by function splitting.
+    holds at most one `uir.phase` op per phase, in increasing phase order,
+    with values flowing between phases as ordinary SSA values. This form is
+    the IR contract consumed by function splitting.
   }];
 }
 
@@ -477,11 +477,14 @@ def PhaseOp : UIROp<"phase", [
   let summary = "container for one phase's content";
   let description = [{
     Holds the content of a single execution phase of the enclosing
-    `uir.func`, in either the body or the signature region. The `phase`
-    attribute is the phase number in the enclosing function's own frame,
-    the same frame as the function's declared argument and result phases.
-    Phases not visible in the function's declaration also get their own
-    `uir.phase` ops; they are simply not callable from the outside.
+    `uir.func`, in either the body or the signature region; both regions
+    follow the same rules. The `phase` attribute is the phase number in
+    the enclosing function's own frame, the same frame as the function's
+    declared argument and result phases. Phases not visible in the
+    function's declaration also get their own `uir.phase` ops; they are
+    simply not callable from the outside. Sorting never materializes a
+    `uir.phase` for a content-less phase, though an empty phase op is
+    legal IR.
 
     The op's results are the values later phases consume. Each result is
     provided by the `yield` operands of the `uir.phase_return` exits
@@ -528,6 +531,11 @@ def PhaseReturnOp : UIROp<"phase_return", [
     directly or appear nested inside structured control flow as an early
     exit. All `uir.phase_return` ops of one phase region must agree on
     the yield count; different exit paths may yield different values.
+
+    The correspondence between `values` and the enclosing function's
+    declared results is part of the sorted-form contract and diagnosed by
+    function splitting, not the verifier; body and signature regions
+    follow the same rules.
   }];
   let arguments = (ins
     Variadic<HIRAnyType>:$values,
