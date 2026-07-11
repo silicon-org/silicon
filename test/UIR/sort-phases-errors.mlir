@@ -79,6 +79,59 @@ uir.func @PartialActivation(%n: -1, %x: 0) -> (result: 0) {
 
 // -----
 
+// A definitely-returning later-phase block followed by more later-phase
+// content in the same region: the trailing content is dead and must not
+// reach sorting.
+uir.func @ContentAfterReturnCarrier(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %v = hir.var : %t
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      uir.if %done {
+        uir.break
+      }
+      // expected-error @below {{definitely returns but is followed by more content in the receiving block}}
+      uir.expr pin 1 {
+        uir.return %x : %t
+      }
+      uir.expr pin 1 {
+        hir.write_var %v, %x : %t
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  uir.return %x : %t
+}
+
+// -----
+
+// An expr terminated by a loop exit cannot be dissolved or carried yet.
+uir.func @BreakCarrier(%n: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.loop : %t {
+    // expected-error @below {{cannot be dissolved: body is terminated by uir.break}}
+    uir.expr {
+      uir.break %x : %t
+    }
+    uir.unreachable
+  }
+  uir.return %x : %t
+}
+
+// -----
+
 // Later-phase content inside an exit-carrying arm is a partial activation
 // too.
 uir.func @ContentInExitArm(%n: -1, %x: 0) -> (result: 0) {

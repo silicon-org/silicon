@@ -444,6 +444,77 @@ uir.func @SiblingInterleaved(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Later-phase return under earlier CF: the return rides the record inside a
+// return-terminated expr carrier and becomes the replicate body's
+// terminator. If it fires during expansion, it terminates the receiving
+// phase's function.
+
+// CHECK-LABEL: uir.func @ReturnInReplicate
+uir.func @ReturnInReplicate(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  // CHECK: [[LIST:%.+]] = hir.opaque_list_create
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      uir.if %done {
+        uir.break
+      }
+      uir.expr pin 1 {
+        %s = hir.add %x, %i : %t
+        uir.return %s : %t
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  // CHECK: hir.replicate (%arg0) in [[LIST]] {
+  // CHECK-NEXT: [[S:%.+]] = hir.add %x, %arg0
+  // CHECK-NEXT: uir.return [[S]]
+  // CHECK-NEXT: }
+  uir.return %x : %t
+}
+
+// Later-phase return under an earlier if: the return lands in a pick
+// alternative; the other alternative yields and execution falls through to
+// the trailing return.
+// CHECK-LABEL: uir.func @ReturnInPick
+uir.func @ReturnInPick(%c: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: [[IF:%.+]] = uir.if %c : [[CT:%.+]] {
+  // CHECK:   hir.choice 0()
+  // CHECK: } else {
+  // CHECK:   hir.choice 1()
+  // CHECK: }
+  uir.expr pin -1 {
+    uir.if %c {
+      uir.expr pin 1 {
+        %s = hir.mul %x, %x : %t
+        uir.return %s : %t
+      }
+      uir.yield
+    }
+    uir.yield
+  }
+  // CHECK: hir.pick [[IF]] [0 (): {
+  // CHECK-NEXT: [[S:%.+]] = hir.mul %x, %x
+  // CHECK-NEXT: uir.return [[S]]
+  // CHECK-NEXT: } 1 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }]
+  // CHECK: uir.return %x
+  uir.return %x : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Hoisting: a const write under a dyn if executes unconditionally per the
 // D-rule and hoists to before the if.
 

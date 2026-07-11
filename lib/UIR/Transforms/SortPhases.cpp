@@ -25,6 +25,13 @@
 //    once the phase map is computed they only stand in the way of moving
 //    individual ops across region boundaries.
 //
+//    An expr whose body ends in `uir.return` (a later-phase early exit such
+//    as `dyn { return x }`) cannot dissolve in place: its terminator has no
+//    mid-block position. Such an expr stays intact as a grouping carrier,
+//    travels wholesale during extraction, and dissolves once it sits at the
+//    tail of a receiving block, where the return becomes the block's
+//    terminator: the exit reconstructs itself in the receiving phase.
+//
 // 2. **Decompose calls.** Each `uir.call` becomes one `hir.call` per entry
 //    of the callee's `uir.split_func` witness, placed at the call site with
 //    opaque context values chaining consecutive entries. Sorting requires
@@ -105,7 +112,9 @@ private:
   LogicalResult extractFromLoop(Operation *op, int16_t p);
 
   bool hasLaterContent(Operation *op, int16_t p);
+  Operation *findExitTerminator(Region &region, int16_t p);
   SmallVector<Operation *> collectLaterContent(Block &block, int16_t p);
+  LogicalResult dissolveTailReturnExpr(Block &block);
   llvm::SetVector<Value> collectCrossingValues(Operation *regionOp,
                                                ArrayRef<Operation *> movedOps);
   void remapIntoReceivingBlock(Operation *regionOp, Block &receivingBlock,
@@ -164,10 +173,19 @@ LogicalResult Sorter::dissolveExprsAndPins() {
   for (auto exprOp : exprs) {
     auto &block = exprOp.getBody().front();
     auto yieldOp = dyn_cast<YieldOp>(block.getTerminator());
-    if (!yieldOp)
+    if (!yieldOp) {
+      // Return-terminated exprs stay intact as grouping carriers until
+      // extraction places them at the tail of a receiving block.
+      if (isa<ReturnOp>(block.getTerminator())) {
+        if (exprOp.getNumResults() != 0)
+          return exprOp.emitOpError()
+                 << "with results must not be terminated by a return";
+        continue;
+      }
       return exprOp.emitOpError()
              << "cannot be dissolved: body is terminated by "
              << block.getTerminator()->getName() << " instead of a yield";
+    }
     for (auto [result, value] :
          llvm::zip(exprOp.getResults(), yieldOp.getValues()))
       result.replaceAllUsesWith(value);
@@ -531,15 +549,53 @@ void Sorter::remapIntoReceivingBlock(Operation *regionOp, Block &receivingBlock,
   });
 }
 
-/// Whether an if arm (or the op nested anywhere below it) exits the
-/// enclosing loop or function instead of yielding.
-static Operation *findExitTerminator(Region &region) {
+/// Dissolve a return-terminated expr carrier sitting at the tail of a
+/// receiving block: its ops splice into the block and its return replaces
+/// the block's empty yield terminator. A carrier anywhere else in the block
+/// is a hard error — content after a definite later-phase return is dead
+/// and must not reach sorting.
+LogicalResult Sorter::dissolveTailReturnExpr(Block &block) {
+  SmallVector<ExprOp> carriers;
+  for (auto exprOp : block.getOps<ExprOp>())
+    if (isa<ReturnOp>(exprOp.getBody().front().getTerminator()))
+      carriers.push_back(exprOp);
+
+  for (auto exprOp : carriers) {
+    auto &exprBlock = exprOp.getBody().front();
+    auto *blockTerm = block.getTerminator();
+    if (exprOp->getNextNode() != blockTerm)
+      return exprOp.emitOpError()
+             << "definitely returns but is followed by more content in the "
+                "receiving block";
+    auto yieldOp = dyn_cast<hir::YieldOp>(blockTerm);
+    if (!yieldOp || !yieldOp.getOperands().empty())
+      return exprOp.emitOpError()
+             << "definitely returns but the receiving block must yield "
+                "values";
+
+    block.getOperations().splice(exprOp->getIterator(),
+                                 exprBlock.getOperations());
+    forget(yieldOp);
+    yieldOp.erase();
+    forget(exprOp);
+    exprOp.erase();
+  }
+  return success();
+}
+
+/// Find a terminator at phase <= p inside the region that exits the
+/// enclosing loop or function instead of yielding. Later-phase returns
+/// riding inside expr carriers are content, not exits of this region.
+Operation *Sorter::findExitTerminator(Region &region, int16_t p) {
   Operation *found = nullptr;
   region.walk([&](Operation *op) {
-    if (isa<BreakOp, ContinueOp, ReturnOp>(op) &&
-        op->hasTrait<OpTrait::IsTerminator>()) {
-      found = op;
-      return WalkResult::interrupt();
+    if (isa<BreakOp, ContinueOp, ReturnOp>(op)) {
+      auto it = analysis.opPhases.find(op);
+      if (it != analysis.opPhases.end() && isRealPhase(it->second) &&
+          it->second <= p) {
+        found = op;
+        return WalkResult::interrupt();
+      }
     }
     return WalkResult::advance();
   });
@@ -575,7 +631,7 @@ LogicalResult Sorter::extractFromBranch(Operation *op, int16_t p) {
   // records (break/continue) or to the function-level exit chains at
   // distribution time (return). Neither is extracted here.
   for (auto *arm : arms) {
-    if (auto *exit = findExitTerminator(*arm)) {
+    if (auto *exit = findExitTerminator(*arm, p)) {
       if (isa<ReturnOp>(exit))
         return op->emitOpError()
                << "has later-phase content and an early return; "
@@ -746,6 +802,8 @@ LogicalResult Sorter::extractFromBranch(Operation *op, int16_t p) {
         hir::YieldOp::create(altBuilder, loc, info.laterYieldOperands);
     analysis.opPhases[altYield] = p + 1;
     remapIntoReceivingBlock(newOp, altBlock, info.fields);
+    if (failed(dissolveTailReturnExpr(altBlock)))
+      return failure();
   }
 
   forget(op);
@@ -793,9 +851,10 @@ LogicalResult Sorter::extractFromLoop(Operation *op, int16_t p) {
       return blockOp.emitOpError()
              << "contains later-phase content on a partial activation path; "
                 "not implemented yet";
-    if (findExitTerminator(*blockOp.getRegions().begin()) ||
-        (blockOp.getNumRegions() > 1 &&
-         findExitTerminator(*std::next(blockOp.getRegions().begin())))) {
+    bool hasExit = false;
+    for (auto &region : blockOp.getRegions())
+      hasExit |= findExitTerminator(region, p) != nullptr;
+    if (hasExit) {
       if (seenLater)
         return blockOp.emitOpError()
                << "loop exit after later-phase content requires partial "
@@ -833,6 +892,8 @@ LogicalResult Sorter::extractFromLoop(Operation *op, int16_t p) {
   auto repYield = hir::YieldOp::create(repBuilder, loc, ValueRange{});
   analysis.opPhases[repYield] = p + 1;
   remapIntoReceivingBlock(op, repBlock, fields);
+  if (failed(dissolveTailReturnExpr(repBlock)))
+    return failure();
 
   return success();
 }
