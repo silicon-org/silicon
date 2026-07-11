@@ -28,6 +28,7 @@ Three stages, each owning a single concern:
 
 - `uir.phase`: a region op holding one phase's content, letting multiple per-phase function bodies coexist inside one `uir.func`.
   Its results are the values consumed by later phases.
+  The function's original `uir.return` is replaced by a `uir.unreachable`.
 - `uir.phase_return`: terminator of a `uir.phase` region.
   It carries both the function results belonging to that phase and the values yielded as the phase op's results.
   Multiple `uir.phase_return`s per region are legal (early exits); all must agree on the yielded signature.
