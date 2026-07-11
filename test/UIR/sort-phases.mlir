@@ -444,6 +444,95 @@ uir.func @SiblingInterleaved(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Break-value choice: a const loop whose break carries a dyn value yields a
+// choice instead; the pick after the loop reconstructs the value from the
+// break site's samples.
+
+// CHECK-LABEL: uir.func @BreakValue
+uir.func @BreakValue(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  // CHECK: [[CT:%.+]] = hir.choice_type
+  // CHECK: [[CH:%.+]] = uir.loop (%arg0 = %{{.*}}) : [[CT]] {
+  // CHECK:   uir.if
+  // CHECK:     [[C0:%.+]] = hir.choice 0(%arg0)
+  // CHECK:     uir.break [[C0]] : [[CT]]
+  // CHECK:   }
+  // CHECK: }
+  %y = uir.expr pin -1 : %t {
+    %r = uir.loop (%k = %zero : %t) : %t {
+      %ksq = hir.mul %k, %k : %t
+      %done = hir.geq %ksq, %n : %t
+      uir.if %done {
+        %v = uir.expr pin 1 : %t {
+          %s = hir.add %x, %k : %t
+          uir.yield %s : %t
+        }
+        uir.break %v : %t
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %r : %t
+  }
+  // CHECK: [[Y:%.+]] = hir.pick [[CH]] : !hir.any [0 (%arg0): {
+  // CHECK-NEXT: [[S:%.+]] = hir.add %x, %arg0
+  // CHECK-NEXT: hir.yield [[S]]
+  // CHECK-NEXT: }]
+  // CHECK: uir.return [[Y]]
+  uir.return %y : %t
+}
+
+// Two break sites providing distinct dyn values: one choice, two tags, two
+// pick alternatives.
+// CHECK-LABEL: uir.func @TwoBreakValues
+uir.func @TwoBreakValues(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  // CHECK: [[CH:%.+]] = uir.loop (
+  // CHECK:   hir.choice 0(%arg0)
+  // CHECK:   hir.choice 1(%arg0)
+  // CHECK: }
+  %y = uir.expr pin -1 : %t {
+    %r = uir.loop (%k = %zero : %t) : %t {
+      %done = hir.geq %k, %n : %t
+      uir.if %done {
+        %v = uir.expr pin 1 : %t {
+          %s = hir.add %x, %k : %t
+          uir.yield %s : %t
+        }
+        uir.break %v : %t
+      }
+      %big = hir.geq %k, %one : %t
+      uir.if %big {
+        %w = uir.expr pin 1 : %t {
+          %m = hir.mul %x, %k : %t
+          uir.yield %m : %t
+        }
+        uir.break %w : %t
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %r : %t
+  }
+  // CHECK: hir.pick [[CH]] : !hir.any [0 (%arg0): {
+  // CHECK:   hir.add %x, %arg0
+  // CHECK: } 1 (%arg0): {
+  // CHECK:   hir.mul %x, %arg0
+  // CHECK: }]
+  uir.return %y : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Later-phase return under earlier CF: the return rides the record inside a
 // return-terminated expr carrier and becomes the replicate body's
 // terminator. If it fires during expansion, it terminates the receiving

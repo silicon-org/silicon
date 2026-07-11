@@ -112,6 +112,7 @@ private:
   LogicalResult extractFromLoop(Operation *op, int16_t p);
 
   bool hasLaterContent(Operation *op, int16_t p);
+  LogicalResult extractBreakValues(Operation *&op, int16_t p);
   Operation *findExitTerminator(Region &region, int16_t p);
   SmallVector<Operation *> collectLaterContent(Block &block, int16_t p);
   LogicalResult dissolveTailReturnExpr(Block &block);
@@ -614,24 +615,11 @@ LogicalResult Sorter::extractFromBranch(Operation *op, int16_t p) {
   auto pickOp = dyn_cast<hir::PickOp>(op);
   assert((ifOp || pickOp) && "branch extraction expects uir.if or hir.pick");
 
-  // Gather the arm regions. An else-less if gets its else region
-  // materialized so the not-taken tag has a constructor.
-  SmallVector<Region *> arms;
-  if (ifOp) {
-    if (ifOp.getElseRegion().empty())
-      ifOp.getElseRegion().emplaceBlock();
-    arms.push_back(&ifOp.getThenRegion());
-    arms.push_back(&ifOp.getElseRegion());
-  } else {
-    for (auto &alt : pickOp.getAlternatives())
-      arms.push_back(&alt);
-  }
-
   // Arms that exit instead of yielding belong to the enclosing loop's
   // records (break/continue) or to the function-level exit chains at
   // distribution time (return). Neither is extracted here.
-  for (auto *arm : arms) {
-    if (auto *exit = findExitTerminator(*arm, p)) {
+  for (auto &arm : op->getRegions()) {
+    if (auto *exit = findExitTerminator(arm, p)) {
       if (isa<ReturnOp>(exit))
         return op->emitOpError()
                << "has later-phase content and an early return; "
@@ -641,11 +629,22 @@ LogicalResult Sorter::extractFromBranch(Operation *op, int16_t p) {
     }
   }
 
-  // Materialize an empty-yield terminator in a freshly created else block.
-  if (ifOp && arms[1]->front().empty()) {
-    auto builder = OpBuilder::atBlockEnd(&arms[1]->front());
-    auto yield = YieldOp::create(builder, loc, ValueRange{}, ValueRange{});
-    analysis.opPhases[yield] = p;
+  // Gather the arm regions. An else-less if gets its else region
+  // materialized with an empty yield so the not-taken tag has a
+  // constructor.
+  SmallVector<Region *> arms;
+  if (ifOp) {
+    if (ifOp.getElseRegion().empty()) {
+      auto &elseBlock = ifOp.getElseRegion().emplaceBlock();
+      auto builder = OpBuilder::atBlockEnd(&elseBlock);
+      auto yield = YieldOp::create(builder, loc, ValueRange{}, ValueRange{});
+      analysis.opPhases[yield] = p;
+    }
+    arms.push_back(&ifOp.getThenRegion());
+    arms.push_back(&ifOp.getElseRegion());
+  } else {
+    for (auto &alt : pickOp.getAlternatives())
+      arms.push_back(&alt);
   }
 
   // Partition the op's results into kept (at or before p, or never) and
@@ -811,6 +810,201 @@ LogicalResult Sorter::extractFromBranch(Operation *op, int16_t p) {
   return success();
 }
 
+/// Extract later-phase results of a loop as break-value choices. Each break
+/// site constructs an hir.choice (tag = site index, payload = the crossing
+/// values its value computation needs); the loop is rebuilt with the kept
+/// results plus the choice; and a pick after the loop reconstructs the
+/// later-phase values, with each site's value slice moved into its
+/// alternative. The exit content runs once, after all records, so the pick
+/// sits after any replicate the loop's record extraction creates.
+LogicalResult Sorter::extractBreakValues(Operation *&op, int16_t p) {
+  auto loopOp = dyn_cast<LoopOp>(op);
+  if (!loopOp)
+    return success(); // hir.replicate has no results
+
+  SmallVector<unsigned> keptIdx, laterIdx;
+  for (auto result : op->getResults()) {
+    int16_t phase = analysis.getValuePhase(result);
+    if (isRealPhase(phase) && phase > p)
+      laterIdx.push_back(result.getResultNumber());
+    else
+      keptIdx.push_back(result.getResultNumber());
+  }
+  if (laterIdx.empty())
+    return success();
+
+  auto loc = op->getLoc();
+  auto anyTy = hir::AnyType::get(op->getContext());
+
+  // Collect this loop's break sites, not descending into nested loops.
+  SmallVector<BreakOp> breaks;
+  std::function<void(Block &)> collectBreaks = [&](Block &block) {
+    for (auto &blockOp : block) {
+      if (isa<LoopOp>(&blockOp))
+        continue;
+      if (auto breakOp = dyn_cast<BreakOp>(&blockOp)) {
+        breaks.push_back(breakOp);
+        continue;
+      }
+      for (auto &region : blockOp.getRegions())
+        for (auto &inner : region)
+          collectBreaks(inner);
+    }
+  };
+  collectBreaks(loopOp.getBody().front());
+
+  // Per break site: the later-phase values it provides, the transitive
+  // later-phase ops computing them (the value slice, which moves into the
+  // pick alternative), and the crossing values that become the choice
+  // payload.
+  struct SiteInfo {
+    SmallVector<Value> laterValues;
+    SmallVector<Operation *> slice;
+    llvm::SetVector<Value> fields;
+  };
+  SmallVector<SiteInfo> sites;
+  DenseSet<Operation *> allSliceOps;
+  for (auto breakOp : breaks) {
+    SiteInfo info;
+    for (auto idx : laterIdx) {
+      if (idx >= breakOp.getValues().size())
+        return breakOp.emitOpError()
+               << "does not provide the loop's later-phase result " << idx;
+      info.laterValues.push_back(breakOp.getValues()[idx]);
+    }
+
+    // Backward closure over later-phase ops inside the loop.
+    DenseSet<Operation *> sliceSet;
+    SmallVector<Value> worklist(info.laterValues);
+    while (!worklist.empty()) {
+      auto *defOp = worklist.pop_back_val().getDefiningOp();
+      if (!defOp || !op->isProperAncestor(defOp))
+        continue;
+      if (auto ph = realPhaseOf(defOp); !ph || *ph <= p)
+        continue;
+      if (!sliceSet.insert(defOp).second)
+        continue;
+      if (!allSliceOps.insert(defOp).second)
+        return defOp->emitOpError()
+               << "feeds the break values of multiple loop exits; not "
+                  "implemented yet";
+      defOp->walk([&](Operation *inner) {
+        for (auto operand : inner->getOperands())
+          worklist.push_back(operand);
+      });
+    }
+
+    // Slice ops in program order, outermost units only; reject slices
+    // entangled with content that stays behind.
+    loopOp.getBody().walk<WalkOrder::PreOrder>([&](Operation *walked) {
+      if (sliceSet.contains(walked)) {
+        info.slice.push_back(walked);
+        return WalkResult::skip();
+      }
+      return WalkResult::advance();
+    });
+    for (auto *sliceOp : info.slice)
+      for (auto *user : sliceOp->getUsers())
+        if (user != breakOp && !sliceSet.contains(user) &&
+            llvm::none_of(sliceSet,
+                          [&](Operation *s) { return s->isAncestor(user); }))
+          return sliceOp->emitOpError()
+                 << "is shared between a break value and other later-phase "
+                    "content; not implemented yet";
+
+    info.fields = collectCrossingValues(op, info.slice);
+    for (auto value : info.laterValues) {
+      auto *defOp = value.getDefiningOp();
+      if (defOp && op->isProperAncestor(defOp) && !sliceSet.contains(defOp) &&
+          isRealPhase(analysis.getPhase(defOp)))
+        info.fields.insert(value);
+      if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+        auto *owner = blockArg.getOwner()->getParentOp();
+        if (owner == op || op->isProperAncestor(owner))
+          info.fields.insert(value);
+      }
+    }
+    sites.push_back(std::move(info));
+  }
+
+  // Construct the per-site choice and rewrite each break to carry it in
+  // place of the later-phase values.
+  OpBuilder builder(op);
+  auto choiceTypeOp = hir::ChoiceTypeOp::create(builder, loc);
+  setPhase(choiceTypeOp, PhaseAnalysis::kFloatPhase);
+  Value choiceType = choiceTypeOp.getResult();
+
+  for (auto [tag, breakOp] : llvm::enumerate(breaks)) {
+    OpBuilder breakBuilder(breakOp);
+    auto choice = hir::ChoiceOp::create(breakBuilder, loc, anyTy,
+                                        static_cast<uint32_t>(tag),
+                                        sites[tag].fields.getArrayRef());
+    setPhase(choice, p);
+    SmallVector<Value> values, typeOfValues;
+    for (auto idx : keptIdx) {
+      values.push_back(breakOp.getValues()[idx]);
+      typeOfValues.push_back(breakOp.getTypeOfValues()[idx]);
+    }
+    values.push_back(choice.getResult());
+    typeOfValues.push_back(choiceType);
+    auto newBreak = BreakOp::create(breakBuilder, loc, values, typeOfValues);
+    analysis.opPhases[newBreak] = p;
+    forget(breakOp);
+    breakOp.erase();
+  }
+
+  // Rebuild the loop with the kept results plus the choice result.
+  SmallVector<Type> newResultTypes(keptIdx.size() + 1, anyTy);
+  SmallVector<Value> newTypeOperands;
+  for (auto idx : keptIdx)
+    newTypeOperands.push_back(loopOp.getResultTypes()[idx]);
+  newTypeOperands.push_back(choiceType);
+  auto newLoop = LoopOp::create(builder, loc, newResultTypes, loopOp.getInits(),
+                                loopOp.getInitTypes(), newTypeOperands);
+  newLoop.getBody().takeBody(loopOp.getBody());
+  analysis.opPhases[newLoop] = p;
+  for (auto [i, idx] : llvm::enumerate(keptIdx)) {
+    analysis.actualPhase[newLoop.getResult(i)] =
+        analysis.getValuePhase(op->getResult(idx));
+    op->getResult(idx).replaceAllUsesWith(newLoop.getResult(i));
+  }
+  Value choiceResult = newLoop.getResult(keptIdx.size());
+  analysis.actualPhase[choiceResult] = p;
+
+  // Create the receiving pick right after the loop. Record extraction
+  // below inserts its replicate between the loop and the pick, so the exit
+  // content runs after all records.
+  builder.setInsertionPointAfter(newLoop);
+  SmallVector<Type> pickResultTypes(laterIdx.size(), anyTy);
+  auto pick = hir::PickOp::create(builder, loc, pickResultTypes, choiceResult,
+                                  sites.size());
+  analysis.opPhases[pick] = p + 1;
+  for (auto [i, idx] : llvm::enumerate(laterIdx)) {
+    analysis.actualPhase[pick.getResult(i)] =
+        analysis.getValuePhase(op->getResult(idx));
+    op->getResult(idx).replaceAllUsesWith(pick.getResult(i));
+  }
+
+  for (auto [tag, site] : llvm::enumerate(sites)) {
+    auto &altBlock = pick.getAlternatives()[tag].emplaceBlock();
+    for (unsigned i = 0; i < site.fields.size(); ++i)
+      altBlock.addArgument(anyTy, loc);
+    for (auto *sliceOp : site.slice)
+      sliceOp->moveBefore(&altBlock, altBlock.end());
+    OpBuilder altBuilder(&altBlock, altBlock.end());
+    auto altYield = hir::YieldOp::create(altBuilder, loc, site.laterValues);
+    analysis.opPhases[altYield] = p + 1;
+    remapIntoReceivingBlock(newLoop, altBlock, site.fields);
+    if (failed(dissolveTailReturnExpr(altBlock)))
+      return failure();
+  }
+
+  forget(op);
+  op->erase();
+  op = newLoop;
+  return success();
+}
+
 /// Extract the later-phase content of a loop-shaped CF op (uir.loop or
 /// hir.replicate) at phase p: a hit list is created before the op, each
 /// activation packs a record of the crossing values, and one hir.replicate
@@ -824,15 +1018,15 @@ LogicalResult Sorter::extractFromLoop(Operation *op, int16_t p) {
   else
     body = &cast<hir::ReplicateOp>(op).getBody().front();
 
-  // Later-phase results of a loop are break-value choices, which are not
-  // implemented yet.
-  for (auto result : op->getResults()) {
-    int16_t phase = analysis.getValuePhase(result);
-    if (isRealPhase(phase) && phase > p)
-      return op->emitOpError()
-             << "provides result " << result.getResultNumber() << " at phase "
-             << phase << "; break-value choices are not implemented yet";
-  }
+  // Later-phase results are break-value choices: extract them first, so
+  // their value slices are out of the way of the record analysis below.
+  // The loop op may be rebuilt in the process.
+  if (failed(extractBreakValues(op, p)))
+    return failure();
+  if (auto loopOp = dyn_cast<LoopOp>(op))
+    body = &loopOp.getBody().front();
+  if (!hasLaterContent(op, p))
+    return success();
 
   auto movedOps = collectLaterContent(*body, p);
 

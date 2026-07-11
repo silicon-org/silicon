@@ -21,18 +21,17 @@ uir.func @NoWitness(%x: 0) -> (result: 0) {
 
 // -----
 
-// A loop result at a later phase is a break-value choice, not implemented
-// yet.
-uir.func @BreakValue(%n: 0, %x: 0) -> (result: 1) {
+// A break-value slice entangled with later-phase effects that stay behind.
+uir.func @SharedBreakValueSlice(%n: 0, %x: 0) -> (result: 1) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
-  // expected-error @below {{provides result 0 at phase 1; break-value choices are not implemented yet}}
   %r = uir.loop : %t {
     %done = hir.geq %x, %n : %t
     uir.if %done {
       %v = uir.expr pin 1 : %t {
+        // expected-error @below {{is shared between a break value and other later-phase content; not implemented yet}}
         %vv = hir.var : %t
         hir.write_var %vv, %x : %t
         %rr = hir.read_var %vv : %t
