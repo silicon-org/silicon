@@ -1,0 +1,61 @@
+# Phase Ops: An IR Contract Between Sorting and Splitting
+
+Result of the design discussion on pass complexity (2026-07-11).
+Revises the pass architecture in {{< page-link "/design/implementation-plan" >}}: the merged single SplitPhases pass (its stages 5–6 and the topological-order driver) is replaced by two passes connected through explicit IR.
+The sorting algorithm itself (stages 1–4: dissolve, call decomposition, hoist, extract) is unchanged and carries over.
+
+## Problem
+
+The current implementation (`SortPhases.cpp` + `SplitPhases2.cpp`) tangles several concerns in each stage, and the interface between them is invisible: it lives in the PhaseAnalysis side tables, in manually tracked `Value` handles that must be patched at every RAUW, and in `uir.split_func` witnesses that sorting needs before it can decompose a caller's calls.
+The witness dependency forces callee-before-caller topological processing and structurally rejects recursion.
+Because the intermediate state between "sorted" and "split" cannot be expressed in IR, both stages duplicate machinery (call decomposition, expr/pin dissolution), the interface cannot be lit-tested, and the splitter must re-consult phase information everywhere.
+
+## The design
+
+Three stages, each owning a single concern:
+
+1. **PhaseAnalysis** (unchanged) computes phases for ops and values.
+   It is consumed only by the sorting pass; the phase map never crosses a pass boundary.
+2. **Phase sorting** rewrites the *internals* of a `uir.func` and leaves the function op untouched.
+   Output contract: the body and signature regions contain only `uir.phase` ops (plus floating constants), one per phase, in increasing phase order.
+   Values flowing between phases are ordinary SSA values: results of an earlier `uir.phase` op consumed inside a later one.
+   Calls are decomposed into `uir.phase_call` ops targeting a specific phase of the callee.
+   This is the only pass that runs or consumes PhaseAnalysis.
+3. **Function splitting** is phase-blind: it never asks what phase an op has.
+   It expects the phase-op-only contract, creates per-phase `hir.func` ops, converts phase-op result flow into opaque context pack/unpack, rewrites `uir.phase_call` to `hir.call`, reconstructs signatures, and emits the structural ops (`uir.split_func`, `hir.multiphase_func`).
+
+## New ops
+
+- `uir.phase`: a region op holding one phase's content, letting multiple per-phase function bodies coexist inside one `uir.func`.
+  Its results are the values consumed by later phases.
+- `uir.phase_return`: terminator of a `uir.phase` region.
+  It carries both the function results belonging to that phase and the values yielded as the phase op's results.
+  Multiple `uir.phase_return`s per region are legal (early exits); all must agree on the yielded signature.
+- `uir.phase_call`: calls one specific phase of a `uir.func`, with the callee's args and results filtered down to that phase, plus an opaque context value chaining consecutive phase calls.
+  The caller-visible phase entries are exactly the callee's external phases, which are derivable from the callee's *declared* arg/result phases (plus phase 0).
+  No split witness is needed at sort time, so there is no callee-before-caller processing order, and recursion is no longer structurally rejected.
+
+## Settled decisions
+
+- **Signature region.** The signature undergoes the same phase sorting and contains its own `uir.phase` ops.
+  At function-splitting time, values the signature carries between phases must be computed in the function *body* of the previous phase (so they can be passed into the next phase call as specialization parameters), not in the signature.
+  That relocation is purely a function-splitting concern; PhaseAnalysis and sorting do not know about it.
+  Consequence: signature computations (including `uir.phase_call`s) must be re-evaluable, since they are cloned between signature and body — already the status quo assumption, now stated.
+- **No canonicalization between the passes** for now; sorting and splitting run back-to-back.
+  Effect modeling and canonicalization interactions (CSE across phase regions, constant hoisting out of them) are deferred until a canonicalizer needs to run in between.
+- **The phase-op-only contract is not verifier-enforced.**
+  The function-splitting pass errors out with a diagnostic when it encounters content that violates the expectation.
+- **Function-level exit chains** ({{< page-link "/design/function-exit-choices" >}}) surface on `uir.phase_return` instead of being discovered at distribution time.
+  This localizes the chain per phase region and turns the splitter's part into ordinary result plumbing; the design is worked up incrementally after the core port.
+
+## What this dissolves, what it does not
+
+Dissolved: the cross-phase fixup machinery (`fixupCrossPhaseRefs`, hop-by-hop value mappings), the tracked-`Value` handle patching at every RAUW site, the duplicated call decomposition, the topological order and its cycle error, and the `sort-only` test flag (the sorted form is now a first-class, verifiable IR that lit tests check directly).
+
+Not dissolved: the extraction machinery (hoisting, branch/loop extraction, records, break-value choices, partial activations) is intrinsic to the semantics and ports nearly verbatim from `SortPhases.cpp`; only its packaging changes (`uir.phase_call` instead of witness-based calls, output wrapped in `uir.phase` ops, `uir.phase_return` terminators).
+
+## Migration strategy
+
+Ops and hand-written target IR come first: the expected phase-op form of the canonical examples is written by hand before any pass code, forcing the `uir.phase_return` design decision while it is cheap, and doubling as the lit-test contract between the passes.
+Sorting is then rebuilt case-by-case (one PR per case, porting from `SortPhases.cpp`), followed by the new exit-chain territory, and the phase-blind splitter last — sorting output is inspectable on its own, and looking at it feeds back into the earlier transform before the splitter exists.
+The old `SortPhases`/`SplitPhases2` stack stays intact and green throughout as the porting source and behavioral reference; `silc` switches over at parity, and the old passes are deleted in one removal PR.
