@@ -4266,18 +4266,20 @@ uir.func @IfSameValueUnderLaterCF(%x: 0, %cond: 1) -> (result: 0) {
   uir.return %r : %t
 }
 
-// An unused floating expr with only pure contents is dead code and stays
-// phaseless; only anchored content (side effects, pins) triggers the
-// block-phase fallback.
+// An unused floating expr with only pure contents is dead code and gets
+// the float sentinel from the coverage stamp; only anchored content (side
+// effects, pins) triggers the block-phase fallback.
 // CHECK-LABEL: uir.func @UnusedFloatingPure
 uir.func @UnusedFloatingPure(%x: 0) -> () {
   %t0 = hir.int_type
   uir.signature (%t0) -> ()
 } {
   %t = hir.int_type
-  // Nothing is resolved for the dead expr: no phase, unresolved ("?")
-  // operand and result annotations.
-  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["?"], pa.results = ["?"]}
+  // The dead expr floats: no demand ever reaches it, and the coverage
+  // stamp assigns the float sentinel to the op, its result, and its
+  // contents.
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "float", pa.results = ["float"]}
+  // CHECK: hir.add {{.*}}pa.phase = "float"
   %r = uir.expr : %t {
     %sum = hir.add %x, %x : %t
     uir.yield %sum : %t

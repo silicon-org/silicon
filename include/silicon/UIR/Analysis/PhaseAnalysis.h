@@ -37,7 +37,7 @@ namespace uir {
 /// control-flow path provides — such a value never exists at runtime, so
 /// every consumer is unreachable and no phase requirement can bind it.
 ///
-/// The algorithm has five steps:
+/// The algorithm has six steps:
 /// 1. Pre-walk: collect terminators (break/continue per loop,
 ///    return/signature ops).
 /// 2. Constrain blocks containing function-interface terminators to phase ≤ 0.
@@ -45,10 +45,19 @@ namespace uir {
 /// 4. Demand-driven constraints: push from declared arg/result phases. Then
 ///    default undemanded floating exprs with anchored content (side effects,
 ///    pins) to their block phase — effects execute where they stand when no
-///    consumer pulls them elsewhere; dead pure exprs stay phaseless.
+///    consumer pulls them elsewhere.
 /// 5. Final recompute: reschedule pure ops to max(operand phases) and refresh
 ///    recorded region result phases from the final value and op phases (the
 ///    DFS records demand-time phases, which may be looser).
+/// 6. Coverage stamp: pure (dead) content that no demand ever reached gets
+///    the float sentinel, in both `opPhases` and `actualPhase`. Undemanded
+///    results of modeled region ops instead get the same provider-derived
+///    phase as demanded ones, so demand never influences where a region
+///    result materializes. Afterwards every op, result, and block argument
+///    the analysis models has an entry; a missing entry means the op or
+///    value sits inside a region the analysis does not model (e.g.
+///    `hir.pick`/`hir.replicate` interiors), which consumers must treat as
+///    an error.
 ///
 /// Usage:
 ///   PhaseAnalysis analysis(funcOp);
@@ -65,6 +74,14 @@ struct PhaseAnalysis {
   static constexpr int16_t kNeverPhase = INT16_MIN + 1;
 
   PhaseAnalysis(FuncOp funcOp) : funcOp(funcOp) {}
+
+  /// Whether the analysis models the regions of this op. Contents of any
+  /// other op's regions receive no phase entries; after the coverage stamp,
+  /// a missing entry means exactly that, and consumers must treat it as an
+  /// error.
+  static bool isModeledRegionOp(Operation *op) {
+    return isa<ExprOp, IfOp, LoopOp>(op);
+  }
 
   /// Run the phase analysis. Returns failure if phase errors are detected
   /// (diagnostics already emitted via `mlir::emitError`).

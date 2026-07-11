@@ -48,6 +48,155 @@ uir.func @DissolveNestedExprs(%a: -1) -> (result: -1) {
   uir.return %y : %t
 }
 
+// Dead pure content — an unused if result, an unused loop break value, and
+// an undemanded floating expr — must sort like live content: undemanded
+// region results get their provider-derived phase, dead pure ops float,
+// and everything stays in place.
+// CHECK-LABEL: uir.func @DeadPureContent
+uir.func @DeadPureContent(%c: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.if %c
+  // CHECK: hir.add %x, %x
+  %r = uir.if %c : %t {
+    %a = hir.add %x, %x : %t
+    uir.yield %a : %t
+  } else {
+    uir.yield %x : %t
+  }
+  // CHECK: uir.loop
+  // CHECK: hir.sub %x, %x
+  %s = uir.loop () : %t {
+    %b = hir.sub %x, %x : %t
+    uir.break %b : %t
+  }
+  // CHECK: hir.mul %x, %x
+  %dead = uir.expr : %t {
+    %m = hir.mul %x, %x : %t
+    uir.yield %m : %t
+  }
+  // CHECK: uir.return %x
+  uir.return %x : %t
+}
+
+// Dead CF results must also compose with later-phase content: extraction
+// partitions results by their provider-derived phase, so the undemanded
+// result — provided here at the op's own phase — stays on the op while the
+// later-phase effects extract.
+// CHECK-LABEL: uir.func @DeadIfResultLaterContent
+uir.func @DeadIfResultLaterContent(%c: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %va = hir.var : %t
+  // The if keeps the dead result alongside the new choice result.
+  // CHECK: [[IF:%.+]]:2 = uir.if %c :
+  // CHECK: hir.pick [[IF]]#1 [0 (%arg0): {
+  // CHECK-NEXT: hir.write_var %{{.*}}, %arg0
+  %r = uir.if %c : %t {
+    %a = hir.add %x, %x : %t
+    uir.expr pin 1 {
+      hir.write_var %va, %a : %t
+      uir.yield
+    }
+    uir.yield %a : %t
+  } else {
+    uir.yield %x : %t
+  }
+  uir.return %x : %t
+}
+
+// CHECK-LABEL: uir.func @DeadLoopResultLaterContent
+uir.func @DeadLoopResultLaterContent(%n: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %va = hir.var : %t
+  // The loop keeps the dead break-value result; the record chain extracts
+  // as usual.
+  // CHECK: hir.opaque_list_create
+  // CHECK: uir.loop (%arg0 = %{{.*}}) : %{{.*}} {
+  // CHECK: uir.break %arg0
+  %s = uir.loop (%i = %zero : %t) : %t {
+    %done = hir.geq %i, %n : %t
+    uir.if %done {
+      uir.break %i : %t
+    }
+    uir.expr pin 1 {
+      hir.write_var %va, %x : %t
+      uir.yield
+    }
+    %next = hir.add %i, %one : %t
+    uir.continue %next : %t
+  }
+  // CHECK: hir.replicate
+  // CHECK: hir.write_var
+  uir.return %x : %t
+}
+
+// A dead CF result whose provider is itself later-phase content gets the
+// provider-derived phase from the coverage stamp and choice-ifies exactly
+// like a demanded result: the value reconstructs in the receiving pick
+// (unused there), and no stale operand stays behind on the rebuilt op.
+// CHECK-LABEL: uir.func @DeadIfResultLaterValue
+uir.func @DeadIfResultLaterValue(%c: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %va = hir.var : %t
+  // CHECK: [[IF:%.+]] = uir.if %c : {{.*}} {
+  // CHECK: hir.choice 0()
+  // CHECK: hir.choice 1()
+  // CHECK: hir.pick [[IF]] : !hir.any [0 (): {
+  // CHECK-NEXT: hir.read_var
+  %r = uir.if %c : %t {
+    %a = uir.expr pin 1 : %t {
+      %v = hir.read_var %va : %t
+      uir.yield %v : %t
+    }
+    uir.yield %a : %t
+  } else {
+    uir.yield %x : %t
+  }
+  uir.return %x : %t
+}
+
+// CHECK-LABEL: uir.func @DeadLoopResultLaterValue
+uir.func @DeadLoopResultLaterValue(%n: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %va = hir.var : %t
+  // CHECK: [[LOOP:%.+]] = uir.loop (%arg0 = %{{.*}}) : {{.*}} {
+  // CHECK: hir.choice 0()
+  // CHECK: uir.break
+  // CHECK: hir.pick [[LOOP]] : !hir.any [0 (): {
+  // CHECK-NEXT: hir.read_var
+  %s = uir.loop (%i = %zero : %t) : %t {
+    %done = hir.geq %i, %n : %t
+    uir.if %done {
+      %b = uir.expr pin 1 : %t {
+        %v = hir.read_var %va : %t
+        uir.yield %v : %t
+      }
+      uir.break %b : %t
+    }
+    %next = hir.add %i, %one : %t
+    uir.continue %next : %t
+  }
+  uir.return %x : %t
+}
+
 //===----------------------------------------------------------------------===//
 // Call decomposition: a call to a split callee becomes one hir.call per
 // witness entry, chained through an opaque context value, each at its

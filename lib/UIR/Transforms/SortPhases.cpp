@@ -646,8 +646,9 @@ void Sorter::collectExitTerminators(Region &region, int16_t p,
             isa<ReturnOp>(op) || (!loopScoped && isa<BreakOp, ContinueOp>(op));
         if (isExit) {
           auto it = analysis.opPhases.find(&op);
-          if (it != analysis.opPhases.end() && isRealPhase(it->second) &&
-              it->second <= p)
+          assert(it != analysis.opPhases.end() &&
+                 "exit terminator not covered by phase analysis");
+          if (isRealPhase(it->second) && it->second <= p)
             exits.push_back(&op);
         }
         for (auto &inner : op.getRegions())
@@ -1411,6 +1412,25 @@ LogicalResult Sorter::extractBoundary(int16_t p) {
 LogicalResult Sorter::run() {
   LLVM_DEBUG(llvm::dbgs() << "Sorting phases in @" << funcOp.getSymName()
                           << "\n");
+
+  // Sorting relies on total phase-analysis coverage: an op without a phase
+  // entry would be invisible to content collection and exit scanning and
+  // silently mis-sorted. The analysis stamps everything it models —
+  // including dead pure content, which gets the float sentinel — so a
+  // missing entry means exactly that the op sits inside a region the
+  // analysis does not model. In particular, the receiving constructs
+  // (hir.pick, hir.replicate) are only ever produced by sorting itself and
+  // are illegal in its input. Abort loudly before mutating anything.
+  auto coverage = funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (op == funcOp || analysis.opPhases.contains(op))
+      return WalkResult::advance();
+    op->emitOpError() << "is not covered by phase analysis; cannot sort ops "
+                         "the analysis does not model";
+    return WalkResult::interrupt();
+  });
+  if (coverage.wasInterrupted())
+    return failure();
+
   if (failed(dissolveExprsAndPins()))
     return failure();
   if (failed(decomposeCalls()))

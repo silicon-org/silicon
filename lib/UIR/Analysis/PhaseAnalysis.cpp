@@ -51,15 +51,15 @@ void PhaseAnalysis::collectTerminators() {
         continueToLoop[continueOp] = currentLoop;
         continue;
       }
-      if (auto loopOp = dyn_cast<LoopOp>(&op)) {
-        for (auto &region : op.getRegions())
-          for (auto &innerBlock : region)
-            walkBlock(innerBlock, loopOp);
-      } else {
-        for (auto &region : op.getRegions())
-          for (auto &innerBlock : region)
-            walkBlock(innerBlock, currentLoop);
-      }
+      // Regions the analysis does not model are opaque: terminators inside
+      // them belong to that op's own construct, not to this function's
+      // loops or interface.
+      if (!isModeledRegionOp(&op))
+        continue;
+      auto loopOp = dyn_cast<LoopOp>(&op);
+      for (auto &region : op.getRegions())
+        for (auto &innerBlock : region)
+          walkBlock(innerBlock, loopOp ? loopOp : currentLoop);
     }
   };
 
@@ -77,6 +77,10 @@ void PhaseAnalysis::collectTerminators() {
 ///    Then default undemanded floating exprs with anchored content to their
 ///    block phase.
 /// 5. Final recompute: reschedule pure ops, refresh region result phases.
+/// 6. Coverage stamp: undemanded pure (dead) ops, results, and block
+///    arguments get the float sentinel — except undemanded region results,
+///    which get the same provider-derived phase as demanded ones — so
+///    afterwards only contents of unmodeled regions lack entries.
 LogicalResult PhaseAnalysis::run() {
   LLVM_DEBUG(dbgs() << "Analyzing phases in " << funcOp.getSymNameAttr()
                     << "\n");
@@ -189,19 +193,19 @@ LogicalResult PhaseAnalysis::run() {
   }
 
   // Step 4b: Floating exprs that no demand ever reached have no phase. Pure
-  // contents are dead code and stay phaseless, but anchored contents (side
-  // effects, pins) must execute at a well-defined phase regardless of whether
-  // any result is used: such exprs fall back to their block phase, as if the
-  // expression statement stood alone. Walk in pre-order so a nested floating
-  // expr sees its parent's (possibly just defaulted) phase.
+  // contents are dead code and are left for the step-6 float stamp, but
+  // anchored contents (side effects, pins) must execute at a well-defined
+  // phase regardless of whether any result is used: such exprs fall back to
+  // their block phase, as if the expression statement stood alone. Walk in
+  // pre-order so a nested floating expr sees its parent's (possibly just
+  // defaulted) phase.
   {
     // Whether the expr transitively contains anchored (non-floating) content.
     auto hasAnchoredContent = [](ExprOp exprOp) {
       auto inner = exprOp->walk([&](Operation *op) -> WalkResult {
         if (op == exprOp || hir::isEffectivelyPure(op) ||
             op->hasTrait<OpTrait::ConstantLike>() ||
-            op->hasTrait<OpTrait::IsTerminator>() ||
-            isa<ExprOp, IfOp, LoopOp>(op))
+            op->hasTrait<OpTrait::IsTerminator>() || isModeledRegionOp(op))
           return WalkResult::advance();
         return WalkResult::interrupt();
       });
@@ -250,7 +254,7 @@ LogicalResult PhaseAnalysis::run() {
   LLVM_DEBUG(dbgs() << "  step 5: recompute pure ops and region results\n");
   funcOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
     // Region results: refresh recorded phases from the final value phases.
-    if (isa<ExprOp, IfOp, LoopOp>(op)) {
+    if (isModeledRegionOp(op)) {
       for (auto result : op->getResults()) {
         auto resultIt = actualPhase.find(result);
         if (resultIt == actualPhase.end())
@@ -318,6 +322,53 @@ LogicalResult PhaseAnalysis::run() {
         actualPhase[r] = earliest;
     }
   });
+
+  // Step 6: Coverage stamp. Everything the analysis can reach — the entry
+  // blocks of the function's signature and body, and recursively the entry
+  // blocks of the region ops it models — ends up with an entry in both
+  // maps. Pure content that no demand ever reached is dead code; its ops,
+  // results, and block arguments get the float sentinel here. Undemanded
+  // results of modeled region ops instead follow the same provider rule as
+  // demanded ones (step 5): max provider value phase, floored at the op
+  // phase for ops selecting distinct values, `never` when no path provides
+  // them. Demand thus never influences where a region result materializes,
+  // and dead results choice-ify exactly like live ones. Contents of regions
+  // the analysis does not model remain absent from the maps: absence of an
+  // entry is the defined signal that an op or value is outside the
+  // analysis' model.
+  LLVM_DEBUG(dbgs() << "  step 6: stamp undemanded pure content\n");
+  std::function<void(Block &)> stamp = [&](Block &block) {
+    for (auto arg : block.getArguments())
+      actualPhase.try_emplace(arg, kFloatPhase);
+    for (auto &op : block) {
+      opPhases.try_emplace(&op, kFloatPhase);
+      if (!isModeledRegionOp(&op)) {
+        for (auto result : op.getResults())
+          actualPhase.try_emplace(result, kFloatPhase);
+        continue;
+      }
+      // Stamp region contents first so provider values are resolved.
+      for (auto &region : op.getRegions())
+        if (!region.empty())
+          stamp(region.front());
+      for (auto result : op.getResults()) {
+        if (actualPhase.contains(result))
+          continue;
+        auto providers = resultProviders(&op, result.getResultNumber());
+        int16_t phase = kNeverPhase;
+        if (!providers.empty()) {
+          phase = kFloatPhase;
+          for (auto &[value, term] : providers)
+            phase = std::max(phase, actualPhase.at(value));
+          if (!isa<ExprOp>(&op) && selectsDistinctValues(providers))
+            phase = std::max(phase, getPhase(&op));
+        }
+        actualPhase[result] = phase;
+      }
+    }
+  };
+  stamp(funcOp.getSignature().front());
+  stamp(funcOp.getBody().front());
 
   return success();
 }
@@ -425,7 +476,7 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
   }
 
   // Region ops: push per-result constraint through the yield.
-  if (isa<ExprOp, IfOp, LoopOp>(op)) {
+  if (isModeledRegionOp(op)) {
     if (failed(constrainRegionResult(op, resultIdx, latest)))
       return failure();
     int16_t actual = actualPhase.at(value);
@@ -1028,9 +1079,9 @@ int16_t PhaseAnalysis::getValuePhase(Value value) const {
 }
 
 /// Annotate every op in the function with its resolved phase and the phases
-/// of its operands and results. Ops without an opPhase entry still get
-/// operand/result annotations (e.g., floating exprs with pure contents where
-/// only the result phase was resolved).
+/// of its operands and results. After the coverage stamp, only ops inside
+/// regions the analysis does not model lack an opPhases entry; those still
+/// get operand/result annotations.
 void PhaseAnalysis::annotate() const {
   FuncOp func = funcOp;
   auto *ctx = func.getContext();
