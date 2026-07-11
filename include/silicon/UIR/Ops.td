@@ -195,8 +195,8 @@ def IfOp : UIROp<"if", [
   let description = [{
     A structured if/else expression with two regions: `then` and `else`.
     Each region has a single block terminated by `uir.yield` or an
-    early-exit op (`uir.return`, `uir.break`, `uir.continue`,
-    `uir.unreachable`).
+    early-exit op (`uir.return`, `uir.phase_return`, `uir.break`,
+    `uir.continue`, `uir.unreachable`).
 
     The condition is a `!si.bool` operand. The op produces variadic
     results and carries result type operands. Inside each region,
@@ -453,5 +453,132 @@ def SplitFuncOp : UIROp<"split_func", [
 }
 
 } // let opDocGroup = UnifiedFunctions
+
+//===----------------------------------------------------------------------===//
+// Sorted Phases
+//===----------------------------------------------------------------------===//
+
+def SortedPhases : OpDocGroup {
+  let summary = "Sorted phases";
+  let description = [{
+    Ops expressing the output of phase sorting: each region of a `uir.func`
+    holds one `uir.phase` op per phase, in increasing phase order, with
+    values flowing between phases as ordinary SSA values. This form is the
+    IR contract consumed by function splitting.
+  }];
+}
+
+let opDocGroup = SortedPhases in {
+
+def PhaseOp : UIROp<"phase", [
+  HasParent<"FuncOp">,
+  SingleBlock,
+]> {
+  let summary = "container for one phase's content";
+  let description = [{
+    Holds the content of a single execution phase of the enclosing
+    `uir.func`, in either the body or the signature region. The `phase`
+    attribute is the phase number in the enclosing function's own frame,
+    the same frame as the function's declared argument and result phases.
+    Phases not visible in the function's declaration also get their own
+    `uir.phase` ops; they are simply not callable from the outside.
+
+    The op's results are the values later phases consume. Each result is
+    provided by the `yield` operands of the `uir.phase_return` exits
+    inside the region, and may be consumed by any later `uir.phase` op or
+    the `uir.signature` terminator. Results carry no type operands; they
+    are plumbing introduced after type inference has completed.
+
+    The single block ends in a `uir.phase_return`, or in a
+    `uir.unreachable` if all paths through the phase exit early via
+    `uir.phase_return` ops nested inside structured control flow.
+    `uir.return` cannot appear inside a phase; function exits in sorted
+    content are `uir.phase_return` ops. In the printed form, the op's
+    result count is inferred from the first `uir.phase_return` in the
+    region.
+
+    The op deliberately declares no memory effect interface: even a phase
+    whose content is entirely pure and whose results are unused must
+    never be considered trivially dead, since it still becomes a per-phase
+    function that callers may invoke.
+  }];
+  let arguments = (ins SI32Attr:$phase);
+  let results = (outs Variadic<HIRAnyType>:$results);
+  let regions = (region MinSizedRegion<1>:$body);
+  let hasCustomAssemblyFormat = 1;
+  let hasRegionVerifier = 1;
+}
+
+def PhaseReturnOp : UIROp<"phase_return", [
+  AttrSizedOperandSegments,
+  PredOpTrait<"typeOfValues must match values size",
+    CPred<"$values.size() == $typeOfValues.size()">>,
+  Pure,
+  Terminator,
+]> {
+  let summary = "return function results and yield phase results";
+  let description = [{
+    Terminates one exit path of a `uir.phase` region. Carries two operand
+    groups: the enclosing function's results that belong to this phase
+    (`values`, each with a corresponding type operand), and the values
+    delivered as the enclosing `uir.phase` op's results on this path
+    (`yields`).
+
+    Like `uir.return`, the op may terminate the phase region's block
+    directly or appear nested inside structured control flow as an early
+    exit. All `uir.phase_return` ops of one phase region must agree on
+    the yield count; different exit paths may yield different values.
+  }];
+  let arguments = (ins
+    Variadic<HIRAnyType>:$values,
+    Variadic<HIRAnyType>:$typeOfValues,
+    Variadic<HIRAnyType>:$yields
+  );
+  let assemblyFormat = [{
+    ($values^ `:` $typeOfValues)? (`yield` $yields^)? attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def PhaseCallOp : UIROp<"phase_call", [
+  AttrSizedOperandSegments,
+  AttrSizedResultSegments,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+]> {
+  let summary = "call one phase of a function";
+  let description = [{
+    Calls one externally visible phase of a `uir.func`, produced by
+    decomposing a `uir.call` during phase sorting. The `calleePhase`
+    attribute is the phase number in the callee's own frame; the callee's
+    externally visible phases are its declared argument and result phases
+    plus phase 0, so the set of valid entries is derivable from the
+    callee's declaration alone, without a split witness.
+
+    The `arguments` and `results` are the callee's arguments and results
+    declared at that phase, each with a corresponding type operand.
+    Consecutive entries of one decomposed call are chained through an
+    opaque context value: every entry except the callee's first externally
+    visible phase takes a `context` operand, and every entry except the
+    last produces a context result, printed as a trailing `context`
+    keyword. Context values carry no type operands; function splitting
+    materializes their opaque types.
+  }];
+  let arguments = (ins
+    FlatSymbolRefAttr:$callee,
+    SI32Attr:$calleePhase,
+    Variadic<HIRAnyType>:$arguments,
+    Variadic<HIRAnyType>:$typeOfArgs,
+    Variadic<HIRAnyType>:$typeOfResults,
+    Optional<HIRAnyType>:$contextIn
+  );
+  let results = (outs
+    Variadic<HIRAnyType>:$results,
+    Optional<HIRAnyType>:$contextOut
+  );
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+} // let opDocGroup = SortedPhases
 
 #endif // SILICON_UIR_OPS_TD

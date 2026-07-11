@@ -229,6 +229,117 @@ uir.func @caller(%a: 0) -> (result: 0) {
   uir.return %r : %a
 }
 
+// # Sorted Phases
+//
+// The output contract of phase sorting: function regions hold one uir.phase
+// op per phase, values flow between phases as ordinary SSA values, function
+// results ride on uir.phase_return values, and calls are decomposed into
+// per-phase uir.phase_call ops chained through opaque context values.
+
+// A body sorted into phases: phase -1 computes values (including a type
+// value) consumed by phase 0, which delivers the function result; the
+// original return is replaced by uir.unreachable.
+// CHECK-LABEL: uir.func @sorted_phases
+uir.func @sorted_phases(%a: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %p:2 = uir.phase -1 {
+    %prod = hir.mul %a, %a : %t
+    uir.phase_return yield %prod, %t
+  }
+  uir.phase 0 {
+    %sum = hir.add %p#0, %p#0 : %p#1
+    uir.phase_return %sum : %p#1
+  }
+  uir.unreachable
+}
+
+// Signature regions sort into phases too; their phase returns carry no
+// function results, only yields consumed by later phases or uir.signature.
+// CHECK-LABEL: uir.func @sig_phases
+uir.func @sig_phases(%a: -1) -> (result: 0) {
+  %p = uir.phase -1 {
+    %t = hir.int_type
+    uir.phase_return yield %t
+  }
+  uir.signature (%p) -> (%p)
+} {
+  %t = hir.int_type
+  uir.return %a : %t
+}
+
+// Early exits: phase returns may sit inside structured CF; when all paths
+// exit early, the phase block ends in uir.unreachable. Different exits may
+// yield different values.
+// CHECK-LABEL: uir.func @phase_early_exit
+uir.func @phase_early_exit(%c: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %p = uir.phase 0 {
+    uir.if %c {
+      uir.phase_return %x : %t yield %x
+    } else {
+      uir.phase_return %x : %t yield %c
+    }
+    uir.unreachable
+  }
+  uir.unreachable
+}
+
+// A phase return may terminate a loop body inside a phase.
+// CHECK-LABEL: uir.func @phase_return_in_loop
+uir.func @phase_return_in_loop(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.phase 0 {
+    uir.loop {
+      uir.phase_return %x : %t
+    }
+    uir.unreachable
+  }
+  uir.unreachable
+}
+
+// A call to a single-phase callee decomposes into one uir.phase_call with
+// no context values.
+// CHECK-LABEL: uir.func @phase_call_single
+uir.func @phase_call_single(%a: 0) -> (result: 0) {
+  uir.signature (%a) -> (%a)
+} {
+  %r = uir.phase_call @simple_func[0] (%a, %a) : (%a, %a) -> (%a)
+  uir.return %r : %a
+}
+
+// A call to a two-phase callee decomposes into chained uir.phase_calls: the
+// first entry produces a context result (trailing `context` keyword), the
+// last entry consumes it (`context` operand).
+// CHECK-LABEL: uir.func @phase_call_chain
+uir.func @phase_call_chain(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %ctx = uir.phase_call @const_arg[-1] (%n) : (%t) -> () context
+  %r = uir.phase_call @const_arg[0] (%x) context %ctx : (%t) -> (%t)
+  uir.return %r : %t
+}
+
+// A uir.phase_call may target a callee that is already split.
+// CHECK-LABEL: uir.func @phase_call_split_callee
+uir.func @phase_call_split_callee(%a: -1) -> (result: 0) {
+  uir.signature (%a) -> (%a)
+} {
+  %ctx = uir.phase_call @split_witness[-1] (%a) : (%a) -> () context
+  %r = uir.phase_call @split_witness[0] (%a) context %ctx : (%a) -> (%a)
+  uir.return %r : %a
+}
+
 // # Exit Terminators in Replicate/Pick Bodies
 //
 // Receiving-phase replicate/pick bodies may terminate in uir.return instead

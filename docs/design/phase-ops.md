@@ -17,7 +17,7 @@ Three stages, each owning a single concern:
 1. **PhaseAnalysis** (unchanged) computes phases for ops and values.
    It is consumed only by the sorting pass; the phase map never crosses a pass boundary.
 2. **Phase sorting** rewrites the *internals* of a `uir.func` and leaves the function op untouched.
-   Output contract: the body and signature regions contain only `uir.phase` ops (plus floating constants), one per phase, in increasing phase order.
+   Output contract: the body and signature regions contain only `uir.phase` ops, floating constants, and the region's terminator (`uir.unreachable` for the body, `uir.signature` for the signature), one `uir.phase` per phase, in increasing phase order.
    Values flowing between phases are ordinary SSA values: results of an earlier `uir.phase` op consumed inside a later one.
    Calls are decomposed into `uir.phase_call` ops targeting a specific phase of the callee.
    This is the only pass that runs or consumes PhaseAnalysis.
@@ -38,6 +38,9 @@ Three stages, each owning a single concern:
 
 ## Settled decisions
 
+- **Internal phases.** Sorting distributes content into a `uir.phase` op for every phase, including phases not visible in the function's declaration — leading, mid-range, and trailing internal phases, such as effect-only `dyn` content past the last declared phase.
+  Callers cannot target internal phases: the `uir.phase_call` entries are exactly the declaration-derived external phases.
+  How internal phases end up executing is a function-splitting and evaluation concern (multiphase funcs are the likely vehicle), not a sorting concern; sorting stoically wraps them like any other phase.
 - **Signature region.** The signature undergoes the same phase sorting and contains its own `uir.phase` ops.
   At function-splitting time, values the signature carries between phases must be computed in the function *body* of the previous phase (so they can be passed into the next phase call as specialization parameters), not in the signature.
   That relocation is purely a function-splitting concern; PhaseAnalysis and sorting do not know about it.

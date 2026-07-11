@@ -283,10 +283,11 @@ LogicalResult LoopOp::verifyRegions() {
   // The body block must be terminated by an op that advances or exits the
   // loop. `uir.yield` only terminates `uir.expr` and `uir.if` regions.
   auto *terminator = bodyBlock.getTerminator();
-  if (!isa<ContinueOp, BreakOp, ReturnOp, UnreachableOp>(terminator))
+  if (!isa<ContinueOp, BreakOp, ReturnOp, PhaseReturnOp, UnreachableOp>(
+          terminator))
     return terminator->emitOpError(
         "cannot terminate a 'uir.loop' body; use 'uir.continue', 'uir.break', "
-        "'uir.return', or 'uir.unreachable'");
+        "'uir.return', 'uir.phase_return', or 'uir.unreachable'");
 
   return success();
 }
@@ -904,6 +905,323 @@ void SplitFuncOp::getAsmBlockArgumentNames(Region &region,
   auto argNames = getArgNames();
   for (auto [name, arg] : llvm::zip(argNames, region.front().getArguments()))
     setNameFn(arg, cast<StringAttr>(name).getValue());
+}
+
+//===----------------------------------------------------------------------===//
+// PhaseOp
+//===----------------------------------------------------------------------===//
+
+// # Custom Parser for PhaseOp
+//
+// The assembly format is:
+//   %r0, %r1 = uir.phase 0 { ... }
+//
+// All results are `!hir.any` and are not spelled out in the assembly; the
+// result count is inferred from the first `uir.phase_return` found in the
+// region (all of them agree on the yield count, checked by the verifier).
+ParseResult PhaseOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto &builder = parser.getBuilder();
+  auto anyTy = builder.getType<hir::AnyType>();
+
+  // Parse the phase number.
+  int32_t phase;
+  if (parser.parseInteger(phase))
+    return failure();
+  result.addAttribute("phase", builder.getSI32IntegerAttr(phase));
+
+  // Parse optional attributes (before the region).
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
+  // Parse the body region.
+  auto *body = result.addRegion();
+  if (parser.parseRegion(*body))
+    return failure();
+
+  // Infer the result count from the first phase return in the region.
+  unsigned numResults = 0;
+  body->walk([&](PhaseReturnOp op) {
+    numResults = op.getYields().size();
+    return WalkResult::interrupt();
+  });
+  result.addTypes(SmallVector<Type>(numResults, anyTy));
+
+  return success();
+}
+
+void PhaseOp::print(OpAsmPrinter &p) {
+  p << ' ' << getPhase();
+  p.printOptionalAttrDictWithKeyword((*this)->getAttrs(), {"phase"});
+  p << ' ';
+  p.printRegion(getBody(), /*printEntryBlockArgs=*/false);
+}
+
+LogicalResult PhaseOp::verifyRegions() {
+  auto funcOp = cast<FuncOp>((*this)->getParentOp());
+  bool inSignature = (*this)->getParentRegion() == &funcOp.getSignature();
+
+  // The block must end in a phase return, or in unreachable when all paths
+  // exit early through phase returns nested in structured control flow.
+  auto *terminator = getBody().front().getTerminator();
+  if (!isa<PhaseReturnOp, UnreachableOp>(terminator))
+    return terminator->emitOpError()
+           << "cannot terminate a 'uir.phase' body; use 'uir.phase_return' "
+              "or 'uir.unreachable'";
+
+  // Function exits inside a phase are phase returns; the unsorted
+  // `uir.return` must not appear in phase content, where it would smuggle
+  // function results past the phase return contract.
+  auto returnWalkResult = getBody().walk([](ReturnOp op) {
+    op.emitOpError() << "cannot appear inside a 'uir.phase'";
+    return WalkResult::interrupt();
+  });
+  if (returnWalkResult.wasInterrupted())
+    return failure();
+
+  // The function results that belong to this phase.
+  unsigned numPhaseResults = 0;
+  for (auto resultPhase : funcOp.getResultPhases())
+    if (resultPhase == getPhase())
+      ++numPhaseResults;
+
+  // Every phase return in the region provides this op's results and, in the
+  // body region, the function results declared at this phase. Signature
+  // phases compute only type-level values and carry no function results.
+  bool anyPhaseReturn = false;
+  auto walkResult = getBody().walk([&](PhaseReturnOp op) {
+    anyPhaseReturn = true;
+    if (op.getYields().size() != getNumResults()) {
+      op.emitOpError() << "yields " << op.getYields().size()
+                       << " values but enclosing 'uir.phase' has "
+                       << getNumResults() << " results";
+      return WalkResult::interrupt();
+    }
+    if (inSignature) {
+      if (!op.getValues().empty()) {
+        op.emitOpError() << "cannot carry function results in the signature "
+                            "region";
+        return WalkResult::interrupt();
+      }
+    } else if (op.getValues().size() != numPhaseResults) {
+      op.emitOpError() << "carries " << op.getValues().size()
+                       << " function results but the enclosing function "
+                          "declares "
+                       << numPhaseResults << " results at phase " << getPhase();
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  if (walkResult.wasInterrupted())
+    return failure();
+
+  // Results are provided exclusively by phase returns; a phase without any
+  // cannot produce results (and could not round-trip, since the printed form
+  // infers the result count from the first phase return).
+  if (!anyPhaseReturn && getNumResults() != 0)
+    return emitOpError() << "has " << getNumResults()
+                         << " results but no 'uir.phase_return' to provide "
+                            "them";
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// PhaseReturnOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult PhaseReturnOp::verify() {
+  if (!hasAncestorOp(*this, "uir.phase"))
+    return emitOpError("must be nested inside a 'uir.phase'");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// PhaseCallOp
+//===----------------------------------------------------------------------===//
+
+// # Custom Parser for PhaseCallOp
+//
+// The assembly format is:
+//   uir.phase_call @callee[phase] (%args) context %ctx
+//     : (%typeOfArgs) -> (%typeOfResults) context
+//
+// The `context %ctx` operand and the trailing `context` keyword (marking the
+// chained context result) are both optional. All operands and results are
+// `!hir.any`; the result count is the type-of-result count plus the context
+// result.
+ParseResult PhaseCallOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto &builder = parser.getBuilder();
+  auto anyTy = builder.getType<hir::AnyType>();
+
+  // Parse the callee and phase: `@callee[phase]`.
+  StringAttr calleeAttr;
+  int32_t phase;
+  if (parser.parseSymbolName(calleeAttr) || parser.parseLSquare() ||
+      parser.parseInteger(phase) || parser.parseRSquare())
+    return failure();
+  result.addAttribute("callee", FlatSymbolRefAttr::get(calleeAttr));
+  result.addAttribute("calleePhase", builder.getSI32IntegerAttr(phase));
+
+  // Parse the argument list and optional context operand.
+  SmallVector<OpAsmParser::UnresolvedOperand> argOperands;
+  if (parser.parseOperandList(argOperands, OpAsmParser::Delimiter::Paren))
+    return failure();
+  bool hasContextIn = false;
+  OpAsmParser::UnresolvedOperand contextOperand;
+  if (succeeded(parser.parseOptionalKeyword("context"))) {
+    if (parser.parseOperand(contextOperand))
+      return failure();
+    hasContextIn = true;
+  }
+
+  // Parse the type operands: `: (%typeOfArgs) -> (%typeOfResults)`.
+  SmallVector<OpAsmParser::UnresolvedOperand> typeOfArgs, typeOfResults;
+  if (parser.parseColon() ||
+      parser.parseOperandList(typeOfArgs, OpAsmParser::Delimiter::Paren) ||
+      parser.parseArrow() ||
+      parser.parseOperandList(typeOfResults, OpAsmParser::Delimiter::Paren))
+    return failure();
+
+  // Parse the optional trailing `context` keyword marking the context result.
+  bool hasContextOut = succeeded(parser.parseOptionalKeyword("context"));
+
+  // Parse optional attributes.
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  // Resolve operands in segment order.
+  if (parser.resolveOperands(argOperands, anyTy, result.operands) ||
+      parser.resolveOperands(typeOfArgs, anyTy, result.operands) ||
+      parser.resolveOperands(typeOfResults, anyTy, result.operands))
+    return failure();
+  if (hasContextIn &&
+      parser.resolveOperand(contextOperand, anyTy, result.operands))
+    return failure();
+  result.addAttribute(
+      getOperandSegmentSizeAttr(),
+      builder.getDenseI32ArrayAttr({static_cast<int32_t>(argOperands.size()),
+                                    static_cast<int32_t>(typeOfArgs.size()),
+                                    static_cast<int32_t>(typeOfResults.size()),
+                                    hasContextIn ? 1 : 0}));
+
+  // Add result types.
+  result.addAttribute(
+      getResultSegmentSizeAttr(),
+      builder.getDenseI32ArrayAttr(
+          {static_cast<int32_t>(typeOfResults.size()), hasContextOut ? 1 : 0}));
+  result.addTypes(
+      SmallVector<Type>(typeOfResults.size() + hasContextOut, anyTy));
+
+  return success();
+}
+
+void PhaseCallOp::print(OpAsmPrinter &p) {
+  p << ' ';
+  p.printSymbolName(getCallee());
+  p << '[' << getCalleePhase() << "] (";
+  llvm::interleaveComma(getArguments(), p, [&](Value v) { p.printOperand(v); });
+  p << ')';
+  if (auto contextIn = getContextIn()) {
+    p << " context ";
+    p.printOperand(contextIn);
+  }
+  p << " : (";
+  llvm::interleaveComma(getTypeOfArgs(), p,
+                        [&](Value v) { p.printOperand(v); });
+  p << ") -> (";
+  llvm::interleaveComma(getTypeOfResults(), p,
+                        [&](Value v) { p.printOperand(v); });
+  p << ')';
+  if (getContextOut())
+    p << " context";
+  p.printOptionalAttrDict((*this)->getAttrs(),
+                          {"callee", "calleePhase", getOperandSegmentSizeAttr(),
+                           getResultSegmentSizeAttr()});
+}
+
+LogicalResult PhaseCallOp::verify() {
+  if (getArguments().size() != getTypeOfArgs().size())
+    return emitOpError() << "has " << getArguments().size() << " arguments but "
+                         << getTypeOfArgs().size() << " typeOfArgs";
+  if (getResults().size() != getTypeOfResults().size())
+    return emitOpError() << "has " << getResults().size() << " results but "
+                         << getTypeOfResults().size() << " typeOfResults";
+  return success();
+}
+
+LogicalResult
+PhaseCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto callee = getCalleeAttr();
+  auto *calleeOp = symbolTable.lookupNearestSymbolFrom(getOperation(), callee);
+  if (!calleeOp)
+    return emitOpError() << "'" << callee.getValue()
+                         << "' does not reference a valid function";
+
+  // Accept both uir.func and uir.split_func as callees, since a callee may
+  // already be split when the caller is verified. Both carry the declared
+  // arg and result phases this op is checked against.
+  ArrayRef<int32_t> argPhases, resultPhases;
+  if (auto funcOp = dyn_cast<FuncOp>(calleeOp)) {
+    argPhases = funcOp.getArgPhases();
+    resultPhases = funcOp.getResultPhases();
+  } else if (auto funcOp = dyn_cast<SplitFuncOp>(calleeOp)) {
+    argPhases = funcOp.getArgPhases();
+    resultPhases = funcOp.getResultPhases();
+  } else {
+    return emitOpError() << "'" << callee.getValue()
+                         << "' does not reference a 'uir.func' or "
+                            "'uir.split_func'";
+  }
+
+  // The callee's externally visible phases are its declared arg and result
+  // phases plus phase 0, derivable from the declaration alone.
+  SmallVector<int32_t> externals;
+  externals.push_back(0);
+  externals.append(argPhases.begin(), argPhases.end());
+  externals.append(resultPhases.begin(), resultPhases.end());
+  llvm::sort(externals);
+  externals.erase(std::unique(externals.begin(), externals.end()),
+                  externals.end());
+
+  auto phase = getCalleePhase();
+  if (!llvm::is_contained(externals, phase))
+    return emitOpError() << "callee @" << callee.getValue()
+                         << " has no externally visible phase " << phase;
+
+  // The call's arguments and results are the callee's declared arguments and
+  // results at this phase.
+  auto expectedArgs = llvm::count(argPhases, phase);
+  if (static_cast<int64_t>(getArguments().size()) != expectedArgs)
+    return emitOpError() << "has " << getArguments().size()
+                         << " arguments but callee @" << callee.getValue()
+                         << " declares " << expectedArgs
+                         << " arguments at phase " << phase;
+  auto expectedResults = llvm::count(resultPhases, phase);
+  if (static_cast<int64_t>(getTypeOfResults().size()) != expectedResults)
+    return emitOpError() << "has " << getTypeOfResults().size()
+                         << " results but callee @" << callee.getValue()
+                         << " declares " << expectedResults
+                         << " results at phase " << phase;
+
+  // Context values chain consecutive externally visible phases.
+  bool needsContextIn = phase != externals.front();
+  if (needsContextIn && !getContextIn())
+    return emitOpError() << "requires a context operand: phase " << phase
+                         << " is not the callee's first externally visible "
+                            "phase";
+  if (!needsContextIn && getContextIn())
+    return emitOpError() << "cannot have a context operand: phase " << phase
+                         << " is the callee's first externally visible phase";
+  bool needsContextOut = phase != externals.back();
+  if (needsContextOut && !getContextOut())
+    return emitOpError() << "requires a context result: phase " << phase
+                         << " is not the callee's last externally visible "
+                            "phase";
+  if (!needsContextOut && getContextOut())
+    return emitOpError() << "cannot have a context result: phase " << phase
+                         << " is the callee's last externally visible phase";
+
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
