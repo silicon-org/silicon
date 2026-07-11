@@ -103,18 +103,19 @@ using namespace uir;
 
 namespace {
 /// One exit path of a divergence point: a break/continue terminator at the
-/// loop's phase, together with the later-phase content on its arm and the
-/// crossing values that content samples.
+/// loop's phase, together with the later-phase content on its path and the
+/// crossing values that content samples; both are empty for paths that run
+/// no later-phase content.
 struct ExitPath {
   Operation *terminator;
   SmallVector<Operation *> content;
   llvm::SetVector<Value> fields;
 };
 
-/// An exit-carrying branch interleaved with a loop body's later-phase
-/// content: activations diverge here in how much content they instantiate.
+/// An exit-carrying op in a loop body with later-phase content: activations
+/// diverge here in how much of that content they instantiate, and every
+/// exit path contributes one chain link to the activation's record.
 struct Divergence {
-  Operation *branchOp;
   SmallVector<ExitPath> exits;
 };
 
@@ -143,6 +144,8 @@ private:
 
   bool hasLaterContent(Operation *root, int16_t p);
   LogicalResult extractBreakValues(Operation *&op, int16_t p);
+  void collectExitTerminators(Region &region, int16_t p,
+                              SmallVectorImpl<Operation *> &exits);
   Operation *findExitTerminator(Region &region, int16_t p);
   SmallVector<Operation *> collectLaterContent(Block &block, int16_t p);
   LogicalResult dissolveTailReturnExpr(Block &block);
@@ -628,28 +631,24 @@ LogicalResult Sorter::dissolveTailReturnExpr(Block &block) {
   return success();
 }
 
-/// Find a terminator at phase <= p inside the region that exits out of the
-/// region instead of yielding. Break/continue inside loops (including the
-/// queried region itself when it belongs to a loop) target those loops and
-/// do not exit; returns exit the function from any depth. Later-phase
-/// returns riding inside expr carriers are content, not exits of this
-/// region.
-Operation *Sorter::findExitTerminator(Region &region, int16_t p) {
-  Operation *found = nullptr;
+/// Collect all terminators at phase <= p inside the region that exit out
+/// of the region instead of yielding, in walk order. Break/continue inside
+/// loops (including the queried region itself when it belongs to a loop)
+/// target those loops and do not exit; returns exit the function from any
+/// depth. Later-phase returns riding inside expr carriers are content, not
+/// exits of this region.
+void Sorter::collectExitTerminators(Region &region, int16_t p,
+                                    SmallVectorImpl<Operation *> &exits) {
   std::function<void(Region &, bool)> visit = [&](Region &r, bool loopScoped) {
     for (auto &block : r) {
       for (auto &op : block) {
-        if (found)
-          return;
         bool isExit =
             isa<ReturnOp>(op) || (!loopScoped && isa<BreakOp, ContinueOp>(op));
         if (isExit) {
           auto it = analysis.opPhases.find(&op);
           if (it != analysis.opPhases.end() && isRealPhase(it->second) &&
-              it->second <= p) {
-            found = &op;
-            return;
-          }
+              it->second <= p)
+            exits.push_back(&op);
         }
         for (auto &inner : op.getRegions())
           visit(inner, loopScoped || isa<LoopOp>(op));
@@ -657,7 +656,14 @@ Operation *Sorter::findExitTerminator(Region &region, int16_t p) {
     }
   };
   visit(region, isa<LoopOp>(region.getParentOp()));
-  return found;
+}
+
+/// The first exit terminator at phase <= p inside the region, or null if
+/// every path through the region yields.
+Operation *Sorter::findExitTerminator(Region &region, int16_t p) {
+  SmallVector<Operation *> exits;
+  collectExitTerminators(region, p, exits);
+  return exits.empty() ? nullptr : exits.front();
 }
 
 /// Extract the later-phase content of a branch-shaped CF op (uir.if or
@@ -1067,31 +1073,29 @@ LogicalResult Sorter::extractBreakValues(Operation *&op, int16_t p) {
 /// Decompose a loop body's top level into content segments separated by
 /// exit-carrying divergence points. `segments` holds the later-phase ops
 /// between consecutive divergences in program order (one more entry than
-/// `divergences`); each divergence records the exit terminators and the
-/// later-phase content on their arms. Leading exit-carrying branches with
-/// no prior content and no arm content are not divergences: their exits run
-/// no later-phase content, so they push no record.
+/// `divergences`); each divergence records its exit terminators and the
+/// later-phase content on their paths. Exit paths that run no later-phase
+/// content get an empty chain link, so every activation pushes exactly one
+/// record and the hit list length always equals the activation count.
 LogicalResult
 Sorter::scanLoopBody(Operation *op, Block &body, int16_t p,
                      SmallVectorImpl<SmallVector<Operation *>> &segments,
                      SmallVectorImpl<Divergence> &divergences) {
   segments.emplace_back();
-  bool seenContent = false;
   for (auto &blockOp : body) {
     if (&blockOp == body.getTerminator())
       break;
     if (auto ph = realPhaseOf(&blockOp); ph && *ph > p) {
       segments.back().push_back(&blockOp);
-      seenContent = true;
       continue;
     }
     if (blockOp.getNumRegions() == 0)
       continue;
 
-    bool hasExit = false;
+    SmallVector<Operation *> exitTerms;
     for (auto &region : blockOp.getRegions())
-      hasExit |= findExitTerminator(region, p) != nullptr;
-    if (!hasExit) {
+      collectExitTerminators(region, p, exitTerms);
+    if (exitTerms.empty()) {
       // Non-exit CF at phase p was extracted by the innermost-first walk
       // already; leftover later-phase content here is a compiler bug.
       if (hasLaterContent(&blockOp, p))
@@ -1101,81 +1105,92 @@ Sorter::scanLoopBody(Operation *op, Block &body, int16_t p,
       continue;
     }
 
-    auto ifOp = dyn_cast<IfOp>(&blockOp);
-    if (!ifOp)
-      return blockOp.emitOpError()
-             << "carries a loop exit but is not a branch; cannot build "
-                "partial activation records";
-    // Results whose phase was never demanded have no consumers and need no
-    // reconstruction; only demanded later-phase results are unimplemented.
-    for (auto result : ifOp.getResults()) {
-      auto it = analysis.actualPhase.find(result);
-      if (it != analysis.actualPhase.end() && isRealPhase(it->second) &&
-          it->second > p)
-        return ifOp.emitOpError() << "carries a loop exit and has "
-                                     "later-phase results; not implemented "
-                                     "yet";
-    }
-
-    // Classify each arm as an exit path or a rejoining path.
-    Divergence divergence;
-    divergence.branchOp = &blockOp;
-    for (auto &region : ifOp->getRegions()) {
-      if (region.empty())
-        continue;
-      auto &armBlock = region.front();
-      auto *term = armBlock.getTerminator();
-      auto termPhase = realPhaseOf(term);
-      bool isExitTerm = termPhase && *termPhase <= p &&
-                        isa<BreakOp, ContinueOp, ReturnOp>(term);
-      if (isExitTerm && isa<ReturnOp>(term))
+    // A return under a loop with later-phase content is a function-level
+    // exit chain no matter how it is nested; those belong to distribution.
+    for (auto *term : exitTerms)
+      if (isa<ReturnOp>(term))
         return term->emitOpError()
                << "exits the function under a loop with later-phase "
                   "content; function-level exit chains are not implemented "
                   "yet";
-      if (isExitTerm) {
+
+    // Results whose phase was never demanded have no consumers and need no
+    // reconstruction; only demanded later-phase results are unimplemented.
+    for (auto result : blockOp.getResults()) {
+      auto it = analysis.actualPhase.find(result);
+      if (it != analysis.actualPhase.end() && isRealPhase(it->second) &&
+          it->second > p)
+        return blockOp.emitOpError() << "carries a loop exit and has "
+                                        "later-phase results; not "
+                                        "implemented yet";
+    }
+
+    Divergence divergence;
+    if (!hasLaterContent(&blockOp, p)) {
+      // No later-phase content anywhere in the divergence: every exit path
+      // contributes an empty chain link built at its terminator, no matter
+      // how deeply the terminator is nested.
+      for (auto *term : exitTerms) {
         ExitPath exit;
         exit.terminator = term;
-        exit.content = collectLaterContent(armBlock, p);
-        // The arm must be straight-line up to its exit: nested divergence
-        // (further exits or later-phase content inside arm-interior CF)
-        // is not implemented.
-        for (auto &armOp : armBlock) {
-          if (&armOp == term || llvm::is_contained(exit.content, &armOp))
-            continue;
-          bool nestedExit = false;
-          for (auto &inner : armOp.getRegions())
-            nestedExit |= findExitTerminator(inner, p) != nullptr;
-          if (nestedExit || hasLaterContent(&armOp, p))
-            return armOp.emitOpError()
-                   << "diverges inside an exit-carrying arm; nested "
-                      "divergence is not implemented yet";
-        }
         divergence.exits.push_back(std::move(exit));
-      } else {
-        // Rejoining arm: its content would need a sub-choice covering the
-        // arm-local divergence, which is not implemented.
-        if (findExitTerminator(region, p))
-          return blockOp.emitOpError()
-                 << "has a rejoining arm containing a nested exit; nested "
-                    "divergence is not implemented yet";
-        bool armHasContent = !collectLaterContent(armBlock, p).empty() ||
-                             llvm::any_of(armBlock, [&](Operation &armOp) {
-                               return hasLaterContent(&armOp, p);
-                             });
-        if (armHasContent)
-          return blockOp.emitOpError()
-                 << "has later-phase content on a rejoining arm of an "
-                    "exit-carrying branch; not implemented yet";
+      }
+    } else {
+      // Later-phase content inside the divergence must be attributed to
+      // the paths that run it; only the flat form (a branch whose exit
+      // arms are straight-line up to their terminator) is implemented.
+      auto ifOp = dyn_cast<IfOp>(&blockOp);
+      if (!ifOp)
+        return blockOp.emitOpError()
+               << "carries a loop exit but is not a branch; cannot build "
+                  "partial activation records";
+      // Classify each arm as an exit path or a rejoining path.
+      for (auto &region : ifOp->getRegions()) {
+        if (region.empty())
+          continue;
+        auto &armBlock = region.front();
+        auto *term = armBlock.getTerminator();
+        auto termPhase = realPhaseOf(term);
+        bool isExitTerm =
+            termPhase && *termPhase <= p && isa<BreakOp, ContinueOp>(term);
+        if (isExitTerm) {
+          ExitPath exit;
+          exit.terminator = term;
+          exit.content = collectLaterContent(armBlock, p);
+          // The arm must be straight-line up to its exit: nested divergence
+          // (further exits or later-phase content inside arm-interior CF)
+          // is not implemented.
+          for (auto &armOp : armBlock) {
+            if (&armOp == term || llvm::is_contained(exit.content, &armOp))
+              continue;
+            bool nestedExit = false;
+            for (auto &inner : armOp.getRegions())
+              nestedExit |= findExitTerminator(inner, p) != nullptr;
+            if (nestedExit || hasLaterContent(&armOp, p))
+              return armOp.emitOpError()
+                     << "diverges inside an exit-carrying arm; nested "
+                        "divergence is not implemented yet";
+          }
+          divergence.exits.push_back(std::move(exit));
+        } else {
+          // Rejoining arm: its content would need a sub-choice covering the
+          // arm-local divergence, which is not implemented.
+          if (findExitTerminator(region, p))
+            return blockOp.emitOpError()
+                   << "has a rejoining arm containing a nested exit; nested "
+                      "divergence is not implemented yet";
+          bool armHasContent = !collectLaterContent(armBlock, p).empty() ||
+                               llvm::any_of(armBlock, [&](Operation &armOp) {
+                                 return hasLaterContent(&armOp, p);
+                               });
+          if (armHasContent)
+            return blockOp.emitOpError()
+                   << "has later-phase content on a rejoining arm of an "
+                      "exit-carrying branch; not implemented yet";
+        }
       }
     }
 
-    // A leading exit with no content anywhere on its paths pushes nothing
-    // and needs no chain link.
-    bool hasArmContent = llvm::any_of(
-        divergence.exits, [](ExitPath &e) { return !e.content.empty(); });
-    if (!seenContent && !hasArmContent && divergences.empty())
-      continue;
     divergences.push_back(std::move(divergence));
     segments.emplace_back();
   }
@@ -1185,9 +1200,11 @@ Sorter::scanLoopBody(Operation *op, Block &body, int16_t p,
 /// Extract the later-phase content of a loop-shaped CF op (uir.loop or
 /// hir.replicate) at phase p: a hit list is created before the op, each
 /// activation packs a record of the crossing values, and one hir.replicate
-/// after the op receives the content. Bodies whose exits interleave with
-/// later-phase content push one record per exit path, ending in a nested
-/// exit-path choice, and the replicate reconstructs the divergence with
+/// after the op receives the content. Every activation pushes exactly one
+/// record, built in place at the terminator that ends it: the record chains
+/// a `continued` link per divergence the activation fell past and ends in
+/// the taken exit path's choice, whose payload is empty when that path ran
+/// no later-phase content. The replicate reconstructs the divergences with
 /// nested picks.
 LogicalResult Sorter::extractFromLoop(Operation *op, int16_t p) {
   auto loc = op->getLoc();

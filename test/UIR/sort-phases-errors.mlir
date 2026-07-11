@@ -92,18 +92,22 @@ uir.func @NestedDivergenceInExitArm(%n: -1, %x: 0) -> (result: 0) {
   %v = hir.var : %t
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
-      uir.expr pin 1 {
-        hir.write_var %v, %i : %t
-        uir.yield
-      }
       %done = hir.geq %i, %n : %t
       %big = hir.geq %i, %one : %t
       uir.if %done {
+        uir.expr pin 1 {
+          hir.write_var %v, %i : %t
+          uir.yield
+        }
         // expected-error @below {{diverges inside an exit-carrying arm; nested divergence is not implemented yet}}
         uir.if %big {
           uir.break
         }
         uir.break
+      }
+      uir.expr pin 1 {
+        hir.write_var %v, %x : %t
+        uir.yield
       }
       %next = hir.add %i, %one : %t
       uir.continue %next : %t
@@ -116,7 +120,8 @@ uir.func @NestedDivergenceInExitArm(%n: -1, %x: 0) -> (result: 0) {
 
 // -----
 
-// A nested exit on a rejoining arm is a nested divergence too.
+// A nested exit on a rejoining arm of a divergence with later-phase
+// content is a nested divergence too.
 uir.func @RejoinArmNestedExit(%n: -1, %x: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
@@ -127,14 +132,14 @@ uir.func @RejoinArmNestedExit(%n: -1, %x: 0) -> (result: 0) {
   %v = hir.var : %t
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
-      uir.expr pin 1 {
-        hir.write_var %v, %i : %t
-        uir.yield
-      }
       %done = hir.geq %i, %n : %t
       %big = hir.geq %i, %one : %t
       // expected-error @below {{has a rejoining arm containing a nested exit; nested divergence is not implemented yet}}
       uir.if %done {
+        uir.expr pin 1 {
+          hir.write_var %v, %i : %t
+          uir.yield
+        }
         uir.break
       } else {
         uir.if %big {
@@ -214,6 +219,38 @@ uir.func @ReturnExitUnderContent(%n: 0, %x: 0) -> (result: 0) {
     uir.if %done {
       // expected-error @below {{exits the function under a loop with later-phase content; function-level exit chains are not implemented yet}}
       uir.return %x : %t
+    }
+    %next = hir.add %i, %one : %t
+    uir.continue %next : %t
+  }
+  uir.return %x : %t
+}
+
+// -----
+
+// The same function-level exit chain limitation applies no matter how the
+// return is nested, e.g. inside an inner loop.
+uir.func @ReturnInNestedLoopUnderContent(%n: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %v = hir.var : %t
+  uir.loop (%i = %zero : %t) {
+    uir.expr pin 1 {
+      hir.write_var %v, %i : %t
+      uir.yield
+    }
+    uir.loop (%j = %zero : %t) {
+      %done = hir.geq %j, %n : %t
+      uir.if %done {
+        // expected-error @below {{exits the function under a loop with later-phase content; function-level exit chains are not implemented yet}}
+        uir.return %x : %t
+      }
+      %next2 = hir.add %j, %one : %t
+      uir.continue %next2 : %t
     }
     %next = hir.add %i, %one : %t
     uir.continue %next : %t

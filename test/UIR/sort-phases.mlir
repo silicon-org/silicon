@@ -77,8 +77,9 @@ uir.func @DecomposeCall(%x: -1, %y: 0) -> (result: 0) {
 
 //===----------------------------------------------------------------------===//
 // Sum-over-index: a const loop whose body contains dyn content using the
-// loop's iteration argument. One record per full activation; the break path
-// pushes nothing since it precedes all later-phase content.
+// loop's iteration argument. Every activation pushes exactly one record:
+// the break path an empty exited() link, full activations a continued link
+// carrying the iteration argument.
 
 // CHECK-LABEL: uir.func @SumOverIndex
 uir.func @SumOverIndex(%n: -1, %x: 0) -> (result: 0) {
@@ -95,6 +96,9 @@ uir.func @SumOverIndex(%n: -1, %x: 0) -> (result: 0) {
     uir.loop (%i = %zero : %t) {
       %done = hir.geq %i, %n : %t
       // CHECK: uir.if
+      // CHECK-NEXT: [[XC:%.+]] = hir.choice 0()
+      // CHECK-NEXT: [[XREC:%.+]] = hir.opaque_pack([[XC]])
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]], [[XREC]]
       // CHECK-NEXT: uir.break
       // CHECK-NEXT: }
       uir.if %done {
@@ -107,7 +111,8 @@ uir.func @SumOverIndex(%n: -1, %x: 0) -> (result: 0) {
         uir.yield
       }
       %next = hir.add %i, %one : %t
-      // CHECK: [[REC:%.+]] = hir.opaque_pack(%arg0)
+      // CHECK: [[CC:%.+]] = hir.choice 1(%arg0)
+      // CHECK-NEXT: [[REC:%.+]] = hir.opaque_pack([[CC]])
       // CHECK-NEXT: hir.opaque_list_push [[LIST]], [[REC]]
       // CHECK-NEXT: uir.continue
       uir.continue %next : %t
@@ -115,9 +120,14 @@ uir.func @SumOverIndex(%n: -1, %x: 0) -> (result: 0) {
     uir.yield
   }
   // CHECK: hir.replicate (%arg0) in [[LIST]] {
+  // CHECK-NEXT: hir.pick %arg0 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (%arg1): {
   // CHECK-NEXT: hir.read_var
-  // CHECK-NEXT: hir.add %{{.*}}, %arg0
+  // CHECK-NEXT: hir.add %{{.*}}, %arg1
   // CHECK-NEXT: hir.write_var
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }]
   // CHECK-NEXT: hir.yield
   // CHECK-NEXT: }
   %r = hir.read_var %acc : %t
@@ -241,6 +251,12 @@ uir.func @Filtering(%n: -1, %x: 0) -> (result: 0) {
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       %done = hir.geq %i, %n : %t
+      // CHECK: uir.if
+      // CHECK-NEXT: hir.choice 0()
+      // CHECK-NEXT: hir.opaque_pack
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]]
+      // CHECK-NEXT: uir.break
+      // CHECK-NEXT: }
       uir.if %done {
         uir.break
       }
@@ -260,15 +276,19 @@ uir.func @Filtering(%n: -1, %x: 0) -> (result: 0) {
         uir.yield
       }
       %next = hir.add %i, %one : %t
-      // CHECK: [[REC:%.+]] = hir.opaque_pack(%arg0, [[CH]])
+      // CHECK: [[CC:%.+]] = hir.choice 1(%arg0, [[CH]])
+      // CHECK-NEXT: [[REC:%.+]] = hir.opaque_pack([[CC]])
       // CHECK-NEXT: hir.opaque_list_push [[LIST]], [[REC]]
       uir.continue %next : %t
     }
     uir.yield
   }
-  // CHECK: hir.replicate (%arg0, %arg1) in [[LIST]] {
-  // CHECK-NEXT: hir.pick %arg1 [0 (): {
-  // CHECK:   hir.add %{{.*}}, %arg0
+  // CHECK: hir.replicate (%arg0) in [[LIST]] {
+  // CHECK-NEXT: hir.pick %arg0 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (%arg1, %arg2): {
+  // CHECK-NEXT: hir.pick %arg2 [0 (): {
+  // CHECK:   hir.add %{{.*}}, %arg1
   // CHECK: } 1 (): {
   // CHECK-NEXT: hir.yield
   // CHECK-NEXT: }]
@@ -314,14 +334,16 @@ uir.func @NestedLoops(%n: -1, %x: 0) -> (result: 0) {
           uir.yield
         }
         // The pure i+j migrates to the const phase; its snapshot crosses
-        // through the inner record.
+        // through the inner record's continued link.
         // CHECK: [[SUM:%.+]] = hir.add %arg0, %arg1
-        // CHECK: [[IREC:%.+]] = hir.opaque_pack([[SUM]])
+        // CHECK: [[ICC:%.+]] = hir.choice 1([[SUM]])
+        // CHECK-NEXT: [[IREC:%.+]] = hir.opaque_pack([[ICC]])
         // CHECK-NEXT: hir.opaque_list_push [[INNER]], [[IREC]]
         %next2 = hir.add %j, %one : %t
         uir.continue %next2 : %t
       }
-      // CHECK: [[OREC:%.+]] = hir.opaque_pack([[INNER]])
+      // CHECK: [[OCC:%.+]] = hir.choice 1([[INNER]])
+      // CHECK-NEXT: [[OREC:%.+]] = hir.opaque_pack([[OCC]])
       // CHECK-NEXT: hir.opaque_list_push [[OUTER]], [[OREC]]
       %next = hir.add %i, %one : %t
       uir.continue %next : %t
@@ -329,11 +351,19 @@ uir.func @NestedLoops(%n: -1, %x: 0) -> (result: 0) {
     uir.yield
   }
   // CHECK: hir.replicate (%arg0) in [[OUTER]] {
-  // CHECK-NEXT: hir.replicate (%arg1) in %arg0 {
+  // CHECK-NEXT: hir.pick %arg0 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (%arg1): {
+  // CHECK-NEXT: hir.replicate (%arg2) in %arg1 {
+  // CHECK-NEXT: hir.pick %arg2 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (%arg3): {
   // CHECK:   hir.read_var
-  // CHECK:   hir.add %{{.*}}, %arg1
+  // CHECK:   hir.add %{{.*}}, %arg3
   // CHECK:   hir.write_var
+  // CHECK: }]
   // CHECK: }
+  // CHECK: }]
   // CHECK: }
   %r = hir.read_var %acc : %t
   uir.return %r : %t
@@ -361,6 +391,12 @@ uir.func @DistanceTwo(%n: -1, %x: 1) -> (result: 1) {
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       %done = hir.geq %i, %n : %t
+      // CHECK: uir.if
+      // CHECK-NEXT: hir.choice 0()
+      // CHECK-NEXT: hir.opaque_pack
+      // CHECK-NEXT: hir.opaque_list_push [[HITS0]]
+      // CHECK-NEXT: uir.break
+      // CHECK-NEXT: }
       uir.if %done {
         uir.break
       }
@@ -370,23 +406,38 @@ uir.func @DistanceTwo(%n: -1, %x: 1) -> (result: 1) {
         hir.write_var %acc, %new : %t
         uir.yield
       }
-      // CHECK: hir.opaque_pack(%arg0)
+      // CHECK: [[CC:%.+]] = hir.choice 1(%arg0)
+      // CHECK-NEXT: hir.opaque_pack([[CC]])
       // CHECK-NEXT: hir.opaque_list_push [[HITS0]]
       %next = hir.add %i, %one : %t
       uir.continue %next : %t
     }
     uir.yield
   }
+  // The intermediate replicate re-chains: its pick re-tags the exit choice
+  // for the next boundary's records.
   // CHECK: [[HITS1:%.+]] = hir.opaque_list_create
   // CHECK-NEXT: hir.replicate (%arg0) in [[HITS0]] {
-  // CHECK-NEXT: [[REC1:%.+]] = hir.opaque_pack(%arg0)
+  // CHECK-NEXT: [[CH1:%.+]] = hir.pick %arg0 : !hir.any [0 (): {
+  // CHECK-NEXT: hir.choice 0()
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (%arg1): {
+  // CHECK-NEXT: hir.choice 1(%arg1)
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }]
+  // CHECK-NEXT: [[REC1:%.+]] = hir.opaque_pack([[CH1]])
   // CHECK-NEXT: hir.opaque_list_push [[HITS1]], [[REC1]]
   // CHECK-NEXT: hir.yield
   // CHECK-NEXT: }
   // CHECK: hir.replicate (%arg0) in [[HITS1]] {
+  // CHECK-NEXT: hir.pick %arg0 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (%arg1): {
   // CHECK-NEXT: hir.read_var
-  // CHECK-NEXT: hir.add %{{.*}}, %arg0
+  // CHECK-NEXT: hir.add %{{.*}}, %arg1
   // CHECK-NEXT: hir.write_var
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }]
   // CHECK-NEXT: hir.yield
   // CHECK-NEXT: }
   %r = uir.expr pin 1 : %t {
@@ -426,17 +477,23 @@ uir.func @SiblingInterleaved(%n: -1, %x: 0) -> (result: 0) {
         hir.write_var %b, %isq : %t
         uir.yield
       }
-      // Both dyn blocks share one record: (i, i*i).
-      // CHECK: hir.opaque_pack(%arg0, %{{.*}})
+      // Both dyn blocks share one continued link: (i, i*i).
+      // CHECK: [[CC:%.+]] = hir.choice 1(%arg0, %{{.*}})
+      // CHECK-NEXT: hir.opaque_pack([[CC]])
       // CHECK-NEXT: hir.opaque_list_push [[LIST]]
       %next = hir.add %i, %one : %t
       uir.continue %next : %t
     }
     uir.yield
   }
-  // CHECK: hir.replicate (%arg0, %arg1) in [[LIST]] {
-  // CHECK-NEXT: hir.write_var %{{.*}}, %arg0
+  // CHECK: hir.replicate (%arg0) in [[LIST]] {
+  // CHECK-NEXT: hir.pick %arg0 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (%arg1, %arg2): {
   // CHECK-NEXT: hir.write_var %{{.*}}, %arg1
+  // CHECK-NEXT: hir.write_var %{{.*}}, %arg2
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }]
   // CHECK-NEXT: hir.yield
   // CHECK-NEXT: }
   %r = hir.read_var %a : %t
@@ -676,9 +733,10 @@ uir.func @MultiExitChain(%n: -1, %x: 0) -> (result: 0) {
 
 //===----------------------------------------------------------------------===//
 // The canonical partial activation: a for-const with a leading contentless
-// bounds-check break (pushes nothing), dyn content A, a const continue
-// divergence, and dyn content B. Activations taking the continue stamp only
-// A; full activations stamp A then B.
+// bounds-check break (an empty exited() link), dyn content A, a const
+// continue divergence, and dyn content B. Bounds-break activations stamp
+// nothing, continue activations stamp only A, full activations stamp A
+// then B.
 // for const i in 0..n { x += 1; const { if i == 2 { continue } } x *= 2; }
 
 // CHECK-LABEL: uir.func @CanonicalContinue
@@ -695,8 +753,11 @@ uir.func @CanonicalContinue(%n: -1, %x: 0) -> (result: 0) {
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       %done = hir.geq %i, %n : %t
-      // The bounds-check exit precedes all content: no record, no link.
+      // The bounds-check exit runs no content: an empty exited() record.
       // CHECK: uir.if
+      // CHECK-NEXT: [[B0:%.+]] = hir.choice 0()
+      // CHECK-NEXT: [[BR:%.+]] = hir.opaque_pack([[B0]])
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]], [[BR]]
       // CHECK-NEXT: uir.break
       // CHECK-NEXT: }
       uir.if %done {
@@ -710,9 +771,12 @@ uir.func @CanonicalContinue(%n: -1, %x: 0) -> (result: 0) {
       }
       %next = hir.add %i, %one : %t
       %skip = hir.eq %i, %two : %t
+      // The skip exit fell past the bounds divergence: its exited() link
+      // rides in that divergence's continued link.
       // CHECK: uir.if
       // CHECK-NEXT: [[C0:%.+]] = hir.choice 0()
-      // CHECK-NEXT: [[R0:%.+]] = hir.opaque_pack([[C0]])
+      // CHECK-NEXT: [[K0:%.+]] = hir.choice 1([[C0]])
+      // CHECK-NEXT: [[R0:%.+]] = hir.opaque_pack([[K0]])
       // CHECK-NEXT: hir.opaque_list_push [[LIST]], [[R0]]
       // CHECK-NEXT: uir.continue
       uir.if %skip {
@@ -725,7 +789,8 @@ uir.func @CanonicalContinue(%n: -1, %x: 0) -> (result: 0) {
         uir.yield
       }
       // CHECK: [[C1:%.+]] = hir.choice 1()
-      // CHECK-NEXT: [[R1:%.+]] = hir.opaque_pack([[C1]])
+      // CHECK-NEXT: [[K1:%.+]] = hir.choice 1([[C1]])
+      // CHECK-NEXT: [[R1:%.+]] = hir.opaque_pack([[K1]])
       // CHECK-NEXT: hir.opaque_list_push [[LIST]], [[R1]]
       // CHECK-NEXT: uir.continue
       uir.continue %next : %t
@@ -733,10 +798,13 @@ uir.func @CanonicalContinue(%n: -1, %x: 0) -> (result: 0) {
     uir.yield
   }
   // CHECK: hir.replicate (%arg0) in [[LIST]] {
+  // CHECK-NEXT: hir.pick %arg0 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (%arg1): {
   // CHECK-NEXT: hir.read_var
   // CHECK-NEXT: hir.add
   // CHECK-NEXT: hir.write_var
-  // CHECK-NEXT: hir.pick %arg0 [0 (): {
+  // CHECK-NEXT: hir.pick %arg1 [0 (): {
   // CHECK-NEXT: hir.yield
   // CHECK-NEXT: } 1 (): {
   // CHECK-NEXT: hir.read_var
@@ -745,8 +813,150 @@ uir.func @CanonicalContinue(%n: -1, %x: 0) -> (result: 0) {
   // CHECK-NEXT: hir.yield
   // CHECK-NEXT: }]
   // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }]
+  // CHECK-NEXT: hir.yield
   // CHECK-NEXT: }
   %r = hir.read_var %v : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A divergence with no later-phase content inside accepts arbitrarily
+// nested exits: each exit terminator pushes an empty exited() link in
+// place, and the receiving pick gets one empty alternative per exit.
+
+// CHECK-LABEL: uir.func @NestedExitsNoContent
+uir.func @NestedExitsNoContent(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: [[LIST:%.+]] = hir.opaque_list_create
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      %big = hir.geq %i, %one : %t
+      // CHECK: uir.if
+      // CHECK-NEXT: uir.if
+      // CHECK-NEXT: [[X0:%.+]] = hir.choice 0()
+      // CHECK-NEXT: hir.opaque_pack([[X0]])
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]]
+      // CHECK-NEXT: uir.break
+      // CHECK-NEXT: }
+      // CHECK-NEXT: [[X1:%.+]] = hir.choice 1()
+      // CHECK-NEXT: hir.opaque_pack([[X1]])
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]]
+      // CHECK-NEXT: uir.break
+      // CHECK-NEXT: }
+      uir.if %done {
+        uir.if %big {
+          uir.break
+        }
+        uir.break
+      }
+      uir.expr pin 1 {
+        %cur = hir.read_var %acc : %t
+        %new = hir.add %cur, %i : %t
+        hir.write_var %acc, %new : %t
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      // CHECK: [[CC:%.+]] = hir.choice 2(%arg0)
+      // CHECK-NEXT: hir.opaque_pack([[CC]])
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]]
+      // CHECK-NEXT: uir.continue
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  // CHECK: hir.replicate (%arg0) in [[LIST]] {
+  // CHECK-NEXT: hir.pick %arg0 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 2 (%arg1): {
+  // CHECK-NEXT: hir.read_var
+  // CHECK-NEXT: hir.add %{{.*}}, %arg1
+  // CHECK-NEXT: hir.write_var
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }]
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }
+  %r = hir.read_var %acc : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A nested exit on a rejoining arm of a contentless divergence: the exit
+// pushes its empty link where it fires, and the rejoining path falls
+// through to the continue like any full activation.
+
+// CHECK-LABEL: uir.func @NestedExitInRejoiningArm
+uir.func @NestedExitInRejoiningArm(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: [[LIST:%.+]] = hir.opaque_list_create
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      %big = hir.geq %i, %one : %t
+      // CHECK: uir.if
+      // CHECK-NEXT: [[X0:%.+]] = hir.choice 0()
+      // CHECK-NEXT: hir.opaque_pack([[X0]])
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]]
+      // CHECK-NEXT: uir.break
+      // CHECK-NEXT: } else {
+      // CHECK-NEXT: uir.if
+      // CHECK-NEXT: [[X1:%.+]] = hir.choice 1()
+      // CHECK-NEXT: hir.opaque_pack([[X1]])
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]]
+      // CHECK-NEXT: uir.break
+      // CHECK-NEXT: }
+      uir.if %done {
+        uir.break
+      } else {
+        uir.if %big {
+          uir.break
+        }
+        uir.yield
+      }
+      uir.expr pin 1 {
+        %cur = hir.read_var %acc : %t
+        %new = hir.add %cur, %i : %t
+        hir.write_var %acc, %new : %t
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      // CHECK: [[CC:%.+]] = hir.choice 2(%arg0)
+      // CHECK-NEXT: hir.opaque_pack([[CC]])
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]]
+      // CHECK-NEXT: uir.continue
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  // CHECK: hir.replicate (%arg0) in [[LIST]] {
+  // CHECK-NEXT: hir.pick %arg0 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 2 (%arg1): {
+  // CHECK-NEXT: hir.read_var
+  // CHECK-NEXT: hir.add %{{.*}}, %arg1
+  // CHECK-NEXT: hir.write_var
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }]
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }
+  %r = hir.read_var %acc : %t
   uir.return %r : %t
 }
 
@@ -901,8 +1111,13 @@ uir.func @ReturnInReplicate(%n: -1, %x: 0) -> (result: 0) {
     uir.yield
   }
   // CHECK: hir.replicate (%arg0) in [[LIST]] {
-  // CHECK-NEXT: [[S:%.+]] = hir.add %x, %arg0
+  // CHECK-NEXT: hir.pick %arg0 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (%arg1): {
+  // CHECK-NEXT: [[S:%.+]] = hir.add %x, %arg1
   // CHECK-NEXT: uir.return [[S]]
+  // CHECK-NEXT: }]
+  // CHECK-NEXT: hir.yield
   // CHECK-NEXT: }
   uir.return %x : %t
 }
@@ -1026,11 +1241,13 @@ uir.func @HoistThenExtract(%n: -1, %c: 0) -> (result: 0) {
       uir.if %done {
         uir.break
       }
-      // The const increment sits in the loop body, unconditionally.
+      // The const increment sits in the loop body, unconditionally. The
+      // continued link carries no samples.
       // CHECK: hir.read_var
       // CHECK-NEXT: hir.add
       // CHECK-NEXT: hir.write_var
-      // CHECK: hir.opaque_pack()
+      // CHECK: [[CC:%.+]] = hir.choice 1()
+      // CHECK-NEXT: hir.opaque_pack([[CC]])
       // CHECK-NEXT: hir.opaque_list_push [[LIST]]
       uir.expr pin 1 {
         uir.if %c {
@@ -1051,11 +1268,16 @@ uir.func @HoistThenExtract(%n: -1, %c: 0) -> (result: 0) {
     }
     uir.yield
   }
-  // CHECK: hir.replicate () in [[LIST]] {
+  // CHECK: hir.replicate (%arg0) in [[LIST]] {
+  // CHECK-NEXT: hir.pick %arg0 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (): {
   // CHECK-NEXT: uir.if %c {
   // CHECK:   hir.read_var
   // CHECK:   hir.write_var
   // CHECK: }
+  // CHECK: hir.yield
+  // CHECK: }]
   // CHECK: hir.yield
   // CHECK: }
   %r = hir.read_var %d : %t
