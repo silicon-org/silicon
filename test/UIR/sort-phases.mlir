@@ -675,6 +675,145 @@ uir.func @MultiExitChain(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// The canonical partial activation: a for-const with a leading contentless
+// bounds-check break (pushes nothing), dyn content A, a const continue
+// divergence, and dyn content B. Activations taking the continue stamp only
+// A; full activations stamp A then B.
+// for const i in 0..n { x += 1; const { if i == 2 { continue } } x *= 2; }
+
+// CHECK-LABEL: uir.func @CanonicalContinue
+uir.func @CanonicalContinue(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %two = hir.constant_int 2 : %t
+  %v = hir.var : %t
+  // CHECK: [[LIST:%.+]] = hir.opaque_list_create
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      // The bounds-check exit precedes all content: no record, no link.
+      // CHECK: uir.if
+      // CHECK-NEXT: uir.break
+      // CHECK-NEXT: }
+      uir.if %done {
+        uir.break
+      }
+      uir.expr pin 1 {
+        %c = hir.read_var %v : %t
+        %c1 = hir.add %c, %one : %t
+        hir.write_var %v, %c1 : %t
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      %skip = hir.eq %i, %two : %t
+      // CHECK: uir.if
+      // CHECK-NEXT: [[C0:%.+]] = hir.choice 0()
+      // CHECK-NEXT: [[R0:%.+]] = hir.opaque_pack([[C0]])
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]], [[R0]]
+      // CHECK-NEXT: uir.continue
+      uir.if %skip {
+        uir.continue %next : %t
+      }
+      uir.expr pin 1 {
+        %d = hir.read_var %v : %t
+        %d2 = hir.mul %d, %two : %t
+        hir.write_var %v, %d2 : %t
+        uir.yield
+      }
+      // CHECK: [[C1:%.+]] = hir.choice 1()
+      // CHECK-NEXT: [[R1:%.+]] = hir.opaque_pack([[C1]])
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]], [[R1]]
+      // CHECK-NEXT: uir.continue
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  // CHECK: hir.replicate (%arg0) in [[LIST]] {
+  // CHECK-NEXT: hir.read_var
+  // CHECK-NEXT: hir.add
+  // CHECK-NEXT: hir.write_var
+  // CHECK-NEXT: hir.pick %arg0 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (): {
+  // CHECK-NEXT: hir.read_var
+  // CHECK-NEXT: hir.mul
+  // CHECK-NEXT: hir.write_var
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }]
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }
+  %r = hir.read_var %v : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Break-value choice combined with partial activation: the break site
+// pushes both its activation record (ending in its exit tag) and its
+// break-value choice; the replicate consumes all records before the pick
+// reconstructs the exit value.
+
+// CHECK-LABEL: uir.func @BreakValueWithPartialActivation
+uir.func @BreakValueWithPartialActivation(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %v = hir.var : %t
+  // CHECK: [[LIST:%.+]] = hir.opaque_list_create
+  // CHECK: [[CH:%.+]] = uir.loop (%arg0 = %{{.*}}) :
+  %y = uir.expr pin -1 : %t {
+    %r = uir.loop (%k = %zero : %t) : %t {
+      uir.expr pin 1 {
+        hir.write_var %v, %k : %t
+        uir.yield
+      }
+      %done = hir.geq %k, %n : %t
+      // CHECK: uir.if
+      // CHECK-NEXT: [[BV:%.+]] = hir.choice 0(%arg0)
+      // CHECK-NEXT: [[E0:%.+]] = hir.choice 0()
+      // CHECK-NEXT: [[R0:%.+]] = hir.opaque_pack(%arg0, [[E0]])
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]], [[R0]]
+      // CHECK-NEXT: uir.break [[BV]]
+      uir.if %done {
+        %w = uir.expr pin 1 : %t {
+          %s = hir.add %x, %k : %t
+          uir.yield %s : %t
+        }
+        uir.break %w : %t
+      }
+      %next = hir.add %k, %one : %t
+      // CHECK: [[E1:%.+]] = hir.choice 1()
+      // CHECK-NEXT: [[R1:%.+]] = hir.opaque_pack(%arg0, [[E1]])
+      // CHECK-NEXT: hir.opaque_list_push [[LIST]], [[R1]]
+      // CHECK-NEXT: uir.continue
+      uir.continue %next : %t
+    }
+    uir.yield %r : %t
+  }
+  // CHECK: hir.replicate (%arg0, %arg1) in [[LIST]] {
+  // CHECK-NEXT: hir.write_var %{{.*}}, %arg0
+  // CHECK-NEXT: hir.pick %arg1 [0 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: } 1 (): {
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }]
+  // CHECK-NEXT: hir.yield
+  // CHECK-NEXT: }
+  // CHECK: [[Y:%.+]] = hir.pick [[CH]] : !hir.any [0 (%arg0): {
+  // CHECK-NEXT: [[S:%.+]] = hir.add %x, %arg0
+  // CHECK-NEXT: hir.yield [[S]]
+  // CHECK-NEXT: }]
+  // CHECK: uir.return [[Y]]
+  uir.return %y : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Content inside an exit-carrying arm: the arm's samples ride the exit
 // alternative's payload; the fall-through content lands in the continued
 // alternative.
