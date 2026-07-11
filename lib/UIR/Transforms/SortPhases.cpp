@@ -68,6 +68,20 @@
 //      regions for the next boundary, which is where distance-2 nesting
 //      comes from.
 //
+//      **Partial activations**: when a loop body interleaves later-phase
+//      content with early exits (break/continue at the loop's phase inside
+//      branch arms), activations diverge in how much of that content they
+//      instantiate. The body decomposes into content segments separated by
+//      exit-carrying divergence points, and the record ends in a nested
+//      exit-path choice: each exit terminator packs and pushes its own
+//      record in place — the shared prefix segment, then one `continued`
+//      link per divergence it fell past (carrying that segment's samples),
+//      ending in its own exit tag (carrying the samples of its arm's
+//      content). The receiving replicate mirrors this shape with nested
+//      picks: each divergence becomes a pick whose exit alternatives hold
+//      the arm content and whose `continued` alternative holds the next
+//      segment and the next pick.
+//
 //===----------------------------------------------------------------------===//
 
 #include "silicon/HIR/Ops.h"
@@ -88,6 +102,22 @@ using namespace uir;
 //===----------------------------------------------------------------------===//
 
 namespace {
+/// One exit path of a divergence point: a break/continue terminator at the
+/// loop's phase, together with the later-phase content on its arm and the
+/// crossing values that content samples.
+struct ExitPath {
+  Operation *terminator;
+  SmallVector<Operation *> content;
+  llvm::SetVector<Value> fields;
+};
+
+/// An exit-carrying branch interleaved with a loop body's later-phase
+/// content: activations diverge here in how much content they instantiate.
+struct Divergence {
+  Operation *branchOp;
+  SmallVector<ExitPath> exits;
+};
+
 /// Sorts the content of a single `uir.func` across phase boundaries and
 /// maintains the phase map for every op it erases or creates.
 struct Sorter {
@@ -111,15 +141,20 @@ private:
   LogicalResult extractFromBranch(Operation *op, int16_t p);
   LogicalResult extractFromLoop(Operation *op, int16_t p);
 
-  bool hasLaterContent(Operation *op, int16_t p);
+  bool hasLaterContent(Operation *root, int16_t p);
   LogicalResult extractBreakValues(Operation *&op, int16_t p);
   Operation *findExitTerminator(Region &region, int16_t p);
   SmallVector<Operation *> collectLaterContent(Block &block, int16_t p);
   LogicalResult dissolveTailReturnExpr(Block &block);
+  LogicalResult
+  scanLoopBody(Operation *op, Block &body, int16_t p,
+               SmallVectorImpl<SmallVector<Operation *>> &segments,
+               SmallVectorImpl<Divergence> &divergences);
   llvm::SetVector<Value> collectCrossingValues(Operation *regionOp,
+                                               ArrayRef<Operation *> userOps,
                                                ArrayRef<Operation *> movedOps);
-  void remapIntoReceivingBlock(Operation *regionOp, Block &receivingBlock,
-                               const llvm::SetVector<Value> &fields);
+  void remapFields(Block &receivingBlock, const llvm::SetVector<Value> &fields);
+  void cloneFloatingUses(Operation *regionOp, Block &rootBlock);
 
   /// Whether a phase is a real phase (not the float/never sentinel).
   static bool isRealPhase(int16_t phase) {
@@ -252,8 +287,7 @@ LogicalResult Sorter::decomposeCall(CallOp callOp) {
        llvm::zip(calleeSplitFunc.getPhaseNumbers(),
                  calleeSplitFunc.getPhaseFuncs())) {
     auto name = cast<FlatSymbolRefAttr>(funcRef).getValue();
-    entries.push_back(
-        {static_cast<int16_t>(callOpPhase + entryPhase), name});
+    entries.push_back({static_cast<int16_t>(callOpPhase + entryPhase), name});
   }
   assert(!entries.empty() && "split_func witness has no phase entries");
 
@@ -476,13 +510,17 @@ SmallVector<Operation *> Sorter::collectLaterContent(Block &block, int16_t p) {
   return ops;
 }
 
-/// Collect the values defined inside `regionOp` (excluding the moved ops
-/// themselves) that the moved ops use: these cross the phase boundary and
-/// become record fields / choice payloads. Values defined outside the
-/// region op remain direct uses (the receiving construct sits right after
-/// the op, so they dominate it), and floating values are cloned instead.
+/// Collect the values defined inside `regionOp` that the `userOps` use and
+/// that are not themselves produced by any of the `movedOps`: these cross
+/// the phase boundary and become record fields / choice payloads. Values
+/// defined outside the region op remain direct uses (the receiving
+/// construct sits right after the op, so they dominate it), and floating
+/// values are cloned instead. `movedOps` lists everything that leaves the
+/// region — with partial activations that is more than the `userOps` whose
+/// uses are being collected here.
 llvm::SetVector<Value>
 Sorter::collectCrossingValues(Operation *regionOp,
+                              ArrayRef<Operation *> userOps,
                               ArrayRef<Operation *> movedOps) {
   auto isMoved = [&](Operation *op) {
     return llvm::any_of(movedOps, [&](Operation *m) {
@@ -491,7 +529,7 @@ Sorter::collectCrossingValues(Operation *regionOp,
   };
 
   llvm::SetVector<Value> fields;
-  for (auto *moved : movedOps) {
+  for (auto *moved : userOps) {
     moved->walk([&](Operation *user) {
       for (auto value : user->getOperands()) {
         if (auto blockArg = dyn_cast<BlockArgument>(value)) {
@@ -515,12 +553,13 @@ Sorter::collectCrossingValues(Operation *regionOp,
   return fields;
 }
 
-/// After moving content into a receiving block whose arguments correspond
-/// 1:1 to `fields`: replace field uses inside the block with the block
-/// arguments and clone floating trees that are still referenced from inside
-/// the (former) region of `regionOp`.
-void Sorter::remapIntoReceivingBlock(Operation *regionOp, Block &receivingBlock,
-                                     const llvm::SetVector<Value> &fields) {
+/// After moving content into a receiving block whose leading arguments
+/// correspond 1:1 to `fields`: replace field uses inside the block (and any
+/// nested receiving blocks) with the block arguments. With nested receiving
+/// structures, all levels must be remapped before floating trees are cloned
+/// via `cloneFloatingUses`.
+void Sorter::remapFields(Block &receivingBlock,
+                         const llvm::SetVector<Value> &fields) {
   auto *receivingRegion = receivingBlock.getParent();
   for (auto [field, arg] : llvm::zip(fields, receivingBlock.getArguments())) {
     Value fieldValue = field;
@@ -529,9 +568,14 @@ void Sorter::remapIntoReceivingBlock(Operation *regionOp, Block &receivingBlock,
       return receivingRegion->isAncestor(use.getOwner()->getParentRegion());
     });
   }
+}
 
-  // Clone floating trees still referenced from inside the region op.
-  receivingBlock.walk([&](Operation *user) {
+/// Clone floating trees that moved content still references from inside the
+/// (former) region of `regionOp`. Must run after every receiving block's
+/// fields have been remapped; any other remaining use of a region-interior
+/// value is a causality violation the analysis must have rejected.
+void Sorter::cloneFloatingUses(Operation *regionOp, Block &rootBlock) {
+  rootBlock.walk([&](Operation *user) {
     for (auto &use : user->getOpOperands()) {
       auto *defOp = use.get().getDefiningOp();
       if (!defOp || !regionOp->isProperAncestor(defOp))
@@ -584,22 +628,35 @@ LogicalResult Sorter::dissolveTailReturnExpr(Block &block) {
   return success();
 }
 
-/// Find a terminator at phase <= p inside the region that exits the
-/// enclosing loop or function instead of yielding. Later-phase returns
-/// riding inside expr carriers are content, not exits of this region.
+/// Find a terminator at phase <= p inside the region that exits out of the
+/// region instead of yielding. Break/continue inside loops (including the
+/// queried region itself when it belongs to a loop) target those loops and
+/// do not exit; returns exit the function from any depth. Later-phase
+/// returns riding inside expr carriers are content, not exits of this
+/// region.
 Operation *Sorter::findExitTerminator(Region &region, int16_t p) {
   Operation *found = nullptr;
-  region.walk([&](Operation *op) {
-    if (isa<BreakOp, ContinueOp, ReturnOp>(op)) {
-      auto it = analysis.opPhases.find(op);
-      if (it != analysis.opPhases.end() && isRealPhase(it->second) &&
-          it->second <= p) {
-        found = op;
-        return WalkResult::interrupt();
+  std::function<void(Region &, bool)> visit = [&](Region &r, bool loopScoped) {
+    for (auto &block : r) {
+      for (auto &op : block) {
+        if (found)
+          return;
+        bool isExit =
+            isa<ReturnOp>(op) || (!loopScoped && isa<BreakOp, ContinueOp>(op));
+        if (isExit) {
+          auto it = analysis.opPhases.find(&op);
+          if (it != analysis.opPhases.end() && isRealPhase(it->second) &&
+              it->second <= p) {
+            found = &op;
+            return;
+          }
+        }
+        for (auto &inner : op.getRegions())
+          visit(inner, loopScoped || isa<LoopOp>(op));
       }
     }
-    return WalkResult::advance();
-  });
+  };
+  visit(region, isa<LoopOp>(region.getParentOp()));
   return found;
 }
 
@@ -670,7 +727,7 @@ LogicalResult Sorter::extractFromBranch(Operation *op, int16_t p) {
   for (auto [tag, arm] : llvm::enumerate(arms)) {
     ArmInfo info;
     info.moved = collectLaterContent(arm->front(), p);
-    info.fields = collectCrossingValues(op, info.moved);
+    info.fields = collectCrossingValues(op, info.moved, info.moved);
 
     auto *term = arm->front().getTerminator();
     ValueRange values;
@@ -800,7 +857,8 @@ LogicalResult Sorter::extractFromBranch(Operation *op, int16_t p) {
     auto altYield =
         hir::YieldOp::create(altBuilder, loc, info.laterYieldOperands);
     analysis.opPhases[altYield] = p + 1;
-    remapIntoReceivingBlock(newOp, altBlock, info.fields);
+    remapFields(altBlock, info.fields);
+    cloneFloatingUses(newOp, altBlock);
     if (failed(dissolveTailReturnExpr(altBlock)))
       return failure();
   }
@@ -912,7 +970,7 @@ LogicalResult Sorter::extractBreakValues(Operation *&op, int16_t p) {
                  << "is shared between a break value and other later-phase "
                     "content; not implemented yet";
 
-    info.fields = collectCrossingValues(op, info.slice);
+    info.fields = collectCrossingValues(op, info.slice, info.slice);
     for (auto value : info.laterValues) {
       auto *defOp = value.getDefiningOp();
       if (defOp && op->isProperAncestor(defOp) && !sliceSet.contains(defOp) &&
@@ -994,7 +1052,8 @@ LogicalResult Sorter::extractBreakValues(Operation *&op, int16_t p) {
     OpBuilder altBuilder(&altBlock, altBlock.end());
     auto altYield = hir::YieldOp::create(altBuilder, loc, site.laterValues);
     analysis.opPhases[altYield] = p + 1;
-    remapIntoReceivingBlock(newLoop, altBlock, site.fields);
+    remapFields(altBlock, site.fields);
+    cloneFloatingUses(newLoop, altBlock);
     if (failed(dissolveTailReturnExpr(altBlock)))
       return failure();
   }
@@ -1005,89 +1064,300 @@ LogicalResult Sorter::extractBreakValues(Operation *&op, int16_t p) {
   return success();
 }
 
+/// Decompose a loop body's top level into content segments separated by
+/// exit-carrying divergence points. `segments` holds the later-phase ops
+/// between consecutive divergences in program order (one more entry than
+/// `divergences`); each divergence records the exit terminators and the
+/// later-phase content on their arms. Leading exit-carrying branches with
+/// no prior content and no arm content are not divergences: their exits run
+/// no later-phase content, so they push no record.
+LogicalResult
+Sorter::scanLoopBody(Operation *op, Block &body, int16_t p,
+                     SmallVectorImpl<SmallVector<Operation *>> &segments,
+                     SmallVectorImpl<Divergence> &divergences) {
+  segments.emplace_back();
+  bool seenContent = false;
+  for (auto &blockOp : body) {
+    if (&blockOp == body.getTerminator())
+      break;
+    if (auto ph = realPhaseOf(&blockOp); ph && *ph > p) {
+      segments.back().push_back(&blockOp);
+      seenContent = true;
+      continue;
+    }
+    if (blockOp.getNumRegions() == 0)
+      continue;
+
+    bool hasExit = false;
+    for (auto &region : blockOp.getRegions())
+      hasExit |= findExitTerminator(region, p) != nullptr;
+    if (!hasExit) {
+      // Non-exit CF at phase p was extracted by the innermost-first walk
+      // already; leftover later-phase content here is a compiler bug.
+      if (hasLaterContent(&blockOp, p))
+        return blockOp.emitOpError()
+               << "contains later-phase content that inner extraction did "
+                  "not consume";
+      continue;
+    }
+
+    auto ifOp = dyn_cast<IfOp>(&blockOp);
+    if (!ifOp)
+      return blockOp.emitOpError()
+             << "carries a loop exit but is not a branch; cannot build "
+                "partial activation records";
+    // Results whose phase was never demanded have no consumers and need no
+    // reconstruction; only demanded later-phase results are unimplemented.
+    for (auto result : ifOp.getResults()) {
+      auto it = analysis.actualPhase.find(result);
+      if (it != analysis.actualPhase.end() && isRealPhase(it->second) &&
+          it->second > p)
+        return ifOp.emitOpError() << "carries a loop exit and has "
+                                     "later-phase results; not implemented "
+                                     "yet";
+    }
+
+    // Classify each arm as an exit path or a rejoining path.
+    Divergence divergence;
+    divergence.branchOp = &blockOp;
+    for (auto &region : ifOp->getRegions()) {
+      if (region.empty())
+        continue;
+      auto &armBlock = region.front();
+      auto *term = armBlock.getTerminator();
+      auto termPhase = realPhaseOf(term);
+      bool isExitTerm = termPhase && *termPhase <= p &&
+                        isa<BreakOp, ContinueOp, ReturnOp>(term);
+      if (isExitTerm && isa<ReturnOp>(term))
+        return term->emitOpError()
+               << "exits the function under a loop with later-phase "
+                  "content; function-level exit chains are not implemented "
+                  "yet";
+      if (isExitTerm) {
+        ExitPath exit;
+        exit.terminator = term;
+        exit.content = collectLaterContent(armBlock, p);
+        // The arm must be straight-line up to its exit: nested divergence
+        // (further exits or later-phase content inside arm-interior CF)
+        // is not implemented.
+        for (auto &armOp : armBlock) {
+          if (&armOp == term || llvm::is_contained(exit.content, &armOp))
+            continue;
+          bool nestedExit = false;
+          for (auto &inner : armOp.getRegions())
+            nestedExit |= findExitTerminator(inner, p) != nullptr;
+          if (nestedExit || hasLaterContent(&armOp, p))
+            return armOp.emitOpError()
+                   << "diverges inside an exit-carrying arm; nested "
+                      "divergence is not implemented yet";
+        }
+        divergence.exits.push_back(std::move(exit));
+      } else {
+        // Rejoining arm: its content would need a sub-choice covering the
+        // arm-local divergence, which is not implemented.
+        if (findExitTerminator(region, p))
+          return blockOp.emitOpError()
+                 << "has a rejoining arm containing a nested exit; nested "
+                    "divergence is not implemented yet";
+        bool armHasContent = !collectLaterContent(armBlock, p).empty() ||
+                             llvm::any_of(armBlock, [&](Operation &armOp) {
+                               return hasLaterContent(&armOp, p);
+                             });
+        if (armHasContent)
+          return blockOp.emitOpError()
+                 << "has later-phase content on a rejoining arm of an "
+                    "exit-carrying branch; not implemented yet";
+      }
+    }
+
+    // A leading exit with no content anywhere on its paths pushes nothing
+    // and needs no chain link.
+    bool hasArmContent = llvm::any_of(
+        divergence.exits, [](ExitPath &e) { return !e.content.empty(); });
+    if (!seenContent && !hasArmContent && divergences.empty())
+      continue;
+    divergences.push_back(std::move(divergence));
+    segments.emplace_back();
+  }
+  return success();
+}
+
 /// Extract the later-phase content of a loop-shaped CF op (uir.loop or
 /// hir.replicate) at phase p: a hit list is created before the op, each
 /// activation packs a record of the crossing values, and one hir.replicate
-/// after the op receives the content.
+/// after the op receives the content. Bodies whose exits interleave with
+/// later-phase content push one record per exit path, ending in a nested
+/// exit-path choice, and the replicate reconstructs the divergence with
+/// nested picks.
 LogicalResult Sorter::extractFromLoop(Operation *op, int16_t p) {
   auto loc = op->getLoc();
   auto anyTy = hir::AnyType::get(op->getContext());
-  Block *body;
-  if (auto loopOp = dyn_cast<LoopOp>(op))
-    body = &loopOp.getBody().front();
-  else
-    body = &cast<hir::ReplicateOp>(op).getBody().front();
 
   // Later-phase results are break-value choices: extract them first, so
   // their value slices are out of the way of the record analysis below.
   // The loop op may be rebuilt in the process.
   if (failed(extractBreakValues(op, p)))
     return failure();
+  Block *body;
   if (auto loopOp = dyn_cast<LoopOp>(op))
     body = &loopOp.getBody().front();
+  else
+    body = &cast<hir::ReplicateOp>(op).getBody().front();
   if (!hasLaterContent(op, p))
     return success();
 
-  auto movedOps = collectLaterContent(*body, p);
+  SmallVector<SmallVector<Operation *>> segments;
+  SmallVector<Divergence> divergences;
+  if (failed(scanLoopBody(op, *body, p, segments, divergences)))
+    return failure();
+  size_t numDivs = divergences.size();
 
-  // Partial activations are not implemented yet: all exit-carrying ifs must
-  // precede the later-phase content and must not contain any of it, so
-  // exactly the full activations reach the single record push at the end of
-  // the body.
-  bool seenLater = false;
-  for (auto &blockOp : *body) {
-    bool isLater = llvm::is_contained(movedOps, &blockOp);
-    if (isLater)
-      seenLater = true;
-    if (isLater || blockOp.getNumRegions() == 0)
-      continue;
-    if (hasLaterContent(&blockOp, p))
-      return blockOp.emitOpError()
-             << "contains later-phase content on a partial activation path; "
-                "not implemented yet";
-    bool hasExit = false;
-    for (auto &region : blockOp.getRegions())
-      hasExit |= findExitTerminator(region, p) != nullptr;
-    if (hasExit) {
-      if (seenLater)
-        return blockOp.emitOpError()
-               << "loop exit after later-phase content requires partial "
-                  "activation records; not implemented yet";
+  // Collect the crossing values per segment and per exit path. Everything
+  // that leaves the region counts as moved for the crossing analysis. A
+  // segment's fields are deduplicated against all enclosing segments (their
+  // receiving-block arguments dominate the nested levels); an exit path's
+  // fields against the segments enclosing its pick.
+  SmallVector<Operation *> allMoved;
+  for (auto &segment : segments)
+    allMoved.append(segment);
+  for (auto &divergence : divergences)
+    for (auto &exit : divergence.exits)
+      allMoved.append(exit.content);
+
+  SmallVector<llvm::SetVector<Value>> segFields(segments.size());
+  llvm::SetVector<Value> prefixFields;
+  for (auto [k, segment] : llvm::enumerate(segments)) {
+    segFields[k] = collectCrossingValues(op, segment, allMoved);
+    segFields[k].set_subtract(prefixFields);
+    prefixFields.set_union(segFields[k]);
+    if (k < numDivs) {
+      for (auto &exit : divergences[k].exits) {
+        exit.fields = collectCrossingValues(op, exit.content, allMoved);
+        exit.fields.set_subtract(prefixFields);
+      }
     }
   }
 
-  auto fields = collectCrossingValues(op, movedOps);
-
-  // Hit list before the op, record pack and push before the body
-  // terminator: only full activations reach it.
+  // Hit list before the op.
   OpBuilder builder(op);
   auto list = hir::OpaqueListCreateOp::create(builder, loc, anyTy);
   setPhase(list, p);
 
-  auto *term = body->getTerminator();
-  OpBuilder termBuilder(term);
-  auto record =
-      hir::OpaquePackOp::create(termBuilder, loc, anyTy, fields.getArrayRef());
-  setPhase(record, p);
-  auto push = hir::OpaqueListPushOp::create(termBuilder, loc, list.getResult(),
-                                            record.getResult());
-  setPhase(push, p);
+  // Build one record push per exit path, in place at its terminator. The
+  // record is the shared prefix segment plus, for each divergence the path
+  // fell past, a `continued` link carrying that segment's samples, ending
+  // in the path's own exit tag. The `continued` tag of each divergence is
+  // one past its exit tags.
+  auto buildRecordPush = [&](Operation *beforeTerm, int exitLevel, uint32_t tag,
+                             ArrayRef<Value> payload) {
+    OpBuilder b(beforeTerm);
+    Value chain;
+    if (exitLevel >= 0) {
+      auto choice = hir::ChoiceOp::create(b, loc, anyTy, tag, payload);
+      setPhase(choice, p);
+      chain = choice.getResult();
+      for (int i = exitLevel - 1; i >= 0; --i) {
+        SmallVector<Value> link(segFields[i + 1].getArrayRef());
+        link.push_back(chain);
+        auto continued = hir::ChoiceOp::create(
+            b, loc, anyTy, static_cast<uint32_t>(divergences[i].exits.size()),
+            link);
+        setPhase(continued, p);
+        chain = continued.getResult();
+      }
+    }
+    SmallVector<Value> recordFields(segFields[0].getArrayRef());
+    if (chain)
+      recordFields.push_back(chain);
+    auto record = hir::OpaquePackOp::create(b, loc, anyTy, recordFields);
+    setPhase(record, p);
+    auto push = hir::OpaqueListPushOp::create(b, loc, list.getResult(),
+                                              record.getResult());
+    setPhase(push, p);
+  };
 
-  // Receiving replicate after the op.
+  for (auto [k, divergence] : llvm::enumerate(divergences))
+    for (auto [tag, exit] : llvm::enumerate(divergence.exits))
+      buildRecordPush(exit.terminator, k, tag, exit.fields.getArrayRef());
+
+  // A break/continue body terminator ends a full activation just like a
+  // replicate body's yield; the record with the full chain is pushed there.
+  auto *bodyTerm = body->getTerminator();
+  if (isa<BreakOp, ContinueOp, hir::YieldOp>(bodyTerm)) {
+    if (numDivs == 0)
+      buildRecordPush(bodyTerm, -1, 0, {});
+    else
+      buildRecordPush(bodyTerm, numDivs - 1,
+                      divergences[numDivs - 1].exits.size(),
+                      segFields[numDivs].getArrayRef());
+  } else if (isa<ReturnOp>(bodyTerm)) {
+    return bodyTerm->emitOpError()
+           << "terminates a loop body with later-phase content; "
+              "function-level exit chains are not implemented yet";
+  } else if (!isa<UnreachableOp>(bodyTerm)) {
+    return bodyTerm->emitOpError()
+           << "unsupported loop body terminator for record extraction";
+  }
+
+  // Receiving replicate after the op, mirroring the record shape: one level
+  // per segment, connected by picks over the chain links. Level k holds
+  // segment k's content; its pick's exit alternatives hold the arm content,
+  // and the `continued` alternative is level k+1.
   builder.setInsertionPointAfter(op);
   auto replicate = hir::ReplicateOp::create(builder, loc, list.getResult());
   analysis.opPhases[replicate] = p + 1;
-  auto &repBlock = replicate.getBody().emplaceBlock();
-  for (unsigned i = 0; i < fields.size(); ++i)
-    repBlock.addArgument(anyTy, loc);
-  for (auto *moved : movedOps)
-    moved->moveBefore(&repBlock, repBlock.end());
-  OpBuilder repBuilder(&repBlock, repBlock.end());
-  auto repYield = hir::YieldOp::create(repBuilder, loc, ValueRange{});
-  analysis.opPhases[repYield] = p + 1;
-  remapIntoReceivingBlock(op, repBlock, fields);
-  if (failed(dissolveTailReturnExpr(repBlock)))
-    return failure();
+
+  SmallVector<std::pair<Block *, const llvm::SetVector<Value> *>> remapBlocks;
+  Block *levelBlock = &replicate.getBody().emplaceBlock();
+  for (auto [k, segment] : llvm::enumerate(segments)) {
+    bool hasChain = k < numDivs;
+    for (unsigned i = 0; i < segFields[k].size(); ++i)
+      levelBlock->addArgument(anyTy, loc);
+    Value chainArg;
+    if (hasChain) {
+      chainArg = levelBlock->addArgument(anyTy, loc);
+      analysis.actualPhase[chainArg] = p;
+    }
+    remapBlocks.push_back({levelBlock, &segFields[k]});
+    for (auto *moved : segment)
+      moved->moveBefore(levelBlock, levelBlock->end());
+
+    Block *nextLevel = nullptr;
+    if (hasChain) {
+      auto &divergence = divergences[k];
+      OpBuilder levelBuilder(levelBlock, levelBlock->end());
+      auto pick = hir::PickOp::create(levelBuilder, loc, TypeRange{}, chainArg,
+                                      divergence.exits.size() + 1);
+      analysis.opPhases[pick] = p + 1;
+      for (auto [tag, exit] : llvm::enumerate(divergence.exits)) {
+        auto &altBlock = pick.getAlternatives()[tag].emplaceBlock();
+        for (unsigned i = 0; i < exit.fields.size(); ++i)
+          altBlock.addArgument(anyTy, loc);
+        remapBlocks.push_back({&altBlock, &exit.fields});
+        for (auto *moved : exit.content)
+          moved->moveBefore(&altBlock, altBlock.end());
+        OpBuilder altBuilder(&altBlock, altBlock.end());
+        auto altYield = hir::YieldOp::create(altBuilder, loc, ValueRange{});
+        analysis.opPhases[altYield] = p + 1;
+      }
+      nextLevel =
+          &pick.getAlternatives()[divergence.exits.size()].emplaceBlock();
+    }
+    OpBuilder levelBuilder(levelBlock, levelBlock->end());
+    auto levelYield = hir::YieldOp::create(levelBuilder, loc, ValueRange{});
+    analysis.opPhases[levelYield] = p + 1;
+    levelBlock = nextLevel;
+  }
+
+  // Remap fields outermost-first so that deduplicated inner uses resolve to
+  // the enclosing level's arguments, then clone floating trees once over
+  // the whole structure and dissolve return carriers at block tails.
+  for (auto [block, fields] : remapBlocks)
+    remapFields(*block, *fields);
+  cloneFloatingUses(op, replicate.getBody().front());
+  for (auto [block, fields] : remapBlocks)
+    if (failed(dissolveTailReturnExpr(*block)))
+      return failure();
 
   return success();
 }

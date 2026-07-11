@@ -46,9 +46,43 @@ uir.func @SharedBreakValueSlice(%n: 0, %x: 0) -> (result: 1) {
 
 // -----
 
-// Later-phase content on a partial activation path (before a loop exit)
-// requires partial activation records, not implemented yet.
-uir.func @PartialActivation(%n: -1, %x: 0) -> (result: 0) {
+// Later-phase content on a rejoining arm of an exit-carrying branch needs a
+// sub-choice covering the arm-local divergence, not implemented yet.
+uir.func @RejoinArmContent(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %v = hir.var : %t
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      // expected-error @below {{has later-phase content on a rejoining arm of an exit-carrying branch; not implemented yet}}
+      uir.if %done {
+        uir.break
+      } else {
+        uir.expr pin 1 {
+          hir.write_var %v, %i : %t
+          uir.yield
+        }
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  %r = hir.read_var %v : %t
+  uir.return %r : %t
+}
+
+// -----
+
+// A nested exit inside an exit-carrying arm is a nested divergence, not
+// implemented yet.
+uir.func @NestedDivergenceInExitArm(%n: -1, %x: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
@@ -63,8 +97,12 @@ uir.func @PartialActivation(%n: -1, %x: 0) -> (result: 0) {
         uir.yield
       }
       %done = hir.geq %i, %n : %t
-      // expected-error @below {{loop exit after later-phase content requires partial activation records; not implemented yet}}
+      %big = hir.geq %i, %one : %t
       uir.if %done {
+        // expected-error @below {{diverges inside an exit-carrying arm; nested divergence is not implemented yet}}
+        uir.if %big {
+          uir.break
+        }
         uir.break
       }
       %next = hir.add %i, %one : %t
@@ -74,6 +112,113 @@ uir.func @PartialActivation(%n: -1, %x: 0) -> (result: 0) {
   }
   %r = hir.read_var %v : %t
   uir.return %r : %t
+}
+
+// -----
+
+// A nested exit on a rejoining arm is a nested divergence too.
+uir.func @RejoinArmNestedExit(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %v = hir.var : %t
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      uir.expr pin 1 {
+        hir.write_var %v, %i : %t
+        uir.yield
+      }
+      %done = hir.geq %i, %n : %t
+      %big = hir.geq %i, %one : %t
+      // expected-error @below {{has a rejoining arm containing a nested exit; nested divergence is not implemented yet}}
+      uir.if %done {
+        uir.break
+      } else {
+        uir.if %big {
+          uir.break
+        }
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  %r = hir.read_var %v : %t
+  uir.return %r : %t
+}
+
+// -----
+
+// An exit-carrying branch with later-phase results would need pick-based
+// result reconstruction entangled with the exit chain, not implemented yet.
+uir.func @ExitIfLaterResult(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %v = hir.var : %t
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      uir.expr pin 1 {
+        hir.write_var %v, %i : %t
+        uir.yield
+      }
+      %done = hir.geq %i, %n : %t
+      // expected-error @below {{carries a loop exit and has later-phase results; not implemented yet}}
+      %y = uir.if %done : %t {
+        uir.break
+      } else {
+        %w = uir.expr pin 1 : %t {
+          %s = hir.add %x, %i : %t
+          uir.yield %s : %t
+        }
+        uir.yield %w : %t
+      }
+      uir.expr pin 1 {
+        hir.write_var %v, %y : %t
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  %r = hir.read_var %v : %t
+  uir.return %r : %t
+}
+
+// -----
+
+// An early function return under a loop with later-phase content needs
+// function-level exit chains, which belong to distribution (M3).
+uir.func @ReturnExitUnderContent(%n: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %v = hir.var : %t
+  uir.loop (%i = %zero : %t) {
+    uir.expr pin 1 {
+      hir.write_var %v, %i : %t
+      uir.yield
+    }
+    %done = hir.geq %i, %n : %t
+    uir.if %done {
+      // expected-error @below {{exits the function under a loop with later-phase content; function-level exit chains are not implemented yet}}
+      uir.return %x : %t
+    }
+    %next = hir.add %i, %one : %t
+    uir.continue %next : %t
+  }
+  uir.return %x : %t
 }
 
 // -----
@@ -131,36 +276,21 @@ uir.func @BreakCarrier(%n: 0, %x: 0) -> (result: 0) {
 
 // -----
 
-// Later-phase content inside an exit-carrying arm is a partial activation
-// too.
-uir.func @ContentInExitArm(%n: -1, %x: 0) -> (result: 0) {
+// A loop body terminated by a function return, with later-phase content in
+// the body, needs function-level exit chains too.
+uir.func @ReturnTerminatedBody(%n: 0, %x: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
-  %zero = hir.constant_int 0 : %t
-  %one = hir.constant_int 1 : %t
   %v = hir.var : %t
-  uir.expr pin -1 {
-    uir.loop (%i = %zero : %t) {
-      %done = hir.geq %i, %n : %t
-      // expected-error @below {{contains later-phase content on a partial activation path; not implemented yet}}
-      uir.if %done {
-        uir.expr pin 1 {
-          hir.write_var %v, %i : %t
-          uir.yield
-        }
-        uir.break
-      }
-      uir.expr pin 1 {
-        hir.write_var %v, %x : %t
-        uir.yield
-      }
-      %next = hir.add %i, %one : %t
-      uir.continue %next : %t
+  uir.loop {
+    uir.expr pin 1 {
+      hir.write_var %v, %x : %t
+      uir.yield
     }
-    uir.yield
+    // expected-error @below {{terminates a loop body with later-phase content; function-level exit chains are not implemented yet}}
+    uir.return %x : %t
   }
-  %r = hir.read_var %v : %t
-  uir.return %r : %t
+  uir.return %x : %t
 }
