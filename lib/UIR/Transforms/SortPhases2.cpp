@@ -51,9 +51,11 @@
 // replaced by their inputs: the grouping ops exist to communicate phase
 // constraints to PhaseAnalysis and only stand in the way once the phase map
 // is computed. Then every `uir.call` is decomposed into `uir.phase_call`
-// entries, one per externally visible callee phase, and every earlier-phase
+// entries, one per externally visible callee phase; every earlier-phase
 // `uir.if` with later-phase content or a choice-ified result is decomposed
-// into a choice-yielding branch plus a receiving `hir.pick`:
+// into a choice-yielding branch plus a receiving `hir.pick`; and every
+// earlier-phase `uir.loop` with later-phase content is decomposed into a hit
+// list of per-activation records plus a receiving `hir.replicate`:
 //
 // - **Decompose**: a call is replaced by one `uir.phase_call` per phase in
 //   the callee's declaration-derived external phase set (its declared arg
@@ -76,15 +78,24 @@
 //   crossing. Only genuine choice-ification is lifted this way; identity-
 //   provided and never-produced divergent results stay rejected below.
 //
-// The pass covers straight-line content and single-boundary branch
-// extraction. Inputs that need the remaining sorting machinery are rejected
-// with explicit diagnostics instead of being sorted incorrectly: early
-// function exits (function-level exit chains), results delivered at a phase
-// different from their op's own phase by identity-provided or never-produced
-// control flow (which need result forwarding and unreachable-consumer
-// handling), hoisting and loop-record extraction of content nested under
-// differently-phased control flow, and backward uses from floating content
-// nested under earlier-phase control flow.
+// - **Extract loops**: a `uir.loop` at phase p whose body holds later-phase
+//   content is rebuilt at phase p pushing one record per activation onto a hit
+//   list, and the later-phase content moves into a `hir.replicate` at phase
+//   p+1 that replays the records. Loop-phase early exits (`break`/`continue`
+//   in branch arms) make the record end in a nested exit-path choice that a
+//   nested `hir.pick` in the replicate dispatches on. The list crosses phases
+//   as an ordinary crossing. Later-phase loop results (break-value choices)
+//   stay rejected below.
+//
+// The pass covers straight-line content, single-boundary branch extraction,
+// and single-boundary loop-record extraction. Inputs that need the remaining
+// sorting machinery are rejected with explicit diagnostics instead of being
+// sorted incorrectly: early function exits (function-level exit chains),
+// results delivered at a phase different from their op's own phase by
+// identity-provided or never-produced control flow (which need result
+// forwarding and unreachable-consumer handling), break-value choices,
+// hoisting and content more than one phase away from its control flow, and
+// backward uses from floating content nested under earlier-phase control flow.
 //
 //===----------------------------------------------------------------------===//
 
@@ -115,6 +126,23 @@ namespace uir {
 //===----------------------------------------------------------------------===//
 
 namespace {
+/// One exit path of a divergence point: a break/continue terminator at the
+/// loop's phase, together with the later-phase content on its path and the
+/// crossing values that content samples; both are empty for paths that run
+/// no later-phase content.
+struct ExitPath {
+  Operation *terminator;
+  SmallVector<Operation *> content;
+  llvm::SetVector<Value> fields;
+};
+
+/// An exit-carrying op in a loop body with later-phase content: activations
+/// diverge here in how much of that content they instantiate, and every
+/// exit path contributes one chain link to the activation's record.
+struct Divergence {
+  SmallVector<ExitPath> exits;
+};
+
 /// Sorts the content of a single `uir.func` into per-phase `uir.phase` ops
 /// and maintains the phase map for every op it erases or creates.
 struct PhaseSorter {
@@ -135,13 +163,24 @@ private:
   LogicalResult decomposeCall(CallOp callOp);
   LogicalResult extractBranches();
   LogicalResult extractFromBranch(IfOp ifOp, int16_t p);
+  LogicalResult extractLoops();
+  LogicalResult extractFromLoop(LoopOp loopOp, int16_t p);
+  LogicalResult
+  scanLoopBody(Operation *op, Block &body, int16_t p,
+               SmallVectorImpl<SmallVector<Operation *>> &segments,
+               SmallVectorImpl<Divergence> &divergences);
   LogicalResult rejectUnimplemented();
   LogicalResult sortRegion(Region &region);
 
   bool hasLaterContent(Operation *root, int16_t p);
   SmallVector<Operation *> collectLaterContent(Block &block, int16_t p);
   Operation *findExitTerminator(Region &region, int16_t p);
+  void collectExitTerminators(Region &region, int16_t p,
+                              SmallVectorImpl<Operation *> &exits);
   llvm::SetVector<Value> collectCrossingValues(Operation *regionOp,
+                                               ArrayRef<Operation *> movedOps);
+  llvm::SetVector<Value> collectCrossingValues(Operation *regionOp,
+                                               ArrayRef<Operation *> userOps,
                                                ArrayRef<Operation *> movedOps);
   void remapFields(Block &receivingBlock, const llvm::SetVector<Value> &fields);
   void cloneFloatingUses(Operation *regionOp, Block &rootBlock);
@@ -474,6 +513,28 @@ Operation *PhaseSorter::findExitTerminator(Region &region, int16_t p) {
   return found;
 }
 
+/// Collect all terminators at phase <= p inside the region that exit out of
+/// the region instead of yielding, in walk order. Break/continue inside loops
+/// (including the queried region itself when it belongs to a loop) target
+/// those loops and do not exit; returns exit the function from any depth.
+void PhaseSorter::collectExitTerminators(Region &region, int16_t p,
+                                         SmallVectorImpl<Operation *> &exits) {
+  std::function<void(Region &, bool)> visit = [&](Region &r, bool loopScoped) {
+    for (auto &block : r) {
+      for (auto &op : block) {
+        bool isExit =
+            isa<ReturnOp>(op) || (!loopScoped && isa<BreakOp, ContinueOp>(op));
+        if (isExit)
+          if (auto ph = realPhaseOf(&op); ph && *ph <= p)
+            exits.push_back(&op);
+        for (auto &inner : op.getRegions())
+          visit(inner, loopScoped || isa<LoopOp>(op));
+      }
+    }
+  };
+  visit(region, isa<LoopOp>(region.getParentOp()));
+}
+
 /// Collect the real-phase values defined inside `regionOp` that the
 /// `movedOps` (and their nested ops) use and that are not themselves among
 /// the moved ops: these cross the phase boundary as choice payload fields.
@@ -483,6 +544,19 @@ Operation *PhaseSorter::findExitTerminator(Region &region, int16_t p) {
 llvm::SetVector<Value>
 PhaseSorter::collectCrossingValues(Operation *regionOp,
                                    ArrayRef<Operation *> movedOps) {
+  return collectCrossingValues(regionOp, movedOps, movedOps);
+}
+
+/// Collect the values defined inside `regionOp` that the `userOps` use and
+/// that are not themselves produced by any of the `movedOps`: these cross the
+/// phase boundary and become record fields / choice payloads. `movedOps` lists
+/// everything that leaves the region; with partial activations it is more than
+/// the `userOps` whose uses are being collected here (a segment's uses are
+/// collected while all segments and exit paths count as moved).
+llvm::SetVector<Value>
+PhaseSorter::collectCrossingValues(Operation *regionOp,
+                                   ArrayRef<Operation *> userOps,
+                                   ArrayRef<Operation *> movedOps) {
   auto isMoved = [&](Operation *op) {
     return llvm::any_of(movedOps, [&](Operation *m) {
       return m == op || m->isProperAncestor(op);
@@ -490,7 +564,7 @@ PhaseSorter::collectCrossingValues(Operation *regionOp,
   };
 
   llvm::SetVector<Value> fields;
-  for (auto *moved : movedOps) {
+  for (auto *moved : userOps) {
     moved->walk([&](Operation *user) {
       for (auto value : user->getOperands()) {
         if (auto blockArg = dyn_cast<BlockArgument>(value)) {
@@ -793,6 +867,370 @@ LogicalResult PhaseSorter::extractFromBranch(IfOp ifOp, int16_t p) {
 }
 
 //===----------------------------------------------------------------------===//
+// Loop-Record Extraction
+//===----------------------------------------------------------------------===//
+//
+// # Extract Later-Phase Content Out of Earlier-Phase Loops
+//
+// A `uir.loop` at phase p whose body holds later-phase content cannot wrap
+// wholesale into phase p: the later-phase content runs once per activation of
+// the loop, so the phase-p execution must tell phase p+1 *how often* it is
+// instantiated, and with which per-iteration snapshots. Loop-record extraction
+// rewrites such a loop into two cooperating constructs the wrap and cross
+// rules then place:
+//
+// - A hit list (`hir.opaque_list_create`) is created at phase p, right before
+//   the loop. Every activation packs a record of the crossing values it
+//   samples and pushes it onto the list; the record is built in place at the
+//   terminator that ends the activation. The list is an ordinary phase-p value
+//   that crosses to phase p+1 like any other crossing.
+// - One `hir.replicate` at phase p+1 replays the records, holding the loop's
+//   later-phase content. It reconstructs the per-iteration snapshots from the
+//   record fields.
+//
+// Loop bodies with loop-phase early exits (`break`/`continue` inside branch
+// arms) diverge in how much later-phase content each activation runs. The body
+// decomposes into content segments separated by exit-carrying divergence
+// points, and each record ends in a nested exit-path choice: each exit
+// terminator packs and pushes its own record in place — the shared prefix
+// segment, then one `continued` link per divergence it fell past, ending in
+// its own exit tag. The receiving replicate mirrors this shape with nested
+// picks (`function-exit-choices.md` §3, sampling-model.md §6).
+//
+// Only single-boundary loop-record extraction is handled: later-phase loop
+// results (break-value choices), returns under loops (function-level exit
+// chains), rejoining-arm content and nested divergence inside exit arms, and
+// content more than one phase later (which needs the replicate re-extracted at
+// the next boundary) are rejected below and by `rejectUnimplemented`.
+
+/// Decompose a loop body's top level into content segments separated by
+/// exit-carrying divergence points. `segments` holds the later-phase ops
+/// between consecutive divergences in program order (one more entry than
+/// `divergences`); each divergence records its exit terminators and the
+/// later-phase content on their paths. Exit paths that run no later-phase
+/// content get an empty chain link, so every activation pushes exactly one
+/// record and the hit list length always equals the activation count.
+LogicalResult
+PhaseSorter::scanLoopBody(Operation *op, Block &body, int16_t p,
+                          SmallVectorImpl<SmallVector<Operation *>> &segments,
+                          SmallVectorImpl<Divergence> &divergences) {
+  segments.emplace_back();
+  for (auto &blockOp : body) {
+    if (&blockOp == body.getTerminator())
+      break;
+    if (auto ph = realPhaseOf(&blockOp); ph && *ph > p) {
+      segments.back().push_back(&blockOp);
+      continue;
+    }
+    if (blockOp.getNumRegions() == 0)
+      continue;
+
+    SmallVector<Operation *> exitTerms;
+    for (auto &region : blockOp.getRegions())
+      collectExitTerminators(region, p, exitTerms);
+    if (exitTerms.empty()) {
+      // Non-exit CF at phase p was extracted by the innermost-first walk
+      // already; leftover later-phase content here is a compiler bug.
+      if (hasLaterContent(&blockOp, p))
+        return blockOp.emitOpError()
+               << "contains later-phase content that inner extraction did "
+                  "not consume";
+      continue;
+    }
+
+    // A return under a loop with later-phase content is a function-level exit
+    // chain no matter how it is nested; those belong to distribution.
+    for (auto *term : exitTerms)
+      if (isa<ReturnOp>(term))
+        return term->emitOpError()
+               << "exits the function under a loop with later-phase content; "
+                  "function-level exit chains are not implemented in phase "
+                  "sorting yet";
+
+    // Results whose phase was never demanded have no consumers and need no
+    // reconstruction; only demanded later-phase results are unimplemented.
+    for (auto result : blockOp.getResults()) {
+      auto it = analysis.actualPhase.find(result);
+      if (it != analysis.actualPhase.end() && isRealPhase(it->second) &&
+          it->second > p)
+        return blockOp.emitOpError()
+               << "carries a loop exit and has later-phase results; "
+                  "break-value choices are not implemented in phase sorting "
+                  "yet";
+    }
+
+    Divergence divergence;
+    if (!hasLaterContent(&blockOp, p)) {
+      // No later-phase content anywhere in the divergence: every exit path
+      // contributes an empty chain link built at its terminator, no matter
+      // how deeply the terminator is nested.
+      for (auto *term : exitTerms) {
+        ExitPath exit;
+        exit.terminator = term;
+        divergence.exits.push_back(std::move(exit));
+      }
+    } else {
+      // Later-phase content inside the divergence must be attributed to the
+      // paths that run it; only the flat form (a branch whose exit arms are
+      // straight-line up to their terminator) is implemented.
+      auto ifOp = dyn_cast<IfOp>(&blockOp);
+      if (!ifOp)
+        return blockOp.emitOpError()
+               << "carries a loop exit but is not a branch; cannot build "
+                  "partial activation records";
+      for (auto &region : ifOp->getRegions()) {
+        if (region.empty())
+          continue;
+        auto &armBlock = region.front();
+        auto *term = armBlock.getTerminator();
+        auto termPhase = realPhaseOf(term);
+        bool isExitTerm =
+            termPhase && *termPhase <= p && isa<BreakOp, ContinueOp>(term);
+        if (isExitTerm) {
+          ExitPath exit;
+          exit.terminator = term;
+          exit.content = collectLaterContent(armBlock, p);
+          // The arm must be straight-line up to its exit: nested divergence
+          // (further exits or later-phase content inside arm-interior CF) is
+          // not implemented.
+          for (auto &armOp : armBlock) {
+            if (&armOp == term || llvm::is_contained(exit.content, &armOp))
+              continue;
+            bool nestedExit = false;
+            for (auto &inner : armOp.getRegions())
+              nestedExit |= findExitTerminator(inner, p) != nullptr;
+            if (nestedExit || hasLaterContent(&armOp, p))
+              return armOp.emitOpError()
+                     << "diverges inside an exit-carrying arm; nested "
+                        "divergence is not implemented in phase sorting yet";
+          }
+          divergence.exits.push_back(std::move(exit));
+        } else {
+          // Rejoining arm: its content would need a sub-choice covering the
+          // arm-local divergence, which is not implemented.
+          if (findExitTerminator(region, p))
+            return blockOp.emitOpError()
+                   << "has a rejoining arm containing a nested exit; nested "
+                      "divergence is not implemented in phase sorting yet";
+          bool armHasContent = !collectLaterContent(armBlock, p).empty() ||
+                               llvm::any_of(armBlock, [&](Operation &armOp) {
+                                 return hasLaterContent(&armOp, p);
+                               });
+          if (armHasContent)
+            return blockOp.emitOpError()
+                   << "has later-phase content on a rejoining arm of an "
+                      "exit-carrying branch; not implemented in phase sorting "
+                      "yet";
+        }
+      }
+    }
+
+    divergences.push_back(std::move(divergence));
+    segments.emplace_back();
+  }
+  return success();
+}
+
+/// Extract the later-phase content of a phase-p `uir.loop` into a hit list and
+/// a receiving `hir.replicate` at phase p+1. See the section header for the
+/// shape and invariants. Every activation pushes exactly one record, built in
+/// place at the terminator that ends it: the record chains a `continued` link
+/// per divergence the activation fell past and ends in the taken exit path's
+/// choice, whose payload is empty when that path ran no later-phase content.
+LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
+  Operation *op = loopOp;
+  auto loc = op->getLoc();
+  auto anyTy = hir::AnyType::get(op->getContext());
+
+  // Later-phase loop results are break-value choices (case 6): the value never
+  // materializes at the loop's phase and must be reconstructed from the break
+  // site's snapshots. That is a separate sorting case; reject it here.
+  for (auto result : op->getResults()) {
+    int16_t phase = analysis.actualPhase.at(result);
+    if (isRealPhase(phase) && phase > p)
+      return op->emitOpError()
+             << "delivers result #" << result.getResultNumber() << " at phase "
+             << phase << " instead of its own phase " << p
+             << "; break-value choices are not implemented in phase sorting "
+                "yet";
+  }
+
+  Block *body = &loopOp.getBody().front();
+  SmallVector<SmallVector<Operation *>> segments;
+  SmallVector<Divergence> divergences;
+  if (failed(scanLoopBody(op, *body, p, segments, divergences)))
+    return failure();
+  size_t numDivs = divergences.size();
+
+  // Collect the crossing values per segment and per exit path. Everything that
+  // leaves the region counts as moved for the crossing analysis. A segment's
+  // fields are deduplicated against all enclosing segments (their
+  // receiving-block arguments dominate the nested levels); an exit path's
+  // fields against the segments enclosing its pick.
+  SmallVector<Operation *> allMoved;
+  for (auto &segment : segments)
+    allMoved.append(segment);
+  for (auto &divergence : divergences)
+    for (auto &exit : divergence.exits)
+      allMoved.append(exit.content);
+
+  SmallVector<llvm::SetVector<Value>> segFields(segments.size());
+  llvm::SetVector<Value> prefixFields;
+  for (auto [k, segment] : llvm::enumerate(segments)) {
+    segFields[k] = collectCrossingValues(op, segment, allMoved);
+    segFields[k].set_subtract(prefixFields);
+    prefixFields.set_union(segFields[k]);
+    if (k < numDivs) {
+      for (auto &exit : divergences[k].exits) {
+        exit.fields = collectCrossingValues(op, exit.content, allMoved);
+        exit.fields.set_subtract(prefixFields);
+      }
+    }
+  }
+
+  // Hit list before the op.
+  OpBuilder builder(op);
+  auto list = hir::OpaqueListCreateOp::create(builder, loc, anyTy);
+  setPhase(list, p);
+
+  // Build one record push per exit path, in place at its terminator. The
+  // record is the shared prefix segment plus, for each divergence the path
+  // fell past, a `continued` link carrying that segment's samples, ending in
+  // the path's own exit tag. The `continued` tag of each divergence is one
+  // past its exit tags.
+  auto buildRecordPush = [&](Operation *beforeTerm, int exitLevel, uint32_t tag,
+                             ArrayRef<Value> payload) {
+    OpBuilder b(beforeTerm);
+    Value chain;
+    if (exitLevel >= 0) {
+      auto choice = hir::ChoiceOp::create(b, loc, anyTy, tag, payload);
+      setPhase(choice, p);
+      chain = choice.getResult();
+      for (int i = exitLevel - 1; i >= 0; --i) {
+        SmallVector<Value> link(segFields[i + 1].getArrayRef());
+        link.push_back(chain);
+        auto continued = hir::ChoiceOp::create(
+            b, loc, anyTy, static_cast<uint32_t>(divergences[i].exits.size()),
+            link);
+        setPhase(continued, p);
+        chain = continued.getResult();
+      }
+    }
+    SmallVector<Value> recordFields(segFields[0].getArrayRef());
+    if (chain)
+      recordFields.push_back(chain);
+    auto record = hir::OpaquePackOp::create(b, loc, anyTy, recordFields);
+    setPhase(record, p);
+    auto push = hir::OpaqueListPushOp::create(b, loc, list.getResult(),
+                                              record.getResult());
+    setPhase(push, p);
+  };
+
+  for (auto [k, divergence] : llvm::enumerate(divergences))
+    for (auto [tag, exit] : llvm::enumerate(divergence.exits))
+      buildRecordPush(exit.terminator, k, tag, exit.fields.getArrayRef());
+
+  // A break/continue body terminator ends a full activation just like a
+  // replicate body's yield; the record with the full chain is pushed there.
+  auto *bodyTerm = body->getTerminator();
+  if (isa<BreakOp, ContinueOp>(bodyTerm)) {
+    if (numDivs == 0)
+      buildRecordPush(bodyTerm, -1, 0, {});
+    else
+      buildRecordPush(bodyTerm, numDivs - 1,
+                      divergences[numDivs - 1].exits.size(),
+                      segFields[numDivs].getArrayRef());
+  } else if (isa<ReturnOp>(bodyTerm)) {
+    return bodyTerm->emitOpError()
+           << "terminates a loop body with later-phase content; "
+              "function-level exit chains are not implemented in phase "
+              "sorting yet";
+  } else if (!isa<UnreachableOp>(bodyTerm)) {
+    return bodyTerm->emitOpError()
+           << "unsupported loop body terminator for record extraction";
+  }
+
+  // Receiving replicate after the op, mirroring the record shape: one level
+  // per segment, connected by picks over the chain links. Level k holds
+  // segment k's content; its pick's exit alternatives hold the arm content,
+  // and the `continued` alternative is level k+1.
+  builder.setInsertionPointAfter(op);
+  auto replicate = hir::ReplicateOp::create(builder, loc, list.getResult());
+  analysis.opPhases[replicate] = p + 1;
+
+  SmallVector<std::pair<Block *, const llvm::SetVector<Value> *>> remapBlocks;
+  Block *levelBlock = &replicate.getBody().emplaceBlock();
+  for (auto [k, segment] : llvm::enumerate(segments)) {
+    bool hasChain = k < numDivs;
+    for (unsigned i = 0; i < segFields[k].size(); ++i)
+      levelBlock->addArgument(anyTy, loc);
+    Value chainArg;
+    if (hasChain) {
+      chainArg = levelBlock->addArgument(anyTy, loc);
+      analysis.actualPhase[chainArg] = p;
+    }
+    remapBlocks.push_back({levelBlock, &segFields[k]});
+    for (auto *moved : segment)
+      moved->moveBefore(levelBlock, levelBlock->end());
+
+    Block *nextLevel = nullptr;
+    if (hasChain) {
+      auto &divergence = divergences[k];
+      OpBuilder levelBuilder(levelBlock, levelBlock->end());
+      auto pick = hir::PickOp::create(levelBuilder, loc, TypeRange{}, chainArg,
+                                      divergence.exits.size() + 1);
+      analysis.opPhases[pick] = p + 1;
+      for (auto [tag, exit] : llvm::enumerate(divergence.exits)) {
+        auto &altBlock = pick.getAlternatives()[tag].emplaceBlock();
+        for (unsigned i = 0; i < exit.fields.size(); ++i)
+          altBlock.addArgument(anyTy, loc);
+        remapBlocks.push_back({&altBlock, &exit.fields});
+        for (auto *moved : exit.content)
+          moved->moveBefore(&altBlock, altBlock.end());
+        OpBuilder altBuilder(&altBlock, altBlock.end());
+        auto altYield = hir::YieldOp::create(altBuilder, loc, ValueRange{});
+        analysis.opPhases[altYield] = p + 1;
+      }
+      nextLevel =
+          &pick.getAlternatives()[divergence.exits.size()].emplaceBlock();
+    }
+    OpBuilder levelBuilder(levelBlock, levelBlock->end());
+    auto levelYield = hir::YieldOp::create(levelBuilder, loc, ValueRange{});
+    analysis.opPhases[levelYield] = p + 1;
+    levelBlock = nextLevel;
+  }
+
+  // Remap fields outermost-first so that deduplicated inner uses resolve to
+  // the enclosing level's arguments, then clone floating trees once over the
+  // whole structure.
+  for (auto [block, fields] : remapBlocks)
+    remapFields(*block, *fields);
+  cloneFloatingUses(op, replicate.getBody().front());
+
+  return success();
+}
+
+/// Extract later-phase content out of every phase-p `uir.loop` whose interior
+/// demands it, innermost first so a nested loop becomes ordinary later-phase
+/// content of its enclosing loop's records.
+LogicalResult PhaseSorter::extractLoops() {
+  SmallVector<LoopOp> loops;
+  funcOp.getBody().walk<WalkOrder::PostOrder>([&](LoopOp op) {
+    if (realPhaseOf(op))
+      loops.push_back(op);
+  });
+
+  for (auto loopOp : loops) {
+    int16_t p = *realPhaseOf(loopOp);
+    if (!hasLaterContent(loopOp, p))
+      continue;
+    if (failed(extractFromLoop(loopOp, p)))
+      return failure();
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reject Unimplemented Sorting Machinery
 //===----------------------------------------------------------------------===//
 
@@ -820,8 +1258,10 @@ static std::string phaseName(int16_t phase) {
 ///   later-phase values) are already lifted by branch extraction above, so
 ///   the residual divergence here is only identity-provided or never-produced.
 /// - Anchored content whose phase differs from its parent op's phase, which
-///   needs hoisting or loop-record extraction across the phase boundary
-///   (branch content is handled by branch extraction above).
+///   needs hoisting across the phase boundary (branch content is handled by
+///   branch extraction and single-boundary loop content by loop-record
+///   extraction above; content more than one phase later than its loop is
+///   left here for the next-boundary re-extraction that this pass does not do).
 ///
 /// Together these establish that every op and every value inside anchored
 /// content is at that content's phase, which is what makes the wrap and
@@ -1095,6 +1535,8 @@ LogicalResult PhaseSorter::run() {
   if (failed(decomposeCalls()))
     return failure();
   if (failed(extractBranches()))
+    return failure();
+  if (failed(extractLoops()))
     return failure();
   if (failed(rejectUnimplemented()))
     return failure();

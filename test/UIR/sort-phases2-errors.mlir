@@ -235,22 +235,225 @@ uir.func @FloatBackwardInBranch(%c: 0, %x: 0) -> () {
 
 // -----
 
-// Content at a different phase nested under a loop needs loop-record
-// extraction, which is a later sorting case. Branch extraction handles the
-// same shape under a uir.if, but not under a loop.
-uir.func @LaterContentInLoop(%n: -1, %x: 0) -> () {
+// A const loop whose break carries a later-phase value is a break-value
+// choice: the value never materializes at the loop's phase and must be
+// reconstructed from the break site's snapshots. That is a separate sorting
+// case; loop-record extraction rejects it.
+uir.func @BreakValueLoop(%n: -1, %x: 0) -> (result: 0) {
   %0 = hir.int_type
-  uir.signature (%0, %0) -> ()
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %r = uir.expr pin -1 : %t {
+    // expected-error @below {{delivers result #0 at phase 0 instead of its own phase -1; break-value choices are not implemented in phase sorting yet}}
+    %v = uir.loop (%k = %zero : %t) : %t {
+      %done = hir.geq %k, %n : %t
+      uir.if %done {
+        %b = uir.expr pin 1 : %t {
+          %s = hir.add %x, %k : %t
+          uir.yield %s : %t
+        }
+        uir.break %b : %t
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %v : %t
+  }
+  uir.return %r : %t
+}
+
+// -----
+
+// A return exiting the function under a const loop with later-phase content is
+// a function-level exit chain, not loop-record extraction.
+uir.func @ReturnUnderLoop(%c: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
   %v = hir.var : %t
   uir.loop {
     uir.expr pin 1 {
-      // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
       hir.write_var %v, %x : %t
       uir.yield
     }
+    uir.if %c {
+      // expected-error @below {{exits the function under a loop with later-phase content; function-level exit chains are not implemented in phase sorting yet}}
+      uir.return %x : %t
+    }
     uir.continue
   }
-  uir.return
+  uir.unreachable
+}
+
+// -----
+
+// An exit-carrying divergence whose branch has a later-phase result would need
+// break-value reconstruction from the divergence; not implemented.
+uir.func @DivergenceLaterResult(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      // expected-error @below {{carries a loop exit and has later-phase results; break-value choices are not implemented in phase sorting yet}}
+      %r = uir.if %done : %t {
+        uir.break
+      } else {
+        %d = uir.expr pin 1 : %t {
+          %s = hir.add %x, %x : %t
+          uir.yield %s : %t
+        }
+        uir.yield %d : %t
+      }
+      uir.expr pin 1 {
+        hir.write_var %acc, %r : %t
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  %rr = hir.read_var %acc : %t
+  uir.return %rr : %t
+}
+
+// -----
+
+// An exit-carrying arm that itself diverges (later-phase content plus a nested
+// exit) needs nested exit-path choices; not implemented.
+uir.func @NestedDivergence(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      uir.if %done {
+        uir.expr pin 1 {
+          hir.write_var %acc, %i : %t
+          uir.yield
+        }
+        %d2 = hir.geq %i, %n : %t
+        // expected-error @below {{diverges inside an exit-carrying arm; nested divergence is not implemented in phase sorting yet}}
+        uir.if %d2 {
+          uir.break
+        }
+        uir.break
+      }
+      %next = hir.add %i, %one : %t
+      uir.expr pin 1 {
+        hir.write_var %acc, %i : %t
+        uir.yield
+      }
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  %r = hir.read_var %acc : %t
+  uir.return %r : %t
+}
+
+// -----
+
+// An exit-carrying branch whose rejoining arm carries later-phase content
+// would need an arm-local sub-choice; not implemented.
+uir.func @RejoiningArmContent(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      // expected-error @below {{has later-phase content on a rejoining arm of an exit-carrying branch; not implemented in phase sorting yet}}
+      uir.if %done {
+        uir.break
+      } else {
+        uir.expr pin 1 {
+          hir.write_var %acc, %i : %t
+          uir.yield
+        }
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  %r = hir.read_var %acc : %t
+  uir.return %r : %t
+}
+
+// -----
+
+// An exit-carrying branch whose rejoining arm hides a nested exit needs an
+// arm-local sub-choice; not implemented.
+uir.func @RejoiningNestedExit(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      // expected-error @below {{has a rejoining arm containing a nested exit; nested divergence is not implemented in phase sorting yet}}
+      uir.if %done {
+        uir.expr pin 1 {
+          hir.write_var %acc, %i : %t
+          uir.yield
+        }
+        uir.break
+      } else {
+        %d2 = hir.geq %i, %n : %t
+        uir.if %d2 { uir.break }
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  %r = hir.read_var %acc : %t
+  uir.return %r : %t
+}
+
+// -----
+
+// A loop body with later-phase content whose activation ends in a return is a
+// function-level exit chain, not loop-record extraction.
+uir.func @LoopBodyReturn(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %v = hir.var : %t
+  uir.loop {
+    uir.expr pin 1 {
+      hir.write_var %v, %x : %t
+      uir.yield
+    }
+    // expected-error @below {{terminates a loop body with later-phase content; function-level exit chains are not implemented in phase sorting yet}}
+    uir.return %x : %t
+  }
+  uir.unreachable
 }
