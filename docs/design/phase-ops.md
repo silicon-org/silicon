@@ -12,17 +12,21 @@ Because the intermediate state between "sorted" and "split" cannot be expressed 
 
 ## The design
 
-Three stages, each owning a single concern:
+Four stages, each owning a single concern:
 
 1. **PhaseAnalysis** (unchanged) computes phases for ops and values.
    It is consumed only by the sorting pass; the phase map never crosses a pass boundary.
 2. **Phase sorting** rewrites the *internals* of a `uir.func` and leaves the function op untouched.
-   Output contract: the body and signature regions contain only `uir.phase` ops, floating constants, and the region's terminator (`uir.unreachable` for the body, `uir.signature` for the signature), at most one `uir.phase` per phase, in increasing phase order.
-   Values flowing between phases are ordinary SSA values: results of an earlier `uir.phase` op consumed inside a later one.
+   Output contract: the body and signature regions contain only `uir.phase` ops, floating ops, and the region's terminator (`uir.unreachable` for the body, `uir.signature` for the signature), at most one `uir.phase` per phase, in increasing phase order.
+   Values computed inside a phase and consumed in a later one cross as phase-op results: yielded by `uir.phase_return`, consumed by any later phase, at any distance.
+   Values already visible at the region top level — function arguments and floating ops — are consumed directly wherever needed, without routing through a phase op.
    Calls are decomposed into `uir.phase_call` ops targeting a specific phase of the callee.
    This is the only pass that runs or consumes PhaseAnalysis.
-3. **Function splitting** is phase-blind: it never asks what phase an op has.
-   It expects the phase-op-only contract, creates per-phase `hir.func` ops, converts phase-op result flow into opaque context pack/unpack, rewrites `uir.phase_call` to `hir.call`, reconstructs signatures, and emits the structural ops (`uir.split_func`, `hir.multiphase_func`).
+3. **Normalization** is a cheap structural pre-pass, run inside the function splitter or as a small pass immediately before it.
+   It brings the sorted form into a fully threaded shape: it materializes `uir.phase` ops for externally visible phases that have no content and for intermediate hops of skipping crossings, threads every crossing through adjacent phase ops (function arguments starting at their declared phase), and sinks floating ops into the phase regions that use them.
+   Its output contract is purely structural, with no notion of "floating" left: regions hold exactly `uir.phase` ops and the region terminator, every value crossing between phase ops is yielded by the immediately preceding one, and every function result rides the `uir.phase_return` of its phase.
+4. **Function splitting** is phase-blind: it never asks what phase an op has.
+   It expects the normalized contract, creates one per-phase `hir.func` per `uir.phase` op (never synthesizing any), converts phase-op result flow into opaque context pack/unpack, rewrites `uir.phase_call` to `hir.call`, reconstructs signatures, and emits the structural ops (`uir.split_func`, `hir.multiphase_func`).
 
 ## New ops
 
@@ -41,8 +45,11 @@ Three stages, each owning a single concern:
 - **Internal phases.** Sorting distributes content into a `uir.phase` op for every phase, including phases not visible in the function's declaration — leading, mid-range, and trailing internal phases, such as effect-only `dyn` content past the last declared phase.
   Callers cannot target internal phases: the `uir.phase_call` entries are exactly the declaration-derived external phases.
   How internal phases end up executing is a function-splitting and evaluation concern (multiphase funcs are the likely vehicle), not a sorting concern; sorting stoically wraps them like any other phase.
-- **No empty phases.** Sorting creates a `uir.phase` op only for phases that have content; it never materializes empty ones.
-  Function splitting synthesizes per-phase functions for externally visible phases that have no phase op.
+- **No empty phases in sorted output.** Sorting creates a `uir.phase` op only for phases that have content; it never materializes empty ones.
+  A `uir.phase_return` carrying function results or yields is content: a result-only phase gets a phase op holding just its `uir.phase_return`.
+  Empty and passthrough-only phase ops are normalization's vocabulary: it materializes them freely for gap phases and threading hops, so the splitter emits exactly one function per phase op and never synthesizes.
+- **Crossings in sorted output may jump.** Sorting yields a value once, from the phase computing it; consumers at any later phase use that result directly, and function arguments and floating ops are consumed directly at any phase.
+  Hop-by-hop threading is normalization's job, not sorting's: no sorting rule depends on whether an intermediate phase op happens to exist.
 - **Body and signature regions follow one set of rules.** The same control flow and exit arrangements are legal in both, phase ops and their verifiers do not distinguish the regions, and sorting looks at op phases and moves ops around without caring which region it rewrites.
   In particular, which function result values a `uir.phase_return` must carry is part of the splitting contract (diagnosed there), not an op verifier rule, since no single verifier rule covers both regions.
 - **Signature region.** The signature undergoes the same phase sorting and contains its own `uir.phase` ops.
