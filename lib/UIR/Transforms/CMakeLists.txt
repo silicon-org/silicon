@@ -1,6 +1,7 @@
 add_silicon_dialect_library(SiliconUIRTransforms
   FlattenCF.cpp
   SortPhases.cpp
+  SortPhases2.cpp
   SplitPhases2.cpp
   TestPhaseAnalysis2.cpp
 

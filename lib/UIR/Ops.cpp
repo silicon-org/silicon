@@ -683,6 +683,21 @@ LogicalResult FuncOp::verifyRegions() {
   if (bodyWalkResult.wasInterrupted())
     return failure();
 
+  // Every return in the body provides exactly one value per declared
+  // function result, no matter how deeply it is nested.
+  auto numResults = getResultPhases().size();
+  auto returnWalkResult = getBody().walk([&](ReturnOp op) {
+    if (op.getValues().size() != numResults) {
+      op.emitOpError() << "provides " << op.getValues().size()
+                       << " values but the enclosing function declares "
+                       << numResults << " results";
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  if (returnWalkResult.wasInterrupted())
+    return failure();
+
   return success();
 }
 

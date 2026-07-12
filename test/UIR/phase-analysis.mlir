@@ -711,7 +711,8 @@ uir.func @SignaturePhases(%a: -1, %b: 0) -> (result: 0) {
   // CHECK: uir.signature ({{.*}}) -> ({{.*}}) {{.*}}pa.phase = "0"
   uir.signature (%0, %1) -> (%2)
 } {
-  uir.return
+  %t = hir.int_type
+  uir.return %b : %t
 }
 
 //===----------------------------------------------------------------------===//

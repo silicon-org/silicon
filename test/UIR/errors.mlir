@@ -416,3 +416,29 @@ uir.func @phase_call_result_type_mismatch(%a: 0) -> () {
   %r = "uir.phase_call"() {callee = @pc_callee, calleePhase = 0 : si32, operandSegmentSizes = array<i32: 0, 0, 0, 0>, resultSegmentSizes = array<i32: 1, 0>} : () -> (!hir.any)
   uir.return
 }
+
+// -----
+
+// Verify that returns in a uir.func body must match the declared results.
+uir.func @return_arity(%a: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  // expected-error @below {{provides 0 values but the enclosing function declares 1 results}}
+  uir.return
+}
+
+// -----
+
+// Verify that nested returns must match the declared results too.
+uir.func @return_arity_nested(%c: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.if %c {
+    // expected-error @below {{provides 0 values but the enclosing function declares 1 results}}
+    uir.return
+  }
+  uir.return %x : %t
+}
