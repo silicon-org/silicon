@@ -374,35 +374,39 @@ LogicalResult PhaseAnalysis::run() {
 }
 
 /// Collect the (value, terminator) pairs that provide a given result of a
-/// region-bearing op: the single yield for exprs, the branch yields for ifs,
-/// and the breaks for loops. Terminators that do not carry the result (e.g.
-/// early returns, unreachable) are omitted.
+/// region-bearing op.
+///
+/// A result is provided only by terminators that hand control to the op's
+/// continuation carrying the value: a `uir.yield` for exprs and ifs, and a
+/// `uir.break` of that loop for loops. Any other arm terminator diverts
+/// control elsewhere — an if/expr arm that breaks, continues, returns, or is
+/// unreachable never delivers a value to the op's result, so its operands (a
+/// break's values belong to the enclosing loop's result, not this op's) are
+/// not providers. Result-index positions a provider does not carry are
+/// omitted.
 SmallVector<std::pair<Value, Operation *>, 2>
 PhaseAnalysis::resultProviders(Operation *regionOp, unsigned resultIdx) {
   SmallVector<std::pair<Value, Operation *>, 2> providers;
-  auto addTerm = [&](Operation *term) {
-    ValueRange values;
-    if (auto yieldOp = dyn_cast<YieldOp>(term))
-      values = yieldOp.getValues();
-    else if (auto breakOp = dyn_cast<BreakOp>(term))
-      values = breakOp.getValues();
-    else
+  auto addYield = [&](Operation *term) {
+    auto yieldOp = dyn_cast<YieldOp>(term);
+    if (!yieldOp)
       return;
-    if (resultIdx < values.size())
-      providers.push_back({values[resultIdx], term});
+    if (resultIdx < yieldOp.getValues().size())
+      providers.push_back({yieldOp.getValues()[resultIdx], term});
   };
 
   if (auto exprOp = dyn_cast<ExprOp>(regionOp)) {
-    addTerm(exprOp.getBody().front().getTerminator());
+    addYield(exprOp.getBody().front().getTerminator());
   } else if (auto ifOp = dyn_cast<IfOp>(regionOp)) {
-    addTerm(ifOp.getThenRegion().front().getTerminator());
+    addYield(ifOp.getThenRegion().front().getTerminator());
     if (!ifOp.getElseRegion().empty())
-      addTerm(ifOp.getElseRegion().front().getTerminator());
+      addYield(ifOp.getElseRegion().front().getTerminator());
   } else if (auto loopOp = dyn_cast<LoopOp>(regionOp)) {
     auto it = loopBreaks.find(loopOp);
     if (it != loopBreaks.end())
       for (auto breakOp : it->second)
-        addTerm(breakOp);
+        if (resultIdx < breakOp.getValues().size())
+          providers.push_back({breakOp.getValues()[resultIdx], breakOp});
   } else {
     llvm_unreachable("unexpected region op in resultProviders");
   }
@@ -672,11 +676,18 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
   // does not carry this result (e.g. uir.return, uir.unreachable).
   auto constrainTermOperand =
       [&](Operation *term) -> FailureOr<std::optional<int16_t>> {
+    // Only the terminator kind that hands control to this op's continuation
+    // provides its results: a yield for exprs/ifs, a break for loops. An
+    // if/expr arm terminated otherwise (a break diverting to an enclosing
+    // loop, a continue, a return) delivers no value to this op's result.
     auto getOperands = [&](Operation *t) -> std::pair<ValueRange, ValueRange> {
-      if (auto yieldOp = dyn_cast<YieldOp>(t))
-        return {yieldOp.getValues(), yieldOp.getTypeOfValues()};
-      if (auto breakOp = dyn_cast<BreakOp>(t))
-        return {breakOp.getValues(), breakOp.getTypeOfValues()};
+      if (isa<ExprOp, IfOp>(regionOp)) {
+        if (auto yieldOp = dyn_cast<YieldOp>(t))
+          return {yieldOp.getValues(), yieldOp.getTypeOfValues()};
+      } else if (isa<LoopOp>(regionOp)) {
+        if (auto breakOp = dyn_cast<BreakOp>(t))
+          return {breakOp.getValues(), breakOp.getTypeOfValues()};
+      }
       return {{}, {}};
     };
 

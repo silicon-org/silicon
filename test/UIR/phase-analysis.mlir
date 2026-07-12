@@ -1076,6 +1076,42 @@ uir.func @LoopDistinctBreakFloorSatisfied(%a: 0, %b: 0, %flag: 0) -> (result: 0)
 }
 
 //===----------------------------------------------------------------------===//
+// An if arm terminated by uir.break does not provide the if's result. The
+// break diverts control to the enclosing loop carrying the loop result (%hi at
+// phase 1); the if's result is provided only by the yielding else arm (%lo at
+// phase 0). The if result must be phase 0, uninfluenced by the break value's
+// phase, and the demand for %if at phase 0 must succeed (before the fix, the
+// break value %hi at phase 1 was misread as the if provider and could not
+// satisfy a phase-0 demand).
+
+// CHECK-LABEL: uir.func @IfArmBreakNotIfProvider
+uir.func @IfArmBreakNotIfProvider(%hi: 1, %lo: 0, %sel: 0) -> (result: 1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  %2 = hir.int_type
+  %3 = hir.int_type
+  uir.signature (%0, %1, %2) -> (%3)
+} {
+  %t = hir.int_type
+  // The loop result comes from the break (%hi at phase 1).
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
+  %r = uir.loop : %t {
+    // The if result comes only from the else-arm yield (%lo at phase 0); the
+    // then-arm break provides the loop result, not the if result.
+    // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["0"]
+    %if = uir.if %sel : %t {
+      uir.break %hi : %t
+    } else {
+      uir.yield %lo : %t
+    }
+    // CHECK: uir.pin {{.*}}pa.operands = ["0"], pa.phase = "0"
+    %p = uir.pin %if, 0 : !hir.any
+    uir.continue
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Function with const result, single return. No floor.
 
 // CHECK-LABEL: uir.func @FuncSingleReturnNoFloor
