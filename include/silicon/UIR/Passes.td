@@ -86,25 +86,27 @@ def SortPhasesPass : Pass<"sort-phases", "mlir::ModuleOp"> {
     records. Loop-phase early exits (`break`/`continue` in branch arms) make
     each record end in a nested exit-path choice that a nested `hir.pick` in
     the replicate dispatches on; nested loops produce nested hit lists. The
-    list crosses phases as an ordinary crossing. Later-phase loop results
-    (break-value choices) stay rejected.
+    list crosses phases as an ordinary crossing. A loop delivering a later-
+    phase result first has that break value choice-ified: each break site
+    carries a `hir.choice` of the value's snapshots in place of the value, and
+    a `hir.pick` at phase p+1 after the loop reconstructs it, composing with
+    record extraction.
 
     This is the only pass that runs or consumes PhaseAnalysis; the phase map
     never crosses the pass boundary.
 
     The pass currently covers straight-line content, call decomposition,
-    single-boundary branch extraction, and single-boundary loop-record
-    extraction, and rejects inputs that need the remaining sorting machinery
-    with explicit diagnostics: early function exits (function-level exit
-    chains), results delivered at a phase different from their op's own phase
-    by identity-provided or never-produced control flow (which need result
-    forwarding and unreachable-consumer handling), break-value choices,
-    hoisting and content more than one phase away from its control flow, and
-    backward uses from floating content nested under earlier-phase control
-    flow. The pass's own output vocabulary
-    (`uir.phase`, `uir.phase_return`, `uir.phase_call`) is likewise rejected
-    in its input, as are ops inside regions the phase analysis does not
-    model.
+    single-boundary branch extraction, single-boundary loop-record extraction,
+    and break-value choices, and rejects inputs that need the remaining sorting
+    machinery with explicit diagnostics: early function exits (function-level
+    exit chains), results delivered at a phase different from their op's own
+    phase by identity-provided or never-produced control flow (which need
+    result forwarding and unreachable-consumer handling), hoisting and content
+    more than one phase away from its control flow, and backward uses from
+    floating content nested under earlier-phase control flow. The pass's own
+    output vocabulary (`uir.phase`, `uir.phase_return`, `uir.phase_call`) is
+    likewise rejected in its input, as are ops inside regions the phase
+    analysis does not model.
   }];
 }
 

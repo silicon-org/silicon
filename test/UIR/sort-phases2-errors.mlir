@@ -235,34 +235,127 @@ uir.func @FloatBackwardInBranch(%c: 0, %x: 0) -> () {
 
 // -----
 
-// A const loop whose break carries a later-phase value is a break-value
-// choice: the value never materializes at the loop's phase and must be
-// reconstructed from the break site's snapshots. That is a separate sorting
-// case; loop-record extraction rejects it.
-uir.func @BreakValueLoop(%n: -1, %x: 0) -> (result: 0) {
+// A break value shared with other later-phase effects that stay behind cannot
+// be sliced out: the entangled content (here a var written and read for the
+// break value) would be duplicated into the receiving pick. Rejected.
+uir.func @SharedBreakValueSlice(%n: 0, %x: 0) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %r = uir.loop : %t {
+    %done = hir.geq %x, %n : %t
+    uir.if %done {
+      %v = uir.expr pin 1 : %t {
+        // expected-error @below {{is shared between a break value and other later-phase content; not implemented in phase sorting yet}}
+        %vv = hir.var : %t
+        hir.write_var %vv, %x : %t
+        %rr = hir.read_var %vv : %t
+        uir.yield %rr : %t
+      }
+      uir.break %v : %t
+    }
+    uir.continue
+  }
+  uir.return %r : %t
+}
+
+// -----
+
+// Two break sites carrying the same value slice: from the first site the slice
+// is used by the second break, i.e. by content outside the first site, so it is
+// rejected as a shared break-value slice.
+uir.func @SharedAcrossBreaks(%n: -1, %x: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
   %zero = hir.constant_int 0 : %t
   %one = hir.constant_int 1 : %t
-  %r = uir.expr pin -1 : %t {
-    // expected-error @below {{delivers result #0 at phase 0 instead of its own phase -1; break-value choices are not implemented in phase sorting yet}}
-    %v = uir.loop (%k = %zero : %t) : %t {
-      %done = hir.geq %k, %n : %t
-      uir.if %done {
-        %b = uir.expr pin 1 : %t {
-          %s = hir.add %x, %k : %t
-          uir.yield %s : %t
-        }
-        uir.break %b : %t
+  %y = uir.expr pin -1 : %t {
+    %r = uir.loop (%k = %zero : %t) : %t {
+      // expected-error @below {{is shared between a break value and other later-phase content; not implemented in phase sorting yet}}
+      %s = hir.add %x, %k : %t
+      %c1 = hir.geq %k, %n : %t
+      uir.if %c1 {
+        uir.break %s : %t
+      }
+      %c2 = hir.geq %k, %one : %t
+      uir.if %c2 {
+        uir.break %s : %t
       }
       %next = hir.add %k, %one : %t
       uir.continue %next : %t
     }
-    uir.yield %v : %t
+    uir.yield %r : %t
   }
-  uir.return %r : %t
+  uir.return %y : %t
+}
+
+// -----
+
+// A break that does not carry the loop's later-phase result while another break
+// does: break arity is not a verifier invariant, so the missing value is caught
+// here.
+uir.func @BreakMissingResult(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %y = uir.expr pin -1 : %t {
+    %r = uir.loop (%k = %zero : %t) : %t {
+      %c1 = hir.geq %k, %n : %t
+      uir.if %c1 {
+        %s = hir.add %x, %k : %t
+        uir.break %s : %t
+      }
+      %c2 = hir.geq %k, %one : %t
+      uir.if %c2 {
+        // expected-error @below {{does not provide the loop's result 0}}
+        uir.break
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %r : %t
+  }
+  uir.return %y : %t
+}
+
+// -----
+
+// A multi-result loop whose later result is choice-ified but one break omits a
+// trailing kept (phase-p) result: every result the break must supply is
+// positionally indexed, so the missing kept value is caught, not indexed out of
+// range.
+uir.func @BreakMissingKeptResult(%n: -1, %x: 0) -> (a: 0, b: -1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0, %0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %y:2 = uir.expr pin -1 : %t, %t {
+    %r:2 = uir.loop (%k = %zero : %t) : %t, %t {
+      %c1 = hir.geq %k, %n : %t
+      uir.if %c1 {
+        %s = hir.add %x, %k : %t
+        uir.break %s, %k : %t, %t
+      }
+      %c2 = hir.geq %k, %one : %t
+      uir.if %c2 {
+        %m = hir.add %x, %one : %t
+        // expected-error @below {{does not provide the loop's result 1}}
+        uir.break %m : %t
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %r#0, %r#1 : %t, %t
+  }
+  uir.return %y#0, %y#1 : %t, %t
 }
 
 // -----
@@ -304,7 +397,7 @@ uir.func @DivergenceLaterResult(%n: -1, %x: 0) -> (result: 0) {
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       %done = hir.geq %i, %n : %t
-      // expected-error @below {{carries a loop exit and has later-phase results; break-value choices are not implemented in phase sorting yet}}
+      // expected-error @below {{carries a loop exit and has later-phase results; exit-carrying branches with demanded later-phase results are not implemented in phase sorting yet}}
       %r = uir.if %done : %t {
         uir.break
       } else {

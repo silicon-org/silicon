@@ -1180,3 +1180,180 @@ uir.func @NestedLoops(%n: -1, %x: 0) -> (result: 0) {
   %r = hir.read_var %acc : %t
   uir.return %r : %t
 }
+
+//===----------------------------------------------------------------------===//
+// Break-value choice: a const loop whose break carries a dyn value is rebuilt
+// at phase -1 breaking with a choice of the value's snapshots instead; the
+// choice crosses to phase 0, where a pick reconstructs the value from the
+// snapshots. Matches @BreakValueChoice in sorted-form.mlir.
+
+// CHECK-LABEL: uir.func @BreakValueChoice
+uir.func @BreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[ZERO:%.+]] = hir.constant_int 0
+  %zero = hir.constant_int 0 : %t
+  // CHECK-NEXT: [[ONE:%.+]] = hir.constant_int 1
+  %one = hir.constant_int 1 : %t
+  // CHECK-NEXT: [[CT:%.+]] = hir.choice_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[CH:%.+]] = uir.loop ([[K:%.+]] = [[ZERO]] : [[T]]) : [[CT]] {
+  // CHECK-NEXT:     [[DONE:%.+]] = hir.geq [[K]], %n : [[T]]
+  // CHECK-NEXT:     uir.if [[DONE]] {
+  // CHECK-NEXT:       [[C0:%.+]] = hir.choice 0([[K]])
+  // CHECK-NEXT:       uir.break [[C0]] : [[CT]]
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[NEXT:%.+]] = hir.add [[K]], [[ONE]] : [[T]]
+  // CHECK-NEXT:     uir.continue [[NEXT]] : [[T]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[CH]]
+  // CHECK-NEXT: }
+  %y = uir.expr pin -1 : %t {
+    %r = uir.loop (%k = %zero : %t) : %t {
+      %done = hir.geq %k, %n : %t
+      uir.if %done {
+        %s = hir.add %x, %k : %t
+        uir.break %s : %t
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %r : %t
+  }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[Y:%.+]] = hir.pick [[P]] : !hir.any [0 ([[SK:%.+]]): {
+  // CHECK-NEXT:     [[S:%.+]] = hir.add %x, [[SK]] : [[T]]
+  // CHECK-NEXT:     hir.yield [[S]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[Y]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.return %y : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Two break sites, each carrying a distinct dyn value: one choice, two tags,
+// two pick alternatives. Structurally unlike the single-break case.
+
+// CHECK-LABEL: uir.func @TwoBreakValues
+uir.func @TwoBreakValues(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  // CHECK: [[CH:%.+]] = uir.loop (
+  // CHECK:   hir.choice 0([[K0:%.+]])
+  // CHECK:   uir.break
+  // CHECK:   hir.choice 1([[K1:%.+]])
+  // CHECK:   uir.break
+  // CHECK: }
+  // CHECK: uir.phase_return yield [[CH]]
+  %y = uir.expr pin -1 : %t {
+    %r = uir.loop (%k = %zero : %t) : %t {
+      %done = hir.geq %k, %n : %t
+      uir.if %done {
+        %s = hir.add %x, %k : %t
+        uir.break %s : %t
+      }
+      %big = hir.geq %k, %one : %t
+      uir.if %big {
+        %m = hir.mul %x, %k : %t
+        uir.break %m : %t
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %r : %t
+  }
+  // CHECK: hir.pick %{{.+}} : !hir.any [0 ([[SK0:%.+]]): {
+  // CHECK-NEXT:   hir.add %x, [[SK0]]
+  // CHECK-NEXT:   hir.yield
+  // CHECK-NEXT: } 1 ([[SK1:%.+]]): {
+  // CHECK-NEXT:   hir.mul %x, [[SK1]]
+  // CHECK-NEXT:   hir.yield
+  // CHECK-NEXT: }]
+  uir.return %y : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Break value composed with separate record content: the loop both accumulates
+// a dyn var per iteration (record content) and breaks with a dyn value. The
+// break value choice-ifies while the record content extracts into a replicate;
+// the reconstructing pick runs after the replicate (all iterations first, then
+// the final break value). Structurally unlike @BreakValueChoice.
+
+// CHECK-LABEL: uir.func @BreakValueWithRecords
+uir.func @BreakValueWithRecords(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // The phase -1 op yields both the hit list and the break-value choice.
+  // CHECK: [[P:%.+]]:2 = uir.phase -1 {
+  // CHECK-NEXT:   [[LIST:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   [[CH:%.+]] = uir.loop ([[K:%.+]] = %{{.+}} : [[T:%.+]]) : %{{.+}} {
+  // CHECK-NEXT:     [[DONE:%.+]] = hir.geq [[K]], %n : [[T]]
+  // CHECK-NEXT:     uir.if [[DONE]] {
+  // The break site pushes both a break-value choice and an exit-path record.
+  // CHECK-NEXT:       [[BV:%.+]] = hir.choice 0([[K]])
+  // CHECK-NEXT:       [[EX:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[RE:%.+]] = hir.opaque_pack([[K]], [[EX]])
+  // CHECK-NEXT:       hir.opaque_list_push [[LIST]], [[RE]]
+  // CHECK-NEXT:       uir.break [[BV]] :
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[NEXT:%.+]] = hir.add [[K]], %{{.+}} : [[T]]
+  // CHECK-NEXT:     [[CO:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     [[RC:%.+]] = hir.opaque_pack([[K]], [[CO]])
+  // CHECK-NEXT:     hir.opaque_list_push [[LIST]], [[RC]]
+  // CHECK-NEXT:     uir.continue [[NEXT]] : [[T]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[LIST]], [[CH]]
+  // CHECK-NEXT: }
+  %y = uir.expr pin -1 : %t {
+    %r = uir.loop (%k = %zero : %t) : %t {
+      uir.expr pin 1 {
+        %cur = hir.read_var %acc : %t
+        %new = hir.add %cur, %k : %t
+        hir.write_var %acc, %new : %t
+        uir.yield
+      }
+      %done = hir.geq %k, %n : %t
+      uir.if %done {
+        %s = hir.add %x, %k : %t
+        uir.break %s : %t
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %r : %t
+  }
+  // The replicate replays the record content; the pick reconstructs the break
+  // value afterwards, and the result combines both.
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[ACC:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   hir.replicate ([[SAMP:%.+]], [[CHAIN:%.+]]) in [[P]]#0 {
+  // CHECK:          hir.pick [[CHAIN]] [0 (): {
+  // CHECK:          } 1 (): {
+  // CHECK:          }]
+  // CHECK:        }
+  // CHECK:        [[BVR:%.+]] = hir.pick [[P]]#1 : !hir.any [0 ([[SK:%.+]]): {
+  // CHECK-NEXT:     hir.add %x, [[SK]] : [[T]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }]
+  // CHECK:        [[RD:%.+]] = hir.read_var [[ACC]] : [[T]]
+  // CHECK-NEXT:   [[SUM:%.+]] = hir.add [[BVR]], [[RD]] : [[T]]
+  // CHECK-NEXT:   uir.phase_return [[SUM]] : [[T]]
+  // CHECK-NEXT: }
+  %rd = hir.read_var %acc : %t
+  %sum = hir.add %y, %rd : %t
+  uir.return %sum : %t
+}
