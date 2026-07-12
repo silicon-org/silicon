@@ -51,7 +51,9 @@
 // replaced by their inputs: the grouping ops exist to communicate phase
 // constraints to PhaseAnalysis and only stand in the way once the phase map
 // is computed. Then every `uir.call` is decomposed into `uir.phase_call`
-// entries, one per externally visible callee phase:
+// entries, one per externally visible callee phase, and every earlier-phase
+// `uir.if` with later-phase content or a choice-ified result is decomposed
+// into a choice-yielding branch plus a receiving `hir.pick`:
 //
 // - **Decompose**: a call is replaced by one `uir.phase_call` per phase in
 //   the callee's declaration-derived external phase set (its declared arg
@@ -66,15 +68,23 @@
 //   callee declaration alone means no split witness, no callee-before-caller
 //   order, and recursion decomposes like any other call.
 //
-// The pass currently covers straight-line content. Inputs that need the
-// remaining sorting machinery are rejected with explicit diagnostics
-// instead of being sorted incorrectly: early function exits (function-level
-// exit chains), results delivered at a phase different from their op's own
-// phase (identity-provided, choice-ified, and never-produced control-flow
-// results, which need result forwarding and unreachable-consumer handling),
-// hoisting/extraction of content nested under differently-phased control
-// flow, and backward uses from floating content nested under earlier-phase
-// control flow.
+// - **Extract branches**: a `uir.if` at phase p whose arms hold later-phase
+//   content, or whose result selects between distinct later-phase values, is
+//   rebuilt at phase p with a per-arm `hir.choice` as an extra result; the
+//   later-phase content and results move into a `hir.pick` at phase p+1 that
+//   dispatches on the choice. The choice crosses phases as an ordinary
+//   crossing. Only genuine choice-ification is lifted this way; identity-
+//   provided and never-produced divergent results stay rejected below.
+//
+// The pass covers straight-line content and single-boundary branch
+// extraction. Inputs that need the remaining sorting machinery are rejected
+// with explicit diagnostics instead of being sorted incorrectly: early
+// function exits (function-level exit chains), results delivered at a phase
+// different from their op's own phase by identity-provided or never-produced
+// control flow (which need result forwarding and unreachable-consumer
+// handling), hoisting and loop-record extraction of content nested under
+// differently-phased control flow, and backward uses from floating content
+// nested under earlier-phase control flow.
 //
 //===----------------------------------------------------------------------===//
 
@@ -82,6 +92,7 @@
 #include "silicon/UIR/Analysis/PhaseAnalysis.h"
 #include "silicon/UIR/Ops.h"
 #include "silicon/UIR/Passes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
 #include "llvm/Support/Debug.h"
 #include <map>
@@ -122,8 +133,18 @@ private:
   LogicalResult dissolveExprsAndPins();
   LogicalResult decomposeCalls();
   LogicalResult decomposeCall(CallOp callOp);
+  LogicalResult extractBranches();
+  LogicalResult extractFromBranch(IfOp ifOp, int16_t p);
   LogicalResult rejectUnimplemented();
   LogicalResult sortRegion(Region &region);
+
+  bool hasLaterContent(Operation *root, int16_t p);
+  SmallVector<Operation *> collectLaterContent(Block &block, int16_t p);
+  Operation *findExitTerminator(Region &region, int16_t p);
+  llvm::SetVector<Value> collectCrossingValues(Operation *regionOp,
+                                               ArrayRef<Operation *> movedOps);
+  void remapFields(Block &receivingBlock, const llvm::SetVector<Value> &fields);
+  void cloneFloatingUses(Operation *regionOp, Block &rootBlock);
 
   /// Whether a phase is a real phase (not the float/never sentinel).
   static bool isRealPhase(int16_t phase) {
@@ -370,6 +391,408 @@ LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
 }
 
 //===----------------------------------------------------------------------===//
+// Branch Extraction
+//===----------------------------------------------------------------------===//
+//
+// # Extract Later-Phase Content Out of Earlier-Phase Branches
+//
+// A `uir.if` at phase p whose arms hold later-phase content, or whose result
+// selects between distinct later-phase values, cannot wrap wholesale into
+// phase p: the later-phase content must run in a later phase, and a later
+// value cannot be produced at phase p (causality). Branch extraction rewrites
+// such an if into two cooperating ops that the ordinary wrap and cross rules
+// then place:
+//
+// - The if is rebuilt at phase p. Its kept results (those already at phase p)
+//   stay, and it gains one extra phase-p result per arm: an `hir.choice`
+//   tagging the taken arm and carrying, as its payload, the arm-local values
+//   the moved content samples. Later-phase results are removed from the if.
+// - One `hir.pick` is created right after the if, at phase p+1, dispatching
+//   on the choice. Each alternative holds that arm's moved later-phase
+//   content, reconstructing the payload from block arguments, and yields the
+//   arm's contribution to the removed later-phase results.
+//
+// The choice is an ordinary phase-p value; the cross rule yields it out of
+// phase p and the pick consumes it in phase p+1 like any other crossing. The
+// distinction between an obligation to choice-ify and the neighbouring
+// divergent-result cases is local: a later-phase result is choice-ified only
+// when its providing arm yields select distinct SSA values. An identity-
+// provided result (all arms yield the same value) or a never-produced result
+// is not extracted; the residual if still delivers it divergently, so the
+// rejection below reports it. Extraction thus lifts exactly the
+// choice-ification case and leaves the rest rejected.
+
+/// Whether any op transitively inside `root` sits at a real phase later than
+/// p.
+bool PhaseSorter::hasLaterContent(Operation *root, int16_t p) {
+  auto result = root->walk([&](Operation *op) {
+    if (op == root)
+      return WalkResult::advance();
+    if (auto ph = realPhaseOf(op); ph && *ph > p)
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  return result.wasInterrupted();
+}
+
+/// The top-level ops of a block at a real phase later than p, in program
+/// order.
+SmallVector<Operation *> PhaseSorter::collectLaterContent(Block &block,
+                                                          int16_t p) {
+  SmallVector<Operation *> ops;
+  for (auto &op : block)
+    if (auto ph = realPhaseOf(&op); ph && *ph > p)
+      ops.push_back(&op);
+  return ops;
+}
+
+/// The first terminator at phase <= p that exits the region (return, or
+/// break/continue targeting a loop outside the region), or null if every
+/// path yields. Branch extraction bails on arms with such exits: they belong
+/// to function-level exit chains or the enclosing loop's records, not to
+/// branch extraction.
+Operation *PhaseSorter::findExitTerminator(Region &region, int16_t p) {
+  Operation *found = nullptr;
+  std::function<void(Region &, bool)> visit = [&](Region &r, bool loopScoped) {
+    for (auto &block : r) {
+      for (auto &op : block) {
+        if (found)
+          return;
+        bool isExit =
+            isa<ReturnOp>(op) || (!loopScoped && isa<BreakOp, ContinueOp>(op));
+        if (isExit)
+          if (auto ph = realPhaseOf(&op); ph && *ph <= p) {
+            found = &op;
+            return;
+          }
+        for (auto &inner : op.getRegions())
+          visit(inner, loopScoped || isa<LoopOp>(op));
+      }
+    }
+  };
+  visit(region, isa<LoopOp>(region.getParentOp()));
+  return found;
+}
+
+/// Collect the real-phase values defined inside `regionOp` that the
+/// `movedOps` (and their nested ops) use and that are not themselves among
+/// the moved ops: these cross the phase boundary as choice payload fields.
+/// Values defined outside the region are used directly (they dominate the
+/// receiving pick); floating values defined inside are cloned instead of
+/// crossing.
+llvm::SetVector<Value>
+PhaseSorter::collectCrossingValues(Operation *regionOp,
+                                   ArrayRef<Operation *> movedOps) {
+  auto isMoved = [&](Operation *op) {
+    return llvm::any_of(movedOps, [&](Operation *m) {
+      return m == op || m->isProperAncestor(op);
+    });
+  };
+
+  llvm::SetVector<Value> fields;
+  for (auto *moved : movedOps) {
+    moved->walk([&](Operation *user) {
+      for (auto value : user->getOperands()) {
+        if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+          auto *owner = blockArg.getOwner()->getParentOp();
+          if (owner == regionOp || regionOp->isProperAncestor(owner))
+            if (!isMoved(owner))
+              fields.insert(value);
+          continue;
+        }
+        auto *defOp = value.getDefiningOp();
+        if (!regionOp->isProperAncestor(defOp) || isMoved(defOp))
+          continue;
+        // Floating values are cloned into the receiving block instead of
+        // crossing through a field.
+        if (!isRealPhase(analysis.opPhases.at(defOp)))
+          continue;
+        fields.insert(value);
+      }
+    });
+  }
+  return fields;
+}
+
+/// After moving content into a receiving block whose leading arguments
+/// correspond 1:1 to `fields`, replace field uses inside the block (and any
+/// nested receiving blocks) with the block arguments.
+void PhaseSorter::remapFields(Block &receivingBlock,
+                              const llvm::SetVector<Value> &fields) {
+  auto *receivingRegion = receivingBlock.getParent();
+  for (auto [field, arg] : llvm::zip(fields, receivingBlock.getArguments())) {
+    Value fieldValue = field;
+    analysis.actualPhase[arg] = analysis.actualPhase.at(fieldValue);
+    fieldValue.replaceUsesWithIf(arg, [&](OpOperand &use) {
+      return receivingRegion->isAncestor(use.getOwner()->getParentRegion());
+    });
+  }
+}
+
+/// Clone the defining tree of a floating pure value at the builder's
+/// insertion point.
+static Value cloneFloatingTree(Value value, OpBuilder &builder,
+                               IRMapping &mapping) {
+  if (auto mapped = mapping.lookupOrNull(value))
+    return mapped;
+  auto *defOp = value.getDefiningOp();
+  assert(defOp && "floating value must have a defining op");
+  for (auto operand : defOp->getOperands())
+    cloneFloatingTree(operand, builder, mapping);
+  builder.clone(*defOp, mapping);
+  return mapping.lookup(value);
+}
+
+/// Clone floating trees that moved content still references from inside the
+/// (former) region of `regionOp`. A floating value defined inside an arm is
+/// not visible from the receiving pick once the arm wraps into its own phase,
+/// so it is duplicated in front of its user; any other remaining use of a
+/// region-interior value is a causality violation the analysis rejects.
+void PhaseSorter::cloneFloatingUses(Operation *regionOp, Block &rootBlock) {
+  rootBlock.walk([&](Operation *user) {
+    for (auto &use : user->getOpOperands()) {
+      auto *defOp = use.get().getDefiningOp();
+      if (!defOp || !regionOp->isProperAncestor(defOp))
+        continue;
+      assert(!isRealPhase(analysis.opPhases.at(defOp)) &&
+             hir::isEffectivelyPure(defOp) &&
+             "moved op uses non-floating, non-crossing value from region");
+      OpBuilder builder(user);
+      IRMapping mapping;
+      auto clone = cloneFloatingTree(use.get(), builder, mapping);
+      clone.getDefiningOp()->walk([&](Operation *cloned) {
+        setPhase(cloned, PhaseAnalysis::kFloatPhase);
+      });
+      use.set(clone);
+    }
+  });
+}
+
+/// Whether the arm yields providing result `idx` of `ifOp` select between
+/// distinct SSA values. Only distinct selections are choice-ification
+/// obligations; a result forwarded identically by all arms is delivered at
+/// the value's own phase and is not extracted here. An arm terminated by an
+/// exit (return/break/continue) rather than a yield does not provide the
+/// result; such an if is not choice-ified but left for the early-exit
+/// rejection, so a single yielding provider never counts as a selection.
+static bool selectsDistinctValues(IfOp ifOp, unsigned idx) {
+  SmallVector<Value, 2> provided;
+  for (auto *region : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
+    if (region->empty())
+      continue;
+    auto yieldOp = dyn_cast<YieldOp>(region->front().getTerminator());
+    if (yieldOp && idx < yieldOp.getValues().size())
+      provided.push_back(yieldOp.getValues()[idx]);
+  }
+  return provided.size() > 1 &&
+         !llvm::all_of(provided, [&](Value v) { return v == provided[0]; });
+}
+
+/// Extract later-phase content out of every phase-p `uir.if` whose interior
+/// or results demand it, innermost first so a nested if becomes ordinary
+/// later-phase content of its enclosing branch.
+///
+/// An if is extracted only when every one of its results is deliverable at
+/// its own phase after extraction: results already at phase p stay, and
+/// results at a later phase are removed and reconstructed by the pick — but
+/// only if they choice-ify (distinct arm values). A result diverging from the
+/// op's phase in any other way (identity-provided earlier or later, or
+/// never-produced) is left in place for the divergence rejection; such an if
+/// is not extracted.
+LogicalResult PhaseSorter::extractBranches() {
+  SmallVector<IfOp> ifOps;
+  funcOp.getBody().walk<WalkOrder::PostOrder>([&](IfOp op) {
+    if (realPhaseOf(op))
+      ifOps.push_back(op);
+  });
+
+  for (auto ifOp : ifOps) {
+    int16_t p = *realPhaseOf(ifOp);
+
+    // Classify the results. Extraction is viable only if none diverge except
+    // by choice-ification.
+    bool extractable = true;
+    bool hasChoiceResult = false;
+    for (auto result : ifOp.getResults()) {
+      int16_t vph = analysis.actualPhase.at(result);
+      if (vph == p)
+        continue; // Kept at the op's phase.
+      if (isRealPhase(vph) && vph > p &&
+          selectsDistinctValues(ifOp, result.getResultNumber())) {
+        hasChoiceResult = true;
+        continue; // Choice-ification obligation.
+      }
+      extractable = false; // Identity-provided or never-produced divergence.
+      break;
+    }
+    if (!extractable)
+      continue;
+    if (!hasChoiceResult && !hasLaterContent(ifOp, p))
+      continue; // Nothing to extract; wraps wholesale.
+
+    if (failed(extractFromBranch(ifOp, p)))
+      return failure();
+  }
+  return success();
+}
+
+/// Rewrite one phase-p `uir.if` into a choice-yielding if plus a receiving
+/// `hir.pick` at phase p+1. See the section header for the shape and the
+/// invariant.
+LogicalResult PhaseSorter::extractFromBranch(IfOp ifOp, int16_t p) {
+  Operation *op = ifOp;
+  auto loc = op->getLoc();
+  auto anyTy = hir::AnyType::get(op->getContext());
+
+  // Arms that exit instead of yielding belong to the enclosing loop's records
+  // (break/continue) or to function-level exit chains (return); neither is
+  // branch extraction's concern. Leave the if for the corresponding rejection.
+  for (auto *arm : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
+    if (arm->empty())
+      continue;
+    if (findExitTerminator(*arm, p))
+      return success();
+  }
+
+  // Materialize an else region for an else-less if so the not-taken tag has a
+  // constructor.
+  if (ifOp.getElseRegion().empty()) {
+    auto &elseBlock = ifOp.getElseRegion().emplaceBlock();
+    auto builder = OpBuilder::atBlockEnd(&elseBlock);
+    auto yield = YieldOp::create(builder, loc, ValueRange{}, ValueRange{});
+    setPhase(yield, p);
+  }
+  SmallVector<Region *> arms = {&ifOp.getThenRegion(), &ifOp.getElseRegion()};
+
+  // Partition the results into kept (at phase p) and later ones. Later
+  // results are reconstructed by the receiving pick.
+  SmallVector<unsigned> keptIdx, laterIdx;
+  for (auto result : op->getResults()) {
+    if (analysis.actualPhase.at(result) > p)
+      laterIdx.push_back(result.getResultNumber());
+    else
+      keptIdx.push_back(result.getResultNumber());
+  }
+
+  // Per arm: the moved later-phase content, the crossing values it samples,
+  // and the operands the old yield provided for the later results.
+  struct ArmInfo {
+    SmallVector<Operation *> moved;
+    llvm::SetVector<Value> fields;
+    SmallVector<Value> laterYieldOperands;
+  };
+  SmallVector<ArmInfo> armInfos;
+  for (auto *arm : arms) {
+    ArmInfo info;
+    info.moved = collectLaterContent(arm->front(), p);
+    info.fields = collectCrossingValues(op, info.moved);
+
+    auto yieldOp = cast<YieldOp>(arm->front().getTerminator());
+    for (auto idx : laterIdx)
+      if (idx < yieldOp.getValues().size())
+        info.laterYieldOperands.push_back(yieldOp.getValues()[idx]);
+
+    // The later yield operands cross the boundary too: collect their crossing
+    // needs as if the yield were moved content.
+    for (auto value : info.laterYieldOperands) {
+      auto *defOp = value.getDefiningOp();
+      if (defOp && op->isProperAncestor(defOp) &&
+          !llvm::any_of(info.moved,
+                        [&](Operation *m) {
+                          return m == defOp || m->isProperAncestor(defOp);
+                        }) &&
+          isRealPhase(analysis.opPhases.at(defOp)))
+        info.fields.insert(value);
+      if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+        auto *owner = blockArg.getOwner()->getParentOp();
+        if (owner == op || op->isProperAncestor(owner))
+          info.fields.insert(value);
+      }
+    }
+    armInfos.push_back(std::move(info));
+  }
+
+  // Construct the per-arm choice and rewrite each yield to carry the kept
+  // values plus the choice.
+  OpBuilder builder(op);
+  auto choiceTypeOp = hir::ChoiceTypeOp::create(builder, loc);
+  setPhase(choiceTypeOp, PhaseAnalysis::kFloatPhase);
+  Value choiceType = choiceTypeOp.getResult();
+
+  for (auto [tag, arm] : llvm::enumerate(arms)) {
+    auto yieldOp = cast<YieldOp>(arm->front().getTerminator());
+    OpBuilder termBuilder(yieldOp);
+    auto choice = hir::ChoiceOp::create(termBuilder, loc, anyTy,
+                                        static_cast<uint32_t>(tag),
+                                        armInfos[tag].fields.getArrayRef());
+    setPhase(choice, p);
+
+    SmallVector<Value> values, typeOfValues;
+    for (auto idx : keptIdx) {
+      values.push_back(yieldOp.getValues()[idx]);
+      typeOfValues.push_back(yieldOp.getTypeOfValues()[idx]);
+    }
+    values.push_back(choice.getResult());
+    typeOfValues.push_back(choiceType);
+    auto newYield = YieldOp::create(termBuilder, loc, values, typeOfValues);
+    setPhase(newYield, p);
+    forget(yieldOp);
+    yieldOp->erase();
+  }
+
+  // Rebuild the if with the kept results plus the choice result.
+  SmallVector<Type> newResultTypes(keptIdx.size() + 1, anyTy);
+  SmallVector<Value> newTypeOperands;
+  for (auto idx : keptIdx)
+    newTypeOperands.push_back(ifOp.getResultTypes()[idx]);
+  newTypeOperands.push_back(choiceType);
+  auto newIf = IfOp::create(builder, loc, newResultTypes, ifOp.getCondition(),
+                            newTypeOperands);
+  newIf.getThenRegion().takeBody(ifOp.getThenRegion());
+  newIf.getElseRegion().takeBody(ifOp.getElseRegion());
+  setPhase(newIf, p);
+  for (auto [i, idx] : llvm::enumerate(keptIdx)) {
+    analysis.actualPhase[newIf.getResult(i)] =
+        analysis.actualPhase.at(op->getResult(idx));
+    op->getResult(idx).replaceAllUsesWith(newIf.getResult(i));
+  }
+  Value choiceResult = newIf.getResult(keptIdx.size());
+  analysis.actualPhase[choiceResult] = p;
+
+  // Create the receiving pick after the if, one alternative per arm,
+  // reconstructing the later results.
+  builder.setInsertionPointAfter(newIf);
+  SmallVector<Type> pickResultTypes(laterIdx.size(), anyTy);
+  auto receivingPick = hir::PickOp::create(builder, loc, pickResultTypes,
+                                           choiceResult, arms.size());
+  analysis.opPhases[receivingPick] = p + 1;
+  for (auto [i, idx] : llvm::enumerate(laterIdx)) {
+    analysis.actualPhase[receivingPick.getResult(i)] =
+        analysis.actualPhase.at(op->getResult(idx));
+    op->getResult(idx).replaceAllUsesWith(receivingPick.getResult(i));
+  }
+
+  for (auto [tag, alt] : llvm::enumerate(receivingPick.getAlternatives())) {
+    auto &info = armInfos[tag];
+    auto &altBlock = alt.emplaceBlock();
+    for (unsigned i = 0; i < info.fields.size(); ++i)
+      altBlock.addArgument(anyTy, loc);
+    for (auto *moved : info.moved)
+      moved->moveBefore(&altBlock, altBlock.end());
+    OpBuilder altBuilder(&altBlock, altBlock.end());
+    auto altYield =
+        hir::YieldOp::create(altBuilder, loc, info.laterYieldOperands);
+    analysis.opPhases[altYield] = p + 1;
+    remapFields(altBlock, info.fields);
+    cloneFloatingUses(newIf, altBlock);
+  }
+
+  forget(op);
+  op->erase();
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reject Unimplemented Sorting Machinery
 //===----------------------------------------------------------------------===//
 
@@ -390,13 +813,15 @@ static std::string phaseName(int16_t phase) {
 /// - Early function exits (a `uir.return` anywhere but as the body region's
 ///   terminator, including returns still riding inside undissolved expr
 ///   carriers), which need function-level exit chains.
-/// - Ops delivering a result at a phase different from their own phase: a
-///   transparent forwarding of an identity-provided value, a
-///   choice-ification obligation (a control-flow op selecting distinct
-///   later-phase values), or a never-produced result. These need result
-///   forwarding and unreachable-consumer handling.
+/// - Ops delivering a result at a phase different from their own phase by a
+///   transparent forwarding of an identity-provided value or a never-produced
+///   result. These need result forwarding and unreachable-consumer handling.
+///   Choice-ification obligations (a control-flow op selecting distinct
+///   later-phase values) are already lifted by branch extraction above, so
+///   the residual divergence here is only identity-provided or never-produced.
 /// - Anchored content whose phase differs from its parent op's phase, which
-///   needs hoisting or extraction across the phase boundary.
+///   needs hoisting or loop-record extraction across the phase boundary
+///   (branch content is handled by branch extraction above).
 ///
 /// Together these establish that every op and every value inside anchored
 /// content is at that content's phase, which is what makes the wrap and
@@ -427,9 +852,9 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
               << "delivers result #" << index << " at phase "
               << phaseName(valueIt->second) << " instead of its own phase "
               << phaseName(opPhase)
-              << "; result forwarding (identity-provided, choice-ified, or "
-                 "never-produced control-flow results) is not implemented in "
-                 "phase sorting yet";
+              << "; result forwarding (identity-provided or never-produced "
+                 "control-flow results) is not implemented in phase sorting "
+                 "yet";
           return WalkResult::interrupt();
         }
       }
@@ -668,6 +1093,8 @@ LogicalResult PhaseSorter::run() {
   if (failed(dissolveExprsAndPins()))
     return failure();
   if (failed(decomposeCalls()))
+    return failure();
+  if (failed(extractBranches()))
     return failure();
   if (failed(rejectUnimplemented()))
     return failure();

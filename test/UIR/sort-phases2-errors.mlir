@@ -129,7 +129,7 @@ uir.func @NeverResult(%a: -1, %x: 0) -> (c: -1) {
   uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
-  // expected-error @below {{delivers result #0 at phase never instead of its own phase 0; result forwarding (identity-provided, choice-ified, or never-produced control-flow results) is not implemented in phase sorting yet}}
+  // expected-error @below {{delivers result #0 at phase never instead of its own phase 0; result forwarding (identity-provided or never-produced control-flow results) is not implemented in phase sorting yet}}
   %r = uir.loop : %t {
     uir.continue
   }
@@ -148,7 +148,7 @@ uir.func @IdentityBackward(%a: -1, %c: 0) -> (r: -1) {
   uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
-  // expected-error @below {{delivers result #0 at phase -1 instead of its own phase 0; result forwarding (identity-provided, choice-ified, or never-produced control-flow results) is not implemented in phase sorting yet}}
+  // expected-error @below {{delivers result #0 at phase -1 instead of its own phase 0; result forwarding (identity-provided or never-produced control-flow results) is not implemented in phase sorting yet}}
   %r = uir.if %c : %t {
     uir.yield %a : %t
   } else {
@@ -170,7 +170,7 @@ uir.func @IdentityForward(%c: -1, %x: 0) -> (r: 0) {
 } {
   %t = hir.int_type
   %r = uir.expr pin -1 : %t {
-    // expected-error @below {{delivers result #0 at phase 0 instead of its own phase -1; result forwarding (identity-provided, choice-ified, or never-produced control-flow results) is not implemented in phase sorting yet}}
+    // expected-error @below {{delivers result #0 at phase 0 instead of its own phase -1; result forwarding (identity-provided or never-produced control-flow results) is not implemented in phase sorting yet}}
     %i = uir.if %c : %t {
       uir.yield %x : %t
     } else {
@@ -184,24 +184,25 @@ uir.func @IdentityForward(%c: -1, %x: 0) -> (r: 0) {
 
 // -----
 
-// A control-flow op selecting between distinct later-phase values is a
-// choice-ification obligation, handled by branch extraction in a later
-// sorting case.
-uir.func @ChoiceObligation(%c: -1, %x: 0, %y: 0) -> (r: 0) {
+// An if with a later-phase result whose arms do not all yield: the else arm
+// exits early instead. Branch extraction classifies the result by asking
+// whether the yielding arms select distinct values, which must tolerate the
+// non-yield arm rather than assume every arm yields. With only one provider
+// the result is not choice-ified, so the if is left for the nested-content
+// rejection.
+uir.func @ExitArmLaterResult(%c: 0, %y: 1) -> (result: 1) {
   %0 = hir.int_type
-  uir.signature (%0, %0, %0) -> (%0)
+  uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
-  %r = uir.expr pin -1 : %t {
-    // expected-error @below {{delivers result #0 at phase 0 instead of its own phase -1; result forwarding (identity-provided, choice-ified, or never-produced control-flow results) is not implemented in phase sorting yet}}
-    %i = uir.if %c : %t {
-      uir.yield %x : %t
-    } else {
-      uir.yield %y : %t
-    }
-    uir.yield %i : %t
+  %v = uir.if %c : %t {
+    // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
+    %a = hir.add %y, %y : %t
+    uir.yield %a : %t
+  } else {
+    uir.return %y : %t
   }
-  uir.return %r : %t
+  uir.return %v : %t
 }
 
 // -----
@@ -234,21 +235,22 @@ uir.func @FloatBackwardInBranch(%c: 0, %x: 0) -> () {
 
 // -----
 
-// Content at a different phase nested under control flow needs hoisting or
-// extraction, which are later sorting cases.
-uir.func @LaterContentInBranch(%c: 0, %x: 0) -> () {
+// Content at a different phase nested under a loop needs loop-record
+// extraction, which is a later sorting case. Branch extraction handles the
+// same shape under a uir.if, but not under a loop.
+uir.func @LaterContentInLoop(%n: -1, %x: 0) -> () {
   %0 = hir.int_type
   uir.signature (%0, %0) -> ()
 } {
   %t = hir.int_type
   %v = hir.var : %t
-  uir.if %c {
+  uir.loop {
     uir.expr pin 1 {
       // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
       hir.write_var %v, %x : %t
       uir.yield
     }
-    uir.yield
+    uir.continue
   }
   uir.return
 }

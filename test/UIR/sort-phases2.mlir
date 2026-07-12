@@ -642,3 +642,284 @@ uir.func @Recurse(%x: -1, %y: 0) -> (result: 0) {
   %r = uir.call @Recurse(%x, %y) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
   uir.return %r : %t
 }
+
+//===----------------------------------------------------------------------===//
+// Branch extraction, effects: a const if with dyn content in both arms. The
+// rebuilt if yields the const result and a per-arm choice; both cross to
+// phase 0, where a pick dispatches on the choice and the arm-local const
+// value arrives as the choice payload.
+
+// CHECK-LABEL: uir.func @IfChoiceEffects
+uir.func @IfChoiceEffects(%c: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[CT:%.+]] = hir.choice_type
+  // CHECK-NEXT: [[P:%.+]]:2 = uir.phase -1 {
+  // CHECK-NEXT:   [[V:%.+]]:2 = uir.if %c : [[T]], [[CT]] {
+  // CHECK-NEXT:     [[A:%.+]] = hir.add %c, %c : [[T]]
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0([[A]])
+  // CHECK-NEXT:     uir.yield [[A]], [[C0]] : [[T]], [[CT]]
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     uir.yield %c, [[C1]] : [[T]], [[CT]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[V]]#0, [[V]]#1
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[VA:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   hir.pick [[P]]#1 [0 ([[ARG:%.+]]): {
+  // CHECK-NEXT:     hir.write_var [[VA]], [[ARG]] : [[T]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.write_var [[VA]], %x : [[T]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   [[OUT:%.+]] = hir.add %x, [[P]]#0 : [[T]]
+  // CHECK-NEXT:   uir.phase_return [[OUT]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %va = hir.var : %t
+  %r = uir.expr pin -1 : %t {
+    %v = uir.if %c : %t {
+      %a = hir.add %c, %c : %t
+      uir.expr pin 1 {
+        hir.write_var %va, %a : %t
+        uir.yield
+      }
+      uir.yield %a : %t
+    } else {
+      uir.expr pin 1 {
+        hir.write_var %va, %x : %t
+        uir.yield
+      }
+      uir.yield %c : %t
+    }
+    uir.yield %v : %t
+  }
+  %out = hir.add %x, %r : %t
+  uir.return %out : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Branch extraction, dyn result: the if's dyn-phase result selects distinct
+// later-phase values, so it is removed from the if and reconstructed as a
+// result of the receiving pick, whose alternatives recompute the per-arm
+// values. The if keeps only the choice result.
+
+// CHECK-LABEL: uir.func @IfChoiceResult
+uir.func @IfChoiceResult(%c: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[CH:%.+]] = uir.if %c : [[CT:%.+]] {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     uir.yield [[C0]] : [[CT]]
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     uir.yield [[C1]] : [[CT]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[CH]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[S:%.+]] = hir.add %x, %x : [[T]]
+  // CHECK-NEXT:     hir.yield [[S]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[M:%.+]] = hir.mul %x, %x : [[T]]
+  // CHECK-NEXT:     hir.yield [[M]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %r = uir.expr pin -1 : %t {
+    %v = uir.if %c : %t {
+      %a = uir.expr pin 1 : %t {
+        %s = hir.add %x, %x : %t
+        uir.yield %s : %t
+      }
+      uir.yield %a : %t
+    } else {
+      %b = uir.expr pin 1 : %t {
+        %m = hir.mul %x, %x : %t
+        uir.yield %m : %t
+      }
+      uir.yield %b : %t
+    }
+    uir.yield %v : %t
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Branch extraction into an internal phase: a phase-0 if with later-phase
+// (phase 1) content and no results. The else-less if gets a materialized
+// else region for the not-taken tag, and the pick lands in the trailing
+// internal phase 1.
+
+// CHECK-LABEL: uir.func @IfLaterContentInternal
+uir.func @IfLaterContentInternal(%c: 0, %x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  // CHECK: hir.int_type
+  %t = hir.int_type
+  // CHECK: [[P:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.var : %{{.+}}
+  // CHECK-NEXT:   uir.if %c : %{{.+}} {
+  // CHECK-NEXT:     hir.choice 0()
+  // CHECK:       } else {
+  // CHECK-NEXT:     hir.choice 1()
+  // CHECK:       }
+  // CHECK-NEXT:   uir.phase_return yield [[V]], %{{.+}}
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   hir.pick [[P]]#1 [0 (): {
+  // CHECK-NEXT:     hir.write_var [[P]]#0, %x
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %v = hir.var : %t
+  uir.if %c {
+    uir.expr pin 1 {
+      hir.write_var %v, %x : %t
+      uir.yield
+    }
+    uir.yield
+  }
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Nested branch extraction: a const if whose else arm holds another const if,
+// each leaf carrying dyn effects. Extraction runs innermost first, so the
+// inner if's choice rides the outer choice payload and the receiving pick
+// nests a pick per level.
+
+// CHECK-LABEL: uir.func @NestedIfChoice
+uir.func @NestedIfChoice(%c: -1, %d: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: [[P:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[OUT:%.+]] = uir.if %c : %{{.+}} {
+  // CHECK-NEXT:     [[OC0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     uir.yield [[OC0]]
+  // CHECK-NEXT:   } else {
+  // CHECK:         [[IN:%.+]] = uir.if %d : %{{.+}} {
+  // CHECK-NEXT:       [[IC0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       uir.yield [[IC0]]
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[IC1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.yield [[IC1]]
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[OC1:%.+]] = hir.choice 1([[IN]])
+  // CHECK-NEXT:     uir.yield [[OC1]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[OUT]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[VA:%.+]] = hir.var
+  // CHECK-NEXT:   hir.pick [[P]] [0 (): {
+  // CHECK-NEXT:     hir.write_var [[VA]], %x
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   } 1 ([[ARG:%.+]]): {
+  // CHECK-NEXT:     hir.pick [[ARG]] [0 (): {
+  // CHECK-NEXT:       hir.write_var [[VA]], %x
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.write_var [[VA]], %x
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }]
+  %va = hir.var : %t
+  uir.expr pin -1 {
+    uir.if %c {
+      uir.expr pin 1 {
+        hir.write_var %va, %x : %t
+        uir.yield
+      }
+      uir.yield
+    } else {
+      uir.if %d {
+        uir.expr pin 1 {
+          hir.write_var %va, %x : %t
+          uir.yield
+        }
+        uir.yield
+      } else {
+        uir.expr pin 1 {
+          hir.write_var %va, %x : %t
+          uir.yield
+        }
+        uir.yield
+      }
+      uir.yield
+    }
+    uir.yield
+  }
+  %r = hir.read_var %va : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Branch extraction with a call in an arm: the dyn call decomposes into a
+// uir.phase_call, which is later-phase content of the const if and moves into
+// the receiving pick alongside the write.
+
+// CHECK-LABEL: uir.func @Helper
+uir.func @Helper(%a: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %r = hir.add %a, %a : %t
+  uir.return %r : %t
+}
+
+// CHECK-LABEL: uir.func @IfArmCall
+uir.func @IfArmCall(%c: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.phase -1 {
+  // CHECK:   uir.if %c
+  // CHECK: uir.phase 0 {
+  // CHECK:   [[VA:%.+]] = hir.var
+  // CHECK:   hir.pick %{{.+}} [0 (): {
+  // CHECK-NEXT:     [[K:%.+]] = uir.phase_call @Helper[0] (%x) : (%{{.+}}) -> (%{{.+}})
+  // CHECK-NEXT:     hir.write_var [[VA]], [[K]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }]
+  %va = hir.var : %t
+  uir.expr pin -1 {
+    uir.if %c {
+      uir.expr pin 1 {
+        %k = uir.call @Helper(%x) : (%t) -> (%t) (!hir.any) -> !hir.any [0] -> [0]
+        hir.write_var %va, %k : %t
+        uir.yield
+      }
+      uir.yield
+    }
+    uir.yield
+  }
+  %r = hir.read_var %va : %t
+  uir.return %r : %t
+}
