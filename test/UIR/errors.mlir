@@ -105,6 +105,48 @@ uir.func @call_bad_callee(%a: 0) -> (result: 0) {
 
 // -----
 
+// Verify that uir.call rejects argument phases inconsistent with the callee.
+uir.func @call_arg_phase_callee(%a: -1, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.return %b : %t
+}
+
+uir.func @call_arg_phase_mismatch(%a: 0, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // expected-error @below {{argument phases 0, 0 do not match the phases @call_arg_phase_callee declares for its arguments -1, 0}}
+  %r = uir.call @call_arg_phase_callee(%a, %b) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+  uir.return %r : %t
+}
+
+// -----
+
+// Verify that uir.call rejects result phases inconsistent with the callee.
+uir.func @call_result_phase_callee(%a: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.return %a : %t
+}
+
+uir.func @call_result_phase_mismatch(%a: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  // expected-error @below {{result phases 1 do not match the phases @call_result_phase_callee declares for its results 0}}
+  %r = uir.call @call_result_phase_callee(%a) : (%t) -> (%t) (!hir.any) -> !hir.any [0] -> [1]
+  uir.return %r : %t
+}
+
+// -----
+
 // Verify that uir.continue rejects mismatched values/typeOfValues.
 func.func @continue_mismatch(%a: !hir.any) {
   uir.loop (%x = %a : %a) {

@@ -68,23 +68,21 @@ uir.func @ReturnCarrier(%x: 0) -> (result: 0) {
 
 // -----
 
-// Call decomposition into uir.phase_call entries is a later sorting case.
-uir.func @Callee(%x: 0) -> (result: 0) {
-  %0 = hir.int_type
-  uir.signature (%0) -> (%0)
+// A uir.call whose callee resolves to something other than a uir.func or
+// uir.split_func cannot be decomposed: its phase entries are undefined.
+hir.func @NotUnified() -> () {
+  hir.signature () -> ()
 } {
-  %t = hir.int_type
-  uir.return %x : %t
+  hir.return -> ()
 }
 
-uir.func @Caller(%x: 0) -> (result: 0) {
+uir.func @CallsNonFunc(%x: 0) -> () {
   %0 = hir.int_type
-  uir.signature (%0) -> (%0)
+  uir.signature (%0) -> ()
 } {
-  %t = hir.int_type
-  // expected-error @below {{decomposition into 'uir.phase_call' entries is not implemented in phase sorting yet}}
-  %r = uir.call @Callee(%x) : (%t) -> (%t) (!hir.any) -> !hir.any [0] -> [0]
-  uir.return %r : %t
+  // expected-error @below {{callee @NotUnified is neither a 'uir.func' nor a 'uir.split_func'}}
+  uir.call @NotUnified() : () -> () () -> () [] -> []
+  uir.return
 }
 
 // -----

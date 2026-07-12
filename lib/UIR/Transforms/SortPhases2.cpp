@@ -50,24 +50,39 @@
 // Before sorting, `uir.expr` bodies are inlined and `uir.pin` outputs are
 // replaced by their inputs: the grouping ops exist to communicate phase
 // constraints to PhaseAnalysis and only stand in the way once the phase map
-// is computed.
+// is computed. Then every `uir.call` is decomposed into `uir.phase_call`
+// entries, one per externally visible callee phase:
+//
+// - **Decompose**: a call is replaced by one `uir.phase_call` per phase in
+//   the callee's declaration-derived external phase set (its declared arg
+//   and result phases plus phase 0, in the callee's own frame). The call's
+//   own analysis phase is the single frame shift shared by all entries, so
+//   the entry for callee-frame phase p lands at caller phase shift + p. Each
+//   entry carries the call's arguments and results filtered to p, and
+//   consecutive entries chain in ascending phase order through an opaque
+//   context value. The entries are ordinary ops that the wrap and cross
+//   rules then place and thread like any other content; the context value
+//   crosses phases as an ordinary crossing. Deriving the entries from the
+//   callee declaration alone means no split witness, no callee-before-caller
+//   order, and recursion decomposes like any other call.
 //
 // The pass currently covers straight-line content. Inputs that need the
 // remaining sorting machinery are rejected with explicit diagnostics
-// instead of being sorted incorrectly: call decomposition into
-// `uir.phase_call`, early function exits (function-level exit chains),
-// results delivered at a phase different from their op's own phase
-// (identity-provided, choice-ified, and never-produced control-flow
-// results, which need result forwarding and unreachable-consumer
-// handling), hoisting/extraction of content nested under
-// differently-phased control flow, and backward uses from floating content
-// nested under earlier-phase control flow.
+// instead of being sorted incorrectly: early function exits (function-level
+// exit chains), results delivered at a phase different from their op's own
+// phase (identity-provided, choice-ified, and never-produced control-flow
+// results, which need result forwarding and unreachable-consumer handling),
+// hoisting/extraction of content nested under differently-phased control
+// flow, and backward uses from floating content nested under earlier-phase
+// control flow.
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/HIR/Ops.h"
 #include "silicon/UIR/Analysis/PhaseAnalysis.h"
 #include "silicon/UIR/Ops.h"
 #include "silicon/UIR/Passes.h"
+#include "mlir/IR/SymbolTable.h"
 #include "llvm/Support/Debug.h"
 #include <map>
 
@@ -92,18 +107,21 @@ namespace {
 /// Sorts the content of a single `uir.func` into per-phase `uir.phase` ops
 /// and maintains the phase map for every op it erases or creates.
 struct PhaseSorter {
-  PhaseSorter(FuncOp funcOp, PhaseAnalysis &analysis)
-      : funcOp(funcOp), analysis(analysis) {}
+  PhaseSorter(FuncOp funcOp, PhaseAnalysis &analysis, SymbolTable &symbolTable)
+      : funcOp(funcOp), analysis(analysis), symbolTable(symbolTable) {}
 
   LogicalResult run();
 
 private:
   FuncOp funcOp;
   PhaseAnalysis &analysis;
+  SymbolTable &symbolTable;
 
   LogicalResult rejectSortedVocabulary();
   LogicalResult checkCoverage();
   LogicalResult dissolveExprsAndPins();
+  LogicalResult decomposeCalls();
+  LogicalResult decomposeCall(CallOp callOp);
   LogicalResult rejectUnimplemented();
   LogicalResult sortRegion(Region &region);
 
@@ -235,6 +253,123 @@ LogicalResult PhaseSorter::dissolveExprsAndPins() {
 }
 
 //===----------------------------------------------------------------------===//
+// Decompose Calls
+//===----------------------------------------------------------------------===//
+
+/// The callee's declaration-derived externally visible phases: its declared
+/// argument and result phases plus phase 0, in the callee's own frame, sorted
+/// and deduplicated. This mirrors the `uir.phase_call` verifier, so every
+/// entry the decomposition emits validates against the same set. A callee may
+/// be a `uir.func` (the common case at sort time) or a `uir.split_func` (an
+/// already-split callee); both carry the declared phases.
+static LogicalResult calleeExternalPhases(CallOp callOp, Operation *calleeOp,
+                                          SmallVectorImpl<int32_t> &externals) {
+  ArrayRef<int32_t> argPhases, resultPhases;
+  if (auto funcOp = dyn_cast<FuncOp>(calleeOp)) {
+    argPhases = funcOp.getArgPhases();
+    resultPhases = funcOp.getResultPhases();
+  } else if (auto funcOp = dyn_cast<SplitFuncOp>(calleeOp)) {
+    argPhases = funcOp.getArgPhases();
+    resultPhases = funcOp.getResultPhases();
+  } else {
+    return callOp.emitOpError()
+           << "callee @" << callOp.getCallee()
+           << " is neither a 'uir.func' nor a 'uir.split_func'";
+  }
+  externals.push_back(0);
+  externals.append(argPhases.begin(), argPhases.end());
+  externals.append(resultPhases.begin(), resultPhases.end());
+  llvm::sort(externals);
+  externals.erase(std::unique(externals.begin(), externals.end()),
+                  externals.end());
+  return success();
+}
+
+/// Decompose every `uir.call` in the function into `uir.phase_call` entries.
+LogicalResult PhaseSorter::decomposeCalls() {
+  SmallVector<CallOp> calls;
+  funcOp->walk([&](CallOp op) { calls.push_back(op); });
+  for (auto callOp : calls)
+    if (failed(decomposeCall(callOp)))
+      return failure();
+  return success();
+}
+
+/// Decompose one `uir.call` into per-phase `uir.phase_call` entries.
+///
+/// The callee's externally visible phases come from its declaration alone —
+/// no split witness, no callee-before-caller order, so recursion decomposes
+/// like any other call. The call's own analysis phase is the single frame
+/// shift shared by all entries: an entry for the callee-frame phase `e` lands
+/// at caller phase `shift + e`. Each entry carries the call's arguments and
+/// results filtered to `e` (via the call's per-argument and per-result phase
+/// attributes, which are the callee's declared phases), and consecutive
+/// entries chain through an opaque context value in ascending phase order.
+/// The entries are created as ordinary ops at the call site; sorting then
+/// wraps each into its phase's `uir.phase` op and threads the context across
+/// phases like any other crossing.
+LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
+  // The frame shift is the call's own analysis phase. A call is
+  // side-effecting, so it is always anchored at a real block phase.
+  auto shiftIt = analysis.opPhases.find(callOp);
+  assert(shiftIt != analysis.opPhases.end() && "call phase not computed");
+  int16_t shift = shiftIt->second;
+  assert(isRealPhase(shift) && "side-effecting call must have a real phase");
+
+  auto *calleeOp = symbolTable.lookup(callOp.getCallee());
+  assert(calleeOp && "call to undeclared callee survived verification");
+  SmallVector<int32_t> externals;
+  if (failed(calleeExternalPhases(callOp, calleeOp, externals)))
+    return failure();
+  assert(!externals.empty() && "external phases always contain phase 0");
+
+  // Partition the call's arguments and results by their callee-frame phase.
+  // The lists preserve program order, keeping the entries deterministic.
+  std::map<int32_t, SmallVector<Value>> phaseArgs, phaseTypeOfArgs;
+  for (auto [arg, typeOfArg, phase] :
+       llvm::zip(callOp.getArguments(), callOp.getTypeOfArgs(),
+                 callOp.getArgPhases())) {
+    phaseArgs[phase].push_back(arg);
+    phaseTypeOfArgs[phase].push_back(typeOfArg);
+  }
+  std::map<int32_t, SmallVector<std::pair<unsigned, Value>>> phaseResults;
+  for (auto [index, phase] : llvm::enumerate(callOp.getResultPhases()))
+    phaseResults[phase].push_back({index, callOp.getTypeOfResults()[index]});
+
+  // Create one entry per external phase, ascending, chaining opaque context.
+  OpBuilder builder(callOp);
+  auto loc = callOp.getLoc();
+  auto anyTy = hir::AnyType::get(callOp.getContext());
+  int32_t maxPhase = externals.back();
+  Value prevContext;
+  SmallVector<Value> replacements(callOp.getNumResults());
+  for (int32_t phase : externals) {
+    auto &results = phaseResults[phase];
+    SmallVector<Value> typeOfResults;
+    SmallVector<Type> resultTypes;
+    for (auto &[index, typeOfResult] : results) {
+      typeOfResults.push_back(typeOfResult);
+      resultTypes.push_back(anyTy);
+    }
+    Type contextOutType = phase != maxPhase ? anyTy : Type();
+    auto entry = PhaseCallOp::create(
+        builder, loc, resultTypes, contextOutType, callOp.getCallee(), phase,
+        phaseArgs[phase], phaseTypeOfArgs[phase], typeOfResults, prevContext);
+    setPhase(entry, shift + static_cast<int16_t>(phase));
+    for (auto [i, pair] : llvm::enumerate(results))
+      replacements[pair.first] = entry.getResult(i);
+    prevContext = entry.getContextOut();
+  }
+
+  assert(llvm::all_of(replacements, [](Value v) { return !!v; }) &&
+         "every call result has an external phase entry");
+  callOp->replaceAllUsesWith(replacements);
+  forget(callOp);
+  callOp.erase();
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reject Unimplemented Sorting Machinery
 //===----------------------------------------------------------------------===//
 
@@ -248,10 +383,10 @@ static std::string phaseName(int16_t phase) {
   return std::to_string(phase);
 }
 
-/// Reject inputs that need sorting machinery beyond wrapping and forward
-/// crossings, with explicit diagnostics instead of sorting them incorrectly:
+/// Reject inputs that need sorting machinery beyond wrapping, call
+/// decomposition, and forward crossings, with explicit diagnostics instead of
+/// sorting them incorrectly:
 ///
-/// - `uir.call` decomposition into `uir.phase_call` entries.
 /// - Early function exits (a `uir.return` anywhere but as the body region's
 ///   terminator, including returns still riding inside undissolved expr
 ///   carriers), which need function-level exit chains.
@@ -271,11 +406,6 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
   auto result = funcOp->walk([&](Operation *op) {
     if (op == funcOp)
       return WalkResult::advance();
-    if (isa<CallOp>(op)) {
-      op->emitOpError() << "decomposition into 'uir.phase_call' entries is "
-                           "not implemented in phase sorting yet";
-      return WalkResult::interrupt();
-    }
     if (isa<ReturnOp>(op) && op != bodyTerminator) {
       op->emitOpError() << "is an early function exit; function-level exit "
                            "chains are not implemented in phase sorting yet";
@@ -537,6 +667,8 @@ LogicalResult PhaseSorter::run() {
     return failure();
   if (failed(dissolveExprsAndPins()))
     return failure();
+  if (failed(decomposeCalls()))
+    return failure();
   if (failed(rejectUnimplemented()))
     return failure();
   if (failed(sortRegion(funcOp.getSignature())))
@@ -553,11 +685,15 @@ LogicalResult PhaseSorter::run() {
 namespace {
 struct SortPhasesPass : public uir::impl::SortPhasesPassBase<SortPhasesPass> {
   void runOnOperation() override {
+    // The symbol table resolves call decomposition's callee lookups. Sorting
+    // only rewrites function interiors, never adds or removes symbols, so one
+    // table stays valid across all functions.
+    SymbolTable symbolTable(getOperation());
     for (auto funcOp : getOperation().getOps<FuncOp>()) {
       PhaseAnalysis analysis(funcOp);
       if (failed(analysis.run()))
         return signalPassFailure();
-      if (failed(PhaseSorter(funcOp, analysis).run()))
+      if (failed(PhaseSorter(funcOp, analysis, symbolTable).run()))
         return signalPassFailure();
     }
   }

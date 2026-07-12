@@ -1235,6 +1235,32 @@ LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
     return emitOpError() << "'" << callee.getValue()
                          << "' does not reference a valid function";
 
+  // When the callee is a unified function (or an already-split witness), the
+  // call's per-argument and per-result phase offsets are the callee's declared
+  // phases, so they must line up one-to-one. Call decomposition relies on this
+  // to derive the phase entries from the callee declaration alone; without the
+  // check a phase present on the call but not the callee would silently drop
+  // an argument or result.
+  ArrayRef<int32_t> calleeArgPhases, calleeResultPhases;
+  if (auto funcOp = dyn_cast<FuncOp>(calleeOp)) {
+    calleeArgPhases = funcOp.getArgPhases();
+    calleeResultPhases = funcOp.getResultPhases();
+  } else if (auto funcOp = dyn_cast<SplitFuncOp>(calleeOp)) {
+    calleeArgPhases = funcOp.getArgPhases();
+    calleeResultPhases = funcOp.getResultPhases();
+  } else {
+    return success();
+  }
+
+  if (getArgPhases() != calleeArgPhases)
+    return emitOpError() << "argument phases " << getArgPhases()
+                         << " do not match the phases @" << callee.getValue()
+                         << " declares for its arguments " << calleeArgPhases;
+  if (getResultPhases() != calleeResultPhases)
+    return emitOpError() << "result phases " << getResultPhases()
+                         << " do not match the phases @" << callee.getValue()
+                         << " declares for its results " << calleeResultPhases;
+
   return success();
 }
 

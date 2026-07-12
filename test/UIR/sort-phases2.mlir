@@ -496,3 +496,149 @@ uir.func @NoContent(%x: 0) -> () {
   // CHECK: uir.unreachable
   uir.return
 }
+
+//===----------------------------------------------------------------------===//
+// A two-phase callee, reused by the call-decomposition cases below. Its
+// declaration-derived external phases are -1 and 0.
+
+// CHECK-LABEL: uir.func @Callee
+uir.func @Callee(%a: -1, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %sq = hir.mul %a, %a : %t
+  %r = hir.add %sq, %b : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Call decomposition: a call to the two-phase @Callee becomes one
+// uir.phase_call per externally visible callee phase. The call sits at the
+// caller's phase 0 (its own analysis phase, the frame shift), so entry [-1]
+// lands in caller phase -1 and entry [0] in caller phase 0. The context value
+// chaining the entries crosses phases like any other value.
+
+// CHECK-LABEL: uir.func @Caller
+uir.func @Caller(%x: -1, %y: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[CTX:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[C:%.+]] = uir.phase_call @Callee[-1] (%x) : ([[T]]) -> () context
+  // CHECK-NEXT:   uir.phase_return yield [[C]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[R:%.+]] = uir.phase_call @Callee[0] (%y) context [[CTX]] : ([[T]]) -> ([[T]])
+  // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %r = uir.call @Callee(%x, %y) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Frame-shifted call: a dyn-shifted call (wrapped in a phase-1 expr) executes
+// one phase later than the callee's frame, so its analysis phase is 1. That
+// single shift moves the callee's [-1] entry into caller phase 0 and its [0]
+// entry into caller phase 1. The calleePhase attribute stays in the callee's
+// own frame.
+
+// CHECK-LABEL: uir.func @ShiftedCall
+uir.func @ShiftedCall(%k: 0, %x: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[CTX:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[C:%.+]] = uir.phase_call @Callee[-1] (%k) : ([[T]]) -> () context
+  // CHECK-NEXT:   uir.phase_return yield [[C]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[R:%.+]] = uir.phase_call @Callee[0] (%x) context [[CTX]] : ([[T]]) -> ([[T]])
+  // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %r = uir.expr pin 1 : %t {
+    %c = uir.call @Callee(%k, %x) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+    uir.yield %c : %t
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A three-external-phase callee: its declared arg and result phases yield the
+// external set {-1, 0, 1}.
+
+// CHECK-LABEL: uir.func @ThreePhaseCallee
+uir.func @ThreePhaseCallee(%a: -1, %b: 0, %c: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %s0 = hir.add %a, %b : %t
+  %s1 = hir.add %s0, %c : %t
+  uir.return %s1 : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Structurally different from @Caller: a three-external-phase callee produces
+// three entries, and the middle entry (phase 0) both consumes the previous
+// context and produces the next one. Both context values cross forward one
+// phase.
+
+// CHECK-LABEL: uir.func @ThreePhaseCall
+uir.func @ThreePhaseCall(%x: -1, %y: 0, %z: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[CTX0:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[C0:%.+]] = uir.phase_call @ThreePhaseCallee[-1] (%x) : ([[T]]) -> () context
+  // CHECK-NEXT:   uir.phase_return yield [[C0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[CTX1:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[C1:%.+]] = uir.phase_call @ThreePhaseCallee[0] (%y) context [[CTX0]] : ([[T]]) -> () context
+  // CHECK-NEXT:   uir.phase_return yield [[C1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[R:%.+]] = uir.phase_call @ThreePhaseCallee[1] (%z) context [[CTX1]] : ([[T]]) -> ([[T]])
+  // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %r = uir.call @ThreePhaseCallee(%x, %y, %z) : (%t, %t, %t) -> (%t) (!hir.any, !hir.any, !hir.any) -> !hir.any [-1, 0, 1] -> [1]
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Self-recursion: a function may call itself. Deriving the entries from the
+// callee's declaration alone means no callee-before-caller ordering is
+// needed, so the recursive call decomposes like any other.
+
+// CHECK-LABEL: uir.func @Recurse
+uir.func @Recurse(%x: -1, %y: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[CTX:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[C:%.+]] = uir.phase_call @Recurse[-1] (%x) : ([[T]]) -> () context
+  // CHECK-NEXT:   uir.phase_return yield [[C]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[R:%.+]] = uir.phase_call @Recurse[0] (%y) context [[CTX]] : ([[T]]) -> ([[T]])
+  // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %r = uir.call @Recurse(%x, %y) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  uir.return %r : %t
+}
