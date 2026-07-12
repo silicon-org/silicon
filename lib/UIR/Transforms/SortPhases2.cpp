@@ -26,9 +26,10 @@
 // - **Float**: a top-level op without a real phase (the float and never
 //   sentinels) stays at the region top level, unless it uses a value
 //   defined by an op that moved into a phase region — then it sinks into
-//   the latest such phase region, after its operands. Such ops are dead
-//   (any live consumer would have anchored them through demand), so their
-//   placement is only a dominance concern.
+//   the latest such phase region, after its operands; operands from
+//   earlier phases cross like any other use. Such ops are dead (any live
+//   consumer would have anchored them through demand), so their placement
+//   is only a dominance concern.
 //
 // - **Return**: the body's `uir.return` dissolves. The value and type
 //   operand of result i move onto the `uir.phase_return` of the phase op
@@ -38,18 +39,29 @@
 //   phases get none. The body terminator becomes `uir.unreachable`. A
 //   `uir.signature` terminator stays in place.
 //
+// - **Cross**: a value computed inside a phase and consumed in a later one
+//   crosses as a phase-op result: the defining phase's `uir.phase_return`
+//   yields it once, and every use outside the defining phase — later phase
+//   content, function-result and type operands riding a later phase
+//   return, or the region terminator — is redirected to the `uir.phase`
+//   op's result, at any distance. Hop-by-hop threading through
+//   intermediate phases is normalization's job, not sorting's.
+//
 // Before sorting, `uir.expr` bodies are inlined and `uir.pin` outputs are
 // replaced by their inputs: the grouping ops exist to communicate phase
 // constraints to PhaseAnalysis and only stand in the way once the phase map
 // is computed.
 //
-// The pass currently covers straight-line content whose values stay within
-// their own phase. Inputs that need the remaining sorting machinery are
-// rejected with explicit diagnostics instead of being sorted incorrectly:
-// cross-phase value crossings (which will become phase-op results), call
-// decomposition into `uir.phase_call`, early function exits (function-level
-// exit chains), and hoisting/extraction of content nested under
-// differently-phased control flow.
+// The pass currently covers straight-line content. Inputs that need the
+// remaining sorting machinery are rejected with explicit diagnostics
+// instead of being sorted incorrectly: call decomposition into
+// `uir.phase_call`, early function exits (function-level exit chains),
+// results delivered at a phase different from their op's own phase
+// (identity-provided, choice-ified, and never-produced control-flow
+// results, which need result forwarding and unreachable-consumer
+// handling), hoisting/extraction of content nested under
+// differently-phased control flow, and backward uses from floating content
+// nested under earlier-phase control flow.
 //
 //===----------------------------------------------------------------------===//
 
@@ -94,7 +106,6 @@ private:
   LogicalResult dissolveExprsAndPins();
   LogicalResult rejectUnimplemented();
   LogicalResult sortRegion(Region &region);
-  LogicalResult checkRegion(Region &region);
 
   /// Whether a phase is a real phase (not the float/never sentinel).
   static bool isRealPhase(int16_t phase) {
@@ -227,13 +238,39 @@ LogicalResult PhaseSorter::dissolveExprsAndPins() {
 // Reject Unimplemented Sorting Machinery
 //===----------------------------------------------------------------------===//
 
-/// Reject inputs that need sorting machinery beyond the straight-line wrap:
-/// call decomposition into `uir.phase_call` and function-level exit chains
-/// (a `uir.return` anywhere but as the body region's terminator, including
-/// returns still riding inside undissolved expr carriers).
+/// Format a phase for diagnostics, naming the sentinels like the phase
+/// analysis annotation does.
+static std::string phaseName(int16_t phase) {
+  if (phase == PhaseAnalysis::kFloatPhase)
+    return "float";
+  if (phase == PhaseAnalysis::kNeverPhase)
+    return "never";
+  return std::to_string(phase);
+}
+
+/// Reject inputs that need sorting machinery beyond wrapping and forward
+/// crossings, with explicit diagnostics instead of sorting them incorrectly:
+///
+/// - `uir.call` decomposition into `uir.phase_call` entries.
+/// - Early function exits (a `uir.return` anywhere but as the body region's
+///   terminator, including returns still riding inside undissolved expr
+///   carriers), which need function-level exit chains.
+/// - Ops delivering a result at a phase different from their own phase: a
+///   transparent forwarding of an identity-provided value, a
+///   choice-ification obligation (a control-flow op selecting distinct
+///   later-phase values), or a never-produced result. These need result
+///   forwarding and unreachable-consumer handling.
+/// - Anchored content whose phase differs from its parent op's phase, which
+///   needs hoisting or extraction across the phase boundary.
+///
+/// Together these establish that every op and every value inside anchored
+/// content is at that content's phase, which is what makes the wrap and
+/// crossing rules below exact.
 LogicalResult PhaseSorter::rejectUnimplemented() {
   auto *bodyTerminator = funcOp.getBody().front().getTerminator();
   auto result = funcOp->walk([&](Operation *op) {
+    if (op == funcOp)
+      return WalkResult::advance();
     if (isa<CallOp>(op)) {
       op->emitOpError() << "decomposition into 'uir.phase_call' entries is "
                            "not implemented in phase sorting yet";
@@ -243,6 +280,51 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
       op->emitOpError() << "is an early function exit; function-level exit "
                            "chains are not implemented in phase sorting yet";
       return WalkResult::interrupt();
+    }
+
+    auto phaseIt = analysis.opPhases.find(op);
+    assert(phaseIt != analysis.opPhases.end() && "op phase not computed");
+    int16_t opPhase = phaseIt->second;
+
+    // Reject results delivered at a phase other than the op's own.
+    if (isRealPhase(opPhase)) {
+      for (auto [index, value] : llvm::enumerate(op->getResults())) {
+        auto valueIt = analysis.actualPhase.find(value);
+        assert(valueIt != analysis.actualPhase.end() &&
+               "value phase not computed");
+        if (valueIt->second != opPhase) {
+          op->emitOpError()
+              << "delivers result #" << index << " at phase "
+              << phaseName(valueIt->second) << " instead of its own phase "
+              << phaseName(opPhase)
+              << "; result forwarding (identity-provided, choice-ified, or "
+                 "never-produced control-flow results) is not implemented in "
+                 "phase sorting yet";
+          return WalkResult::interrupt();
+        }
+      }
+    }
+
+    // Reject anchored content nested inside differently-phased content.
+    // Floating (dead) content may sit inside anchored content, but never the
+    // other way around: demand or anchoring on nested content always anchors
+    // its container.
+    if (auto *parent = op->getParentOp(); parent != funcOp) {
+      auto parentIt = analysis.opPhases.find(parent);
+      assert(parentIt != analysis.opPhases.end() && "op phase not computed");
+      if (isRealPhase(parentIt->second)) {
+        if (isRealPhase(opPhase) && opPhase != parentIt->second) {
+          op->emitOpError()
+              << "at phase " << opPhase << " is nested inside phase "
+              << parentIt->second
+              << " content; hoisting and extraction across phase "
+                 "boundaries are not implemented in phase sorting yet";
+          return WalkResult::interrupt();
+        }
+      } else {
+        assert(!isRealPhase(opPhase) &&
+               "anchored content inside floating content");
+      }
     }
     return WalkResult::advance();
   });
@@ -262,6 +344,7 @@ LogicalResult PhaseSorter::sortRegion(Region &region) {
          "coverage check admits only single-block regions");
   auto &block = region.front();
   auto *terminator = block.getTerminator();
+  auto returnOp = dyn_cast<ReturnOp>(terminator);
 
   // Decide placement for every top-level op, in program order: real-phase
   // ops go to their phase, sentinel-phase ops sink after any operand that
@@ -305,9 +388,8 @@ LogicalResult PhaseSorter::sortRegion(Region &region) {
     SmallVector<Value> typeOfValues;
   };
   std::map<int16_t, PhaseResults> phaseResults;
-  auto returnOp = dyn_cast<ReturnOp>(terminator);
+  auto resultPhases = funcOp.getResultPhases();
   if (returnOp) {
-    auto resultPhases = funcOp.getResultPhases();
     assert(returnOp.getValues().size() == resultPhases.size() &&
            "return arity verified against the function declaration");
     for (auto [value, typeOfValue, phase] : llvm::zip(
@@ -319,16 +401,83 @@ LogicalResult PhaseSorter::sortRegion(Region &region) {
     }
   }
 
+  // Collect the yields of every phase: a value computed inside a phase and
+  // consumed in a later one crosses as a phase-op result, yielded once by
+  // the defining phase's `uir.phase_return`. To find the yields, attribute
+  // every use of a placed op's result to the phase where it lives after
+  // sorting: uses inside placed content belong to that content's phase, the
+  // dissolving `uir.return`'s operands belong to the declared phase of
+  // their function result, and uses by the region terminator sit after all
+  // phase ops. With divergent results and nested phase mismatches rejected
+  // up front, the only uses left at a phase before the defining op's
+  // placement are inside floating (dead) content nested under
+  // earlier-phase control flow, which cannot sink and is rejected.
+  // Insertion follows program order of the defining ops, keeping the yield
+  // lists deterministic.
+  std::map<int16_t, llvm::SetVector<Value>> phaseYields;
+  for (auto &op : block.without_terminator()) {
+    auto placementIt = placement.find(&op);
+    if (placementIt == placement.end())
+      continue; // Top-level values are visible everywhere; nothing crosses.
+    int16_t defPhase = placementIt->second;
+    for (auto value : op.getResults()) {
+      for (auto &use : value.getUses()) {
+        auto *ancestor = block.findAncestorOpInBlock(*use.getOwner());
+        assert(ancestor && "use outside the function region");
+        // The phase where this use lives after sorting; nullopt for the
+        // region terminator, which follows all phase ops.
+        std::optional<int16_t> usePhase;
+        if (ancestor != terminator) {
+          auto it = placement.find(ancestor);
+          assert(it != placement.end() &&
+                 "floating op using a placed value must have sunk");
+          usePhase = it->second;
+        } else if (returnOp) {
+          auto numValues = returnOp.getValues().size();
+          auto index = use.getOperandNumber();
+          usePhase = static_cast<int16_t>(
+              resultPhases[index < numValues ? index : index - numValues]);
+        }
+        if (usePhase == defPhase)
+          continue;
+        if (usePhase && *usePhase < defPhase) {
+          auto diag = use.getOwner()->emitOpError()
+                      << "uses a value from phase " << defPhase
+                      << " inside phase " << *usePhase
+                      << " content; backward crossings are not implemented "
+                         "in phase sorting yet";
+          diag.attachNote(value.getLoc()) << "value defined here";
+          return failure();
+        }
+        phaseYields[defPhase].insert(value);
+      }
+    }
+  }
+  // Every yielding phase has content (at least the value's defining op), so
+  // the creation loop below attaches every yield list to a phase op.
+  assert(llvm::all_of(phaseYields,
+                      [&](const auto &entry) {
+                        return phaseContent.count(entry.first);
+                      }) &&
+         "yielding phase without content");
+
   // Create the phase ops in ascending phase order before the terminator and
-  // move each phase's content into them, preserving program order. Remaining
-  // top-level ops all precede the phase ops, so direct uses of them from
-  // inside the phase regions dominate.
+  // move each phase's content into them, preserving program order. Each
+  // phase op gets one result per yielded value, provided by its
+  // `uir.phase_return`. Remaining top-level ops all precede the phase ops,
+  // so direct uses of them from inside the phase regions dominate.
   OpBuilder builder(terminator);
+  SmallVector<std::pair<PhaseOp, llvm::SetVector<Value> *>> createdPhaseOps;
   for (auto &[phase, content] : phaseContent) {
     auto loc =
         content.empty() ? terminator->getLoc() : content.front()->getLoc();
-    auto phaseOp = PhaseOp::create(builder, loc, TypeRange{}, phase);
+    auto &yields = phaseYields[phase];
+    SmallVector<Type> resultTypes;
+    for (auto value : yields)
+      resultTypes.push_back(value.getType());
+    auto phaseOp = PhaseOp::create(builder, loc, resultTypes, phase);
     setPhase(phaseOp, phase);
+    createdPhaseOps.push_back({phaseOp, &yields});
     auto &phaseBlock = phaseOp.getBody().emplaceBlock();
     for (auto *op : content)
       op->moveBefore(&phaseBlock, phaseBlock.end());
@@ -339,10 +488,28 @@ LogicalResult PhaseSorter::sortRegion(Region &region) {
         resultsIt != phaseResults.end()
             ? PhaseReturnOp::create(
                   returnBuilder, terminator->getLoc(), resultsIt->second.values,
-                  resultsIt->second.typeOfValues, ValueRange{})
+                  resultsIt->second.typeOfValues, yields.getArrayRef())
             : PhaseReturnOp::create(returnBuilder, loc, ValueRange{},
-                                    ValueRange{}, ValueRange{});
+                                    ValueRange{}, yields.getArrayRef());
     setPhase(phaseReturnOp, phase);
+  }
+
+  // With all phase ops in place, redirect every use of a yielded value from
+  // outside its phase region to the corresponding phase-op result. This
+  // rewires consumers inside later phases, the function-result and type
+  // operands captured on later phase returns, and the region terminator;
+  // uses inside the defining phase (including its own phase return) keep
+  // the value directly.
+  for (auto &createdPhaseOp : createdPhaseOps) {
+    Operation *phaseOp = createdPhaseOp.first;
+    for (auto [index, yielded] :
+         llvm::enumerate(createdPhaseOp.second->getArrayRef())) {
+      Value value = yielded;
+      Value replacement = createdPhaseOp.first.getResult(index);
+      value.replaceUsesWithIf(replacement, [&](OpOperand &use) {
+        return !phaseOp->isProperAncestor(use.getOwner());
+      });
+    }
   }
 
   // The function results now ride on the phase returns; the body terminator
@@ -352,92 +519,6 @@ LogicalResult PhaseSorter::sortRegion(Region &region) {
     setPhase(unreachableOp, 0);
     forget(returnOp);
     returnOp.erase();
-  }
-
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
-// Check the Sorted Region
-//===----------------------------------------------------------------------===//
-
-/// Check the sorted region against the parts of the phase-op contract this
-/// pass cannot yet establish, and reject violating inputs loudly:
-///
-/// - Every op inside a `uir.phase` at a real phase must be at that phase;
-///   a mismatch means the input needs hoisting or extraction of content
-///   nested under differently-phased control flow.
-/// - Every use must stay within the defining value's phase region; uses
-///   from another phase op or from the region top level are cross-phase
-///   crossings, which will become phase-op results.
-///
-/// Uses of region-top-level values (function arguments and floating ops)
-/// from inside any phase are legal sorted form and pass the check.
-LogicalResult PhaseSorter::checkRegion(Region &region) {
-  auto &block = region.front();
-
-  // Report a use of a phase-interior value from outside that phase.
-  auto emitCrossingError = [&](Operation *user, Value value,
-                               PhaseOp defPhaseOp) {
-    auto diag = user->emitOpError()
-                << "uses a value defined in phase " << defPhaseOp.getPhase()
-                << "; cross-phase value crossings are not implemented in "
-                   "phase sorting yet";
-    diag.attachNote(value.getLoc()) << "value defined here";
-    return diag;
-  };
-
-  // The phase op enclosing an operand's definition at this region's top
-  // level, or null for block arguments and top-level floating ops.
-  auto definingPhaseOp = [&](Value value) -> PhaseOp {
-    auto *defOp = value.getDefiningOp();
-    if (!defOp)
-      return {};
-    auto *ancestor = block.findAncestorOpInBlock(*defOp);
-    assert(ancestor && "operand defined outside the function region");
-    return dyn_cast<PhaseOp>(ancestor);
-  };
-
-  for (auto &topOp : block) {
-    if (auto phaseOp = dyn_cast<PhaseOp>(&topOp)) {
-      auto result = phaseOp.getBody().walk([&](Operation *op) {
-        auto it = analysis.opPhases.find(op);
-        assert(it != analysis.opPhases.end() && "op phase not computed");
-        if (isRealPhase(it->second) && it->second != phaseOp.getPhase()) {
-          op->emitOpError()
-              << "at phase " << it->second << " is nested inside phase "
-              << phaseOp.getPhase()
-              << " content; hoisting and extraction across phase "
-                 "boundaries are not implemented in phase sorting yet";
-          return WalkResult::interrupt();
-        }
-        for (auto operand : op->getOperands()) {
-          auto defPhaseOp = definingPhaseOp(operand);
-          if (defPhaseOp && defPhaseOp != phaseOp) {
-            emitCrossingError(op, operand, defPhaseOp);
-            return WalkResult::interrupt();
-          }
-        }
-        return WalkResult::advance();
-      });
-      if (result.wasInterrupted())
-        return failure();
-      continue;
-    }
-
-    // Top-level ops (floating ops and the region terminator) must not
-    // reach into any phase region.
-    auto result = topOp.walk([&](Operation *op) {
-      for (auto operand : op->getOperands()) {
-        if (auto defPhaseOp = definingPhaseOp(operand)) {
-          emitCrossingError(op, operand, defPhaseOp);
-          return WalkResult::interrupt();
-        }
-      }
-      return WalkResult::advance();
-    });
-    if (result.wasInterrupted())
-      return failure();
   }
 
   return success();
@@ -461,10 +542,6 @@ LogicalResult PhaseSorter::run() {
   if (failed(sortRegion(funcOp.getSignature())))
     return failure();
   if (failed(sortRegion(funcOp.getBody())))
-    return failure();
-  if (failed(checkRegion(funcOp.getSignature())))
-    return failure();
-  if (failed(checkRegion(funcOp.getBody())))
     return failure();
   return success();
 }

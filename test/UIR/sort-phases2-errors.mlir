@@ -123,62 +123,113 @@ uir.func @PhaseCallInInput(%x: 0) -> () {
 
 // -----
 
-// A value computed at one phase and consumed at a later one must cross as a
-// phase-op result, which is a later sorting case.
-uir.func @Crossing(%a: -1, %x: 0) -> (result: 0) {
+// A never-produced control-flow result (a loop without breaks) diverges
+// from its op's phase: the value never materializes and every consumer is
+// unreachable. Unreachable-consumer handling is a later sorting case.
+uir.func @NeverResult(%a: -1, %x: 0) -> (c: -1) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
-  %sq = uir.expr pin -1 : %t {
-    // expected-note @below {{value defined here}}
-    %m = hir.mul %a, %a : %t
-    uir.yield %m : %t
+  // expected-error @below {{delivers result #0 at phase never instead of its own phase 0; result forwarding (identity-provided, choice-ified, or never-produced control-flow results) is not implemented in phase sorting yet}}
+  %r = uir.loop : %t {
+    uir.continue
   }
-  // expected-error @below {{uses a value defined in phase -1; cross-phase value crossings are not implemented in phase sorting yet}}
-  %r = hir.add %sq, %x : %t
+  %s = hir.add %a, %r : %t
+  uir.return %s : %t
+}
+
+// -----
+
+// A control-flow result provided by the same SSA value on all paths (the
+// identity exemption) is delivered at that value's phase, which can precede
+// the CF op. Forwarding the provider instead of crossing is a later sorting
+// case.
+uir.func @IdentityBackward(%a: -1, %c: 0) -> (r: -1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // expected-error @below {{delivers result #0 at phase -1 instead of its own phase 0; result forwarding (identity-provided, choice-ified, or never-produced control-flow results) is not implemented in phase sorting yet}}
+  %r = uir.if %c : %t {
+    uir.yield %a : %t
+  } else {
+    uir.yield %a : %t
+  }
+  %s = hir.mul %r, %r : %t
+  uir.return %s : %t
+}
+
+// -----
+
+// The divergence also goes forward: an identity-provided result of a
+// transparent-yield region delivers a later-phase value out of an
+// earlier-phase op, so the op's interior references values that do not
+// exist at its phase.
+uir.func @IdentityForward(%c: -1, %x: 0) -> (r: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %r = uir.expr pin -1 : %t {
+    // expected-error @below {{delivers result #0 at phase 0 instead of its own phase -1; result forwarding (identity-provided, choice-ified, or never-produced control-flow results) is not implemented in phase sorting yet}}
+    %i = uir.if %c : %t {
+      uir.yield %x : %t
+    } else {
+      uir.yield %x : %t
+    }
+    uir.yield %i : %t
+  }
+  %s = hir.add %r, %x : %t
+  uir.return %s : %t
+}
+
+// -----
+
+// A control-flow op selecting between distinct later-phase values is a
+// choice-ification obligation, handled by branch extraction in a later
+// sorting case.
+uir.func @ChoiceObligation(%c: -1, %x: 0, %y: 0) -> (r: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %r = uir.expr pin -1 : %t {
+    // expected-error @below {{delivers result #0 at phase 0 instead of its own phase -1; result forwarding (identity-provided, choice-ified, or never-produced control-flow results) is not implemented in phase sorting yet}}
+    %i = uir.if %c : %t {
+      uir.yield %x : %t
+    } else {
+      uir.yield %y : %t
+    }
+    uir.yield %i : %t
+  }
   uir.return %r : %t
 }
 
 // -----
 
-// The signature terminator consuming a value computed inside a phase is a
-// crossing as well (it will consume a phase-op result).
-uir.func @SigCrossing(%x: 0) -> (result: 1) {
-  %0 = hir.int_type
-  %v = hir.var : %0
-  // expected-note @below {{value defined here}}
-  %r = hir.read_var %v : %0
-  // expected-error @below {{uses a value defined in phase 0; cross-phase value crossings are not implemented in phase sorting yet}}
-  uir.signature (%0) -> (%r)
-} {
-  %t = hir.int_type
-  uir.return %x : %t
-}
-
-// -----
-
-// A floating op whose operands moved into different phase regions cannot be
-// placed without a crossing.
-uir.func @DeadFloatAcrossPhases(%a: -1, %x: 0) -> () {
+// Floating (dead) content nested inside earlier-phase control flow can
+// consume later-phase values without any demand anchoring it; it cannot
+// sink out of the region it is glued into, so the backward use is rejected.
+uir.func @FloatBackwardInBranch(%c: 0, %x: 0) -> () {
   %0 = hir.int_type
   uir.signature (%0, %0) -> ()
 } {
   %t = hir.int_type
-  %r1 = uir.expr pin -1 : %t {
-    %v1 = hir.var : %t
-    hir.write_var %v1, %a : %t
+  %m = uir.expr pin 1 : %t {
+    %v = hir.var : %t
+    hir.write_var %v, %x : %t
     // expected-note @below {{value defined here}}
-    %rd1 = hir.read_var %v1 : %t
-    uir.yield %rd1 : %t
+    %rd = hir.read_var %v : %t
+    uir.yield %rd : %t
   }
-  %v2 = hir.var : %t
-  hir.write_var %v2, %x : %t
-  %r2 = hir.read_var %v2 : %t
-  %dead = uir.expr : %t {
-    // expected-error @below {{uses a value defined in phase -1; cross-phase value crossings are not implemented in phase sorting yet}}
-    %m = hir.add %r1, %r2 : %t
-    uir.yield %m : %t
+  uir.if %c {
+    %y = uir.expr : %t {
+      // expected-error @below {{uses a value from phase 1 inside phase 0 content; backward crossings are not implemented in phase sorting yet}}
+      %dead = hir.add %m, %m : %t
+      uir.yield %dead : %t
+    }
+    uir.yield
   }
   uir.return
 }

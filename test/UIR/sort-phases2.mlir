@@ -26,6 +26,70 @@ uir.func @SinglePhase(%a: 0, %b: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Straight-line, two phases: phase -1 computes from the const argument and
+// yields the crossing value; phase 0 consumes it as an ordinary SSA value
+// and returns the function result.
+
+// CHECK-LABEL: uir.func @MultiPhase
+uir.func @MultiPhase(%a: -1, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[SQ:%.+]] = hir.mul %a, %a : [[T]]
+  %sq = hir.mul %a, %a : %t
+  // CHECK-NEXT:   uir.phase_return yield [[SQ]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[R:%.+]] = hir.add [[P]], %b : [[T]]
+  %r = hir.add %sq, %b : %t
+  // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Skip crossing: a value is yielded once, from the phase computing it, and
+// consumed directly at any later phase; here the phase -2 result is consumed
+// at phase -1 and again at phase 0, skipping over the -1 op.
+
+// CHECK-LABEL: uir.func @SkipCrossing
+uir.func @SkipCrossing(%a: -2, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase -2 {
+  // CHECK-NEXT:   [[SQ:%.+]] = hir.mul %a, %a : [[T]]
+  %sq = hir.mul %a, %a : %t
+  // CHECK-NEXT:   uir.phase_return yield [[SQ]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase -1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   hir.write_var [[V]], [[P]] : [[T]]
+  // CHECK-NEXT:   uir.phase_return{{$}}
+  // CHECK-NEXT: }
+  uir.expr pin -1 {
+    %v = hir.var : %t
+    hir.write_var %v, %sq : %t
+    uir.yield
+  }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[R:%.+]] = hir.add [[P]], %x : [[T]]
+  %r = hir.add %sq, %x : %t
+  // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Result-only phase: a phase return carrying function results is content, so
 // a phase whose only job is returning a value still gets its phase op.
 
@@ -256,8 +320,9 @@ uir.func @SignatureContent(%x: 0) -> () {
 
 //===----------------------------------------------------------------------===//
 // Function results at different phases: each phase's phase return carries
-// exactly the function results belonging to that phase; here both phases are
-// result-only since the args are consumed directly.
+// exactly the function results belonging to that phase. A value may double
+// as a function result and a crossing (returned in `values`, yielded in
+// `yields` of the same phase return).
 
 // CHECK-LABEL: uir.func @ResultsPerPhase
 uir.func @ResultsPerPhase(%a: -1, %b: 0) -> (c: -1, d: 0) {
@@ -267,45 +332,154 @@ uir.func @ResultsPerPhase(%a: -1, %b: 0) -> (c: -1, d: 0) {
   // CHECK: uir.signature
   // CHECK: [[T:%.+]] = hir.int_type
   %t = hir.int_type
-  // CHECK-NEXT: uir.phase -1 {
-  // CHECK-NEXT:   uir.phase_return %a : [[T]]
+  // CHECK-NEXT: [[P:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[SQ:%.+]] = hir.mul %a, %a : [[T]]
+  %sq = hir.mul %a, %a : %t
+  // CHECK-NEXT:   uir.phase_return [[SQ]] : [[T]] yield [[SQ]]
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.phase 0 {
-  // CHECK-NEXT:   uir.phase_return %b : [[T]]
+  // CHECK-NEXT:   [[R:%.+]] = hir.add [[P]], %b : [[T]]
+  %r = hir.add %sq, %b : %t
+  // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.unreachable
-  uir.return %a, %b : %t, %t
+  uir.return %sq, %r : %t, %t
+}
+
+//===----------------------------------------------------------------------===//
+// A crossing consumed as a later phase's function result: the value is
+// yielded by its phase and rides the `values` of the later phase's return.
+
+// CHECK-LABEL: uir.func @ResultCrossing
+uir.func @ResultCrossing(%a: -1, %b: 0) -> (c: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[SQ:%.+]] = hir.mul %a, %a : [[T]]
+  %sq = hir.mul %a, %a : %t
+  // CHECK-NEXT:   uir.phase_return yield [[SQ]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
+  %v = hir.var : %t
+  // CHECK-NEXT:   hir.write_var [[V]], %b : [[T]]
+  hir.write_var %v, %b : %t
+  // CHECK-NEXT:   uir.phase_return [[P]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.return %sq : %t
 }
 
 //===----------------------------------------------------------------------===//
 // Internal phases: content past the last declared phase wraps into a
-// uir.phase op like any other phase, even though callers cannot target it.
+// uir.phase op like any other phase, even though callers cannot target it;
+// crossings into the internal phase are ordinary phase results.
 
 // CHECK-LABEL: uir.func @TrailingInternalPhase
-uir.func @TrailingInternalPhase(%x: 0) -> (result: 0) {
+uir.func @TrailingInternalPhase(%a: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0) -> (%0)
 } {
   // CHECK: uir.signature
   // CHECK: [[T:%.+]] = hir.int_type
   %t = hir.int_type
-  // CHECK-NEXT: uir.phase 0 {
-  // CHECK-NEXT:   [[R:%.+]] = hir.add %x, %x : [[T]]
-  %r = hir.add %x, %x : %t
-  // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
+  // CHECK-NEXT: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[SQ:%.+]] = hir.mul %a, %a : [[T]]
+  %sq = hir.mul %a, %a : %t
+  // CHECK-NEXT:   uir.phase_return [[SQ]] : [[T]] yield [[SQ]]
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.phase 1 {
   // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
-  // CHECK-NEXT:   hir.write_var [[V]], %x : [[T]]
+  // CHECK-NEXT:   hir.write_var [[V]], [[P]] : [[T]]
   // CHECK-NEXT:   uir.phase_return{{$}}
   // CHECK-NEXT: }
   uir.expr pin 1 {
     %v = hir.var : %t
-    hir.write_var %v, %x : %t
+    hir.write_var %v, %sq : %t
     uir.yield
   }
   // CHECK-NEXT: uir.unreachable
-  uir.return %r : %t
+  uir.return %sq : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Signature-region phases: a dependent signature computes the phase-0
+// argument and result type from the const argument in its own phase -1 op;
+// the uir.signature terminator consumes the phase result directly. The body
+// recomputes the type in its own phase -1 op, and the phase 0 return's type
+// operand consumes that crossing as well.
+
+// CHECK-LABEL: uir.func @DependentSignature
+uir.func @DependentSignature(%N: -1, %x: 0) -> (result: 0) {
+  // CHECK-NEXT: [[INT:%.+]] = hir.int_type
+  %int = hir.int_type
+  // CHECK-NEXT: [[SP:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[TY:%.+]] = hir.uint_type %N
+  %ty = hir.uint_type %N
+  // CHECK-NEXT:   uir.phase_return yield [[TY]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.signature ([[INT]], [[SP]]) -> ([[SP]])
+  uir.signature (%int, %ty) -> (%ty)
+} {
+  // CHECK: [[BP:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[TY2:%.+]] = hir.uint_type %N
+  %ty2 = hir.uint_type %N
+  // CHECK-NEXT:   uir.phase_return yield [[TY2]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[R:%.+]] = hir.add %x, %x : [[BP]]
+  %r = hir.add %x, %x : %ty2
+  // CHECK-NEXT:   uir.phase_return [[R]] : [[BP]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.return %r : %ty2
+}
+
+//===----------------------------------------------------------------------===//
+// A dead floating op whose operands moved into two different phase regions
+// sinks into the latest one; its earlier-phase operand crosses as an
+// ordinary phase result.
+
+// CHECK-LABEL: uir.func @DeadFloatAcrossPhases
+uir.func @DeadFloatAcrossPhases(%a: -1, %x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[V1:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   hir.write_var [[V1]], %a : [[T]]
+  // CHECK-NEXT:   [[RD1:%.+]] = hir.read_var [[V1]] : [[T]]
+  // CHECK-NEXT:   uir.phase_return yield [[RD1]]
+  // CHECK-NEXT: }
+  %r1 = uir.expr pin -1 : %t {
+    %v1 = hir.var : %t
+    hir.write_var %v1, %a : %t
+    %rd1 = hir.read_var %v1 : %t
+    uir.yield %rd1 : %t
+  }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[V2:%.+]] = hir.var : [[T]]
+  %v2 = hir.var : %t
+  // CHECK-NEXT:   hir.write_var [[V2]], %x : [[T]]
+  hir.write_var %v2, %x : %t
+  // CHECK-NEXT:   [[RD2:%.+]] = hir.read_var [[V2]] : [[T]]
+  %r2 = hir.read_var %v2 : %t
+  // CHECK-NEXT:   hir.add [[P]], [[RD2]] : [[T]]
+  %dead = uir.expr : %t {
+    %m = hir.add %r1, %r2 : %t
+    uir.yield %m : %t
+  }
+  // CHECK-NEXT:   uir.phase_return{{$}}
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.return
 }
 
 //===----------------------------------------------------------------------===//

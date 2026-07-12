@@ -18,7 +18,9 @@
 //   phase-op results: yielded by uir.phase_return, consumed by any later
 //   phase, at any distance. Values already visible at the region top level
 //   (function arguments and floating ops) are consumed directly, without
-//   routing through a phase op.
+//   routing through a phase op. A floating op that uses values moved into
+//   phase regions sinks into the latest such phase; its operands from
+//   earlier phases cross as phase results like any other use.
 // - Function results ride on the `values` of uir.phase_return in the phase
 //   they belong to; a phase_return carrying values or yields is content, so
 //   a result-only phase still gets its phase op, while contentless phases
