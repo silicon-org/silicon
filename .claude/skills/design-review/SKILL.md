@@ -14,11 +14,12 @@ From the arguments (or the conversation), pick one:
 1. No arguments: the uncommitted changes (staged and working tree); if the tree is clean, the HEAD commit.
 2. A commit ref: that commit's diff.
 3. A pass, dialect, or path: the current state of that code, regardless of when it was written.
-4. `all` or `codebase`: the whole compiler; spawn one reviewer subagent per transformation/conversion pass and one per dialect, then merge their reports.
+4. `all` or `codebase`: the whole compiler; spawn one reviewer subagent per transformation/conversion pass and one per dialect (each on the model named in "Spawn the Reviewer"), then merge their reports.
 
 ## Spawn the Reviewer
 
-Spawn a subagent whose prompt contains only the scope (diff ref, commit sha, or paths) and the reviewer instructions below, verbatim.
+Spawn the reviewer as a `claude` subagent with the model set to `opus` (Opus 4.8); the review always runs on that model, not on whatever the main session happens to be using.
+Its prompt must contain only the scope (diff ref, commit sha, or paths) and the reviewer instructions below, verbatim.
 Do not include your own reasoning, the design goals you were pursuing, why the code looks the way it does, or any hint of what you expect the verdict to be.
 If the scope is a diff, tell the reviewer the ref/sha and let it run git itself.
 
