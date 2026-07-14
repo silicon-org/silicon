@@ -126,10 +126,11 @@ y = pick choice [ 0(k): { x + k } ]
 
 ## 7. Value selection across phases (floor rule)
 
-A CF op at phase p that selects between **distinct** values cannot deliver the selection at a phase earlier than p (causality):
+A CF op at phase p that selects between values cannot deliver the selection at a phase earlier than p (causality):
 
-- Multiple `return`/`break`/yield sites providing distinct values for an earlier-phase result: **error**.
-- Same-value exemption: allowed only for **trivially identical** values (same SSA value). No semantic-equality analysis, no instantiation-dependent late errors — `return a; ... return b;` into a const result is an error even if a caller passes equal constants. Caveat: two textually identical literals are distinct SSA values unless CSE ran; the exemption's effective strength depends on canonicalization before PhaseAnalysis, which is acceptable (it only ever accepts more programs).
+- A result provided by more than one terminator site (`return`/`break`/yield) is a **selection**, regardless of the values' identity — no SSA-identity exemption and no semantic-equality analysis; an identity exemption would not compose anyway (nested ifs providing the same value fail SSA identity, so it would have to grow into a CFG traversal).
+- The result phase of a selection floors at the op phase: earlier-phase values provided by multiple sites deliver at the op phase, and a demand below the op phase is an **error**.
+- In particular, multiple `return` sites providing a phase<0 (const) result are always an error, even when all sites return the same SSA value. A future surface rule may require a single return for functions with phase<0 results.
 - The check runs pre-split, in PhaseAnalysis (the implemented floor rule already matches this).
 - A CF op at phase p yielding a **later**-phase value is legal: the value is replaced by a choice crossing the boundary; the receiving phase reconstructs the selection with `pick` (§6).
 - Same-phase CF is untouched: `if`/`loop` keep SSA results and value-carrying yields when everything is at one phase. Splitting must decay gracefully — single-phase functions pass through the same general algorithm unchanged, never a special case.

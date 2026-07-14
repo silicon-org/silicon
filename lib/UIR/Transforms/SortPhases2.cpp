@@ -71,30 +71,32 @@
 //   order, and recursion decomposes like any other call.
 //
 // - **Extract branches**: a `uir.if` at phase p whose arms hold later-phase
-//   content, or whose result selects between distinct later-phase values, is
-//   rebuilt at phase p with a per-arm `hir.choice` as an extra result; the
-//   later-phase content and results move into a `hir.pick` at phase p+1 that
-//   dispatches on the choice. The choice crosses phases as an ordinary
-//   crossing. Only genuine choice-ification is lifted this way; identity-
-//   provided and never-produced divergent results stay rejected below.
+//   content, or whose result selects between later-phase values (both arms
+//   yield it, regardless of the values' identity), is rebuilt at phase p with
+//   a per-arm `hir.choice` as an extra result; the later-phase content and
+//   results move into a `hir.pick` at phase p+1 that dispatches on the
+//   choice. The choice crosses phases as an ordinary crossing. Only
+//   multi-provider results are lifted this way; single-provider and
+//   never-produced divergent results stay rejected below.
 //
 // - **Extract loops**: a `uir.loop` at phase p whose body holds later-phase
-//   content is rebuilt at phase p pushing one record per activation onto a hit
-//   list, and the later-phase content moves into a `hir.replicate` at phase
-//   p+1 that replays the records. Loop-phase early exits (`break`/`continue`
-//   in branch arms) make the record end in a nested exit-path choice that a
-//   nested `hir.pick` in the replicate dispatches on. The list crosses phases
-//   as an ordinary crossing. A loop delivering a later-phase result first has
-//   that break value choice-ified: each break site carries a `hir.choice` of
-//   the value's snapshots in place of the value, and a `hir.pick` at phase p+1
-//   after the loop reconstructs it (composing with record extraction).
+//   content, or whose result is at a later phase, is rebuilt at phase p
+//   pushing one record per activation onto a hit list, and the later-phase
+//   content moves into a `hir.replicate` at phase p+1 that replays the
+//   records. Loop-phase early exits (`break`/`continue` in branch arms) make
+//   the record end in a nested exit-path choice that a nested `hir.pick` in
+//   the replicate dispatches on. The list crosses phases as an ordinary
+//   crossing. A loop delivering a later-phase result first has that break
+//   value choice-ified: each break site carries a `hir.choice` of the value's
+//   snapshots in place of the value, and a `hir.pick` at phase p+1 after the
+//   loop reconstructs it (composing with record extraction).
 //
 // The pass covers straight-line content, single-boundary branch extraction,
 // single-boundary loop-record extraction, and break-value choices. Inputs that
 // need the remaining sorting machinery are rejected with explicit diagnostics
 // instead of being sorted incorrectly: early function exits (function-level
 // exit chains), results delivered at a phase different from their op's own
-// phase by identity-provided or never-produced control flow (which need result
+// phase by single-provider or never-produced control flow (which need result
 // forwarding and unreachable-consumer handling), hoisting and content more
 // than one phase away from its control flow, and backward uses from floating
 // content nested under earlier-phase control flow.
@@ -439,7 +441,7 @@ LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
 // # Extract Later-Phase Content Out of Earlier-Phase Branches
 //
 // A `uir.if` at phase p whose arms hold later-phase content, or whose result
-// selects between distinct later-phase values, cannot wrap wholesale into
+// selects between later-phase values, cannot wrap wholesale into
 // phase p: the later-phase content must run in a later phase, and a later
 // value cannot be produced at phase p (causality). Branch extraction rewrites
 // such an if into two cooperating ops that the ordinary wrap and cross rules
@@ -458,11 +460,11 @@ LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
 // phase p and the pick consumes it in phase p+1 like any other crossing. The
 // distinction between an obligation to choice-ify and the neighbouring
 // divergent-result cases is local: a later-phase result is choice-ified only
-// when its providing arm yields select distinct SSA values. An identity-
-// provided result (all arms yield the same value) or a never-produced result
-// is not extracted; the residual if still delivers it divergently, so the
-// rejection below reports it. Extraction thus lifts exactly the
-// choice-ification case and leaves the rest rejected.
+// when more than one arm yield provides it — the values' identity is
+// irrelevant. A single-provider result (the other arm exits) or a
+// never-produced result is not extracted; the residual if still delivers it
+// divergently, so the rejection below reports it. Extraction thus lifts
+// exactly the choice-ification case and leaves the rest rejected.
 
 /// Whether any op transitively inside `root` sits at a real phase later than
 /// p.
@@ -606,6 +608,8 @@ void PhaseSorter::remapFields(Block &receivingBlock,
   }
 }
 
+// NOLINTBEGIN(misc-no-recursion)
+
 /// Clone the defining tree of a floating pure value at the builder's
 /// insertion point.
 static Value cloneFloatingTree(Value value, OpBuilder &builder,
@@ -619,6 +623,8 @@ static Value cloneFloatingTree(Value value, OpBuilder &builder,
   builder.clone(*defOp, mapping);
   return mapping.lookup(value);
 }
+
+// NOLINTEND(misc-no-recursion)
 
 /// Clone floating trees that moved content still references from inside the
 /// (former) region of `regionOp`. A floating value defined inside an arm is
@@ -645,24 +651,22 @@ void PhaseSorter::cloneFloatingUses(Operation *regionOp, Block &rootBlock) {
   });
 }
 
-/// Whether the arm yields providing result `idx` of `ifOp` select between
-/// distinct SSA values. Only distinct selections are choice-ification
-/// obligations; a result forwarded identically by all arms is delivered at
-/// the value's own phase and is not extracted here. An arm terminated by an
-/// exit (return/break/continue) rather than a yield does not provide the
-/// result; such an if is not choice-ified but left for the early-exit
-/// rejection, so a single yielding provider never counts as a selection.
-static bool selectsDistinctValues(IfOp ifOp, unsigned idx) {
-  SmallVector<Value, 2> provided;
+/// The number of arm yields providing result `idx` of `ifOp`. An arm
+/// terminated by an exit (return/break/continue) rather than a yield does not
+/// provide the result. A result provided by more than one yield is a
+/// selection and a choice-ification obligation when it is later-phase; a
+/// single-provider result (the other arm exits) is not choice-ified but left
+/// for the early-exit rejection.
+static unsigned countResultProviders(IfOp ifOp, unsigned idx) {
+  unsigned count = 0;
   for (auto *region : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
     if (region->empty())
       continue;
     auto yieldOp = dyn_cast<YieldOp>(region->front().getTerminator());
     if (yieldOp && idx < yieldOp.getValues().size())
-      provided.push_back(yieldOp.getValues()[idx]);
+      ++count;
   }
-  return provided.size() > 1 &&
-         !llvm::all_of(provided, [&](Value v) { return v == provided[0]; });
+  return count;
 }
 
 /// Extract later-phase content out of every phase-p `uir.if` whose interior
@@ -672,10 +676,10 @@ static bool selectsDistinctValues(IfOp ifOp, unsigned idx) {
 /// An if is extracted only when every one of its results is deliverable at
 /// its own phase after extraction: results already at phase p stay, and
 /// results at a later phase are removed and reconstructed by the pick — but
-/// only if they choice-ify (distinct arm values). A result diverging from the
-/// op's phase in any other way (identity-provided earlier or later, or
-/// never-produced) is left in place for the divergence rejection; such an if
-/// is not extracted.
+/// only if they choice-ify (provided by more than one arm yield). A result
+/// diverging from the op's phase in any other way (a single-provider result
+/// whose other arm exits, or a never-produced result) is left in place for
+/// the divergence rejection; such an if is not extracted.
 LogicalResult PhaseSorter::extractBranches() {
   SmallVector<IfOp> ifOps;
   funcOp.getBody().walk<WalkOrder::PostOrder>([&](IfOp op) {
@@ -695,11 +699,11 @@ LogicalResult PhaseSorter::extractBranches() {
       if (vph == p)
         continue; // Kept at the op's phase.
       if (isRealPhase(vph) && vph > p &&
-          selectsDistinctValues(ifOp, result.getResultNumber())) {
+          countResultProviders(ifOp, result.getResultNumber()) > 1) {
         hasChoiceResult = true;
         continue; // Choice-ification obligation.
       }
-      extractable = false; // Identity-provided or never-produced divergence.
+      extractable = false; // Single-provider or never-produced divergence.
       break;
     }
     if (!extractable)
@@ -1439,8 +1443,10 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
 }
 
 /// Extract later-phase content out of every phase-p `uir.loop` whose interior
-/// demands it, innermost first so a nested loop becomes ordinary later-phase
-/// content of its enclosing loop's records.
+/// or results demand it, innermost first so a nested loop becomes ordinary
+/// later-phase content of its enclosing loop's records. A later-phase result
+/// is an extraction obligation on its own: its break values need not be
+/// computed inside the loop body.
 LogicalResult PhaseSorter::extractLoops() {
   SmallVector<LoopOp> loops;
   funcOp.getBody().walk<WalkOrder::PostOrder>([&](LoopOp op) {
@@ -1450,7 +1456,11 @@ LogicalResult PhaseSorter::extractLoops() {
 
   for (auto loopOp : loops) {
     int16_t p = *realPhaseOf(loopOp);
-    if (!hasLaterContent(loopOp, p))
+    bool hasLaterResult = llvm::any_of(loopOp->getResults(), [&](Value r) {
+      int16_t vph = analysis.actualPhase.at(r);
+      return isRealPhase(vph) && vph > p;
+    });
+    if (!hasLaterResult && !hasLaterContent(loopOp, p))
       continue;
     if (failed(extractFromLoop(loopOp, p)))
       return failure();
@@ -1480,11 +1490,14 @@ static std::string phaseName(int16_t phase) {
 ///   terminator, including returns still riding inside undissolved expr
 ///   carriers), which need function-level exit chains.
 /// - Ops delivering a result at a phase different from their own phase by a
-///   transparent forwarding of an identity-provided value or a never-produced
-///   result. These need result forwarding and unreachable-consumer handling.
-///   Choice-ification obligations (a control-flow op selecting distinct
-///   later-phase values) are already lifted by branch extraction above, so
-///   the residual divergence here is only identity-provided or never-produced.
+///   transparent forwarding of a single-provider value (the other arms exit)
+///   or a never-produced result. These need result forwarding and
+///   unreachable-consumer handling. Choice-ification obligations (a result
+///   provided by more than one terminator at a later phase) are already
+///   lifted by branch and break-value extraction above, so the residual
+///   divergence here is single-provider or never-produced results, plus the
+///   receiving picks of crossings more than one phase wide (whose
+///   re-extraction at the next boundary this pass does not do).
 /// - Anchored content whose phase differs from its parent op's phase, which
 ///   needs hoisting across the phase boundary (branch content is handled by
 ///   branch extraction and single-boundary loop content by loop-record
@@ -1520,8 +1533,9 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
               << "delivers result #" << index << " at phase "
               << phaseName(valueIt->second) << " instead of its own phase "
               << phaseName(opPhase)
-              << "; result forwarding (identity-provided or never-produced "
-                 "control-flow results) is not implemented in phase sorting "
+              << "; result forwarding (single-provider or never-produced "
+                 "control-flow results, and receivers of crossings more "
+                 "than one phase wide) is not implemented in phase sorting "
                  "yet";
           return WalkResult::interrupt();
         }

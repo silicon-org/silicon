@@ -114,9 +114,9 @@ LogicalResult PhaseAnalysis::run() {
   if (failed(processBlock(funcOp.getBody().front(), 0)))
     return failure();
 
-  // Step 3b: Result phase floor for function returns. When multiple return ops
-  // provide distinct SSA values for a result, the result phase is floored at
-  // the body phase (0). If the declared result phase is < 0, this is an error.
+  // Step 3b: Result phase floor for function returns. A result provided by
+  // more than one return op is a selection at the body phase (0), regardless
+  // of the values' identity, so a declared result phase < 0 is an error.
   {
     auto resultPhases = funcOp.getResultPhases();
     for (unsigned i = 0; i < resultPhases.size(); ++i) {
@@ -124,17 +124,13 @@ LogicalResult PhaseAnalysis::run() {
       if (rp >= 0)
         continue;
 
-      SmallVector<Value, 4> returnValues;
+      unsigned numProviders = 0;
       for (auto *term : funcTerminators)
         if (auto returnOp = dyn_cast<ReturnOp>(term))
           if (i < returnOp.getValues().size())
-            returnValues.push_back(returnOp.getValues()[i]);
+            ++numProviders;
 
-      if (returnValues.size() <= 1)
-        continue;
-      bool allSame = llvm::all_of(
-          returnValues, [&](Value v) { return v == returnValues[0]; });
-      if (allSame)
+      if (numProviders <= 1)
         continue;
 
       auto diag = emitError(funcOp.getLoc())
@@ -248,7 +244,7 @@ LogicalResult PhaseAnalysis::run() {
   // demand-time value phases and op phases; both can be tighter in the final
   // solution. Recompute pure ops as max(operand phases), and region results
   // as the max over their providing terminator values, floored at the final
-  // op phase when the op selects between distinct values. Walk in post-order
+  // op phase when more than one terminator provides them. Walk in post-order
   // so providers are final before their consumers: region contents before
   // the region op itself, block ops in order.
   LLVM_DEBUG(dbgs() << "  step 5: recompute pure ops and region results\n");
@@ -268,7 +264,7 @@ LogicalResult PhaseAnalysis::run() {
         int16_t recomputed = INT16_MIN;
         for (auto &[value, term] : providers)
           recomputed = std::max(recomputed, actualPhase.at(value));
-        if (!isa<ExprOp>(op) && selectsDistinctValues(providers))
+        if (providers.size() > 1)
           recomputed = std::max(recomputed, getPhase(op));
         assert(recomputed <= resultIt->second &&
                "region result phases only tighten");
@@ -330,7 +326,7 @@ LogicalResult PhaseAnalysis::run() {
   // results, and block arguments get the float sentinel here. Undemanded
   // results of modeled region ops instead follow the same provider rule as
   // demanded ones (step 5): max provider value phase, floored at the op
-  // phase for ops selecting distinct values, `never` when no path provides
+  // phase for multi-provider results, `never` when no path provides
   // them. Demand thus never influences where a region result materializes,
   // and dead results choice-ify exactly like live ones. Contents of regions
   // the analysis does not model remain absent from the maps: absence of an
@@ -360,7 +356,7 @@ LogicalResult PhaseAnalysis::run() {
           phase = kFloatPhase;
           for (auto &[value, term] : providers)
             phase = std::max(phase, actualPhase.at(value));
-          if (!isa<ExprOp>(&op) && selectsDistinctValues(providers))
+          if (providers.size() > 1)
             phase = std::max(phase, getPhase(&op));
         }
         actualPhase[result] = phase;
@@ -411,16 +407,6 @@ PhaseAnalysis::resultProviders(Operation *regionOp, unsigned resultIdx) {
     llvm_unreachable("unexpected region op in resultProviders");
   }
   return providers;
-}
-
-/// Whether a set of result providers selects between distinct SSA values.
-/// Same-SSA-value results are exempt from the result phase floor: no
-/// selection occurs and the value forwards at its own phase.
-bool PhaseAnalysis::selectsDistinctValues(
-    ArrayRef<std::pair<Value, Operation *>> providers) {
-  return providers.size() > 1 && !llvm::all_of(providers, [&](auto &entry) {
-           return entry.first == providers[0].first;
-         });
 }
 
 // NOLINTBEGIN(misc-no-recursion)
@@ -641,13 +627,12 @@ FailureOr<int16_t> PhaseAnalysis::constrainBlock(Block &block,
 /// Push demand through yield/break to a specific result of a region-bearing op.
 /// Yields and breaks forward the demand to the corresponding operand.
 ///
-/// For merging CF ops (IfOp, LoopOp), the result phase floor applies: when
-/// multiple terminators provide distinct SSA values for a result, the CF op
-/// performs a selection at its own phase, so the result cannot be delivered
-/// earlier. A demand below the op phase is an error, and the recorded result
-/// phase is the max over the contributing values, floored at the op phase.
-/// When all terminators provide the same SSA value no selection occurs and the
-/// result forwards at the value's own phase.
+/// For merging CF ops (IfOp, LoopOp), the result phase floor applies: a
+/// result provided by more than one terminator is a selection the CF op
+/// performs at its own phase — regardless of the values' identity — so the
+/// result cannot be delivered earlier. A demand below the op phase is an
+/// error, and the recorded result phase is the max over the contributing
+/// values, floored at the op phase.
 ///
 /// A recorded result phase *later* than the op phase is a choice-ification
 /// obligation: SortPhases replaces the value by a choice crossing the phase
@@ -738,9 +723,9 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
     llvm_unreachable("unexpected region op in constrainRegionResult");
   }
 
-  // Gather the values provided for this result to detect whether the op
-  // selects between distinct values. Same-SSA-value results are exempt from
-  // the floor: no selection occurs.
+  // Gather the values provided for this result. A result provided by more
+  // than one terminator is a selection, regardless of the values' identity,
+  // and the result phase floor applies.
   auto termEntries = resultProviders(regionOp, resultIdx);
 
   // A result that no terminator provides (a loop without breaks, an if whose
@@ -753,7 +738,7 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
     return success();
   }
 
-  bool selects = selectsDistinctValues(termEntries);
+  bool selects = termEntries.size() > 1;
 
   // Make sure the CF op has a resolved phase. A result can be demanded before
   // the op's block was processed when the op is nested in a floating expr;
@@ -767,8 +752,8 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
   }
   int16_t opPhase = opPhases.find(regionOp)->second;
 
-  // Result phase floor: a selection between distinct values cannot be
-  // delivered earlier than the phase at which the CF op performs it.
+  // Result phase floor: a selection cannot be delivered earlier than the
+  // phase at which the CF op performs it.
   if (selects && latest < opPhase) {
     auto diag = emitError(regionOp->getLoc())
                 << "result at phase " << latest

@@ -1418,6 +1418,30 @@ uir.func @FuncDistinctReturnFloorError(%a: -1, %b: -1, %flag: 0) -> (result: -1)
 // -----
 
 //===----------------------------------------------------------------------===//
+// Function returns: two returns provide the *same* SSA value for a const
+// result. A result provided by more than one return is a selection at the
+// body phase regardless of the values' identity, so this errors like the
+// distinct-value case.
+
+// expected-error @below {{result 0 at phase -1 is selected by control flow at phase 0; result phase must be >= 0}}
+uir.func @FuncSameReturnFloorError(%x: -1, %flag: 0) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  uir.if %flag {
+    // expected-note @below {{return value provided here}}
+    uir.return %x : %t
+  }
+  // expected-note @below {{return value provided here}}
+  uir.return %x : %t
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
 // if inside a const block at phase -1, yields distinct values for a result
 // demanded at phase -2 (from a doubly-const call arg). The if is at phase -1,
 // so the result can't be below -1.

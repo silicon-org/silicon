@@ -24,12 +24,13 @@ namespace uir {
 /// 2. **Side-effecting ops:** demand goes UP to the parent block, the block
 ///    adjusts its phase, then pushes DOWN to all ops.
 /// 3. **Region op results:** demand passes through the yield transparently
-///    to the inner value. When a merging CF op (if/loop) selects between
-///    distinct values, the result phase is the max over the contributing
-///    values, floored at the op's phase. A result phase *later* than the op
-///    phase is a choice-ification obligation: SortPhases derives those
-///    directly from the phase map and reconstructs the selection with
-///    `hir.pick` in the receiving phase.
+///    to the inner value. When more than one terminator of a merging CF op
+///    (if/loop) provides a result, the op selects between the provided
+///    values — regardless of their identity — and the result phase is the
+///    max over the contributing values, floored at the op's phase. A result
+///    phase *later* than the op phase is a choice-ification obligation:
+///    SortPhases derives those directly from the phase map and reconstructs
+///    the selection with `hir.pick` in the receiving phase.
 ///
 /// Two sentinel phases sit below all real phases and satisfy any demand:
 /// `kFloatPhase` marks pure values that can materialize at any phase, and
@@ -138,9 +139,9 @@ private:
   /// Push demand through yield/break to a specific result of a region-bearing
   /// op. The constraint forwards through the terminator operands; the result
   /// phase is recorded as the max over the contributing values, floored at
-  /// the op phase when the op selects between distinct values. The recorded
-  /// phase uses demand-time value phases; the final recompute in `run()`
-  /// refreshes it once all phases are settled.
+  /// the op phase when more than one terminator provides the result. The
+  /// recorded phase uses demand-time value phases; the final recompute in
+  /// `run()` refreshes it once all phases are settled.
   LogicalResult constrainRegionResult(Operation *regionOp, unsigned resultIdx,
                                       int16_t latest);
 
@@ -149,10 +150,6 @@ private:
   /// that do not carry the result are omitted.
   SmallVector<std::pair<Value, Operation *>, 2>
   resultProviders(Operation *regionOp, unsigned resultIdx);
-
-  /// Whether a set of result providers selects between distinct SSA values.
-  static bool
-  selectsDistinctValues(ArrayRef<std::pair<Value, Operation *>> providers);
 
   /// Push blockPhase down to all ops in a block (including the terminator).
   LogicalResult processBlock(Block &block, int16_t blockPhase);

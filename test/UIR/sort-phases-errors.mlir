@@ -129,7 +129,7 @@ uir.func @NeverResult(%a: -1, %x: 0) -> (c: -1) {
   uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
-  // expected-error @below {{delivers result #0 at phase never instead of its own phase 0; result forwarding (identity-provided or never-produced control-flow results) is not implemented in phase sorting yet}}
+  // expected-error @below {{delivers result #0 at phase never instead of its own phase 0; result forwarding (single-provider or never-produced control-flow results, and receivers of crossings more than one phase wide) is not implemented in phase sorting yet}}
   %r = uir.loop : %t {
     uir.continue
   }
@@ -139,57 +139,34 @@ uir.func @NeverResult(%a: -1, %x: 0) -> (c: -1) {
 
 // -----
 
-// A control-flow result provided by the same SSA value on all paths (the
-// identity exemption) is delivered at that value's phase, which can precede
-// the CF op. Forwarding the provider instead of crossing is a later sorting
-// case.
-uir.func @IdentityBackward(%a: -1, %c: 0) -> (r: -1) {
+// A result provided by a single yield while the other arm exits is delivered
+// at the provider's phase, which can precede the CF op. Forwarding the
+// provider instead of crossing is a later sorting case.
+uir.func @SingleProviderBackward(%a: -1, %c: 0) -> (r: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
-  // expected-error @below {{delivers result #0 at phase -1 instead of its own phase 0; result forwarding (identity-provided or never-produced control-flow results) is not implemented in phase sorting yet}}
-  %r = uir.if %c : %t {
-    uir.yield %a : %t
-  } else {
-    uir.yield %a : %t
-  }
-  %s = hir.mul %r, %r : %t
-  uir.return %s : %t
-}
-
-// -----
-
-// The divergence also goes forward: an identity-provided result of a
-// transparent-yield region delivers a later-phase value out of an
-// earlier-phase op, so the op's interior references values that do not
-// exist at its phase.
-uir.func @IdentityForward(%c: -1, %x: 0) -> (r: 0) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %r = uir.expr pin -1 : %t {
-    // expected-error @below {{delivers result #0 at phase 0 instead of its own phase -1; result forwarding (identity-provided or never-produced control-flow results) is not implemented in phase sorting yet}}
-    %i = uir.if %c : %t {
-      uir.yield %x : %t
+  %l = uir.loop : %t {
+    // expected-error @below {{delivers result #0 at phase -1 instead of its own phase 0; result forwarding (single-provider or never-produced control-flow results, and receivers of crossings more than one phase wide) is not implemented in phase sorting yet}}
+    %r = uir.if %c : %t {
+      uir.break %a : %t
     } else {
-      uir.yield %x : %t
+      uir.yield %a : %t
     }
-    uir.yield %i : %t
+    %s = hir.mul %r, %r : %t
+    uir.break %s : %t
   }
-  %s = hir.add %r, %x : %t
-  uir.return %s : %t
+  uir.return %l : %t
 }
 
 // -----
 
 // An if with a later-phase result whose arms do not all yield: the else arm
-// exits early instead. Branch extraction classifies the result by asking
-// whether the yielding arms select distinct values, which must tolerate the
-// non-yield arm rather than assume every arm yields. With only one provider
-// the result is not choice-ified, so the if is left for the nested-content
-// rejection.
+// exits early instead. Branch extraction classifies the result by counting
+// its providing yields, which must tolerate the non-yield arm rather than
+// assume every arm yields. With only one provider the result is not
+// choice-ified, so the if is left for the nested-content rejection.
 uir.func @ExitArmLaterResult(%c: 0, %y: 1) -> (result: 1) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)

@@ -760,6 +760,48 @@ uir.func @IfChoiceResult(%c: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Branch extraction, same-value result: both arms yield the same later-phase
+// SSA value. Two providers are a selection regardless of the values'
+// identity, so the result choice-ifies exactly like distinct values: the if
+// yields a per-arm choice and the receiving pick reconstructs the value.
+
+// CHECK-LABEL: uir.func @IfSameValueChoice
+uir.func @IfSameValueChoice(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[CH:%.+]] = uir.if %c : [[CT:%.+]] {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     uir.yield [[C0]] : [[CT]]
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     uir.yield [[C1]] : [[CT]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[CH]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P]] : !hir.any [0 (): {
+  // CHECK-NEXT:     hir.yield %y : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield %y : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %v = uir.if %c : %t {
+    uir.yield %y : %t
+  } else {
+    uir.yield %y : %t
+  }
+  uir.return %v : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Branch extraction into an internal phase: a phase-0 if with later-phase
 // (phase 1) content and no results. The else-less if gets a materialized
 // else region for the not-taken tag, and the pick lands in the trailing
@@ -1277,6 +1319,149 @@ uir.func @TwoBreakValues(%n: -1, %x: 0) -> (result: 0) {
   // CHECK-NEXT: } 1 ([[SK1:%.+]]): {
   // CHECK-NEXT:   hir.mul %x, [[SK1]]
   // CHECK-NEXT:   hir.yield
+  // CHECK-NEXT: }]
+  uir.return %y : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Two break sites carrying the same dyn SSA value, defined outside the loop:
+// two providers are a selection regardless of the values' identity, so the
+// value choice-ifies exactly like distinct break values. With the value
+// defined outside, the loop body holds no later-phase content at all — the
+// later-phase result alone triggers the extraction, and the pick alternatives
+// reference the value directly.
+
+// CHECK-LABEL: uir.func @SameBreakValueChoice
+uir.func @SameBreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  // CHECK: [[CH:%.+]] = uir.loop (
+  // CHECK:   hir.choice 0()
+  // CHECK:   uir.break
+  // CHECK:   hir.choice 1()
+  // CHECK:   uir.break
+  // CHECK: }
+  // CHECK: uir.phase_return yield [[CH]]
+  %y = uir.expr pin -1 : %t {
+    %r = uir.loop (%k = %zero : %t) : %t {
+      %done = hir.geq %k, %n : %t
+      uir.if %done {
+        uir.break %x : %t
+      }
+      %big = hir.geq %k, %one : %t
+      uir.if %big {
+        uir.break %x : %t
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %r : %t
+  }
+  // CHECK: hir.pick %{{.+}} : !hir.any [0 (): {
+  // CHECK-NEXT:   hir.yield %x : !hir.any
+  // CHECK-NEXT: } 1 (): {
+  // CHECK-NEXT:   hir.yield %x : !hir.any
+  // CHECK-NEXT: }]
+  uir.return %y : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Mixed kept and later results with the result-only trigger: result 0 is a
+// const value at the loop's own phase (kept on the rebuilt loop), result 1 a
+// dyn value defined outside the loop (choice-ified). The body holds no
+// later-phase content, so the later result alone triggers the extraction.
+
+// CHECK-LABEL: uir.func @MixedKeptLater
+uir.func @MixedKeptLater(%n: -1, %x: 0) -> (rc: -1, rd: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0, %0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  // CHECK: [[CH:%.+]]:2 = uir.loop (
+  // CHECK:   hir.choice 0()
+  // CHECK:   uir.break {{%.+}}, {{%.+}} :
+  // CHECK:   hir.choice 1()
+  // CHECK:   uir.break {{%.+}}, {{%.+}} :
+  // CHECK: }
+  // CHECK: uir.phase_return [[CH]]#0 : {{%.+}} yield [[CH]]#1
+  %a, %b = uir.expr pin -1 : %t, %t {
+    %r0, %r1 = uir.loop (%k = %zero : %t) : %t, %t {
+      %done = hir.geq %k, %n : %t
+      uir.if %done {
+        uir.break %zero, %x : %t, %t
+      }
+      %big = hir.geq %k, %one : %t
+      uir.if %big {
+        uir.break %one, %x : %t, %t
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %r0, %r1 : %t, %t
+  }
+  // CHECK: hir.pick %{{.+}} : !hir.any [0 (): {
+  // CHECK-NEXT:   hir.yield %x : !hir.any
+  // CHECK-NEXT: } 1 (): {
+  // CHECK-NEXT:   hir.yield %x : !hir.any
+  // CHECK-NEXT: }]
+  uir.return %a, %b : %t, %t
+}
+
+//===----------------------------------------------------------------------===//
+// Nested loops with the result-only trigger cascading: the inner const loop
+// breaks with a dyn value defined outside both loops (single break site, no
+// later body content). Inner extraction plants a receiving pick inside the
+// outer loop's body; the outer loop's break then carries that pick's dyn
+// result, so the outer loop break-value-extracts with the inner pick as its
+// slice, and the receiving picks nest at phase 0.
+
+// CHECK-LABEL: uir.func @NestedResultOnly
+uir.func @NestedResultOnly(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  // CHECK: [[OCH:%.+]] = uir.loop (
+  // CHECK:   [[ICH:%.+]] = uir.loop (
+  // CHECK:     hir.choice 0()
+  // CHECK:     uir.break
+  // CHECK:   }
+  // CHECK:   [[OC0:%.+]] = hir.choice 0([[ICH]])
+  // CHECK:   uir.break [[OC0]] :
+  // CHECK: }
+  // CHECK: uir.phase_return yield [[OCH]]
+  %y = uir.expr pin -1 : %t {
+    %o = uir.loop (%k = %zero : %t) : %t {
+      %done = hir.geq %k, %n : %t
+      uir.if %done {
+        %inner = uir.loop (%j = %zero : %t) : %t {
+          %jdone = hir.geq %j, %k : %t
+          uir.if %jdone {
+            uir.break %x : %t
+          }
+          %jnext = hir.add %j, %one : %t
+          uir.continue %jnext : %t
+        }
+        uir.break %inner : %t
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %o : %t
+  }
+  // CHECK: hir.pick %{{.+}} : !hir.any [0 ([[ARG:%.+]]): {
+  // CHECK-NEXT:   [[IV:%.+]] = hir.pick [[ARG]] : !hir.any [0 (): {
+  // CHECK-NEXT:     hir.yield %x : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   hir.yield [[IV]] : !hir.any
   // CHECK-NEXT: }]
   uir.return %y : %t
 }

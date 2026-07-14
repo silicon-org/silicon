@@ -872,19 +872,21 @@ uir.func @AsymmetricPureFloat(%a: -1, %b: 0) -> (result: 0) {
 //===----------------------------------------------------------------------===//
 
 //===----------------------------------------------------------------------===//
-// if at phase 0, both branches yield the same SSA value at phase -1. No
-// selection occurs, so the floor does not apply. Result is at -1.
+// if at phase 0, both branches yield the same SSA value at phase -1. Two
+// providers make a selection regardless of the values' identity, so the
+// result floors at the op phase 0.
 
-// CHECK-LABEL: uir.func @IfSameValueNoFloor
-uir.func @IfSameValueNoFloor(%sel: 0, %x: -1) -> (result: -1) {
+// CHECK-LABEL: uir.func @IfSameValueFloors
+uir.func @IfSameValueFloors(%sel: 0, %x: -1) -> (result: 0) {
   %t0 = hir.int_type
   %t1 = hir.int_type
   %t2 = hir.int_type
   uir.signature (%t0, %t1) -> (%t2)
 } {
   %t = hir.int_type
-  // Both branches yield the same SSA value %x. No selection, no floor.
-  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["-1"]
+  // Both branches yield the same SSA value %x, but the result still floors
+  // at the op phase.
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["0"]
   %r = uir.if %sel : %t {
     uir.yield %x : %t
   } else {
@@ -895,10 +897,11 @@ uir.func @IfSameValueNoFloor(%sel: 0, %x: -1) -> (result: -1) {
 
 //===----------------------------------------------------------------------===//
 // if at phase 0, both branches yield the same dyn SSA value at phase +1.
-// No selection, no floor. Result is at +1.
+// A selection like any other: the result is at the value phase +1, above
+// the floor, and sorting choice-ifies it.
 
-// CHECK-LABEL: uir.func @IfSameValueNoFloorDyn
-uir.func @IfSameValueNoFloorDyn(%sel: 0, %x: 1) -> (result: 1) {
+// CHECK-LABEL: uir.func @IfSameValueDynSelects
+uir.func @IfSameValueDynSelects(%sel: 0, %x: 1) -> (result: 1) {
   %t0 = hir.int_type
   %t1 = hir.int_type
   %t2 = hir.int_type
@@ -1005,18 +1008,19 @@ uir.func @IfBothReturnNoIfFloor(%sel: 0, %a: 0, %b: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// Loop with two breaks providing the same SSA value. No floor.
+// Loop with two breaks providing the same SSA value. Two providers make a
+// selection regardless of identity: the result floors at the loop phase 0.
 
-// CHECK-LABEL: uir.func @LoopSameBreakNoFloor
-uir.func @LoopSameBreakNoFloor(%x: -1, %flag: 0) -> (result: -1) {
+// CHECK-LABEL: uir.func @LoopSameBreakFloors
+uir.func @LoopSameBreakFloors(%x: -1, %flag: 0) -> (result: 0) {
   %t0 = hir.int_type
   %t1 = hir.int_type
   %t2 = hir.int_type
   uir.signature (%t0, %t1) -> (%t2)
 } {
   %t = hir.int_type
-  // Two breaks, same SSA value. No selection, no floor.
-  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["-1"]
+  // Two breaks, same SSA value: still a selection, floored at 0.
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["0"]
   %r = uir.loop : %t {
     uir.if %flag {
       uir.break %x : %t
@@ -1121,23 +1125,6 @@ uir.func @FuncSingleReturnNoFloor(%x: -1) -> (result: -1) {
   uir.signature (%t0) -> (%t1)
 } {
   %t = hir.int_type
-  uir.return %x : %t
-}
-
-//===----------------------------------------------------------------------===//
-// Function with const result, two returns with the same SSA value. No floor.
-
-// CHECK-LABEL: uir.func @FuncSameReturnNoFloor
-uir.func @FuncSameReturnNoFloor(%x: -1, %flag: 0) -> (result: -1) {
-  %t0 = hir.int_type
-  %t1 = hir.int_type
-  %t2 = hir.int_type
-  uir.signature (%t0, %t1) -> (%t2)
-} {
-  %t = hir.int_type
-  uir.if %flag {
-    uir.return %x : %t
-  }
   uir.return %x : %t
 }
 
@@ -4274,22 +4261,21 @@ uir.func @DRuleCallEarlierHalfUnderLaterCF(%x: 0, %d: 1, %cond: 1) -> (result: 1
 }
 
 //===----------------------------------------------------------------------===//
-// SSA-identity exemption under later-phase CF: an if at phase 1 whose branches
-// both yield the same phase-0 SSA value performs no selection, so the result
-// keeps phase 0 — earlier than the op — and neither the floor nor a
-// choice-ification obligation applies.
+// Same-value yields under later-phase CF: an if at phase 1 whose branches
+// both yield the same phase-0 SSA value still selects (two providers), so
+// the earlier value floors at the op phase 1.
 
 // CHECK-LABEL: uir.func @IfSameValueUnderLaterCF
-uir.func @IfSameValueUnderLaterCF(%x: 0, %cond: 1) -> (result: 0) {
+uir.func @IfSameValueUnderLaterCF(%x: 0, %cond: 1) -> (result: 1) {
   %t0 = hir.int_type
   %t1 = hir.bool_type
   %t2 = hir.int_type
   uir.signature (%t0, %t1) -> (%t2)
 } {
   %t = hir.int_type
-  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["0"]
+  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["1"]
   %r = uir.expr pin 1 : %t {
-    // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["0"]
+    // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["1"]
     %s = uir.if %cond : %t {
       uir.yield %x : %t
     } else {
@@ -4297,9 +4283,9 @@ uir.func @IfSameValueUnderLaterCF(%x: 0, %cond: 1) -> (result: 0) {
     }
     uir.yield %s : %t
   }
-  // The result is an ordinary phase-0 value outside the dyn block.
+  // The result is an ordinary phase-1 value outside the dyn block.
   // CHECK: uir.return
-  // CHECK-SAME: pa.operands = ["0", "float"]
+  // CHECK-SAME: pa.operands = ["1", "float"]
   uir.return %r : %t
 }
 
@@ -4418,10 +4404,10 @@ uir.func @EffectSlidesToDynDemand() -> (result: 1) {
   uir.return %r : %t
 }
 
-// Same-value if whose yielded pure op is rescheduled by the final recompute:
-// the result was demanded (and initially recorded) at phase 1, but the add
-// settles at 0, and the recompute refreshes the result to 0 — the
-// SSA-identity exemption must hold for final phases, not demand-time phases.
+// If whose yielded pure op is rescheduled by the final recompute: the result
+// was demanded (and initially recorded) at phase 1, but the add settles at 0,
+// and the recompute refreshes the result to 0 — the floor rule must apply to
+// final phases, not demand-time phases.
 // CHECK-LABEL: uir.func @IfSameValueRecompute
 uir.func @IfSameValueRecompute(%x: 0, %sel: 0) -> (result: 1) {
   %t0 = hir.int_type
@@ -4479,18 +4465,18 @@ uir.func @IfFloorRecompute(%sel: -1, %a: -1, %b: -1) -> (r0: 0, r1: 0) {
 }
 
 // Loop version: both breaks carry the same phase-0 SSA value out of a loop at
-// phase 1. No selection, result at phase 0.
+// phase 1. Two providers select, so the result floors at the loop phase 1.
 // CHECK-LABEL: uir.func @LoopSameValueUnderLaterCF
-uir.func @LoopSameValueUnderLaterCF(%x: 0, %flag: 1) -> (result: 0) {
+uir.func @LoopSameValueUnderLaterCF(%x: 0, %flag: 1) -> (result: 1) {
   %t0 = hir.int_type
   %t1 = hir.bool_type
   %t2 = hir.int_type
   uir.signature (%t0, %t1) -> (%t2)
 } {
   %t = hir.int_type
-  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["0"]
+  // CHECK: uir.expr pin 1 {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["1"]
   %r = uir.expr pin 1 : %t {
-    // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["0"]
+    // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["1"]
     %l = uir.loop : %t {
       uir.if %flag {
         uir.break %x : %t
@@ -4502,7 +4488,7 @@ uir.func @LoopSameValueUnderLaterCF(%x: 0, %flag: 1) -> (result: 0) {
     uir.yield %l : %t
   }
   // CHECK: uir.return
-  // CHECK-SAME: pa.operands = ["0", "float"]
+  // CHECK-SAME: pa.operands = ["1", "float"]
   uir.return %r : %t
 }
 
@@ -4637,12 +4623,11 @@ uir.func @ConstLoopSelectsDynValues(%flag: -1, %x: 1, %y: 1) -> (result: 1) {
 }
 
 //===----------------------------------------------------------------------===//
-// Per-result floor independence: on a multi-result if, a same-SSA-value
-// result keeps the value's earlier phase while a sibling result selecting
-// distinct values is floored at the op phase.
+// Per-result floor on a multi-result if: an identity-provided earlier value
+// floors to the op phase exactly like a sibling selecting distinct values.
 
 // CHECK-LABEL: uir.func @IfPerResultFloor
-uir.func @IfPerResultFloor(%sel: 0, %c: -1, %a: 0, %b: 0) -> (r0: -1, r1: 0) {
+uir.func @IfPerResultFloor(%sel: 0, %c: -1, %a: 0, %b: 0) -> (r0: 0, r1: 0) {
   %t0 = hir.int_type
   %t1 = hir.int_type
   %t2 = hir.int_type
@@ -4652,9 +4637,9 @@ uir.func @IfPerResultFloor(%sel: 0, %c: -1, %a: 0, %b: 0) -> (r0: -1, r1: 0) {
   uir.signature (%t0, %t1, %t2, %t3) -> (%t4, %t5)
 } {
   %t = hir.int_type
-  // Result 0: both branches yield the same const value — exempt, phase -1.
+  // Result 0: both branches yield the same const value — floored at 0.
   // Result 1: distinct values — floored at the op phase 0.
-  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["-1", "0"]
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["0", "0"]
   %r0, %r1 = uir.if %sel : %t, %t {
     uir.yield %c, %a : %t, %t
   } else {
