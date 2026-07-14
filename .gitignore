@@ -5,6 +5,7 @@
 !.clang-tidy
 !/.claude
 /.claude/*
+!/.claude/agents
 !/.claude/skills
 /build
 /tmp
