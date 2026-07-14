@@ -22,6 +22,7 @@ When implementing one, your job is to find where it breaks, not to make it pass.
 
 A pass is a set of small, orthogonal rewrite rules.
 A rule is valid only if it holds for any op of its kind in any context -- not just the shapes that appear in the tests or the doc examples.
+When choosing between candidate rules or behaviors, the answer that minimizes the number of rules, special cases, exceptions, carve-outs, patches, and pattern-matching is almost always the right one in a compiler: complexity through composition of few general rules, not through amount of code per transformation pass.
 
 The stop signal is loss of generality, not difficulty.
 If the only way forward works for the inputs at hand but would fail for the same construct elsewhere -- special-casing on op identity or position, a conditional whose only purpose is to turn one test green, handling the example shapes instead of the general rule, threading extra context into a rule that should be local -- stop coding and report a design flaw; do not patch.
