@@ -49,7 +49,7 @@ Per function, the merged pass runs these stages:
    - Each `uir.return` site builds its boundary exit chains in place (one choice per boundary its conditional content crosses), from statically-known path dispositions and in-scope values; the per-return context is `(shared-prefix values…, chain)`.
    - The receiving phase's picks are created directly in the next-phase function, at the producing branch point's position, continuation following in program order; alternatives yield iff the selection rejoins, return iff the path exits.
    - Receiving phases keep multiple returns; totality (body ends in `return`/`unreachable`) is a cheap structural scan.
-   - Earlier-phase result operands on multi-returns are the same SSA value (delivered a phase earlier, dropped from later returns); distinct values are the floor-rule error PhaseAnalysis already emits.
+   - Earlier-phase result operands on multi-returns are always the floor-rule error PhaseAnalysis already emits, regardless of the values' identity; the same-SSA-value exemption was dropped (sampling-model.md §7 as revised).
 6. **Signatures and witness**: reconstruct per-phase signatures, emit `uir.split_func` and `hir.multiphase_func` structural ops.
    Prefer threading return/signature scaffolding through explicit IR over side tables of tracked `Value`s that must be manually RAUW'd (a known fragility of the current implementation).
 

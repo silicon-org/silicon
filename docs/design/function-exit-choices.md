@@ -57,7 +57,7 @@ Extends {{< page-link "/design/sampling-model" >}} §6/§7, into which it will b
 7. **The machinery is strictly forward-flowing.**
    Earlier phases never receive a choice.
    Phase −1 is blind to phase-0 exits (D-rule): all its content runs unconditionally, and its function is exit-free and straight-line.
-   Earlier-phase result operands on multi-returns are either the same SSA value (delivered a phase earlier, dropped from the later return) or a floor-rule error (PhaseAnalysis step 3b, already implemented).
+   Earlier-phase result operands on multi-returns are always a floor-rule error (PhaseAnalysis step 3b, already implemented): a result provided by more than one return site is a selection regardless of the values' identity, so it cannot deliver earlier than the op phase — the same-SSA-value exemption was dropped (sampling-model.md §7 as revised).
 
 8. **Returns never resolve cross-phase selections.**
    A const-condition `if` stays anchored at its block phase; returning distinct earlier-phase values under it is rejected by the floor rule even when the selection is semantically decidable earlier (conservative, per the sampling model §7's no-late-errors stance).
