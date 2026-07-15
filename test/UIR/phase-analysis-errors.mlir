@@ -2164,3 +2164,26 @@ uir.func @ShiftedExitInDeadFrame(%x: 0) -> () {
   }
   uir.return
 }
+
+// -----
+
+// Break variant of the same check: a `pin 1` sub-block between a dead
+// frame's loop and its break shifts the exit one phase above its target.
+
+uir.func @ShiftedBreakInDeadFrame(%x: 0) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0) -> ()
+} {
+  %t = hir.int_type
+  %dead = uir.expr : %t {
+    %s = uir.loop (%i = %x : %t) : %t {
+      %p = uir.expr pin 1 : %t {
+        // expected-error @below {{break from a phase-shifted block is not allowed}}
+        uir.break %i : %t
+      }
+      uir.continue %p : %t
+    }
+    uir.yield %s : %t
+  }
+  uir.return
+}
