@@ -2138,3 +2138,29 @@ uir.func @LiveConduitTypeBound(%a: 1, %x: 0) -> (result: 0) {
   // expected-remark @below {{required by return value at phase 0}}
   uir.return %r : %t
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// A phase-shifted exit inside a dead frame is a user error exactly as in a
+// live one: the continue sits inside a `pin 1` sub-block, one phase above its
+// target loop, so it cannot reach the loop's iteration argument. The derived
+// frame flows through the same exit-phase check that placed frames obey.
+
+uir.func @ShiftedExitInDeadFrame(%x: 0) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0) -> ()
+} {
+  %t = hir.int_type
+  %dead = uir.expr : %t {
+    %s = uir.loop (%i = %x : %t) : %t {
+      %p = uir.expr pin 1 : %t {
+        // expected-error @below {{continue from a phase-shifted block is not allowed}}
+        uir.continue %i : %t
+      }
+      uir.break %p : %t
+    }
+    uir.yield %s : %t
+  }
+  uir.return
+}

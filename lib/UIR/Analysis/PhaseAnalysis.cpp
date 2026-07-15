@@ -192,36 +192,23 @@ LogicalResult PhaseAnalysis::run() {
   }
 
   // Step 4b: Floating exprs that no demand ever reached have no phase. Exprs
-  // with anchored contents (side effects, pins, out-targeting exits) must
-  // execute at a well-defined phase regardless of whether any result is used;
-  // they fall back to their block phase here, as if the expression statement
-  // stood alone, and are processed like placed content. Exprs with only pure
-  // interiors also default to their block phase, but derive in step 5, where
-  // frame-consumed bounds may still raise them. Walk in pre-order so a nested
-  // floating expr sees its parent's (possibly just defaulted) phase.
+  // with anchored contents (side effects, pins) must execute at a well-
+  // defined phase regardless of whether any result is used; they fall back to
+  // their block phase here, as if the expression statement stood alone, and
+  // are processed like placed content. Exprs whose only anchors are CF and
+  // its terminators also default to their block phase, but derive in step 5,
+  // where frame-consumed bounds may still raise them. Walk in pre-order so a
+  // nested floating expr sees its parent's (possibly just defaulted) phase.
   {
-    // Whether the expr transitively contains anchored (non-floating) content.
-    // A break/continue whose target loop lies outside `exprOp` transfers
-    // control out of the frame: like a side effect, it is observable and
-    // locks the expr to the loop's phase (the exit's phase aliases it). The
-    // lock anchors the expr here only when the loop's phase is already
-    // resolved; an unresolved target loop sits inside an enclosing floating
-    // frame, whose derivation absorbs this expr as frame-locked interior
-    // instead (scanFloatingContent). An exit targeting a loop inside
-    // `exprOp` (or any other terminator) does not anchor.
+    // Whether the expr transitively contains anchored (non-floating) content:
+    // a side effect or a `uir.pin` op that must execute at a well-defined
+    // phase. Such exprs default to their block phase and process like placed
+    // content. Exprs whose only anchors are CF and its terminators (including
+    // out-targeting exits, whose phase aliases an enclosing loop the block
+    // phase already carries) derive in step 5, where frame-consumed bounds
+    // may still raise them.
     auto hasAnchoredContent = [&](ExprOp exprOp) {
-      auto anchorsExpr = [&](Operation *targetLoop) {
-        return !exprOp->isProperAncestor(targetLoop) &&
-               opPhases.count(targetLoop);
-      };
       auto inner = exprOp->walk([&](Operation *op) -> WalkResult {
-        if (auto breakOp = dyn_cast<BreakOp>(op))
-          return anchorsExpr(breakToLoop.at(breakOp)) ? WalkResult::interrupt()
-                                                      : WalkResult::advance();
-        if (auto continueOp = dyn_cast<ContinueOp>(op))
-          return anchorsExpr(continueToLoop.at(continueOp))
-                     ? WalkResult::interrupt()
-                     : WalkResult::advance();
         if (op == exprOp || hir::isEffectivelyPure(op) ||
             op->hasTrait<OpTrait::ConstantLike>() ||
             op->hasTrait<OpTrait::IsTerminator>() || isModeledRegionOp(op))
@@ -278,8 +265,10 @@ LogicalResult PhaseAnalysis::run() {
   // are final before their consumers: region contents before the region op
   // itself, block ops in order.
   LLVM_DEBUG(dbgs() << "  step 5: recompute pure ops and region results\n");
-  recomputeBlock(funcOp.getSignature().front());
-  recomputeBlock(funcOp.getBody().front());
+  if (failed(recomputeBlock(funcOp.getSignature().front())))
+    return failure();
+  if (failed(recomputeBlock(funcOp.getBody().front())))
+    return failure();
 
   // Step 6: Coverage stamp. Everything the analysis models — the entry
   // blocks of the function's signature and body, and recursively the entry
@@ -335,7 +324,7 @@ LogicalResult PhaseAnalysis::run() {
 
 // NOLINTBEGIN(misc-no-recursion)
 
-void PhaseAnalysis::recomputeBlock(Block &block) {
+LogicalResult PhaseAnalysis::recomputeBlock(Block &block) {
   for (auto &op : block) {
     if (isModeledRegionOp(&op)) {
       auto exprOp = dyn_cast<ExprOp>(&op);
@@ -346,13 +335,15 @@ void PhaseAnalysis::recomputeBlock(Block &block) {
         auto *parentOp = op.getParentOp();
         int16_t blockPhase =
             isa<FuncOp>(parentOp) ? 0 : opPhases.find(parentOp)->second;
-        deriveFloatingExpr(exprOp, blockPhase);
+        if (failed(deriveFloatingExpr(exprOp, blockPhase)))
+          return failure();
       } else {
         assert(opPhases.count(&op) &&
                "region op in a processed block must have a phase");
         for (auto &region : op.getRegions())
           if (!region.empty())
-            recomputeBlock(region.front());
+            if (failed(recomputeBlock(region.front())))
+              return failure();
       }
       fillRegionResults(&op, /*overwrite=*/false);
       continue;
@@ -363,6 +354,7 @@ void PhaseAnalysis::recomputeBlock(Block &block) {
       continue;
     derivePure(&op, /*overwrite=*/false);
   }
+  return success();
 }
 
 void PhaseAnalysis::derivePure(Operation *op, bool overwrite) {
@@ -536,23 +528,17 @@ void PhaseAnalysis::scanFloatingContent(Block &block, int16_t shift,
       continue;
     }
 
-    // Break/continue exits. Every exit the scan reaches directly targets a
-    // loop inside the derived frame: an exit escaping the frame would have
-    // anchored it in step 4b (resolved target) or absorbed it into an
-    // enclosing frame's scan as locked interior (unresolved target), and
-    // exits inside independent nested frames belong to those frames' own
-    // scans. Continue values feed the target loop's iteration arguments,
-    // which live at the target loop's frame phase — equal to the exit's
-    // frame phase for legal exits (a phase-shifted exit is a user error) —
-    // so they are frame-consumed like a CF condition at the exit's shift,
-    // their type operands one phase earlier. Break values are delivered
-    // through the loop's result and impose no frame bound.
+    // Break/continue exits. An exit targeting a loop inside the frame is
+    // interior; one targeting a loop outside it aliases that outer loop's
+    // phase (an out-targeting exit) and, since the frame is nested in that
+    // loop, the frame's block phase already carries it. Either way, continue
+    // values feed the target loop's iteration arguments, which live at the
+    // exit's frame phase for a legal exit — a phase-shifted exit is a user
+    // error the assign pass reports — so they are frame-consumed like a CF
+    // condition at the exit's shift, their type operands one phase earlier.
+    // Break values are delivered through the loop's result and impose no
+    // frame bound.
     if (isa<BreakOp, ContinueOp>(&op)) {
-      [[maybe_unused]] Operation *targetLoop =
-          isa<BreakOp>(&op) ? breakToLoop.at(cast<BreakOp>(&op)).getOperation()
-                            : continueToLoop.at(cast<ContinueOp>(&op));
-      assert(frameRoot->isProperAncestor(targetLoop) &&
-             "scanned exit must target a loop inside the derived frame");
       if (auto continueOp = dyn_cast<ContinueOp>(&op)) {
         for (auto value : continueOp.getValues())
           addBound(value, shift, /*isType=*/false);
@@ -581,23 +567,27 @@ void PhaseAnalysis::scanFloatingContent(Block &block, int16_t shift,
   }
 }
 
-void PhaseAnalysis::assignDerivedBlock(Block &block, int16_t blockPhase) {
+LogicalResult PhaseAnalysis::assignDerivedBlock(Block &block,
+                                                int16_t blockPhase) {
   for (auto &op : block) {
     if (auto exprOp = dyn_cast<ExprOp>(&op)) {
       if (exprOp.getPin()) {
         int16_t exprPhase = blockPhase + exprOp.getPhaseShift();
         opPhases[&op] = exprPhase;
-        assignDerivedBlock(exprOp.getBody().front(), exprPhase);
+        if (failed(assignDerivedBlock(exprOp.getBody().front(), exprPhase)))
+          return failure();
       } else if (hasEscapingExit(exprOp)) {
         // Locked to this frame (its exit aliases one of this frame's
         // loops): anchored at the block phase like frame-locked interior.
         opPhases[&op] = blockPhase;
-        assignDerivedBlock(exprOp.getBody().front(), blockPhase);
+        if (failed(assignDerivedBlock(exprOp.getBody().front(), blockPhase)))
+          return failure();
       } else if (!opPhases.count(exprOp)) {
         // Independent nested frame: derive it now, with this frame's phase as
         // its block phase, so a bottomless nested frame defaults here rather
         // than floating. Its own frame-consumed bounds may still raise it.
-        deriveFloatingExpr(exprOp, blockPhase);
+        if (failed(deriveFloatingExpr(exprOp, blockPhase)))
+          return failure();
       }
       fillRegionResults(&op, /*overwrite=*/true);
       continue;
@@ -605,9 +595,12 @@ void PhaseAnalysis::assignDerivedBlock(Block &block, int16_t blockPhase) {
 
     if (auto ifOp = dyn_cast<IfOp>(&op)) {
       opPhases[&op] = blockPhase;
-      assignDerivedBlock(ifOp.getThenRegion().front(), blockPhase);
+      if (failed(assignDerivedBlock(ifOp.getThenRegion().front(), blockPhase)))
+        return failure();
       if (!ifOp.getElseRegion().empty())
-        assignDerivedBlock(ifOp.getElseRegion().front(), blockPhase);
+        if (failed(
+                assignDerivedBlock(ifOp.getElseRegion().front(), blockPhase)))
+          return failure();
       fillRegionResults(&op, /*overwrite=*/true);
       continue;
     }
@@ -617,8 +610,32 @@ void PhaseAnalysis::assignDerivedBlock(Block &block, int16_t blockPhase) {
       // Iteration arguments live at the loop body's phase.
       for (auto arg : loopOp.getBody().front().getArguments())
         actualPhase[arg] = blockPhase;
-      assignDerivedBlock(loopOp.getBody().front(), blockPhase);
+      if (failed(assignDerivedBlock(loopOp.getBody().front(), blockPhase)))
+        return failure();
       fillRegionResults(&op, /*overwrite=*/true);
+      continue;
+    }
+
+    // Break/continue anchor at the frame phase and must reach their target
+    // loop at that loop's phase — the same rule processOp enforces on placed
+    // frames. A phase-shifted exit (a nonzero pin between the exit and its
+    // loop) is a user error, in a dead frame exactly as in a live one.
+    if (auto breakOp = dyn_cast<BreakOp>(&op)) {
+      opPhases[&op] = blockPhase;
+      if (blockPhase != getPhase(breakToLoop.at(breakOp))) {
+        emitError(breakOp.getLoc())
+            << "break from a phase-shifted block is not allowed";
+        return failure();
+      }
+      continue;
+    }
+    if (auto continueOp = dyn_cast<ContinueOp>(&op)) {
+      opPhases[&op] = blockPhase;
+      if (blockPhase != getPhase(continueToLoop.at(continueOp))) {
+        emitError(continueOp.getLoc())
+            << "continue from a phase-shifted block is not allowed";
+        return failure();
+      }
       continue;
     }
 
@@ -633,9 +650,11 @@ void PhaseAnalysis::assignDerivedBlock(Block &block, int16_t blockPhase) {
 
     derivePure(&op, /*overwrite=*/true);
   }
+  return success();
 }
 
-void PhaseAnalysis::deriveFloatingExpr(ExprOp exprOp, int16_t blockPhase) {
+LogicalResult PhaseAnalysis::deriveFloatingExpr(ExprOp exprOp,
+                                                int16_t blockPhase) {
   assert(!exprOp.getPin() && !opPhases.count(exprOp) &&
          "only undemanded floating exprs are derived");
 
@@ -660,7 +679,7 @@ void PhaseAnalysis::deriveFloatingExpr(ExprOp exprOp, int16_t blockPhase) {
     dbgs() << "\n";
   });
   opPhases[exprOp] = bound;
-  assignDerivedBlock(exprOp.getBody().front(), bound);
+  return assignDerivedBlock(exprOp.getBody().front(), bound);
 }
 
 // NOLINTEND(misc-no-recursion)

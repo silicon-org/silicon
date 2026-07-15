@@ -58,9 +58,9 @@ namespace uir {
 /// 3. Structural setup: processBlock(sig, 0) and processBlock(body, 0).
 /// 4. Demand-driven constraints: push from declared arg/result phases. Then
 ///    default undemanded floating exprs with anchored content (side effects,
-///    pins, out-targeting exits) to their block phase and process them like
-///    placed content — effects execute where they stand when no consumer
-///    pulls them elsewhere.
+///    pins) to their block phase and process them like placed content —
+///    effects execute where they stand when no consumer pulls them
+///    elsewhere. Frames whose only anchors are CF derive in step 5.
 /// 5. Final recompute: reschedule visited pure ops to max(operand phases)
 ///    (the DFS records demand-time phases, which may be looser), derive the
 ///    same earliest phase for pure ops no demand ever reached (when some
@@ -181,8 +181,9 @@ private:
   /// Step-5 recompute pass over a block the DFS has processed: tighten pure
   /// ops to their earliest phase, derive undemanded floating exprs, and
   /// refresh or fill in region result phases. Recurses into modeled regions
-  /// in post-order, so providers are final before their consumers.
-  void recomputeBlock(Block &block);
+  /// in post-order, so providers are final before their consumers. Fails if a
+  /// derived frame carries a phase-shifted exit.
+  LogicalResult recomputeBlock(Block &block);
 
   /// Compute a pure op's earliest phase = max over operand phases (type
   /// operands +1, `hir.type_of` -1; sentinel and unresolved operands
@@ -223,14 +224,18 @@ private:
   /// pinned exprs, and loop iteration arguments at the derived phase, derive
   /// nested independent frames with this phase as their block phase, and
   /// re-derive the pure content and region results with the frame resolved.
-  void assignDerivedBlock(Block &block, int16_t blockPhase);
+  /// Fails if a break/continue lands at a phase other than its target loop's
+  /// (a phase-shifted exit), the same rule processOp enforces on placed
+  /// frames.
+  LogicalResult assignDerivedBlock(Block &block, int16_t blockPhase);
 
   /// Derive the phase of an undemanded floating expr like a pure op, but
   /// floored at its `blockPhase`: the frame defaults to its block phase and
   /// rises only for the frame-consumed bounds its anchored content and result
   /// types impose (max(block phase, frame-consumed bounds)). Every frame thus
   /// ends with a real phase; only region-free pure ops and constants float.
-  void deriveFloatingExpr(ExprOp exprOp, int16_t blockPhase);
+  /// Fails if the derived frame carries a phase-shifted exit.
+  LogicalResult deriveFloatingExpr(ExprOp exprOp, int16_t blockPhase);
 };
 
 } // namespace uir
