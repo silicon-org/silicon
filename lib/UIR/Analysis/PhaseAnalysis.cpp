@@ -535,9 +535,11 @@ void PhaseAnalysis::scanFloatingContent(Block &block, int16_t shift,
     // enclosing frame's scan as locked interior (unresolved target), and
     // exits inside independent nested frames belong to those frames' own
     // scans. Continue values feed the target loop's iteration arguments,
-    // which live at the exit's frame phase, so they are frame-consumed like
-    // a CF condition, their type operands one phase earlier. Break values
-    // are delivered through the loop's result and impose no frame bound.
+    // which live at the target loop's frame phase — equal to the exit's
+    // frame phase for legal exits (a phase-shifted exit is a user error) —
+    // so they are frame-consumed like a CF condition at the exit's shift,
+    // their type operands one phase earlier. Break values are delivered
+    // through the loop's result and impose no frame bound.
     if (isa<BreakOp, ContinueOp>(&op)) {
       [[maybe_unused]] Operation *targetLoop =
           isa<BreakOp>(&op) ? breakToLoop.at(cast<BreakOp>(&op)).getOperation()
