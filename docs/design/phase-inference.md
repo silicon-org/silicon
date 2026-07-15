@@ -375,9 +375,8 @@ All `uir` ops are lowered away by two passes:
 
   This avoids leaving simplification to a separate canonicalization pass, which would need to walk the entire expr body and may not scale well.
 
-- **Zero-use ops in a block are expression statements**, implicitly pinned.
-  An op with no uses that's directly in a block is a side-effecting statement.
-  Its phase is the block phase — identified by having no consumers.
+- **Zero-use side-effecting ops in a block are expression statements**, implicitly pinned at the block phase.
+  Zero-use *pure* ops are not anchored: a pure op imposes no latest bound on itself regardless of use count, and its phase derives from its operands (max of the operand phases, floating when operand-free), so deleting a value's last use never invalidates a program.
 
 - **Structured CF ops live in `uir`.**
   `uir.if`, `uir.loop`, `uir.match` replace block-based CF with region-based ops.
@@ -392,10 +391,10 @@ All `uir` ops are lowered away by two passes:
 
 The block-level DFS works as follows:
 
-1. **Identify roots** in the block: `uir.pin` ops, pinned `uir.expr` ops, zero-use ops (expression statements), and the terminator.
+1. **Identify roots** in the block: `uir.pin` ops, pinned `uir.expr` ops, zero-use side-effecting ops (expression statements), and the terminator.
 2. **Process roots in block order** (top to bottom). Each root is pinned at `p(block) + offset`. Its operands are reached via use-def.
 3. **Process the terminator's operands** via use-def DFS. Push latest from the block's consumer.
-4. **Floating ops** (not `uir.pin`, not pinned `uir.expr`, not zero-use) are only reached via use-def from roots or the terminator. Their phase comes from their consumer.
+4. **Floating ops** (not `uir.pin`, not pinned `uir.expr`, pure) are only reached via use-def from roots or the terminator. Their phase comes from their consumer, or derives from their operands when nothing consumes them.
 5. **When the DFS encounters a `uir.expr`** (floating or pinned), enter its region — it's a nested block with its own roots and result.
 6. **When the DFS encounters a `uir.if` / `uir.loop` / `uir.match`**, enter each region as a nested block at `p(CF)`.
 

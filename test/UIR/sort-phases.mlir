@@ -174,11 +174,11 @@ uir.func @DissolveExprsAndPins(%a: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// Zero-use pure ops are anchored at their block phase by the analysis and
-// wrap like any other content, in program order.
+// Dead pure ops derive their phase from their operands in the analysis and
+// wrap like any other content, in program order: sorting is demand-blind.
 
-// CHECK-LABEL: uir.func @DeadContentAnchors
-uir.func @DeadContentAnchors(%x: 0) -> () {
+// CHECK-LABEL: uir.func @DeadContentDerived
+uir.func @DeadContentDerived(%x: 0) -> () {
   %0 = hir.int_type
   uir.signature (%0) -> ()
 } {
@@ -201,12 +201,12 @@ uir.func @DeadContentAnchors(%x: 0) -> () {
 }
 
 //===----------------------------------------------------------------------===//
-// A floating op (dead pure content no demand ever reached) that uses a value
-// moving into a phase region sinks into that region after its operands;
-// floating ops independent of anchored content stay at the top level.
+// The interior of a dissolved dead expr derives its phase from its operands
+// and is placed like live content; only operand-free dead trees stay
+// floating at the top level.
 
-// CHECK-LABEL: uir.func @DeadFloatSinks
-uir.func @DeadFloatSinks(%x: 0) -> () {
+// CHECK-LABEL: uir.func @DeadExprInteriorPlaced
+uir.func @DeadExprInteriorPlaced(%x: 0) -> () {
   %0 = hir.int_type
   uir.signature (%0) -> ()
 } {
@@ -220,8 +220,8 @@ uir.func @DeadFloatSinks(%x: 0) -> () {
   hir.write_var %v, %x : %t
   // CHECK-NEXT:   [[R:%.+]] = hir.read_var [[V]] : [[T]]
   %r = hir.read_var %v : %t
-  // The dissolved expr's interior is floating (its result is never
-  // demanded), uses the anchored read result, and sinks after it.
+  // The dissolved expr's interior is dead (its result is never demanded)
+  // but derives phase 0 from the read result and wraps after it.
   // CHECK-NEXT:   hir.add [[R]], [[R]] : [[T]]
   %y = uir.expr : %t {
     %m = hir.add %r, %r : %t
@@ -440,12 +440,12 @@ uir.func @DependentSignature(%N: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// A dead floating op whose operands moved into two different phase regions
-// sinks into the latest one; its earlier-phase operand crosses as an
-// ordinary phase result.
+// A dead pure op whose operands moved into two different phase regions
+// derives the latest operand phase and wraps there; its earlier-phase
+// operand crosses as an ordinary phase result.
 
-// CHECK-LABEL: uir.func @DeadFloatAcrossPhases
-uir.func @DeadFloatAcrossPhases(%a: -1, %x: 0) -> () {
+// CHECK-LABEL: uir.func @DeadContentAcrossPhases
+uir.func @DeadContentAcrossPhases(%a: -1, %x: 0) -> () {
   %0 = hir.int_type
   uir.signature (%0, %0) -> ()
 } {
@@ -480,6 +480,265 @@ uir.func @DeadFloatAcrossPhases(%a: -1, %x: 0) -> () {
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.unreachable
   uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Dead later-phase content nested inside earlier-phase control flow extracts
+// exactly like live content: the branch choice-ifies, and the dead phase-1
+// op lands in the receiving pick's matching arm.
+
+// CHECK-LABEL: uir.func @DeadContentInBranch
+uir.func @DeadContentInBranch(%c: 0, %x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  %m = uir.expr pin 1 : %t {
+    %v = hir.var : %t
+    hir.write_var %v, %x : %t
+    %rd = hir.read_var %v : %t
+    uir.yield %rd : %t
+  }
+  // CHECK: [[CT:%.+]] = hir.choice_type
+  // CHECK: [[CH:%.+]] = uir.phase 0 {
+  // CHECK:   [[IF:%.+]] = uir.if %c : [[CT]] {
+  // CHECK:     [[C0:%.+]] = hir.choice 0()
+  // CHECK:     uir.yield [[C0]] : [[CT]]
+  // CHECK:   } else {
+  // CHECK:     [[C1:%.+]] = hir.choice 1()
+  // CHECK:     uir.yield [[C1]] : [[CT]]
+  // CHECK:   }
+  // CHECK:   uir.phase_return yield [[IF]]
+  // CHECK: }
+  uir.if %c {
+    %y = uir.expr : %t {
+      %dead = hir.add %m, %m : %t
+      uir.yield %dead : %t
+    }
+    uir.yield
+  }
+  // CHECK: uir.phase 1 {
+  // CHECK:   [[V:%.+]] = hir.var : [[T]]
+  // CHECK:   hir.write_var [[V]], %x : [[T]]
+  // CHECK:   [[RD:%.+]] = hir.read_var [[V]] : [[T]]
+  // CHECK:   hir.pick [[CH]] [0 (): {
+  // CHECK:     hir.add [[RD]], [[RD]] : [[T]]
+  // CHECK:     hir.yield
+  // CHECK:   } 1 (): {
+  // CHECK:     hir.yield
+  // CHECK:   }]
+  // CHECK:   uir.phase_return
+  // CHECK: }
+  // CHECK: uir.unreachable
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// A fully dead if inside a dead floating expr anchors at its derived phase
+// (the condition's) and extracts exactly like live content: the dead result
+// choice-ifies, and the later-phase arm values reconstruct in the receiving
+// pick, unused there.
+
+// CHECK-LABEL: uir.func @DeadIfInDeadExpr
+uir.func @DeadIfInDeadExpr(%c: 0, %a: 1) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK: [[CT:%.+]] = hir.choice_type
+  // CHECK: [[CH:%.+]] = uir.phase 0 {
+  // CHECK:   [[IF:%.+]] = uir.if %c : [[CT]] {
+  // CHECK:     [[C0:%.+]] = hir.choice 0()
+  // CHECK:     uir.yield [[C0]] : [[CT]]
+  // CHECK:   } else {
+  // CHECK:     [[C1:%.+]] = hir.choice 1()
+  // CHECK:     uir.yield [[C1]] : [[CT]]
+  // CHECK:   }
+  // CHECK:   uir.phase_return yield [[IF]]
+  // CHECK: }
+  // CHECK: uir.phase 1 {
+  // CHECK:   hir.pick [[CH]] : !hir.any [0 (): {
+  // CHECK:     [[V:%.+]] = hir.add %a, %a : [[T]]
+  // CHECK:     hir.yield [[V]] : !hir.any
+  // CHECK:   } 1 (): {
+  // CHECK:     [[W:%.+]] = hir.mul %a, %a : [[T]]
+  // CHECK:     hir.yield [[W]] : !hir.any
+  // CHECK:   }]
+  // CHECK:   uir.phase_return
+  // CHECK: }
+  %r = uir.expr : %t {
+    %s = uir.if %c : %t {
+      %v = hir.add %a, %a : %t
+      uir.yield %v : %t
+    } else {
+      %w = hir.mul %a, %a : %t
+      uir.yield %w : %t
+    }
+    uir.yield %s : %t
+  }
+  // CHECK: uir.unreachable
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// A dead frame whose anchored channels carry only bottomless values (a
+// break-only loop with no inits) derives no phase: it stays floating
+// wholesale, is never extracted or placed, and its vacuous later-phase
+// interior materializes no phase op.
+
+// CHECK-LABEL: uir.func @DeadLoopInDeadExpr
+uir.func @DeadLoopInDeadExpr(%a: 1) -> () {
+  %0 = hir.int_type
+  uir.signature (%0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK-NOT: uir.phase
+  // CHECK: uir.loop
+  // CHECK-NEXT: hir.add %a, %a
+  // CHECK-NEXT: uir.break
+  %r = uir.expr : %t {
+    %s = uir.loop : %t {
+      %x = hir.add %a, %a : %t
+      uir.break %x : %t
+    }
+    uir.yield %s : %t
+  }
+  // CHECK: uir.unreachable
+  // CHECK-NOT: uir.phase
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Same for a dead if whose condition is a floating constant: no anchored
+// channel carries a real phase, so the frame floats wholesale instead of
+// anchoring at the condition's phase.
+
+// CHECK-LABEL: uir.func @DeadIfConstCondInDeadExpr
+uir.func @DeadIfConstCondInDeadExpr(%a: 1) -> () {
+  %0 = hir.int_type
+  uir.signature (%0) -> ()
+} {
+  %t = hir.int_type
+  %c = hir.constant_int 1 : %t
+  // CHECK-NOT: uir.phase
+  // CHECK: uir.if
+  // CHECK-NEXT: hir.add %a, %a
+  %r = uir.expr : %t {
+    %s = uir.if %c : %t {
+      %v = hir.add %a, %a : %t
+      uir.yield %v : %t
+    } else {
+      uir.yield %a : %t
+    }
+    uir.yield %s : %t
+  }
+  // CHECK: uir.unreachable
+  // CHECK-NOT: uir.phase
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// A live conduit expr with a bystander dead frame: the demanded content
+// sorts normally, while the bottomless frame next to it stays floating at
+// the top level.
+
+// CHECK-LABEL: uir.func @LiveConduitWithBystanderLoop
+uir.func @LiveConduitWithBystanderLoop(%x: 0, %a: 1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK: uir.loop
+  // CHECK-NEXT: hir.add %a, %a
+  // CHECK-NEXT: uir.break
+  %r = uir.expr : %t {
+    %s = uir.loop : %t {
+      %v = hir.add %a, %a : %t
+      uir.break %v : %t
+    }
+    %y = hir.add %x, %x : %t
+    uir.yield %y : %t
+  }
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT:   [[Y:%.+]] = hir.add %x, %x : [[T]]
+  // CHECK-NEXT:   uir.phase_return [[Y]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK: uir.unreachable
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A dead frame nested inside live anchored content rides along wholesale:
+// the enclosing if wraps into its phase untouched, with no extraction for
+// the frame's vacuous later-phase interior.
+
+// CHECK-LABEL: uir.func @FloatFrameInLiveIf
+uir.func @FloatFrameInLiveIf(%c: 0, %a: 1) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  %t = hir.int_type
+  %fc = hir.constant_int 1 : %t
+  // CHECK-NOT: hir.choice
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT:   uir.if %c {
+  // CHECK-NEXT:     uir.if
+  // CHECK-NEXT:       hir.add %a, %a
+  uir.if %c {
+    %dead = uir.expr : %t {
+      %s = uir.if %fc : %t {
+        %v = hir.add %a, %a : %t
+        uir.yield %v : %t
+      } else {
+        uir.yield %a : %t
+      }
+      uir.yield %s : %t
+    }
+    uir.yield
+  }
+  // CHECK: uir.unreachable
+  // CHECK-NOT: hir.pick
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Extracted content referencing a floating tree defined inside the arm gets
+// a clone of the whole tree in front of it (arm-interior floats are not
+// visible from the receiving pick); values defined outside the arm are used
+// directly. Dead extracted content is cloned for exactly like live content.
+
+// CHECK-LABEL: uir.func @ClonedFloatTree
+uir.func @ClonedFloatTree(%c: 0, %a: 1) -> (result: 1) {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> (%t0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK: uir.phase 1 {
+  // CHECK:   hir.pick {{%.+}} : !hir.any [0 (): {
+  // CHECK:     [[ONE:%.+]] = hir.constant_int 1 : [[T]]
+  // CHECK:     [[TWO:%.+]] = hir.add [[ONE]], [[ONE]] : [[T]]
+  // CHECK:     hir.mul [[TWO]], %a : [[T]]
+  // CHECK:     [[LIVE:%.+]] = hir.add %a, %a : [[T]]
+  // CHECK:     hir.yield [[LIVE]] : !hir.any
+  // CHECK:   } 1 (): {
+  // CHECK:     [[W:%.+]] = hir.mul %a, %a : [[T]]
+  // CHECK:     hir.yield [[W]] : !hir.any
+  // CHECK:   }]
+  %r = uir.if %c : %t {
+    %one = hir.constant_int 1 : %t
+    %two = hir.add %one, %one : %t
+    %dead = hir.mul %two, %a : %t
+    %live = hir.add %a, %a : %t
+    uir.yield %live : %t
+  } else {
+    %w = hir.mul %a, %a : %t
+    uir.yield %w : %t
+  }
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//

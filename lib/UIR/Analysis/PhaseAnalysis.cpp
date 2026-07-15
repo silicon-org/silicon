@@ -69,18 +69,20 @@ void PhaseAnalysis::collectTerminators() {
     walkBlock(block, /*currentLoop=*/nullptr);
 }
 
-/// Run the phase analysis. The algorithm has five steps:
+/// Run the phase analysis. The algorithm has six steps:
 /// 1. Pre-walk: collect terminators.
 /// 2. Constrain blocks containing function terminators to phase ≤ 0.
 /// 3. Structural setup: processBlock(sig, 0) and processBlock(body, 0).
 /// 4. Demand-driven constraints: push from declared arg/result phases.
 ///    Then default undemanded floating exprs with anchored content to their
 ///    block phase.
-/// 5. Final recompute: reschedule pure ops, refresh region result phases.
-/// 6. Coverage stamp: undemanded pure (dead) ops, results, and block
-///    arguments get the float sentinel — except undemanded region results,
-///    which get the same provider-derived phase as demanded ones — so
-///    afterwards only contents of unmodeled regions lack entries.
+/// 5. Final recompute: reschedule visited pure ops to their earliest phase,
+///    derive phases for unvisited pure ops from their operands, and refresh
+///    or fill in region result phases from their providers.
+/// 6. Coverage stamp: anything still unresolved (operand-free dead pure
+///    trees, dead terminators, dead block arguments) gets the float
+///    sentinel, so afterwards only contents of unmodeled regions lack
+///    entries.
 LogicalResult PhaseAnalysis::run() {
   LLVM_DEBUG(dbgs() << "Analyzing phases in " << funcOp.getSymNameAttr()
                     << "\n");
@@ -239,128 +241,46 @@ LogicalResult PhaseAnalysis::run() {
       return failure();
   }
 
-  // Step 5: Final recompute. During the DFS, pure ops were assigned their
-  // demanded phase (`latest`), and region result phases were recorded from
-  // demand-time value phases and op phases; both can be tighter in the final
-  // solution. Recompute pure ops as max(operand phases), and region results
-  // as the max over their providing terminator values, floored at the final
-  // op phase when more than one terminator provides them. Walk in post-order
-  // so providers are final before their consumers: region contents before
-  // the region op itself, block ops in order.
+  // Step 5: Final recompute and derivation. During the DFS, pure ops were
+  // assigned their demanded phase (`latest`) and region result phases were
+  // recorded from demand-time value phases; both can be tighter in the final
+  // solution. Content no demand ever reached has no entry yet; since
+  // undemanded means latest = +inf, no error is possible and phases derive
+  // from operands alone: pure ops as earliest = max(operand phases), and
+  // undemanded floating exprs like pure ops, from the bounds their anchored
+  // contents impose (deriveFloatingExpr). Region results are refreshed or
+  // filled in from their providing terminator values. Demand thus never
+  // influences where a pure op, expr, or region result materializes, and
+  // dead results choice-ify exactly like live ones. The walk covers exactly
+  // the blocks the analysis models — the entry blocks of signature and body
+  // and, recursively, of modeled region ops — in post-order, so providers
+  // are final before their consumers: region contents before the region op
+  // itself, block ops in order.
   LLVM_DEBUG(dbgs() << "  step 5: recompute pure ops and region results\n");
-  funcOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
-    // Region results: refresh recorded phases from the final value phases.
-    if (isModeledRegionOp(op)) {
-      for (auto result : op->getResults()) {
-        auto resultIt = actualPhase.find(result);
-        if (resultIt == actualPhase.end())
-          continue;
-        auto providers = resultProviders(op, result.getResultNumber());
-        if (providers.empty()) {
-          assert(resultIt->second == kNeverPhase &&
-                 "provider-less result must be at the bottom phase");
-          continue;
-        }
-        int16_t recomputed = INT16_MIN;
-        for (auto &[value, term] : providers)
-          recomputed = std::max(recomputed, actualPhase.at(value));
-        if (providers.size() > 1)
-          recomputed = std::max(recomputed, getPhase(op));
-        assert(recomputed <= resultIt->second &&
-               "region result phases only tighten");
-        if (recomputed < resultIt->second) {
-          LLVM_DEBUG({
-            dbgs() << "    result " << result.getResultNumber() << ": "
-                   << resultIt->second << " => " << recomputed << ": ";
-            op->print(dbgs(), OpPrintingFlags().skipRegions());
-            dbgs() << "\n";
-          });
-          resultIt->second = recomputed;
-        }
-      }
-      return;
-    }
+  recomputeBlock(funcOp.getSignature().front());
+  recomputeBlock(funcOp.getBody().front());
 
-    // Pure ops: reschedule to their earliest possible phase.
-    if (!hir::isEffectivelyPure(op) || op->hasTrait<OpTrait::IsTerminator>() ||
-        op->getNumRegions() > 0)
-      return;
-    auto phaseIt = opPhases.find(op);
-    if (phaseIt == opPhases.end())
-      return;
-
-    int16_t earliest = INT16_MIN;
-    if (isa<hir::TypeOfOp>(op)) {
-      earliest = actualPhase.at(op->getOperand(0));
-      if (earliest > kNeverPhase)
-        earliest -= 1;
-    } else {
-      for (auto &operand : op->getOpOperands()) {
-        auto valIt = actualPhase.find(operand.get());
-        if (valIt == actualPhase.end())
-          continue;
-        int16_t opActual = valIt->second;
-        // The ±1 shifts only apply to real phases, not the sentinels.
-        if (isTypeOperand(operand) && opActual > kNeverPhase)
-          opActual += 1;
-        earliest = std::max(earliest, opActual);
-      }
-    }
-
-    if (earliest < phaseIt->second) {
-      LLVM_DEBUG({
-        dbgs() << "    " << phaseIt->second << " => " << earliest << ": ";
-        op->print(dbgs(), OpPrintingFlags().skipRegions());
-        dbgs() << "\n";
-      });
-      phaseIt->second = earliest;
-      for (auto r : op->getResults())
-        actualPhase[r] = earliest;
-    }
-  });
-
-  // Step 6: Coverage stamp. Everything the analysis can reach — the entry
+  // Step 6: Coverage stamp. Everything the analysis models — the entry
   // blocks of the function's signature and body, and recursively the entry
   // blocks of the region ops it models — ends up with an entry in both
-  // maps. Pure content that no demand ever reached is dead code; its ops,
-  // results, and block arguments get the float sentinel here. Undemanded
-  // results of modeled region ops instead follow the same provider rule as
-  // demanded ones (step 5): max provider value phase, floored at the op
-  // phase for multi-provider results, `never` when no path provides
-  // them. Demand thus never influences where a region result materializes,
-  // and dead results choice-ify exactly like live ones. Contents of regions
+  // maps. Ops and values still unresolved here are dead code with no
+  // real-phase operand bound (operand-free pure trees, dead terminators,
+  // dead block arguments); they get the float sentinel. Contents of regions
   // the analysis does not model remain absent from the maps: absence of an
   // entry is the defined signal that an op or value is outside the
   // analysis' model.
-  LLVM_DEBUG(dbgs() << "  step 6: stamp undemanded pure content\n");
+  LLVM_DEBUG(dbgs() << "  step 6: stamp unresolved pure content\n");
   std::function<void(Block &)> stamp = [&](Block &block) {
     for (auto arg : block.getArguments())
       actualPhase.try_emplace(arg, kFloatPhase);
     for (auto &op : block) {
       opPhases.try_emplace(&op, kFloatPhase);
-      if (!isModeledRegionOp(&op)) {
-        for (auto result : op.getResults())
-          actualPhase.try_emplace(result, kFloatPhase);
-        continue;
-      }
-      // Stamp region contents first so provider values are resolved.
-      for (auto &region : op.getRegions())
-        if (!region.empty())
-          stamp(region.front());
-      for (auto result : op.getResults()) {
-        if (actualPhase.contains(result))
-          continue;
-        auto providers = resultProviders(&op, result.getResultNumber());
-        int16_t phase = kNeverPhase;
-        if (!providers.empty()) {
-          phase = kFloatPhase;
-          for (auto &[value, term] : providers)
-            phase = std::max(phase, actualPhase.at(value));
-          if (providers.size() > 1)
-            phase = std::max(phase, getPhase(&op));
-        }
-        actualPhase[result] = phase;
-      }
+      if (isModeledRegionOp(&op))
+        for (auto &region : op.getRegions())
+          if (!region.empty())
+            stamp(region.front());
+      for (auto result : op.getResults())
+        actualPhase.try_emplace(result, kFloatPhase);
     }
   };
   stamp(funcOp.getSignature().front());
@@ -368,6 +288,307 @@ LogicalResult PhaseAnalysis::run() {
 
   return success();
 }
+
+//===----------------------------------------------------------------------===//
+// Final Recompute and Derivation (step 5)
+//===----------------------------------------------------------------------===//
+//
+// The recompute pass finalizes the phases the demand DFS left loose. Pure
+// ops reschedule to earliest = max(operand phases); region results follow
+// their providers. Content no demand ever reached derives the same way:
+// undemanded pure ops adopt earliest directly, and undemanded floating
+// exprs derive in two passes. The scan pass derives the expr's pure content
+// (with the expr's own frame still unknown, so iteration arguments of loops
+// inside contribute nothing yet) and collects the lower bounds the anchored
+// content imposes on the expr's phase: a CF condition or loop init consumed
+// at the frame phase forces the frame to be at least the operand's phase,
+// and type operands force one more. The assign pass then anchors CF ops,
+// terminators, pinned exprs, and loop iteration arguments at the derived
+// phase and re-derives the pure content and region results — values built
+// from iteration arguments can only rise to the frame phase they were
+// pegged to, which every bound they participate in already accommodates, so
+// no iteration is needed. With no real bound anywhere, the expr is an
+// operand-free tree: it stays unresolved and floats in step 6.
+
+// NOLINTBEGIN(misc-no-recursion)
+
+void PhaseAnalysis::recomputeBlock(Block &block) {
+  for (auto &op : block) {
+    if (isModeledRegionOp(&op)) {
+      auto exprOp = dyn_cast<ExprOp>(&op);
+      if (exprOp && !exprOp.getPin() && !opPhases.count(&op)) {
+        // Undemanded floating expr: derive it like a pure op; the
+        // derivation recomputes its interior itself.
+        deriveFloatingExpr(exprOp);
+      } else {
+        assert(opPhases.count(&op) &&
+               "region op in a processed block must have a phase");
+        for (auto &region : op.getRegions())
+          if (!region.empty())
+            recomputeBlock(region.front());
+      }
+      fillRegionResults(&op, /*overwrite=*/false);
+      continue;
+    }
+
+    if (!hir::isEffectivelyPure(&op) || op.hasTrait<OpTrait::IsTerminator>() ||
+        op.getNumRegions() > 0)
+      continue;
+    derivePure(&op, /*overwrite=*/false);
+  }
+}
+
+void PhaseAnalysis::derivePure(Operation *op, bool overwrite) {
+  int16_t earliest = INT16_MIN;
+  if (isa<hir::TypeOfOp>(op)) {
+    auto valIt = actualPhase.find(op->getOperand(0));
+    if (valIt != actualPhase.end()) {
+      earliest = valIt->second;
+      if (earliest > kNeverPhase)
+        earliest -= 1;
+    }
+  } else {
+    for (auto &operand : op->getOpOperands()) {
+      auto valIt = actualPhase.find(operand.get());
+      if (valIt == actualPhase.end())
+        continue;
+      int16_t opActual = valIt->second;
+      // The ±1 shifts only apply to real phases, not the sentinels.
+      if (isTypeOperand(operand) && opActual > kNeverPhase)
+        opActual += 1;
+      earliest = std::max(earliest, opActual);
+    }
+  }
+
+  auto phaseIt = opPhases.find(op);
+  if (phaseIt == opPhases.end()) {
+    // Unvisited: no demand imposes a latest bound; adopt earliest when some
+    // operand contributes a real phase, otherwise stay unresolved (float in
+    // step 6).
+    if (earliest <= kNeverPhase)
+      return;
+  } else if (!overwrite) {
+    // Visited: the DFS assigned the demanded phase; tighten to earliest.
+    if (earliest >= phaseIt->second)
+      return;
+  } else if (earliest <= kNeverPhase) {
+    // Overwrite mode never loses a real phase: operand entries only appear
+    // or rise between the scan and assign passes.
+    return;
+  }
+
+  LLVM_DEBUG({
+    dbgs() << "    ";
+    if (phaseIt != opPhases.end())
+      dbgs() << phaseIt->second << " => " << earliest;
+    else
+      dbgs() << "derived " << earliest;
+    dbgs() << ": ";
+    op->print(dbgs(), OpPrintingFlags().skipRegions());
+    dbgs() << "\n";
+  });
+  opPhases[op] = earliest;
+  for (auto r : op->getResults())
+    actualPhase[r] = earliest;
+}
+
+void PhaseAnalysis::fillRegionResults(Operation *op, bool overwrite) {
+  for (auto result : op->getResults()) {
+    auto providers = resultProviders(op, result.getResultNumber());
+    int16_t recomputed = kNeverPhase;
+    if (!providers.empty()) {
+      recomputed = kFloatPhase;
+      for (auto &[value, term] : providers) {
+        auto valIt = actualPhase.find(value);
+        recomputed =
+            std::max(recomputed,
+                     valIt != actualPhase.end() ? valIt->second : kFloatPhase);
+      }
+      if (providers.size() > 1) {
+        auto opIt = opPhases.find(op);
+        recomputed = std::max(recomputed, opIt != opPhases.end() ? opIt->second
+                                                                 : kFloatPhase);
+      }
+    }
+    auto resultIt = actualPhase.find(result);
+    if (resultIt == actualPhase.end()) {
+      actualPhase[result] = recomputed;
+      continue;
+    }
+    if (recomputed == resultIt->second)
+      continue;
+    assert((overwrite || recomputed < resultIt->second) &&
+           "region result phases only tighten");
+    LLVM_DEBUG({
+      dbgs() << "    result " << result.getResultNumber() << ": "
+             << resultIt->second << " => " << recomputed << ": ";
+      op->print(dbgs(), OpPrintingFlags().skipRegions());
+      dbgs() << "\n";
+    });
+    resultIt->second = recomputed;
+  }
+}
+
+void PhaseAnalysis::scanFloatingContent(Block &block, int16_t shift,
+                                        int16_t &bound) {
+  // An anchored op consuming `value` at the frame phase (expr + relShift)
+  // forces expr >= phase(value) - relShift; type operands are consumed one
+  // phase earlier and force one more. Sentinel and unresolved operands
+  // contribute no bound.
+  auto addBound = [&](Value value, int16_t relShift, bool isType) {
+    auto valIt = actualPhase.find(value);
+    if (valIt == actualPhase.end() || valIt->second <= kNeverPhase)
+      return;
+    bound =
+        std::max<int16_t>(bound, valIt->second + (isType ? 1 : 0) - relShift);
+  };
+
+  for (auto &op : block) {
+    if (auto exprOp = dyn_cast<ExprOp>(&op)) {
+      if (exprOp.getPin()) {
+        int16_t inner = shift + exprOp.getPhaseShift();
+        for (auto typeVal : exprOp.getResultTypes())
+          addBound(typeVal, inner, /*isType=*/true);
+        scanFloatingContent(exprOp.getBody().front(), inner, bound);
+      } else {
+        // Nested floating exprs derive independently and impose no bound;
+        // scan their interiors for provisional phases here, and fully
+        // derive them in the assign pass once the surroundings resolved.
+        int16_t nestedBound = kFloatPhase;
+        scanFloatingContent(exprOp.getBody().front(), 0, nestedBound);
+      }
+      fillRegionResults(&op, /*overwrite=*/true);
+      continue;
+    }
+
+    if (auto ifOp = dyn_cast<IfOp>(&op)) {
+      addBound(ifOp.getCondition(), shift, /*isType=*/false);
+      for (auto typeVal : ifOp.getResultTypes())
+        addBound(typeVal, shift, /*isType=*/true);
+      scanFloatingContent(ifOp.getThenRegion().front(), shift, bound);
+      if (!ifOp.getElseRegion().empty())
+        scanFloatingContent(ifOp.getElseRegion().front(), shift, bound);
+      fillRegionResults(&op, /*overwrite=*/true);
+      continue;
+    }
+
+    if (auto loopOp = dyn_cast<LoopOp>(&op)) {
+      for (auto init : loopOp.getInits())
+        addBound(init, shift, /*isType=*/false);
+      for (auto typeVal : loopOp.getInitTypes())
+        addBound(typeVal, shift, /*isType=*/true);
+      for (auto typeVal : loopOp.getResultTypes())
+        addBound(typeVal, shift, /*isType=*/true);
+      scanFloatingContent(loopOp.getBody().front(), shift, bound);
+      fillRegionResults(&op, /*overwrite=*/true);
+      continue;
+    }
+
+    // Continue values feed the enclosing loop's iteration arguments, which
+    // live at the loop's frame; the values are frame-consumed like a CF
+    // condition, their type operands one phase earlier. Break values are
+    // delivered through the loop's result instead and impose no frame
+    // bound.
+    if (auto continueOp = dyn_cast<ContinueOp>(&op)) {
+      for (auto value : continueOp.getValues())
+        addBound(value, shift, /*isType=*/false);
+      for (auto typeVal : continueOp.getTypeOfValues())
+        addBound(typeVal, shift, /*isType=*/true);
+      continue;
+    }
+
+    if (op.hasTrait<OpTrait::IsTerminator>())
+      continue;
+
+    // Pure region-bearing ops outside the model (e.g. hir.pick): their
+    // interiors carry no entries and they derive no phase.
+    if (op.getNumRegions() > 0) {
+      assert(hir::isEffectivelyPure(&op) &&
+             "effectful op inside an undemanded floating expr");
+      continue;
+    }
+
+    assert(
+        (hir::isEffectivelyPure(&op) || op.hasTrait<OpTrait::ConstantLike>()) &&
+        "effectful op inside an undemanded floating expr; step 4b "
+        "defaults exprs with anchored content");
+    derivePure(&op, /*overwrite=*/true);
+  }
+}
+
+void PhaseAnalysis::assignDerivedBlock(Block &block, int16_t blockPhase) {
+  for (auto &op : block) {
+    if (auto exprOp = dyn_cast<ExprOp>(&op)) {
+      if (exprOp.getPin()) {
+        int16_t exprPhase = blockPhase + exprOp.getPhaseShift();
+        opPhases[&op] = exprPhase;
+        assignDerivedBlock(exprOp.getBody().front(), exprPhase);
+      } else {
+        deriveFloatingExpr(exprOp);
+      }
+      fillRegionResults(&op, /*overwrite=*/true);
+      continue;
+    }
+
+    if (auto ifOp = dyn_cast<IfOp>(&op)) {
+      opPhases[&op] = blockPhase;
+      assignDerivedBlock(ifOp.getThenRegion().front(), blockPhase);
+      if (!ifOp.getElseRegion().empty())
+        assignDerivedBlock(ifOp.getElseRegion().front(), blockPhase);
+      fillRegionResults(&op, /*overwrite=*/true);
+      continue;
+    }
+
+    if (auto loopOp = dyn_cast<LoopOp>(&op)) {
+      opPhases[&op] = blockPhase;
+      // Iteration arguments live at the loop body's phase.
+      for (auto arg : loopOp.getBody().front().getArguments())
+        actualPhase[arg] = blockPhase;
+      assignDerivedBlock(loopOp.getBody().front(), blockPhase);
+      fillRegionResults(&op, /*overwrite=*/true);
+      continue;
+    }
+
+    if (op.hasTrait<OpTrait::IsTerminator>()) {
+      opPhases[&op] = blockPhase;
+      continue;
+    }
+
+    // Pure region-bearing ops outside the model stay unresolved.
+    if (op.getNumRegions() > 0)
+      continue;
+
+    derivePure(&op, /*overwrite=*/true);
+  }
+}
+
+void PhaseAnalysis::deriveFloatingExpr(ExprOp exprOp) {
+  assert(!exprOp.getPin() && !opPhases.count(exprOp) &&
+         "only undemanded floating exprs are derived");
+
+  int16_t bound = kFloatPhase;
+  scanFloatingContent(exprOp.getBody().front(), /*shift=*/0, bound);
+  // The expr's result types are consumed one phase before the expr, like a
+  // pure op's type operands.
+  for (auto typeVal : exprOp.getResultTypes()) {
+    auto valIt = actualPhase.find(typeVal);
+    if (valIt != actualPhase.end() && valIt->second > kNeverPhase)
+      bound = std::max<int16_t>(bound, valIt->second + 1);
+  }
+
+  if (bound <= kNeverPhase)
+    return;
+
+  LLVM_DEBUG({
+    dbgs() << "    derived floating expr at " << bound << ": ";
+    exprOp->print(dbgs(), OpPrintingFlags().skipRegions());
+    dbgs() << "\n";
+  });
+  opPhases[exprOp] = bound;
+  assignDerivedBlock(exprOp.getBody().front(), bound);
+}
+
+// NOLINTEND(misc-no-recursion)
 
 /// Collect the (value, terminator) pairs that provide a given result of a
 /// region-bearing op.
@@ -802,11 +1023,13 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
   if (auto exprOp = dyn_cast<ExprOp>(op); exprOp && !exprOp.getPin())
     return success();
 
-  // Pure ops and constants are demand-driven only — unless they are zero-use
-  // expression statements, which are anchored at the block phase.
+  // Pure ops and constants impose no latest bound on themselves, regardless
+  // of use count: their latest comes from demands (+inf when undemanded),
+  // and their final phase is derived in the step-5 recompute. Terminators
+  // are control flow and stay anchored even when memory-effect free.
   if (!isa<ExprOp>(op) && op->getNumRegions() == 0 &&
-      (hir::isEffectivelyPure(op) || op->hasTrait<OpTrait::ConstantLike>()) &&
-      !op->use_empty())
+      !op->hasTrait<OpTrait::IsTerminator>() &&
+      (hir::isEffectivelyPure(op) || op->hasTrait<OpTrait::ConstantLike>()))
     return success();
 
   SaveAndRestore guard(depth, depth + 2);
@@ -1032,7 +1255,7 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
     return success();
   }
 
-  // Zero-use expression statements and other side-effecting ops.
+  // Remaining side-effecting ops: anchored at the block phase.
   auto it = opPhases.find(op);
   if (it != opPhases.end() && it->second <= blockPhase)
     return success();

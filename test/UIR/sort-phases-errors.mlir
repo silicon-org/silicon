@@ -184,34 +184,6 @@ uir.func @ExitArmLaterResult(%c: 0, %y: 1) -> (result: 1) {
 
 // -----
 
-// Floating (dead) content nested inside earlier-phase control flow can
-// consume later-phase values without any demand anchoring it; it cannot
-// sink out of the region it is glued into, so the backward use is rejected.
-uir.func @FloatBackwardInBranch(%c: 0, %x: 0) -> () {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> ()
-} {
-  %t = hir.int_type
-  %m = uir.expr pin 1 : %t {
-    %v = hir.var : %t
-    hir.write_var %v, %x : %t
-    // expected-note @below {{value defined here}}
-    %rd = hir.read_var %v : %t
-    uir.yield %rd : %t
-  }
-  uir.if %c {
-    %y = uir.expr : %t {
-      // expected-error @below {{uses a value from phase 1 inside phase 0 content; backward crossings are not implemented in phase sorting yet}}
-      %dead = hir.add %m, %m : %t
-      uir.yield %dead : %t
-    }
-    uir.yield
-  }
-  uir.return
-}
-
-// -----
-
 // A break value shared with other later-phase effects that stay behind cannot
 // be sliced out: the entangled content (here a var written and read for the
 // break value) would be duplicated into the receiving pick. Rejected.
@@ -526,4 +498,34 @@ uir.func @LoopBodyReturn(%n: -1, %x: 0) -> (result: 0) {
     uir.return %x : %t
   }
   uir.unreachable
+}
+
+// -----
+
+// Extracted content using the result of a floating frame (a dead loop with
+// bottomless channels) would rematerialize the frame in executed code; for a
+// diverging frame that injects nontermination. Rejected until the design
+// decides how dead frames interact with demand-blind extraction.
+uir.func @FloatingFrameRematerialized(%c: 0, %a: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %r = uir.if %c : %t {
+    %fl = uir.expr : %t {
+      // expected-note @below {{frame defined here}}
+      %s = uir.loop : %t {
+        uir.continue
+      }
+      uir.yield %s : %t
+    }
+    // expected-error @below {{uses the result of a floating frame; rematerializing dead frames is not implemented in phase sorting yet}}
+    %dead = hir.mul %fl, %a : %t
+    %live = hir.add %a, %a : %t
+    uir.yield %live : %t
+  } else {
+    %w = hir.mul %a, %a : %t
+    uir.yield %w : %t
+  }
+  uir.return %r : %t
 }

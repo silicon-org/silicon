@@ -188,7 +188,7 @@ private:
                                                ArrayRef<Operation *> userOps,
                                                ArrayRef<Operation *> movedOps);
   void remapFields(Block &receivingBlock, const llvm::SetVector<Value> &fields);
-  void cloneFloatingUses(Operation *regionOp, Block &rootBlock);
+  LogicalResult cloneFloatingUses(Operation *regionOp, Block &rootBlock);
 
   /// Whether a phase is a real phase (not the float/never sentinel).
   static bool isRealPhase(int16_t phase) {
@@ -467,12 +467,18 @@ LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
 // exactly the choice-ification case and leaves the rest rejected.
 
 /// Whether any op transitively inside `root` sits at a real phase later than
-/// p.
+/// p. A sentinel-phase op is floating (dead) wholesale: its interior pure
+/// content may carry real phases derived from outer operands, but those
+/// annotations are vacuous — the frame is never materialized — so the walk
+/// skips its subtree instead of mistaking them for extraction obligations.
 bool PhaseSorter::hasLaterContent(Operation *root, int16_t p) {
-  auto result = root->walk([&](Operation *op) {
+  auto result = root->walk<WalkOrder::PreOrder>([&](Operation *op) {
     if (op == root)
       return WalkResult::advance();
-    if (auto ph = realPhaseOf(op); ph && *ph > p)
+    auto ph = realPhaseOf(op);
+    if (!ph)
+      return WalkResult::skip();
+    if (*ph > p)
       return WalkResult::interrupt();
     return WalkResult::advance();
   });
@@ -611,16 +617,20 @@ void PhaseSorter::remapFields(Block &receivingBlock,
 // NOLINTBEGIN(misc-no-recursion)
 
 /// Clone the defining tree of a floating pure value at the builder's
-/// insertion point.
-static Value cloneFloatingTree(Value value, OpBuilder &builder,
-                               IRMapping &mapping) {
+/// insertion point. Only defs inside `regionOp` are cloned; values defined
+/// outside remain visible from the receiving block and are used directly.
+/// Every clone is recorded in `clonedOps` so the caller can stamp it.
+static Value cloneFloatingTree(Operation *regionOp, Value value,
+                               OpBuilder &builder, IRMapping &mapping,
+                               SmallVectorImpl<Operation *> &clonedOps) {
+  auto *defOp = value.getDefiningOp();
+  if (!defOp || !regionOp->isProperAncestor(defOp))
+    return value;
   if (auto mapped = mapping.lookupOrNull(value))
     return mapped;
-  auto *defOp = value.getDefiningOp();
-  assert(defOp && "floating value must have a defining op");
   for (auto operand : defOp->getOperands())
-    cloneFloatingTree(operand, builder, mapping);
-  builder.clone(*defOp, mapping);
+    cloneFloatingTree(regionOp, operand, builder, mapping, clonedOps);
+  clonedOps.push_back(builder.clone(*defOp, mapping));
   return mapping.lookup(value);
 }
 
@@ -631,8 +641,28 @@ static Value cloneFloatingTree(Value value, OpBuilder &builder,
 /// not visible from the receiving pick once the arm wraps into its own phase,
 /// so it is duplicated in front of its user; any other remaining use of a
 /// region-interior value is a causality violation the analysis rejects.
-void PhaseSorter::cloneFloatingUses(Operation *regionOp, Block &rootBlock) {
-  rootBlock.walk([&](Operation *user) {
+/// Floating region-bearing defs (dead frames) are rejected: rematerializing
+/// a frame would execute its interior — for a diverging frame that injects
+/// nontermination into live code — contradicting the rule that float frames
+/// are never materialized.
+LogicalResult PhaseSorter::cloneFloatingUses(Operation *regionOp,
+                                             Block &rootBlock) {
+  // Whether the defining tree of a region-interior value contains a
+  // region-bearing op (a dead frame).
+  std::function<Operation *(Value)> findFrame =
+      [&](Value value) -> Operation * {
+    auto *defOp = value.getDefiningOp();
+    if (!defOp || !regionOp->isProperAncestor(defOp))
+      return nullptr;
+    if (defOp->getNumRegions() > 0)
+      return defOp;
+    for (auto operand : defOp->getOperands())
+      if (auto *frame = findFrame(operand))
+        return frame;
+    return nullptr;
+  };
+
+  auto result = rootBlock.walk([&](Operation *user) -> WalkResult {
     for (auto &use : user->getOpOperands()) {
       auto *defOp = use.get().getDefiningOp();
       if (!defOp || !regionOp->isProperAncestor(defOp))
@@ -640,15 +670,27 @@ void PhaseSorter::cloneFloatingUses(Operation *regionOp, Block &rootBlock) {
       assert(!isRealPhase(analysis.opPhases.at(defOp)) &&
              hir::isEffectivelyPure(defOp) &&
              "moved op uses non-floating, non-crossing value from region");
+      if (auto *frame = findFrame(use.get())) {
+        auto diag = user->emitOpError()
+                    << "uses the result of a floating frame; rematerializing "
+                       "dead frames is not implemented in phase sorting yet";
+        diag.attachNote(frame->getLoc()) << "frame defined here";
+        return WalkResult::interrupt();
+      }
       OpBuilder builder(user);
       IRMapping mapping;
-      auto clone = cloneFloatingTree(use.get(), builder, mapping);
-      clone.getDefiningOp()->walk([&](Operation *cloned) {
-        setPhase(cloned, PhaseAnalysis::kFloatPhase);
-      });
+      SmallVector<Operation *> clonedOps;
+      auto clone =
+          cloneFloatingTree(regionOp, use.get(), builder, mapping, clonedOps);
+      for (auto *clonedOp : clonedOps)
+        clonedOp->walk([&](Operation *cloned) {
+          setPhase(cloned, PhaseAnalysis::kFloatPhase);
+        });
       use.set(clone);
     }
+    return WalkResult::advance();
   });
+  return failure(result.wasInterrupted());
 }
 
 /// The number of arm yields providing result `idx` of `ifOp`. An arm
@@ -865,7 +907,8 @@ LogicalResult PhaseSorter::extractFromBranch(IfOp ifOp, int16_t p) {
         hir::YieldOp::create(altBuilder, loc, info.laterYieldOperands);
     analysis.opPhases[altYield] = p + 1;
     remapFields(altBlock, info.fields);
-    cloneFloatingUses(newIf, altBlock);
+    if (failed(cloneFloatingUses(newIf, altBlock)))
+      return failure();
   }
 
   forget(op);
@@ -1253,7 +1296,8 @@ FailureOr<LoopOp> PhaseSorter::extractBreakValues(LoopOp loopOp, int16_t p) {
     auto altYield = hir::YieldOp::create(altBuilder, loc, site.laterValues);
     analysis.opPhases[altYield] = p + 1;
     remapFields(altBlock, site.fields);
-    cloneFloatingUses(newLoop, altBlock);
+    if (failed(cloneFloatingUses(newLoop, altBlock)))
+      return failure();
   }
 
   forget(op);
@@ -1437,9 +1481,7 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
   // whole structure.
   for (auto [block, fields] : remapBlocks)
     remapFields(*block, *fields);
-  cloneFloatingUses(op, replicate.getBody().front());
-
-  return success();
+  return cloneFloatingUses(op, replicate.getBody().front());
 }
 
 /// Extract later-phase content out of every phase-p `uir.loop` whose interior
@@ -1543,9 +1585,13 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
     }
 
     // Reject anchored content nested inside differently-phased content.
-    // Floating (dead) content may sit inside anchored content, but never the
-    // other way around: demand or anchoring on nested content always anchors
-    // its container.
+    // Floating (dead) content may sit inside anchored content, but never
+    // anchored content inside a floating frame: anything observable there
+    // (effects, pins, function terminators) would have anchored the frame
+    // in the analysis. Interior pure content of a floating frame may carry
+    // a real phase derived from outer operands, but the annotation is
+    // vacuous — the frame floats wholesale and is never materialized — so
+    // it is no phase mismatch.
     if (auto *parent = op->getParentOp(); parent != funcOp) {
       auto parentIt = analysis.opPhases.find(parent);
       assert(parentIt != analysis.opPhases.end() && "op phase not computed");
@@ -1559,8 +1605,11 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
           return WalkResult::interrupt();
         }
       } else {
-        assert(!isRealPhase(opPhase) &&
-               "anchored content inside floating content");
+        assert((!isRealPhase(opPhase) ||
+                (op->getNumRegions() == 0 &&
+                 (hir::isEffectivelyPure(op) ||
+                  op->hasTrait<OpTrait::ConstantLike>()))) &&
+               "observable content inside a floating frame");
       }
     }
     return WalkResult::advance();

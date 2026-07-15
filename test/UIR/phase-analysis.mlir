@@ -4289,25 +4289,170 @@ uir.func @IfSameValueUnderLaterCF(%x: 0, %cond: 1) -> (result: 1) {
   uir.return %r : %t
 }
 
-// An unused floating expr with only pure contents is dead code and gets
-// the float sentinel from the coverage stamp; only anchored content (side
-// effects, pins) triggers the block-phase fallback.
+// Dead pure content derives its phase from its operands even though no
+// demand ever reaches it: inside an unused floating expr, the add gets
+// earliest = max(operand phases), and the expr result follows its provider.
+// The expr op itself stays float (nothing pins where the grouping sits).
 // CHECK-LABEL: uir.func @UnusedFloatingPure
 uir.func @UnusedFloatingPure(%x: 0) -> () {
   %t0 = hir.int_type
   uir.signature (%t0) -> ()
 } {
   %t = hir.int_type
-  // The dead expr floats: no demand ever reaches it, and the coverage
-  // stamp assigns the float sentinel to the op, its result, and its
-  // contents.
-  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "float", pa.results = ["float"]}
-  // CHECK: hir.add {{.*}}pa.phase = "float"
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "float", pa.results = ["0"]}
+  // CHECK: hir.add {{.*}}pa.phase = "0"
   %r = uir.expr : %t {
     %sum = hir.add %x, %x : %t
     uir.yield %sum : %t
   }
   // CHECK: uir.return {{.*}}pa.phase = "0"
+  uir.return
+}
+
+// A dead pure op consuming a later-phase value is legal: it imposes no
+// latest bound, so it simply derives the operand's phase — deleting a
+// value's last use never invalidates a program.
+// CHECK-LABEL: uir.func @DeadPureDerivesLaterPhase
+uir.func @DeadPureDerivesLaterPhase(%a: 1) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: hir.add {{.*}} {pa.operands = ["1", "1", "float"], pa.phase = "1", pa.results = ["1"]}
+  %dead = hir.add %a, %a : %t
+  // CHECK: uir.return {{.*}}pa.phase = "0"
+  uir.return
+}
+
+// Dead content behind a floating expr's unused result also derives real
+// phases from its operands; the derivation chains through the expr result
+// into further dead consumers.
+// CHECK-LABEL: uir.func @DeadFloatingExprDerivesLaterPhase
+uir.func @DeadFloatingExprDerivesLaterPhase(%a: 1) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "float", pa.results = ["1"]}
+  %r = uir.expr : %t {
+    // CHECK: hir.add {{.*}}pa.phase = "1"
+    %sum = hir.add %a, %a : %t
+    uir.yield %sum : %t
+  }
+  // CHECK: hir.mul {{.*}} {pa.operands = ["1", "1", "float"], pa.phase = "1", pa.results = ["1"]}
+  %dead = hir.mul %r, %r : %t
+  uir.return
+}
+
+// Operand-free dead pure trees are genuinely phase-free: no operand
+// contributes a real bound, so they keep the float sentinel and are
+// rematerialized per use.
+// CHECK-LABEL: uir.func @DeadOperandFreeTreeFloats
+uir.func @DeadOperandFreeTreeFloats() -> () {
+  uir.signature () -> ()
+} {
+  // CHECK: hir.int_type {pa.phase = "float", pa.results = ["float"]}
+  %t = hir.int_type
+  // CHECK: hir.constant_int 1 {{.*}}pa.phase = "float"
+  %one = hir.constant_int 1 : %t
+  // CHECK: hir.add {{.*}} {pa.operands = ["float", "float", "float"], pa.phase = "float", pa.results = ["float"]}
+  %dead = hir.add %one, %one : %t
+  uir.return
+}
+
+// A dead floating expr wrapping control flow derives its phase like a pure
+// op, from the bounds the anchored content imposes: the if consumes its
+// condition at the expr's frame, so the expr and the if anchor at the
+// condition's phase.
+// CHECK-LABEL: uir.func @DeadIfInDeadExprDynCond
+uir.func @DeadIfInDeadExprDynCond(%d: 1, %x: 1) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "1", pa.results = ["1"]}
+  %r = uir.expr : %t {
+    // CHECK: uir.if %d : {{.*}} attributes {pa.operands = ["1", "float"], pa.phase = "1", pa.results = ["1"]}
+    %s = uir.if %d : %t {
+      uir.yield %x : %t
+    } else {
+      uir.yield %x : %t
+    }
+    uir.yield %s : %t
+  }
+  uir.return
+}
+
+// An earlier-phase condition anchors the dead expr and if early, while
+// later-phase arm content derives from its own operands, exactly like the
+// live twin: the interior rides demand-blind branch extraction downstream.
+// CHECK-LABEL: uir.func @DeadIfInDeadExprLaterContent
+uir.func @DeadIfInDeadExprLaterContent(%c: 0, %a: 1) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "0", pa.results = ["1"]}
+  %r = uir.expr : %t {
+    // CHECK: uir.if %c : {{.*}} attributes {pa.operands = ["0", "float"], pa.phase = "0", pa.results = ["1"]}
+    %s = uir.if %c : %t {
+      // CHECK: hir.add {{.*}}pa.phase = "1"
+      %v = hir.add %a, %a : %t
+      uir.yield %v : %t
+    } else {
+      // CHECK: hir.mul {{.*}}pa.phase = "1"
+      %w = hir.mul %a, %a : %t
+      uir.yield %w : %t
+    }
+    uir.yield %s : %t
+  }
+  uir.return
+}
+
+// A dead expr whose anchored channels all carry bottomless values (a
+// break-only loop with no inits, float result type) derives no phase: the
+// expr and its CF stay float wholesale, while interior pure content and the
+// region results carry vacuous derived phases that no placement rule reads.
+// CHECK-LABEL: uir.func @DeadLoopBottomlessChannelsFloats
+uir.func @DeadLoopBottomlessChannelsFloats(%a: 1) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "float", pa.results = ["1"]}
+  %r = uir.expr : %t {
+    // CHECK: uir.loop : {{.*}} attributes {pa.operands = ["float"], pa.phase = "float", pa.results = ["1"]}
+    %s = uir.loop : %t {
+      // CHECK: hir.add {{.*}}pa.phase = "1"
+      %x = hir.add %a, %a : %t
+      // CHECK: uir.break {{.*}}pa.phase = "float"
+      uir.break %x : %t
+    }
+    uir.yield %s : %t
+  }
+  uir.return
+}
+
+// Loops bound the expr through their frame-consumed channels (inits, init
+// types, result types, continue values); iteration arguments live at the
+// derived frame, and later-phase body content derives above it, delivered
+// through the loop result.
+// CHECK-LABEL: uir.func @DeadLoopInDeadExpr
+uir.func @DeadLoopInDeadExpr(%x: 0, %d: 1) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "0", pa.results = ["1"]}
+  %r = uir.expr : %t {
+    // CHECK: uir.loop {{.*}} attributes {pa.operands = ["0", "float", "float"], pa.phase = "0", pa.results = ["1"]}
+    %s = uir.loop (%i = %x : %t) : %t {
+      // CHECK: hir.add {{.*}} {pa.operands = ["0", "1", "float"], pa.phase = "1", pa.results = ["1"]}
+      %n = hir.add %i, %d : %t
+      uir.break %n : %t
+    }
+    uir.yield %s : %t
+  }
   uir.return
 }
 
