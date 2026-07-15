@@ -199,8 +199,22 @@ LogicalResult PhaseAnalysis::run() {
   // defaulted) phase.
   {
     // Whether the expr transitively contains anchored (non-floating) content.
-    auto hasAnchoredContent = [](ExprOp exprOp) {
+    // A break/continue whose target loop lies outside `exprOp` transfers
+    // control out of the frame: like a side effect, it is observable and
+    // must execute at a definite phase, so it anchors the expr. An exit
+    // targeting a loop inside `exprOp` (or any other terminator) does not.
+    auto hasAnchoredContent = [&](ExprOp exprOp) {
+      auto anchorsExpr = [&](Operation *targetLoop) {
+        return !exprOp->isProperAncestor(targetLoop);
+      };
       auto inner = exprOp->walk([&](Operation *op) -> WalkResult {
+        if (auto breakOp = dyn_cast<BreakOp>(op))
+          return anchorsExpr(breakToLoop.at(breakOp)) ? WalkResult::interrupt()
+                                                      : WalkResult::advance();
+        if (auto continueOp = dyn_cast<ContinueOp>(op))
+          return anchorsExpr(continueToLoop.at(continueOp))
+                     ? WalkResult::interrupt()
+                     : WalkResult::advance();
         if (op == exprOp || hir::isEffectivelyPure(op) ||
             op->hasTrait<OpTrait::ConstantLike>() ||
             op->hasTrait<OpTrait::IsTerminator>() || isModeledRegionOp(op))
@@ -484,16 +498,36 @@ void PhaseAnalysis::scanFloatingContent(Block &block, int16_t shift,
       continue;
     }
 
-    // Continue values feed the enclosing loop's iteration arguments, which
-    // live at the loop's frame; the values are frame-consumed like a CF
-    // condition, their type operands one phase earlier. Break values are
-    // delivered through the loop's result instead and impose no frame
-    // bound.
-    if (auto continueOp = dyn_cast<ContinueOp>(&op)) {
-      for (auto value : continueOp.getValues())
-        addBound(value, shift, /*isType=*/false);
-      for (auto typeVal : continueOp.getTypeOfValues())
-        addBound(typeVal, shift, /*isType=*/true);
+    // Break/continue exits. An exit whose target loop lies outside the frame
+    // — control must cross a `uir.expr` boundary to reach it — is frame-locked
+    // at that loop's (real) phase, since the exit's phase aliases the target
+    // loop's phase. It therefore bounds the frame to the loop's phase (less
+    // the pin shift to the exit's own frame). An in-frame exit aliases an
+    // inner floating loop's phase and imposes nothing, except that in-frame
+    // continue values feed the loop's iteration arguments at the frame phase
+    // (their type operands one phase earlier); break values are delivered
+    // through the loop's result and impose no frame bound.
+    if (isa<BreakOp, ContinueOp>(&op)) {
+      auto targetLoop = isa<BreakOp>(&op)
+                            ? breakToLoop.at(cast<BreakOp>(&op))
+                            : continueToLoop.at(cast<ContinueOp>(&op));
+      bool outTargeting = false;
+      for (Operation *p = op.getParentOp(); p != targetLoop.getOperation();
+           p = p->getParentOp())
+        if (isa<ExprOp>(p)) {
+          outTargeting = true;
+          break;
+        }
+      if (outTargeting) {
+        auto loopIt = opPhases.find(targetLoop);
+        if (loopIt != opPhases.end() && loopIt->second > kNeverPhase)
+          bound = std::max<int16_t>(bound, loopIt->second - shift);
+      } else if (auto continueOp = dyn_cast<ContinueOp>(&op)) {
+        for (auto value : continueOp.getValues())
+          addBound(value, shift, /*isType=*/false);
+        for (auto typeVal : continueOp.getTypeOfValues())
+          addBound(typeVal, shift, /*isType=*/true);
+      }
       continue;
     }
 

@@ -4457,6 +4457,69 @@ uir.func @DeadLoopInDeadExpr(%x: 0, %d: 1) -> () {
 }
 
 //===----------------------------------------------------------------------===//
+// An exit terminator whose target loop lies outside the floating frame is
+// frame-locked at that loop's phase (the exit's phase aliases the loop's),
+// so it anchors the otherwise-dead frame there instead of letting it float
+// wholesale. Here a dead expr holds a break targeting the enclosing loop:
+// the break crosses the expr boundary, so the expr and its if anchor at the
+// loop's phase 0, even though the if's yielded result is a floating
+// constant.
+
+// CHECK-LABEL: uir.func @DeadExprOutBreak
+uir.func @DeadExprOutBreak(%x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  uir.signature (%t0) -> (%t0)
+} {
+  %t = hir.int_type
+  %c = hir.constant_int 1 : %t
+  %five = hir.constant_int 5 : %t
+  // CHECK: uir.loop {{.*}}pa.phase = "0"
+  %r = uir.loop (%i = %x : %t) : %t {
+    // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "0", pa.results = ["float"]}
+    %dead = uir.expr : %t {
+      // CHECK: uir.if {{.*}}pa.phase = "0"
+      %s = uir.if %c : %t {
+        // CHECK: uir.break {{.*}}pa.phase = "0"
+        uir.break %five : %t
+      } else {
+        uir.yield %five : %t
+      }
+      uir.yield %s : %t
+    }
+    uir.continue %i : %t
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Same for an out-targeting continue: it re-enters the enclosing loop, so
+// its phase aliases the loop's and anchors the dead frame at phase 0.
+
+// CHECK-LABEL: uir.func @DeadExprOutContinue
+uir.func @DeadExprOutContinue(%x: 0, %d: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> (%t0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.loop {{.*}}pa.phase = "0"
+  %r = uir.loop (%i = %x : %t) : %t {
+    // CHECK: uir.expr : {{.*}}pa.phase = "0"
+    %dead = uir.expr : %t {
+      // CHECK: uir.if {{.*}}pa.phase = "0"
+      %s = uir.if %d : %t {
+        // CHECK: uir.continue {{.*}}pa.phase = "0"
+        uir.continue %i : %t
+      } else {
+        uir.yield %i : %t
+      }
+      uir.yield %s : %t
+    }
+    uir.break %i : %t
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Undemanded floating exprs with side effects fall back to their block
 // phase: effects execute where they stand when no consumer pulls them
 // elsewhere, as if the expression statement stood alone.

@@ -705,6 +705,41 @@ uir.func @FloatFrameInLiveIf(%c: 0, %a: 1) -> () {
 }
 
 //===----------------------------------------------------------------------===//
+// A dead expr holding a break that targets the enclosing loop is anchored at
+// the loop's phase by the analysis (the break crosses the expr frame), so it
+// is no longer a wholesale float: it dissolves and wraps in place at phase 0
+// like any other content, with no extraction.
+
+// CHECK-LABEL: uir.func @DeadExprOutBreakSorts
+uir.func @DeadExprOutBreakSorts(%x: 0, %c: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> (%t0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT:   [[L:%.+]] = uir.loop (%arg0 = %x
+  // CHECK-NEXT:     uir.if %c
+  // CHECK-NEXT:       uir.break %arg0
+  // CHECK:          uir.yield %arg0
+  // CHECK:        uir.continue %arg0
+  // CHECK:   uir.phase_return [[L]]
+  %r = uir.loop (%i = %x : %t) : %t {
+    %dead = uir.expr : %t {
+      %s = uir.if %c : %t {
+        uir.break %i : %t
+      } else {
+        uir.yield %i : %t
+      }
+      uir.yield %s : %t
+    }
+    uir.continue %i : %t
+  }
+  // CHECK: uir.unreachable
+  // CHECK-NOT: hir.pick
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Extracted content referencing a floating tree defined inside the arm gets
 // a clone of the whole tree in front of it (arm-interior floats are not
 // visible from the receiving pick); values defined outside the arm are used
