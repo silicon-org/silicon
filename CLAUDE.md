@@ -60,7 +60,6 @@ See @docs/getting-started.md for build commands, project layout, and where to st
 - See the @docs/design/ directory for descriptions of how various parts of the compiler should work.
 - Always use relative paths in bash commands, no absolute paths
 - Use `git <cmd>` instead of `git -C ... <cmd>`
-- Put temporary files into a local tmp/ directory
 - Dialect-specific passes are self-contained: HIRTransforms cannot link against MIR, MIRTransforms cannot link against HIR, but both can link against Base; cross-dialect passes go into lib/Transforms/, and conversions between dialects go into lib/Conversions/.
 
 ## Conventions
