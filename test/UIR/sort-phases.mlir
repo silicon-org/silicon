@@ -583,10 +583,10 @@ uir.func @DeadIfInDeadExpr(%c: 0, %a: 1) -> () {
 }
 
 //===----------------------------------------------------------------------===//
-// A dead frame whose anchored channels carry only bottomless values (a
-// break-only loop with no inits) derives no phase: it stays floating
-// wholesale, is never extracted or placed, and its vacuous later-phase
-// interior materializes no phase op.
+// A fully dead loop inside a dead expr sorts exactly like its live twin: the
+// expr defaults to block phase 0 and dissolves, the loop wraps at phase 0
+// pushing a per-activation record, and the later-phase add moves into a
+// phase-1 pick that replays it. Dead content sorts demand-blind.
 
 // CHECK-LABEL: uir.func @DeadLoopInDeadExpr
 uir.func @DeadLoopInDeadExpr(%a: 1) -> () {
@@ -594,10 +594,11 @@ uir.func @DeadLoopInDeadExpr(%a: 1) -> () {
   uir.signature (%0) -> ()
 } {
   %t = hir.int_type
-  // CHECK-NOT: uir.phase
-  // CHECK: uir.loop
-  // CHECK-NEXT: hir.add %a, %a
-  // CHECK-NEXT: uir.break
+  // CHECK: [[L:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   uir.loop
+  // CHECK: uir.phase 1 {
+  // CHECK-NEXT:   hir.pick [[L]]
+  // CHECK: hir.add %a, %a
   %r = uir.expr : %t {
     %s = uir.loop : %t {
       %x = hir.add %a, %a : %t
@@ -606,14 +607,13 @@ uir.func @DeadLoopInDeadExpr(%a: 1) -> () {
     uir.yield %s : %t
   }
   // CHECK: uir.unreachable
-  // CHECK-NOT: uir.phase
   uir.return
 }
 
 //===----------------------------------------------------------------------===//
-// Same for a dead if whose condition is a floating constant: no anchored
-// channel carries a real phase, so the frame floats wholesale instead of
-// anchoring at the condition's phase.
+// Same for a dead if whose condition is a floating constant: the frame
+// defaults to block phase 0 and the if is choice-ified there, with the
+// later-phase arm content moving into a phase-1 pick — the live twin's shape.
 
 // CHECK-LABEL: uir.func @DeadIfConstCondInDeadExpr
 uir.func @DeadIfConstCondInDeadExpr(%a: 1) -> () {
@@ -622,9 +622,11 @@ uir.func @DeadIfConstCondInDeadExpr(%a: 1) -> () {
 } {
   %t = hir.int_type
   %c = hir.constant_int 1 : %t
-  // CHECK-NOT: uir.phase
-  // CHECK: uir.if
-  // CHECK-NEXT: hir.add %a, %a
+  // CHECK: [[CH:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   uir.if
+  // CHECK: uir.phase 1 {
+  // CHECK-NEXT:   hir.pick [[CH]]
+  // CHECK: hir.add %a, %a
   %r = uir.expr : %t {
     %s = uir.if %c : %t {
       %v = hir.add %a, %a : %t
@@ -635,14 +637,14 @@ uir.func @DeadIfConstCondInDeadExpr(%a: 1) -> () {
     uir.yield %s : %t
   }
   // CHECK: uir.unreachable
-  // CHECK-NOT: uir.phase
   uir.return
 }
 
 //===----------------------------------------------------------------------===//
-// A live conduit expr with a bystander dead frame: the demanded content
-// sorts normally, while the bottomless frame next to it stays floating at
-// the top level.
+// A live conduit expr with a bystander dead loop: both sort as ordinary
+// phase-0 content. The bystander loop is choice-ified into phase 0 with its
+// later-phase add replayed by a phase-1 pick, alongside the conduit's own
+// phase-0 result.
 
 // CHECK-LABEL: uir.func @LiveConduitWithBystanderLoop
 uir.func @LiveConduitWithBystanderLoop(%x: 0, %a: 1) -> (result: 0) {
@@ -651,9 +653,13 @@ uir.func @LiveConduitWithBystanderLoop(%x: 0, %a: 1) -> (result: 0) {
 } {
   // CHECK: [[T:%.+]] = hir.int_type
   %t = hir.int_type
-  // CHECK: uir.loop
-  // CHECK-NEXT: hir.add %a, %a
-  // CHECK-NEXT: uir.break
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT:   uir.loop
+  // CHECK:        [[Y:%.+]] = hir.add %x, %x : [[T]]
+  // CHECK-NEXT:   uir.phase_return [[Y]] : [[T]] yield
+  // CHECK: uir.phase 1 {
+  // CHECK-NEXT:   hir.pick
+  // CHECK:        hir.add %a, %a
   %r = uir.expr : %t {
     %s = uir.loop : %t {
       %v = hir.add %a, %a : %t
@@ -662,18 +668,15 @@ uir.func @LiveConduitWithBystanderLoop(%x: 0, %a: 1) -> (result: 0) {
     %y = hir.add %x, %x : %t
     uir.yield %y : %t
   }
-  // CHECK: uir.phase 0 {
-  // CHECK-NEXT:   [[Y:%.+]] = hir.add %x, %x : [[T]]
-  // CHECK-NEXT:   uir.phase_return [[Y]] : [[T]]
-  // CHECK-NEXT: }
   // CHECK: uir.unreachable
   uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
-// A dead frame nested inside live anchored content rides along wholesale:
-// the enclosing if wraps into its phase untouched, with no extraction for
-// the frame's vacuous later-phase interior.
+// A dead frame nested inside live anchored content sorts like its live twin:
+// the enclosing if wraps at phase 0, the dead inner if is choice-ified there
+// (nested inside the outer choice), and both later-phase halves move into the
+// phase-1 pick.
 
 // CHECK-LABEL: uir.func @FloatFrameInLiveIf
 uir.func @FloatFrameInLiveIf(%c: 0, %a: 1) -> () {
@@ -682,11 +685,13 @@ uir.func @FloatFrameInLiveIf(%c: 0, %a: 1) -> () {
 } {
   %t = hir.int_type
   %fc = hir.constant_int 1 : %t
-  // CHECK-NOT: hir.choice
   // CHECK: uir.phase 0 {
-  // CHECK-NEXT:   uir.if %c {
-  // CHECK-NEXT:     uir.if
-  // CHECK-NEXT:       hir.add %a, %a
+  // CHECK-NEXT:   uir.if %c
+  // CHECK:          uir.if
+  // CHECK: uir.phase 1 {
+  // CHECK-NEXT:   hir.pick
+  // CHECK:        hir.pick
+  // CHECK:        hir.add %a, %a
   uir.if %c {
     %dead = uir.expr : %t {
       %s = uir.if %fc : %t {
@@ -700,7 +705,6 @@ uir.func @FloatFrameInLiveIf(%c: 0, %a: 1) -> () {
     uir.yield
   }
   // CHECK: uir.unreachable
-  // CHECK-NOT: hir.pick
   uir.return
 }
 
@@ -848,31 +852,31 @@ uir.func @NestedDeadExpr(%d: 1, %x: 1) -> () {
 }
 
 //===----------------------------------------------------------------------===//
-// A frame anchored by an internal crossing sorts as ordinary content: the
-// phase-0 var read crosses into phase 1 as a plain phase-op result, and the
-// break-only loop wraps at phase 1 where its add consumes the crossing.
+// A dead frame mixing a phase-0 var read with the phase-1 arg defaults to
+// block phase 0 (no internal-crossing rule sinks it). The loop wraps at
+// phase 0, the var read crosses into phase 1 as a plain phase-op result, and
+// the interior add is replayed by a phase-1 pick where it consumes the
+// crossing — the same shape as a live loop with later-phase content.
 
-// CHECK-LABEL: uir.func @FrameSinks
-uir.func @FrameSinks(%x: 0, %a: 1) -> () {
+// CHECK-LABEL: uir.func @DeadFrameDistributesInterior
+uir.func @DeadFrameDistributesInterior(%x: 0, %a: 1) -> () {
   %t0 = hir.int_type
   uir.signature (%t0, %t0) -> ()
 } {
   // CHECK: [[T:%.+]] = hir.int_type
   %t = hir.int_type
-  // CHECK: [[CROSS:%.+]] = uir.phase 0 {
+  // CHECK: [[PH0:%.+]]:2 = uir.phase 0 {
   // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
   // CHECK-NEXT:   hir.write_var [[V]], %x : [[T]]
   // CHECK-NEXT:   [[R:%.+]] = hir.read_var [[V]] : [[T]]
-  // CHECK-NEXT:   uir.phase_return yield [[R]]
-  // CHECK-NEXT: }
+  // CHECK-NEXT:   uir.loop
+  // CHECK:        uir.phase_return yield [[R]]
   %v = hir.var : %t
   hir.write_var %v, %x : %t
   %r = hir.read_var %v : %t
   // CHECK: uir.phase 1 {
-  // CHECK-NEXT:   uir.loop : [[T]] {
-  // CHECK-NEXT:     hir.add [[CROSS]], %a : [[T]]
-  // CHECK-NEXT:     uir.break
-  // CHECK:   uir.phase_return
+  // CHECK-NEXT:   hir.pick [[PH0]]#1
+  // CHECK:          hir.add [[PH0]]#0, %a : [[T]]
   %dead = uir.expr : %t {
     %s = uir.loop : %t {
       %m = hir.add %r, %a : %t

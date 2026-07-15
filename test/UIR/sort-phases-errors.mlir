@@ -502,10 +502,10 @@ uir.func @LoopBodyReturn(%n: -1, %x: 0) -> (result: 0) {
 
 // -----
 
-// Extracted content using the result of a floating frame (a dead loop with
-// bottomless channels) would rematerialize the frame in executed code; for a
-// diverging frame that injects nontermination. Rejected until the design
-// decides how dead frames interact with demand-blind extraction.
+// A dead never-breaking loop inside a dead frame sorts like its live twin:
+// the frame defaults to its block phase and the loop delivers a `never`
+// result. Consuming that result needs unreachable-consumer handling, which
+// the sorter rejects — same as a live loop that never breaks.
 uir.func @FloatingFrameRematerialized(%c: 0, %a: 1) -> (result: 1) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
@@ -513,13 +513,12 @@ uir.func @FloatingFrameRematerialized(%c: 0, %a: 1) -> (result: 1) {
   %t = hir.int_type
   %r = uir.if %c : %t {
     %fl = uir.expr : %t {
-      // expected-note @below {{frame defined here}}
+      // expected-error @below {{delivers result #0 at phase never instead of its own phase 0; result forwarding (single-provider or never-produced control-flow results, and receivers of crossings more than one phase wide) is not implemented in phase sorting yet}}
       %s = uir.loop : %t {
         uir.continue
       }
       uir.yield %s : %t
     }
-    // expected-error @below {{uses the result of a floating frame; rematerializing dead frames is not implemented in phase sorting yet}}
     %dead = hir.mul %fl, %a : %t
     %live = hir.add %a, %a : %t
     uir.yield %live : %t

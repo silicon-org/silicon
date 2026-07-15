@@ -24,12 +24,14 @@ namespace uir {
 ///    on itself: undemanded pure ops have latest = +inf and derive the same
 ///    earliest phase from their operands in the final recompute, so deleting
 ///    a value's last use never invalidates a program. Undemanded floating
-///    exprs derive exactly like pure ops, with the lower bounds their
-///    anchored contents impose (CF conditions and inits consumed at the
-///    frame phase, type operands one phase earlier) playing the role of
-///    operand phases; the contents then anchor at the derived phase, so a
-///    dead expr resolves to the phase its live twin would occupy under the
-///    earliest possible demand.
+///    exprs (frames) default to their block phase and rise only for the
+///    frame-consumed bounds their anchored content imposes (CF conditions
+///    and inits consumed at the frame phase, continue values, type operands
+///    one phase earlier): the frame phase is max(block phase, those bounds).
+///    The contents then anchor at that phase and the interior distributes
+///    per op, so a dead frame resolves exactly like its live twin. Every
+///    frame ends with a real phase; only region-free pure ops and constants
+///    still float.
 /// 2. **Side-effecting ops:** demand goes UP to the parent block, the block
 ///    adjusts its phase, then pushes DOWN to all ops.
 /// 3. **Region op results:** demand passes through the yield transparently
@@ -56,16 +58,18 @@ namespace uir {
 /// 3. Structural setup: processBlock(sig, 0) and processBlock(body, 0).
 /// 4. Demand-driven constraints: push from declared arg/result phases. Then
 ///    default undemanded floating exprs with anchored content (side effects,
-///    pins) to their block phase — effects execute where they stand when no
-///    consumer pulls them elsewhere.
+///    pins, out-targeting exits) to their block phase and process them like
+///    placed content — effects execute where they stand when no consumer
+///    pulls them elsewhere.
 /// 5. Final recompute: reschedule visited pure ops to max(operand phases)
 ///    (the DFS records demand-time phases, which may be looser), derive the
 ///    same earliest phase for pure ops no demand ever reached (when some
 ///    operand contributes a real phase), derive undemanded floating exprs
-///    from the bounds their anchored contents impose and anchor those
-///    contents at the derived phase, and refresh or fill in region result
-///    phases from their providing terminator values — so demand never
-///    influences where a pure op, expr, or region result materializes.
+///    floored at their block phase and raised by the bounds their anchored
+///    content imposes, anchoring those contents at the derived phase, and
+///    refresh or fill in region result phases from their providing
+///    terminator values — so demand never influences where a pure op, expr,
+///    or region result materializes.
 /// 6. Coverage stamp: anything still unresolved — operand-free dead pure
 ///    trees, dead terminators, dead block arguments — gets the float
 ///    sentinel, in both `opPhases` and `actualPhase`. Afterwards every op,
@@ -205,27 +209,28 @@ private:
   /// First pass of floating-expr derivation: derive the pure content, scan
   /// nested regions, and accumulate into `bound` the lower bounds the
   /// anchored content imposes on the expr's phase. Bound sources are frame-
-  /// consumed channels (CF conditions, loop inits, continue values, type
-  /// operands) and internal crossings — an interior op consuming an operand
-  /// at a phase below its own, which forces the frame to materialize at
-  /// that op's phase. A nested floating expr with an exit escaping it is
-  /// locked to this frame and scanned as frame-locked interior; one without
-  /// derives independently here and imposes no bound. `shift` is the pin
-  /// offset of the current frame relative to `frameRoot`, the expr being
-  /// derived; every directly scanned exit targets a loop inside it.
+  /// consumed channels: CF conditions, loop inits, continue values, and type
+  /// operands. A nested floating expr with an exit escaping it is locked to
+  /// this frame and scanned as frame-locked interior; an independent one is
+  /// left for the assign pass, which derives it once this frame's phase is
+  /// known. `shift` is the pin offset of the current frame relative to
+  /// `frameRoot`, the expr being derived; every directly scanned exit
+  /// targets a loop inside it.
   void scanFloatingContent(Block &block, int16_t shift, int16_t &bound,
                            ExprOp frameRoot);
 
   /// Second pass of floating-expr derivation: anchor CF ops, terminators,
-  /// pinned exprs, and loop iteration arguments at the derived phase, and
+  /// pinned exprs, and loop iteration arguments at the derived phase, derive
+  /// nested independent frames with this phase as their block phase, and
   /// re-derive the pure content and region results with the frame resolved.
   void assignDerivedBlock(Block &block, int16_t blockPhase);
 
-  /// Derive the phase of an undemanded floating expr exactly like a pure
-  /// op: earliest = max over the bounds imposed by its anchored content and
-  /// its result types. With no real bound the expr and its remaining
-  /// contents stay unresolved and float in step 6.
-  void deriveFloatingExpr(ExprOp exprOp);
+  /// Derive the phase of an undemanded floating expr like a pure op, but
+  /// floored at its `blockPhase`: the frame defaults to its block phase and
+  /// rises only for the frame-consumed bounds its anchored content and result
+  /// types impose (max(block phase, frame-consumed bounds)). Every frame thus
+  /// ends with a real phase; only region-free pure ops and constants float.
+  void deriveFloatingExpr(ExprOp exprOp, int16_t blockPhase);
 };
 
 } // namespace uir

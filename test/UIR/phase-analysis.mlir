@@ -4292,14 +4292,14 @@ uir.func @IfSameValueUnderLaterCF(%x: 0, %cond: 1) -> (result: 1) {
 // Dead pure content derives its phase from its operands even though no
 // demand ever reaches it: inside an unused floating expr, the add gets
 // earliest = max(operand phases), and the expr result follows its provider.
-// The expr op itself stays float (nothing pins where the grouping sits).
+// The expr op itself, a frame, defaults to its block phase 0.
 // CHECK-LABEL: uir.func @UnusedFloatingPure
 uir.func @UnusedFloatingPure(%x: 0) -> () {
   %t0 = hir.int_type
   uir.signature (%t0) -> ()
 } {
   %t = hir.int_type
-  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "float", pa.results = ["0"]}
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "0", pa.results = ["0"]}
   // CHECK: hir.add {{.*}}pa.phase = "0"
   %r = uir.expr : %t {
     %sum = hir.add %x, %x : %t
@@ -4326,14 +4326,15 @@ uir.func @DeadPureDerivesLaterPhase(%a: 1) -> () {
 
 // Dead content behind a floating expr's unused result also derives real
 // phases from its operands; the derivation chains through the expr result
-// into further dead consumers.
+// into further dead consumers. The expr frame defaults to its block phase 0
+// while its phase-1 interior distributes out.
 // CHECK-LABEL: uir.func @DeadFloatingExprDerivesLaterPhase
 uir.func @DeadFloatingExprDerivesLaterPhase(%a: 1) -> () {
   %t0 = hir.int_type
   uir.signature (%t0) -> ()
 } {
   %t = hir.int_type
-  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "float", pa.results = ["1"]}
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "0", pa.results = ["1"]}
   %r = uir.expr : %t {
     // CHECK: hir.add {{.*}}pa.phase = "1"
     %sum = hir.add %a, %a : %t
@@ -4409,23 +4410,23 @@ uir.func @DeadIfInDeadExprLaterContent(%c: 0, %a: 1) -> () {
   uir.return
 }
 
-// A dead expr whose anchored channels all carry bottomless values (a
-// break-only loop with no inits, float result type) derives no phase: the
-// expr and its CF stay float wholesale, while interior pure content and the
-// region results carry vacuous derived phases that no placement rule reads.
-// CHECK-LABEL: uir.func @DeadLoopBottomlessChannelsFloats
-uir.func @DeadLoopBottomlessChannelsFloats(%a: 1) -> () {
+// A dead expr with no frame-consumed channel carrying a real phase (a
+// break-only loop with no inits, float result type) defaults to its block
+// phase 0: the expr and its loop skeleton sit at 0, while the interior add
+// distributes out to phase 1 and its break stays at the loop's phase.
+// CHECK-LABEL: uir.func @DeadLoopBottomlessChannelsDefault
+uir.func @DeadLoopBottomlessChannelsDefault(%a: 1) -> () {
   %t0 = hir.int_type
   uir.signature (%t0) -> ()
 } {
   %t = hir.int_type
-  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "float", pa.results = ["1"]}
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "0", pa.results = ["1"]}
   %r = uir.expr : %t {
-    // CHECK: uir.loop : {{.*}} attributes {pa.operands = ["float"], pa.phase = "float", pa.results = ["1"]}
+    // CHECK: uir.loop : {{.*}} attributes {pa.operands = ["float"], pa.phase = "0", pa.results = ["1"]}
     %s = uir.loop : %t {
       // CHECK: hir.add {{.*}}pa.phase = "1"
       %x = hir.add %a, %a : %t
-      // CHECK: uir.break {{.*}}pa.phase = "float"
+      // CHECK: uir.break {{.*}}pa.phase = "0"
       uir.break %x : %t
     }
     uir.yield %s : %t
@@ -4525,7 +4526,7 @@ uir.func @DeadExprOutContinue(%x: 0, %d: 0) -> (result: 0) {
 // expr's result imposes no bound on its container. Here the inner expr has a
 // real bound (the if consumes its dynamic condition %d at phase 1), so it
 // anchors at 1 regardless of the outer grouping; the outer expr has no
-// anchored content of its own and stays float.
+// anchored content of its own and defaults to its block phase 0.
 
 // CHECK-LABEL: uir.func @NestedDeadExpr
 uir.func @NestedDeadExpr(%d: 1, %x: 1) -> () {
@@ -4533,7 +4534,7 @@ uir.func @NestedDeadExpr(%d: 1, %x: 1) -> () {
   uir.signature (%t0, %t0) -> ()
 } {
   %t = hir.int_type
-  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "float", pa.results = ["1"]}
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "0", pa.results = ["1"]}
   %outer = uir.expr : %t {
     // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "1", pa.results = ["1"]}
     %inner = uir.expr : %t {
@@ -4551,16 +4552,15 @@ uir.func @NestedDeadExpr(%d: 1, %x: 1) -> () {
 }
 
 //===----------------------------------------------------------------------===//
-// An internal crossing anchors a frame that would otherwise be bottomless: a
-// break-only loop with no inits and a float result type carries no anchored
-// channel, but its interior add consumes a phase-0 var read alongside the
-// phase-1 arg. The add sits at phase 1 with an operand below it — a 0->1
-// crossing that must be captured inside the frame — so the frame materializes
-// at phase 1 instead of floating (contrast @DeadLoopBottomlessChannelsFloats,
-// whose add consumes only the phase-1 arg and has no such crossing).
+// A dead frame whose interior mixes phases defaults to its block phase and
+// distributes the interior per op: a break-only loop with no inits and a
+// float result type carries no frame-consumed channel, so the expr and loop
+// sit at block phase 0, while the interior add (a phase-0 var read alongside
+// the phase-1 arg) distributes out to phase 1. There is no internal-crossing
+// rule pulling the frame down to the add's phase.
 
-// CHECK-LABEL: uir.func @FrameSinks
-uir.func @FrameSinks(%x: 0, %a: 1) -> () {
+// CHECK-LABEL: uir.func @DeadFrameDistributesInterior
+uir.func @DeadFrameDistributesInterior(%x: 0, %a: 1) -> () {
   %t0 = hir.int_type
   uir.signature (%t0, %t0) -> ()
 } {
@@ -4569,9 +4569,9 @@ uir.func @FrameSinks(%x: 0, %a: 1) -> () {
   hir.write_var %v, %x : %t
   // CHECK: hir.read_var {{.*}}pa.phase = "0"
   %r = hir.read_var %v : %t
-  // CHECK: uir.expr : {{.*}}pa.phase = "1"
+  // CHECK: uir.expr : {{.*}}pa.phase = "0"
   %dead = uir.expr : %t {
-    // CHECK: uir.loop : {{.*}}pa.phase = "1"
+    // CHECK: uir.loop : {{.*}}pa.phase = "0"
     %s = uir.loop : %t {
       // CHECK: hir.add {{.*}} {pa.operands = ["0", "1", "float"], pa.phase = "1", pa.results = ["1"]}
       %m = hir.add %r, %a : %t

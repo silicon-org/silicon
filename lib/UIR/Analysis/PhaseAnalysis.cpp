@@ -77,7 +77,8 @@ void PhaseAnalysis::collectTerminators() {
 ///    Then default undemanded floating exprs with anchored content to their
 ///    block phase.
 /// 5. Final recompute: reschedule visited pure ops to their earliest phase,
-///    derive phases for unvisited pure ops from their operands, and refresh
+///    derive phases for unvisited pure ops from their operands, derive
+///    undemanded floating exprs floored at their block phase, and refresh
 ///    or fill in region result phases from their providers.
 /// 6. Coverage stamp: anything still unresolved (operand-free dead pure
 ///    trees, dead terminators, dead block arguments) gets the float
@@ -190,13 +191,14 @@ LogicalResult PhaseAnalysis::run() {
     }
   }
 
-  // Step 4b: Floating exprs that no demand ever reached have no phase. Pure
-  // contents are dead code and are left for the step-6 float stamp, but
-  // anchored contents (side effects, pins) must execute at a well-defined
-  // phase regardless of whether any result is used: such exprs fall back to
-  // their block phase, as if the expression statement stood alone. Walk in
-  // pre-order so a nested floating expr sees its parent's (possibly just
-  // defaulted) phase.
+  // Step 4b: Floating exprs that no demand ever reached have no phase. Exprs
+  // with anchored contents (side effects, pins, out-targeting exits) must
+  // execute at a well-defined phase regardless of whether any result is used;
+  // they fall back to their block phase here, as if the expression statement
+  // stood alone, and are processed like placed content. Exprs with only pure
+  // interiors also default to their block phase, but derive in step 5, where
+  // frame-consumed bounds may still raise them. Walk in pre-order so a nested
+  // floating expr sees its parent's (possibly just defaulted) phase.
   {
     // Whether the expr transitively contains anchored (non-floating) content.
     // A break/continue whose target loop lies outside `exprOp` transfers
@@ -316,18 +318,20 @@ LogicalResult PhaseAnalysis::run() {
 // ops reschedule to earliest = max(operand phases); region results follow
 // their providers. Content no demand ever reached derives the same way:
 // undemanded pure ops adopt earliest directly, and undemanded floating
-// exprs derive in two passes. The scan pass derives the expr's pure content
-// (with the expr's own frame still unknown, so iteration arguments of loops
-// inside contribute nothing yet) and collects the lower bounds the anchored
-// content imposes on the expr's phase: a CF condition or loop init consumed
-// at the frame phase forces the frame to be at least the operand's phase,
-// and type operands force one more. The assign pass then anchors CF ops,
-// terminators, pinned exprs, and loop iteration arguments at the derived
-// phase and re-derives the pure content and region results — values built
-// from iteration arguments can only rise to the frame phase they were
-// pegged to, which every bound they participate in already accommodates, so
-// no iteration is needed. With no real bound anywhere, the expr is an
-// operand-free tree: it stays unresolved and floats in step 6.
+// exprs derive in two passes, floored at their block phase. The scan pass
+// derives the expr's pure content (with the expr's own frame still unknown,
+// so iteration arguments of loops inside contribute nothing yet) and
+// collects the lower bounds the anchored content imposes on the expr's
+// phase: a CF condition or loop init consumed at the frame phase forces the
+// frame to be at least the operand's phase, and type operands force one
+// more. The frame is then placed at max(block phase, those bounds). The
+// assign pass anchors CF ops, terminators, pinned exprs, and loop iteration
+// arguments at that phase, derives nested independent frames with it as
+// their block phase, and re-derives the pure content and region results —
+// values built from iteration arguments can only rise to the frame phase
+// they were pegged to, which every bound they participate in already
+// accommodates, so no iteration is needed. Every frame ends with a real
+// phase; only region-free pure ops and constants float in step 6.
 
 // NOLINTBEGIN(misc-no-recursion)
 
@@ -336,9 +340,13 @@ void PhaseAnalysis::recomputeBlock(Block &block) {
     if (isModeledRegionOp(&op)) {
       auto exprOp = dyn_cast<ExprOp>(&op);
       if (exprOp && !exprOp.getPin() && !opPhases.count(&op)) {
-        // Undemanded floating expr: derive it like a pure op; the
+        // Undemanded floating expr: derive it like a pure op, defaulting to
+        // this block's phase and rising for its frame-consumed bounds. The
         // derivation recomputes its interior itself.
-        deriveFloatingExpr(exprOp);
+        auto *parentOp = op.getParentOp();
+        int16_t blockPhase =
+            isa<FuncOp>(parentOp) ? 0 : opPhases.find(parentOp)->second;
+        deriveFloatingExpr(exprOp, blockPhase);
       } else {
         assert(opPhases.count(&op) &&
                "region op in a processed block must have a phase");
@@ -492,13 +500,12 @@ void PhaseAnalysis::scanFloatingContent(Block &block, int16_t shift,
         scanFloatingContent(exprOp.getBody().front(), shift, bound, frameRoot);
       } else {
         // A nested floating expr without escaping exits is an independent
-        // frame: it derives its own phase from its own anchored interior
-        // right here, and its result imposes no bound on this frame (a
-        // floating expr's yield constrains nothing unless demanded).
-        // Deriving it during the scan makes nested frames resolve
-        // regardless of whether this outer frame does.
-        if (!opPhases.count(exprOp))
-          deriveFloatingExpr(exprOp);
+        // frame: it imposes no bound on this frame (a floating expr's yield
+        // constrains nothing unless demanded) and derives its own phase from
+        // its own anchored interior. Its derivation is deferred to the assign
+        // pass, which runs once this frame's phase is known and passes it as
+        // the nested frame's block phase, so a bottomless nested frame
+        // defaults to this frame's phase rather than floating.
       }
       fillRegionResults(&op, /*overwrite=*/true);
       continue;
@@ -571,26 +578,6 @@ void PhaseAnalysis::scanFloatingContent(Block &block, int16_t shift,
         "effectful op inside an undemanded floating expr; step 4b "
         "defaults exprs with anchored content");
     derivePure(&op, /*overwrite=*/true);
-
-    // An internal crossing bounds the frame. When this op sits at a real
-    // phase but consumes an operand at a strictly earlier real phase, the
-    // earlier value must be captured and carried forward inside the frame.
-    // A crossing exists only between materialized phases, so the frame
-    // cannot float wholesale: it is bounded to this op's phase (less the pin
-    // shift to the op's own frame). A frame whose interior content all sits
-    // at a single phase (no lower operand anywhere) has no crossing and
-    // still floats. Iteration arguments carry no phase during the scan, so
-    // they contribute no spurious crossing.
-    auto opIt = opPhases.find(&op);
-    if (opIt != opPhases.end() && opIt->second > kNeverPhase)
-      for (auto operand : op.getOperands()) {
-        auto vIt = actualPhase.find(operand);
-        if (vIt != actualPhase.end() && vIt->second > kNeverPhase &&
-            vIt->second < opIt->second) {
-          bound = std::max<int16_t>(bound, opIt->second - shift);
-          break;
-        }
-      }
   }
 }
 
@@ -606,9 +593,12 @@ void PhaseAnalysis::assignDerivedBlock(Block &block, int16_t blockPhase) {
         // loops): anchored at the block phase like frame-locked interior.
         opPhases[&op] = blockPhase;
         assignDerivedBlock(exprOp.getBody().front(), blockPhase);
+      } else if (!opPhases.count(exprOp)) {
+        // Independent nested frame: derive it now, with this frame's phase as
+        // its block phase, so a bottomless nested frame defaults here rather
+        // than floating. Its own frame-consumed bounds may still raise it.
+        deriveFloatingExpr(exprOp, blockPhase);
       }
-      // Other nested floating exprs are independent frames already derived
-      // in the scan pass; they do not re-anchor to this frame's phase.
       fillRegionResults(&op, /*overwrite=*/true);
       continue;
     }
@@ -645,11 +635,15 @@ void PhaseAnalysis::assignDerivedBlock(Block &block, int16_t blockPhase) {
   }
 }
 
-void PhaseAnalysis::deriveFloatingExpr(ExprOp exprOp) {
+void PhaseAnalysis::deriveFloatingExpr(ExprOp exprOp, int16_t blockPhase) {
   assert(!exprOp.getPin() && !opPhases.count(exprOp) &&
          "only undemanded floating exprs are derived");
 
-  int16_t bound = kFloatPhase;
+  // The frame defaults to its block phase and rises only for the frame-
+  // consumed bounds its anchored content imposes: an undemanded frame's
+  // phase is max(block phase, frame-consumed bounds). Every frame thus ends
+  // with a real phase — only region-free pure ops and constants still float.
+  int16_t bound = blockPhase;
   scanFloatingContent(exprOp.getBody().front(), /*shift=*/0, bound,
                       /*frameRoot=*/exprOp);
   // The expr's result types are consumed one phase before the expr, like a
@@ -659,9 +653,6 @@ void PhaseAnalysis::deriveFloatingExpr(ExprOp exprOp) {
     if (valIt != actualPhase.end() && valIt->second > kNeverPhase)
       bound = std::max<int16_t>(bound, valIt->second + 1);
   }
-
-  if (bound <= kNeverPhase)
-    return;
 
   LLVM_DEBUG({
     dbgs() << "    derived floating expr at " << bound << ": ";
