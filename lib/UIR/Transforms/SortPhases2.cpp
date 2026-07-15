@@ -188,7 +188,7 @@ private:
                                                ArrayRef<Operation *> userOps,
                                                ArrayRef<Operation *> movedOps);
   void remapFields(Block &receivingBlock, const llvm::SetVector<Value> &fields);
-  LogicalResult cloneFloatingUses(Operation *regionOp, Block &rootBlock);
+  void cloneFloatingUses(Operation *regionOp, Block &rootBlock);
 
   /// Whether a phase is a real phase (not the float/never sentinel).
   static bool isRealPhase(int16_t phase) {
@@ -467,10 +467,9 @@ LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
 // exactly the choice-ification case and leaves the rest rejected.
 
 /// Whether any op transitively inside `root` sits at a real phase later than
-/// p. A sentinel-phase op is floating (dead) wholesale: its interior pure
-/// content may carry real phases derived from outer operands, but those
-/// annotations are vacuous — the frame is never materialized — so the walk
-/// skips its subtree instead of mistaking them for extraction obligations.
+/// p. A sentinel-phase op is a floating region-free pure value (a constant or
+/// arithmetic on constants); it has no regions and contributes no later
+/// content, so the walk skips it.
 bool PhaseSorter::hasLaterContent(Operation *root, int16_t p) {
   auto result = root->walk<WalkOrder::PreOrder>([&](Operation *op) {
     if (op == root)
@@ -641,42 +640,19 @@ static Value cloneFloatingTree(Operation *regionOp, Value value,
 /// not visible from the receiving pick once the arm wraps into its own phase,
 /// so it is duplicated in front of its user; any other remaining use of a
 /// region-interior value is a causality violation the analysis rejects.
-/// Floating region-bearing defs (dead frames) are rejected: rematerializing
-/// a frame would execute its interior — for a diverging frame that injects
-/// nontermination into live code — contradicting the rule that float frames
-/// are never materialized.
-LogicalResult PhaseSorter::cloneFloatingUses(Operation *regionOp,
-                                             Block &rootBlock) {
-  // Whether the defining tree of a region-interior value contains a
-  // region-bearing op (a dead frame).
-  std::function<Operation *(Value)> findFrame =
-      [&](Value value) -> Operation * {
-    auto *defOp = value.getDefiningOp();
-    if (!defOp || !regionOp->isProperAncestor(defOp))
-      return nullptr;
-    if (defOp->getNumRegions() > 0)
-      return defOp;
-    for (auto operand : defOp->getOperands())
-      if (auto *frame = findFrame(operand))
-        return frame;
-    return nullptr;
-  };
-
-  auto result = rootBlock.walk([&](Operation *user) -> WalkResult {
+///
+/// A floating value is a region-free pure tree — constants and arithmetic on
+/// them: every frame now ends with a real phase, so no dead region-bearing
+/// def survives here to be rematerialized.
+void PhaseSorter::cloneFloatingUses(Operation *regionOp, Block &rootBlock) {
+  rootBlock.walk([&](Operation *user) {
     for (auto &use : user->getOpOperands()) {
       auto *defOp = use.get().getDefiningOp();
       if (!defOp || !regionOp->isProperAncestor(defOp))
         continue;
       assert(!isRealPhase(analysis.opPhases.at(defOp)) &&
-             hir::isEffectivelyPure(defOp) &&
+             hir::isEffectivelyPure(defOp) && defOp->getNumRegions() == 0 &&
              "moved op uses non-floating, non-crossing value from region");
-      if (auto *frame = findFrame(use.get())) {
-        auto diag = user->emitOpError()
-                    << "uses the result of a floating frame; rematerializing "
-                       "dead frames is not implemented in phase sorting yet";
-        diag.attachNote(frame->getLoc()) << "frame defined here";
-        return WalkResult::interrupt();
-      }
       OpBuilder builder(user);
       IRMapping mapping;
       SmallVector<Operation *> clonedOps;
@@ -688,9 +664,7 @@ LogicalResult PhaseSorter::cloneFloatingUses(Operation *regionOp,
         });
       use.set(clone);
     }
-    return WalkResult::advance();
   });
-  return failure(result.wasInterrupted());
 }
 
 /// The number of arm yields providing result `idx` of `ifOp`. An arm
@@ -907,8 +881,7 @@ LogicalResult PhaseSorter::extractFromBranch(IfOp ifOp, int16_t p) {
         hir::YieldOp::create(altBuilder, loc, info.laterYieldOperands);
     analysis.opPhases[altYield] = p + 1;
     remapFields(altBlock, info.fields);
-    if (failed(cloneFloatingUses(newIf, altBlock)))
-      return failure();
+    cloneFloatingUses(newIf, altBlock);
   }
 
   forget(op);
@@ -1296,8 +1269,7 @@ FailureOr<LoopOp> PhaseSorter::extractBreakValues(LoopOp loopOp, int16_t p) {
     auto altYield = hir::YieldOp::create(altBuilder, loc, site.laterValues);
     analysis.opPhases[altYield] = p + 1;
     remapFields(altBlock, site.fields);
-    if (failed(cloneFloatingUses(newLoop, altBlock)))
-      return failure();
+    cloneFloatingUses(newLoop, altBlock);
   }
 
   forget(op);
@@ -1481,7 +1453,8 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
   // whole structure.
   for (auto [block, fields] : remapBlocks)
     remapFields(*block, *fields);
-  return cloneFloatingUses(op, replicate.getBody().front());
+  cloneFloatingUses(op, replicate.getBody().front());
+  return success();
 }
 
 /// Extract later-phase content out of every phase-p `uir.loop` whose interior
@@ -1585,31 +1558,22 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
     }
 
     // Reject anchored content nested inside differently-phased content.
-    // Floating (dead) content may sit inside anchored content, but never
-    // anchored content inside a floating frame: anything observable there
-    // (effects, pins, function terminators) would have anchored the frame
-    // in the analysis. Interior pure content of a floating frame may carry
-    // a real phase derived from outer operands, but the annotation is
-    // vacuous — the frame floats wholesale and is never materialized — so
-    // it is no phase mismatch.
+    // Every frame now ends with a real phase, so a parent — always a
+    // region-bearing frame — is never floating: content whose phase differs
+    // from its parent's needs hoisting or extraction across the boundary,
+    // which this pass does not implement.
     if (auto *parent = op->getParentOp(); parent != funcOp) {
       auto parentIt = analysis.opPhases.find(parent);
       assert(parentIt != analysis.opPhases.end() && "op phase not computed");
-      if (isRealPhase(parentIt->second)) {
-        if (isRealPhase(opPhase) && opPhase != parentIt->second) {
-          op->emitOpError()
-              << "at phase " << opPhase << " is nested inside phase "
-              << parentIt->second
-              << " content; hoisting and extraction across phase "
-                 "boundaries are not implemented in phase sorting yet";
-          return WalkResult::interrupt();
-        }
-      } else {
-        assert((!isRealPhase(opPhase) ||
-                (op->getNumRegions() == 0 &&
-                 (hir::isEffectivelyPure(op) ||
-                  op->hasTrait<OpTrait::ConstantLike>()))) &&
-               "observable content inside a floating frame");
+      assert(isRealPhase(parentIt->second) &&
+             "a region-bearing parent is never floating");
+      if (isRealPhase(opPhase) && opPhase != parentIt->second) {
+        op->emitOpError()
+            << "at phase " << opPhase << " is nested inside phase "
+            << parentIt->second
+            << " content; hoisting and extraction across phase "
+               "boundaries are not implemented in phase sorting yet";
+        return WalkResult::interrupt();
       }
     }
     return WalkResult::advance();
