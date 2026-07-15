@@ -198,8 +198,13 @@ private:
 
   /// First pass of floating-expr derivation: derive the pure content, scan
   /// nested regions, and accumulate into `bound` the lower bounds the
-  /// anchored content imposes on the expr's phase. `shift` is the pin
-  /// offset of the current frame relative to the expr.
+  /// anchored content imposes on the expr's phase. Bound sources are frame-
+  /// consumed channels (CF conditions, loop inits, continue values, type
+  /// operands, out-targeting exits) and internal crossings — an interior op
+  /// consuming an operand at a phase below its own, which forces the frame
+  /// to materialize at that op's phase. Nested floating exprs derive
+  /// independently here and impose no bound. `shift` is the pin offset of
+  /// the current frame relative to the expr.
   void scanFloatingContent(Block &block, int16_t shift, int16_t &bound);
 
   /// Second pass of floating-expr derivation: anchor CF ops, terminators,

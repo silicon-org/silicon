@@ -465,11 +465,13 @@ void PhaseAnalysis::scanFloatingContent(Block &block, int16_t shift,
           addBound(typeVal, inner, /*isType=*/true);
         scanFloatingContent(exprOp.getBody().front(), inner, bound);
       } else {
-        // Nested floating exprs derive independently and impose no bound;
-        // scan their interiors for provisional phases here, and fully
-        // derive them in the assign pass once the surroundings resolved.
-        int16_t nestedBound = kFloatPhase;
-        scanFloatingContent(exprOp.getBody().front(), 0, nestedBound);
+        // A nested floating expr is an independent frame: it derives its own
+        // phase from its own anchored interior right here, and its result
+        // imposes no bound on this frame (a floating expr's yield constrains
+        // nothing unless demanded). Deriving it during the scan makes nested
+        // frames resolve regardless of whether this outer frame does.
+        if (!opPhases.count(exprOp))
+          deriveFloatingExpr(exprOp);
       }
       fillRegionResults(&op, /*overwrite=*/true);
       continue;
@@ -547,6 +549,26 @@ void PhaseAnalysis::scanFloatingContent(Block &block, int16_t shift,
         "effectful op inside an undemanded floating expr; step 4b "
         "defaults exprs with anchored content");
     derivePure(&op, /*overwrite=*/true);
+
+    // An internal crossing bounds the frame. When this op sits at a real
+    // phase but consumes an operand at a strictly earlier real phase, the
+    // earlier value must be captured and carried forward inside the frame.
+    // A crossing exists only between materialized phases, so the frame
+    // cannot float wholesale: it is bounded to this op's phase (less the pin
+    // shift to the op's own frame). A frame whose interior content all sits
+    // at a single phase (no lower operand anywhere) has no crossing and
+    // still floats. Iteration arguments carry no phase during the scan, so
+    // they contribute no spurious crossing.
+    auto opIt = opPhases.find(&op);
+    if (opIt != opPhases.end() && opIt->second > kNeverPhase)
+      for (auto operand : op.getOperands()) {
+        auto vIt = actualPhase.find(operand);
+        if (vIt != actualPhase.end() && vIt->second > kNeverPhase &&
+            vIt->second < opIt->second) {
+          bound = std::max<int16_t>(bound, opIt->second - shift);
+          break;
+        }
+      }
   }
 }
 
@@ -557,9 +579,9 @@ void PhaseAnalysis::assignDerivedBlock(Block &block, int16_t blockPhase) {
         int16_t exprPhase = blockPhase + exprOp.getPhaseShift();
         opPhases[&op] = exprPhase;
         assignDerivedBlock(exprOp.getBody().front(), exprPhase);
-      } else {
-        deriveFloatingExpr(exprOp);
       }
+      // A nested floating expr is an independent frame already derived in
+      // the scan pass; it does not re-anchor to this frame's phase.
       fillRegionResults(&op, /*overwrite=*/true);
       continue;
     }

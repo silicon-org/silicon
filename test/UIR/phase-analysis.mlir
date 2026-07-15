@@ -4520,6 +4520,103 @@ uir.func @DeadExprOutContinue(%x: 0, %d: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Bounds flow transparently through floating exprs: each frame derives its
+// phase independently from its own anchored interior, and a nested floating
+// expr's result imposes no bound on its container. Here the inner expr has a
+// real bound (the if consumes its dynamic condition %d at phase 1), so it
+// anchors at 1 regardless of the outer grouping; the outer expr has no
+// anchored content of its own and stays float.
+
+// CHECK-LABEL: uir.func @NestedDeadExpr
+uir.func @NestedDeadExpr(%d: 1, %x: 1) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "float", pa.results = ["1"]}
+  %outer = uir.expr : %t {
+    // CHECK: uir.expr : {{.*}} attributes {pa.operands = ["float"], pa.phase = "1", pa.results = ["1"]}
+    %inner = uir.expr : %t {
+      // CHECK: uir.if {{.*}}pa.phase = "1"
+      %s = uir.if %d : %t {
+        uir.yield %x : %t
+      } else {
+        uir.yield %x : %t
+      }
+      uir.yield %s : %t
+    }
+    uir.yield %inner : %t
+  }
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// An internal crossing anchors a frame that would otherwise be bottomless: a
+// break-only loop with no inits and a float result type carries no anchored
+// channel, but its interior add consumes a phase-0 var read alongside the
+// phase-1 arg. The add sits at phase 1 with an operand below it — a 0->1
+// crossing that must be captured inside the frame — so the frame materializes
+// at phase 1 instead of floating (contrast @DeadLoopBottomlessChannelsFloats,
+// whose add consumes only the phase-1 arg and has no such crossing).
+
+// CHECK-LABEL: uir.func @FrameSinks
+uir.func @FrameSinks(%x: 0, %a: 1) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> ()
+} {
+  %t = hir.int_type
+  %v = hir.var : %t
+  hir.write_var %v, %x : %t
+  // CHECK: hir.read_var {{.*}}pa.phase = "0"
+  %r = hir.read_var %v : %t
+  // CHECK: uir.expr : {{.*}}pa.phase = "1"
+  %dead = uir.expr : %t {
+    // CHECK: uir.loop : {{.*}}pa.phase = "1"
+    %s = uir.loop : %t {
+      // CHECK: hir.add {{.*}} {pa.operands = ["0", "1", "float"], pa.phase = "1", pa.results = ["1"]}
+      %m = hir.add %r, %a : %t
+      uir.break %m : %t
+    }
+    uir.yield %s : %t
+  }
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Independent nested derivation and out-targeting exits compose: a nested
+// dead expr holds a break that targets the enclosing loop, crossing both
+// expr boundaries. The inner frame derives from that out-targeting break
+// (aliasing the loop's phase 0), independently of the outer frame, which the
+// break anchors at 0 as well.
+
+// CHECK-LABEL: uir.func @NestedOutBreak
+uir.func @NestedOutBreak(%x: 0, %c: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> (%t0)
+} {
+  %t = hir.int_type
+  %r = uir.loop (%i = %x : %t) : %t {
+    // CHECK: uir.expr : {{.*}}pa.phase = "0"
+    %outer = uir.expr : %t {
+      // CHECK: uir.expr : {{.*}}pa.phase = "0"
+      %inner = uir.expr : %t {
+        // CHECK: uir.if {{.*}}pa.phase = "0"
+        %s = uir.if %c : %t {
+          // CHECK: uir.break {{.*}}pa.phase = "0"
+          uir.break %i : %t
+        } else {
+          uir.yield %i : %t
+        }
+        uir.yield %s : %t
+      }
+      uir.yield %inner : %t
+    }
+    uir.continue %i : %t
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Undemanded floating exprs with side effects fall back to their block
 // phase: effects execute where they stand when no consumer pulls them
 // elsewhere, as if the expression statement stood alone.

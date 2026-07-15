@@ -740,6 +740,76 @@ uir.func @DeadExprOutBreakSorts(%x: 0, %c: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// A nested dead expr derives independently: the inner frame anchors at the
+// if condition's phase 1 while the outer stays float. Sorting extracts the
+// inner if into phase 1 and the outer expr dissolves entirely (its yield of
+// the inner result is a plain forward, leaving nothing behind).
+
+// CHECK-LABEL: uir.func @NestedDeadExpr
+uir.func @NestedDeadExpr(%d: 1, %x: 1) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.phase 1 {
+  // CHECK-NEXT:   uir.if %d
+  // CHECK-NEXT:     uir.yield %x
+  // CHECK:        uir.yield %x
+  // CHECK:   uir.phase_return
+  // CHECK: }
+  %outer = uir.expr : %t {
+    %inner = uir.expr : %t {
+      %s = uir.if %d : %t {
+        uir.yield %x : %t
+      } else {
+        uir.yield %x : %t
+      }
+      uir.yield %s : %t
+    }
+    uir.yield %inner : %t
+  }
+  // CHECK: uir.unreachable
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// A frame anchored by an internal crossing sorts as ordinary content: the
+// phase-0 var read crosses into phase 1 as a plain phase-op result, and the
+// break-only loop wraps at phase 1 where its add consumes the crossing.
+
+// CHECK-LABEL: uir.func @FrameSinks
+uir.func @FrameSinks(%x: 0, %a: 1) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> ()
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK: [[CROSS:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   hir.write_var [[V]], %x : [[T]]
+  // CHECK-NEXT:   [[R:%.+]] = hir.read_var [[V]] : [[T]]
+  // CHECK-NEXT:   uir.phase_return yield [[R]]
+  // CHECK-NEXT: }
+  %v = hir.var : %t
+  hir.write_var %v, %x : %t
+  %r = hir.read_var %v : %t
+  // CHECK: uir.phase 1 {
+  // CHECK-NEXT:   uir.loop : [[T]] {
+  // CHECK-NEXT:     hir.add [[CROSS]], %a : [[T]]
+  // CHECK-NEXT:     uir.break
+  // CHECK:   uir.phase_return
+  %dead = uir.expr : %t {
+    %s = uir.loop : %t {
+      %m = hir.add %r, %a : %t
+      uir.break %m : %t
+    }
+    uir.yield %s : %t
+  }
+  // CHECK: uir.unreachable
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
 // Extracted content referencing a floating tree defined inside the arm gets
 // a clone of the whole tree in front of it (arm-interior floats are not
 // visible from the receiving pick); values defined outside the arm are used
