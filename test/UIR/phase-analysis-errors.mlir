@@ -2111,3 +2111,30 @@ uir.func @DRuleWriteConsumesLaterValue(%x: 0, %d: 1, %cond: 1) -> () {
   }
   uir.return
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// A demand on a floating expr's result also demands its result-type operand
+// one phase earlier, just like a pinned expr or any other typed value. Here
+// the expr result is returned at phase 0, so its result type `%ty` is demanded
+// at phase -1; `%ty` is `type_of` a phase-1 arg, which pushes the arg to phase
+// 0 and conflicts with its declared phase 1. Without the demand-path type
+// bound this would silently deliver the result at phase 0 above a phase-1
+// type.
+
+// expected-error @below {{value at phase 1 cannot satisfy requirement for phase 0}}
+uir.func @LiveConduitTypeBound(%a: 1, %x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> (%t0)
+} {
+  %t = hir.int_type
+  %ty = hir.type_of %a
+  // expected-remark @below {{required by expr result type at phase -1}}
+  %r = uir.expr : %ty {
+    %sum = hir.add %x, %x : %t
+    uir.yield %sum : %t
+  }
+  // expected-remark @below {{required by return value at phase 0}}
+  uir.return %r : %t
+}

@@ -975,8 +975,20 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
     return valuePhase;
   };
 
-  // Exprs are transparent single-terminator conduits.
+  // Exprs are transparent single-terminator conduits. A floating expr
+  // delivers its result at the demanded phase, so its result-type operand is
+  // consumed one phase earlier, exactly as the pinned-expr path in processOp
+  // enforces. (Pinned exprs constrain their result types when processed, at
+  // their pinned phase, so their demand path must not re-constrain them.)
   if (auto exprOp = dyn_cast<ExprOp>(regionOp)) {
+    if (!exprOp.getPin()) {
+      auto typeVal = exprOp.getResultTypes()[resultIdx];
+      if (failed(constrainValue(typeVal, latest - 1))) {
+        emitRemark(exprOp.getLoc())
+            << "required by expr result type at phase " << latest - 1;
+        return failure();
+      }
+    }
     auto phase = constrainTermOperand(exprOp.getBody().front().getTerminator());
     if (failed(phase))
       return failure();
