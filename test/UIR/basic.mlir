@@ -310,6 +310,15 @@ uir.func @phase_early_exit(%c: 0, %x: 0) -> (result: 0) {
   uir.unreachable
 }
 
+// uir.unreachable_value stands in for a value a control-flow path proved is
+// never produced; it carries the implied !hir.any result and prints no type.
+// CHECK-LABEL: @unreachable_value
+func.func @unreachable_value() {
+  // CHECK: %{{.+}} = uir.unreachable_value
+  %v = uir.unreachable_value
+  return
+}
+
 // A phase return may terminate a loop body inside a phase.
 // CHECK-LABEL: uir.func @phase_return_in_loop
 uir.func @phase_return_in_loop(%x: 0) -> (result: 0) {

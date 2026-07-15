@@ -121,20 +121,16 @@ uir.func @PhaseCallInInput(%x: 0) -> () {
 
 // -----
 
-// A never-produced control-flow result (a loop without breaks) diverges
-// from its op's phase: the value never materializes and every consumer is
-// unreachable. Unreachable-consumer handling is a later sorting case.
-uir.func @NeverResult(%a: -1, %x: 0) -> (c: -1) {
+// `uir.unreachable_value` is phase-sorting output vocabulary, materialized by
+// never-forwarding. Like the other sorted-form ops, it is rejected in the
+// input: its presence means the pipeline is out of order.
+uir.func @UnreachableValueInInput(%x: 0) -> () {
   %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
+  uir.signature (%0) -> ()
 } {
-  %t = hir.int_type
-  // expected-error @below {{delivers result #0 at phase never instead of its own phase 0; result forwarding (single-provider or never-produced control-flow results, and receivers of crossings more than one phase wide) is not implemented in phase sorting yet}}
-  %r = uir.loop : %t {
-    uir.continue
-  }
-  %s = hir.add %a, %r : %t
-  uir.return %s : %t
+  // expected-error @below {{is phase-sorting output vocabulary and cannot appear in phase-sorting input}}
+  %v = uir.unreachable_value
+  uir.return
 }
 
 // -----
@@ -148,7 +144,7 @@ uir.func @SingleProviderBackward(%a: -1, %c: 0) -> (r: 0) {
 } {
   %t = hir.int_type
   %l = uir.loop : %t {
-    // expected-error @below {{delivers result #0 at phase -1 instead of its own phase 0; result forwarding (single-provider or never-produced control-flow results, and receivers of crossings more than one phase wide) is not implemented in phase sorting yet}}
+    // expected-error @below {{delivers result #0 at phase -1 instead of its own phase 0; result forwarding (single-provider control-flow results, and receivers of crossings more than one phase wide) is not implemented in phase sorting yet}}
     %r = uir.if %c : %t {
       uir.break %a : %t
     } else {
@@ -500,31 +496,3 @@ uir.func @LoopBodyReturn(%n: -1, %x: 0) -> (result: 0) {
   uir.unreachable
 }
 
-// -----
-
-// A dead never-breaking loop inside a dead frame sorts like its live twin:
-// the frame defaults to its block phase and the loop delivers a `never`
-// result. Consuming that result needs unreachable-consumer handling, which
-// the sorter rejects — same as a live loop that never breaks.
-uir.func @FloatingFrameRematerialized(%c: 0, %a: 1) -> (result: 1) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %r = uir.if %c : %t {
-    %fl = uir.expr : %t {
-      // expected-error @below {{delivers result #0 at phase never instead of its own phase 0; result forwarding (single-provider or never-produced control-flow results, and receivers of crossings more than one phase wide) is not implemented in phase sorting yet}}
-      %s = uir.loop : %t {
-        uir.continue
-      }
-      uir.yield %s : %t
-    }
-    %dead = hir.mul %fl, %a : %t
-    %live = hir.add %a, %a : %t
-    uir.yield %live : %t
-  } else {
-    %w = hir.mul %a, %a : %t
-    uir.yield %w : %t
-  }
-  uir.return %r : %t
-}

@@ -76,8 +76,9 @@
 //   a per-arm `hir.choice` as an extra result; the later-phase content and
 //   results move into a `hir.pick` at phase p+1 that dispatches on the
 //   choice. The choice crosses phases as an ordinary crossing. Only
-//   multi-provider results are lifted this way; single-provider and
-//   never-produced divergent results stay rejected below.
+//   multi-provider results are lifted this way; single-provider divergent
+//   results stay rejected below, and never-produced results are handled by
+//   never-forwarding (their consumers are already `uir.unreachable_value`).
 //
 // - **Extract loops**: a `uir.loop` at phase p whose body holds later-phase
 //   content, or whose result is at a later phase, is rebuilt at phase p
@@ -91,15 +92,19 @@
 //   snapshots in place of the value, and a `hir.pick` at phase p+1 after the
 //   loop reconstructs it (composing with record extraction).
 //
+// A `never`-phased value (a control-flow result no path provides) is
+// non-viral: before extraction, every real-phase use of one is rewritten to a
+// `uir.unreachable_value` at the consuming phase, so the `never` result stays
+// unused on its producer and never crosses a boundary.
+//
 // The pass covers straight-line content, single-boundary branch extraction,
 // single-boundary loop-record extraction, and break-value choices. Inputs that
 // need the remaining sorting machinery are rejected with explicit diagnostics
 // instead of being sorted incorrectly: early function exits (function-level
 // exit chains), results delivered at a phase different from their op's own
-// phase by single-provider or never-produced control flow (which need result
-// forwarding and unreachable-consumer handling), hoisting and content more
-// than one phase away from its control flow, and backward uses from floating
-// content nested under earlier-phase control flow.
+// phase by single-provider control flow (which needs result forwarding),
+// hoisting and content more than one phase away from its control flow, and
+// backward uses from floating content nested under earlier-phase control flow.
 //
 //===----------------------------------------------------------------------===//
 
@@ -165,6 +170,7 @@ private:
   LogicalResult dissolveExprsAndPins();
   LogicalResult decomposeCalls();
   LogicalResult decomposeCall(CallOp callOp);
+  LogicalResult forwardNeverValues();
   LogicalResult extractBranches();
   LogicalResult extractFromBranch(IfOp ifOp, int16_t p);
   LogicalResult extractLoops();
@@ -234,7 +240,7 @@ private:
 /// structure (the phase analysis does not model them).
 LogicalResult PhaseSorter::rejectSortedVocabulary() {
   auto result = funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
-    if (!isa<PhaseOp, PhaseReturnOp, PhaseCallOp>(op))
+    if (!isa<PhaseOp, PhaseReturnOp, PhaseCallOp, UnreachableValueOp>(op))
       return WalkResult::advance();
     op->emitOpError() << "is phase-sorting output vocabulary and cannot "
                          "appear in phase-sorting input";
@@ -435,6 +441,89 @@ LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
 }
 
 //===----------------------------------------------------------------------===//
+// Forward Never Values
+//===----------------------------------------------------------------------===//
+//
+// # Replace Real-Phase Uses of Never Values with `uir.unreachable_value`
+//
+// A `never`-phased value is the result of a control-flow op that no path ever
+// provides (a loop without breaks, an `if` whose providing paths all exit).
+// The value never materializes at runtime, so every consumer is unreachable.
+// `never` is deliberately non-viral: analysis assigns it as a bottom that
+// satisfies any demand and never propagates an unreachable-ness to consumers,
+// so a real-phase op consuming a `never` value keeps its own real phase.
+//
+// Sorting must not carry a `never` value across a phase boundary: the value
+// stays on its producer, but the wrap and crossing rules would otherwise see a
+// use whose value phase (`never`) sits below every real phase, and a
+// backward-crossing or a spurious yield would result. This step severs those
+// uses ahead of any placement: for every operand of a real-phase op whose value
+// is `never`, it materializes a fresh `uir.unreachable_value` right before the
+// consumer, at the phase where sorting will attribute that use, and rewrites
+// the operand to it. The `never` result is left on its producer, now unused by
+// real-phase content (a dead float consumer, if any, keeps it — see the sorter
+// float rules). The invariant established: no real-phase op operand carries a
+// `never` value, so wrapping and crossing never encounter one.
+//
+// The use-attribution phase mirrors `sortRegion`: every op consumes its
+// operands at its own phase, except `uir.return`, which distributes its value
+// and type operands onto the `uir.phase_return` of each result's declared
+// phase — so a return operand is consumed at that result's declared phase, not
+// the return op's own (always 0). Float and never consumers are left alone;
+// they are dead and never placed.
+
+/// Replace every real-phase use of a `never`-phased value with a fresh
+/// `uir.unreachable_value` at the consuming phase. See the section header.
+LogicalResult PhaseSorter::forwardNeverValues() {
+  auto resultPhases = funcOp.getResultPhases();
+
+  // The phase at which sorting attributes operand `operand` of real-phase op
+  // `op`: the op's own phase, except a `uir.return` fans each value/type
+  // operand onto the phase_return of that result's declared phase.
+  auto consumerPhase = [&](Operation *op, OpOperand &operand) -> int16_t {
+    if (auto returnOp = dyn_cast<ReturnOp>(op)) {
+      unsigned numValues = returnOp.getValues().size();
+      unsigned index = operand.getOperandNumber();
+      unsigned slot = index < numValues ? index : index - numValues;
+      return static_cast<int16_t>(resultPhases[slot]);
+    }
+    return analysis.opPhases.at(op);
+  };
+
+  // Collect first: materializing ops while walking invalidates the walk.
+  SmallVector<Operation *> ops;
+  funcOp->walk([&](Operation *op) {
+    if (op != funcOp && realPhaseOf(op))
+      ops.push_back(op);
+  });
+
+  auto anyTy = hir::AnyType::get(funcOp.getContext());
+  for (auto *op : ops) {
+    // One unreachable value per consuming phase suffices for all of this op's
+    // never operands that land there.
+    DenseMap<int16_t, Value> perPhase;
+    for (auto &operand : op->getOpOperands()) {
+      auto it = analysis.actualPhase.find(operand.get());
+      assert(it != analysis.actualPhase.end() &&
+             "real-phase op operand has no computed phase");
+      if (it->second != PhaseAnalysis::kNeverPhase)
+        continue;
+      int16_t phase = consumerPhase(op, operand);
+      auto &slot = perPhase[phase];
+      if (!slot) {
+        OpBuilder builder(op);
+        auto uv =
+            UnreachableValueOp::create(builder, operand.get().getLoc(), anyTy);
+        setPhase(uv, phase);
+        slot = uv.getResult();
+      }
+      operand.set(slot);
+    }
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Branch Extraction
 //===----------------------------------------------------------------------===//
 //
@@ -461,10 +550,11 @@ LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
 // distinction between an obligation to choice-ify and the neighbouring
 // divergent-result cases is local: a later-phase result is choice-ified only
 // when more than one arm yield provides it — the values' identity is
-// irrelevant. A single-provider result (the other arm exits) or a
-// never-produced result is not extracted; the residual if still delivers it
-// divergently, so the rejection below reports it. Extraction thus lifts
-// exactly the choice-ification case and leaves the rest rejected.
+// irrelevant. A single-provider result (the other arm exits) is not extracted;
+// the residual if still delivers it divergently, so the rejection below reports
+// it. A never-produced result is not extracted either, but its consumers were
+// already rewritten to `uir.unreachable_value` by never-forwarding, so it is
+// simply left unused. Extraction thus lifts exactly the choice-ification case.
 
 /// Whether any op transitively inside `root` sits at a real phase later than
 /// p. A sentinel-phase op is a floating region-free pure value (a constant or
@@ -694,8 +784,10 @@ static unsigned countResultProviders(IfOp ifOp, unsigned idx) {
 /// results at a later phase are removed and reconstructed by the pick — but
 /// only if they choice-ify (provided by more than one arm yield). A result
 /// diverging from the op's phase in any other way (a single-provider result
-/// whose other arm exits, or a never-produced result) is left in place for
-/// the divergence rejection; such an if is not extracted.
+/// whose other arm exits, or a never-produced result whose short-yielding arms
+/// would break the kept-result rebuild) is not extracted; the residual if is
+/// left for the divergence rejection, except a never result, whose consumers
+/// never-forwarding already rewrote, so it is simply left unused.
 LogicalResult PhaseSorter::extractBranches() {
   SmallVector<IfOp> ifOps;
   funcOp.getBody().walk<WalkOrder::PostOrder>([&](IfOp op) {
@@ -719,7 +811,10 @@ LogicalResult PhaseSorter::extractBranches() {
         hasChoiceResult = true;
         continue; // Choice-ification obligation.
       }
-      extractable = false; // Single-provider or never-produced divergence.
+      // Single-provider divergence, or a never result (unused after
+      // never-forwarding but still un-extractable: its short-yielding arms
+      // carry no value for the kept-result rebuild).
+      extractable = false;
       break;
     }
     if (!extractable)
@@ -1505,14 +1600,15 @@ static std::string phaseName(int16_t phase) {
 ///   terminator, including returns still riding inside undissolved expr
 ///   carriers), which need function-level exit chains.
 /// - Ops delivering a result at a phase different from their own phase by a
-///   transparent forwarding of a single-provider value (the other arms exit)
-///   or a never-produced result. These need result forwarding and
-///   unreachable-consumer handling. Choice-ification obligations (a result
+///   transparent forwarding of a single-provider value (the other arms exit).
+///   These need result forwarding. Choice-ification obligations (a result
 ///   provided by more than one terminator at a later phase) are already
-///   lifted by branch and break-value extraction above, so the residual
-///   divergence here is single-provider or never-produced results, plus the
-///   receiving picks of crossings more than one phase wide (whose
-///   re-extraction at the next boundary this pass does not do).
+///   lifted by branch and break-value extraction above, and never-produced
+///   results are skipped here (their consumers are already
+///   `uir.unreachable_value`, so the result is unused), so the residual
+///   divergence is single-provider results, plus the receiving picks of
+///   crossings more than one phase wide (whose re-extraction at the next
+///   boundary this pass does not do).
 /// - Anchored content whose phase differs from its parent op's phase, which
 ///   needs hoisting across the phase boundary (branch content is handled by
 ///   branch extraction and single-boundary loop content by loop-record
@@ -1543,15 +1639,20 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
         auto valueIt = analysis.actualPhase.find(value);
         assert(valueIt != analysis.actualPhase.end() &&
                "value phase not computed");
+        // A never result stays on its producer: its real-phase consumers were
+        // rewritten to `uir.unreachable_value` by never-forwarding, so the
+        // result is unused (or used only by dead float content) and needs no
+        // forwarding of its own.
+        if (valueIt->second == PhaseAnalysis::kNeverPhase)
+          continue;
         if (valueIt->second != opPhase) {
           op->emitOpError()
               << "delivers result #" << index << " at phase "
               << phaseName(valueIt->second) << " instead of its own phase "
               << phaseName(opPhase)
-              << "; result forwarding (single-provider or never-produced "
-                 "control-flow results, and receivers of crossings more "
-                 "than one phase wide) is not implemented in phase sorting "
-                 "yet";
+              << "; result forwarding (single-provider control-flow results, "
+                 "and receivers of crossings more than one phase wide) is not "
+                 "implemented in phase sorting yet";
           return WalkResult::interrupt();
         }
       }
@@ -1788,6 +1889,8 @@ LogicalResult PhaseSorter::run() {
   if (failed(dissolveExprsAndPins()))
     return failure();
   if (failed(decomposeCalls()))
+    return failure();
+  if (failed(forwardNeverValues()))
     return failure();
   if (failed(extractBranches()))
     return failure();

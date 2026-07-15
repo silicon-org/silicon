@@ -1985,3 +1985,182 @@ uir.func @BreakValueWithRecords(%n: -1, %x: 0) -> (result: 0) {
   %sum = hir.add %y, %rd : %t
   uir.return %sum : %t
 }
+
+//===----------------------------------------------------------------------===//
+// Never-value forwarding: a control-flow result no path provides gets the
+// bottom phase `never`. Every real-phase use of it is rewritten to a fresh
+// `uir.unreachable_value` at the consuming phase, and the `never` result is
+// left unused on its producer. `never` is non-viral, so the consumer keeps its
+// own real phase.
+
+// A never `uir.if` result (both arms short-yield) consumed by a same-phase op:
+// the unreachable value and the consumer wrap into the consumer's phase, and
+// the never-producing if wraps into its own phase with an unused result.
+// CHECK-LABEL: uir.func @NeverConsumedSamePhase
+uir.func @NeverConsumedSamePhase(%c: 0, %x: 0) -> (out: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT: [[IF:%.+]] = uir.if %c : [[T]] {
+  // CHECK-NEXT:   uir.yield
+  // CHECK-NEXT: } else {
+  // CHECK-NEXT:   uir.yield
+  // CHECK-NEXT: }
+  %r = uir.if %c : %t {
+    uir.yield
+  } else {
+    uir.yield
+  }
+  // CHECK-NEXT: [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT: [[U:%.+]] = hir.add %x, [[UV]] : [[T]]
+  %u = hir.add %x, %r : %t
+  // CHECK-NEXT: uir.phase_return [[U]] : [[T]]
+  // CHECK-NEXT: }
+  uir.return %u : %t
+}
+
+// The same never `uir.if` result consumed one phase later: the unreachable
+// value materializes in the consumer's phase (1), while the never-producing
+// if wraps into phase 0 with a contentless phase return.
+// CHECK-LABEL: uir.func @NeverConsumedLater
+uir.func @NeverConsumedLater(%c: 0, %x: 1) -> (out: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT: uir.if %c : [[T]] {
+  // CHECK: uir.phase_return{{$}}
+  // CHECK-NEXT: }
+  %r = uir.if %c : %t {
+    uir.yield
+  } else {
+    uir.yield
+  }
+  // CHECK: uir.phase 1 {
+  // CHECK-NEXT: [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT: [[U:%.+]] = hir.add %x, [[UV]] : [[T]]
+  // CHECK-NEXT: uir.phase_return [[U]] : [[T]]
+  // CHECK-NEXT: }
+  %u = hir.add %x, %r : %t
+  uir.return %u : %t
+}
+
+// A never value consumed by the function return at a const (phase -1) result
+// slot: the unreachable value materializes at the result's declared phase, not
+// the return op's own phase (always 0). This exercises the return's
+// per-result-slot use attribution.
+// CHECK-LABEL: uir.func @NeverReturnedConst
+uir.func @NeverReturnedConst(%c: 0) -> (out: -1) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK: uir.phase -1 {
+  // CHECK-NEXT: [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT: uir.phase_return [[UV]] : [[T]]
+  // CHECK-NEXT: }
+  %r = uir.if %c : %t {
+    uir.yield
+  } else {
+    uir.yield
+  }
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT: uir.if %c : [[T]] {
+  // CHECK: uir.phase_return{{$}}
+  // CHECK-NEXT: }
+  uir.return %r : %t
+}
+
+// A never `uir.loop` result (no breaks) consumed by a const op: forwarding
+// replaces the const-phase use, so the loop wraps into phase 0 unused while
+// the consumer stays at phase -1. (Formerly a hard-error input.)
+// CHECK-LABEL: uir.func @NeverLoopResult
+uir.func @NeverLoopResult(%a: -1, %x: 0) -> (c: -1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK: uir.phase -1 {
+  // CHECK-NEXT: [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT: [[S:%.+]] = hir.add %a, [[UV]] : [[T]]
+  // CHECK-NEXT: uir.phase_return [[S]] : [[T]]
+  // CHECK-NEXT: }
+  %r = uir.loop : %t {
+    uir.continue
+  }
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT: uir.loop : [[T]] {
+  // CHECK-NEXT:   uir.continue
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase_return{{$}}
+  // CHECK-NEXT: }
+  %s = hir.add %a, %r : %t
+  uir.return %s : %t
+}
+
+// A dead pure region-free op consuming a never result with no real operand
+// stays float (undemanded), so never-forwarding leaves it alone. The sorter's
+// float-sink rule places it in the never producer's phase after the producer,
+// keeping the never operand, unused — no crossing, no error.
+// CHECK-LABEL: uir.func @DeadFloatNeverConsumer
+uir.func @DeadFloatNeverConsumer(%x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0) -> ()
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT: [[L:%.+]] = uir.loop : [[T]] {
+  // CHECK-NEXT:   uir.continue
+  // CHECK-NEXT: }
+  // CHECK-NEXT: hir.add [[L]], [[L]] : [[T]]
+  // CHECK-NEXT: uir.phase_return{{$}}
+  // CHECK-NEXT: }
+  %r = uir.loop : %t {
+    uir.continue
+  }
+  %d = hir.add %r, %r : %t
+  uir.return
+}
+
+// A never loop nested in a floating frame inside an earlier-phase branch: the
+// frame's later-phase interior (the dead multiply) derives a real phase from
+// its live sibling operand, so its never operand is forwarded to an
+// unreachable value that lands in the receiving pick. The never loop wraps into
+// the phase-0 branch arm, unused. (Formerly a hard-error input.)
+// CHECK-LABEL: uir.func @FloatingFrameNeverInterior
+uir.func @FloatingFrameNeverInterior(%c: 0, %a: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.phase 0 {
+  // CHECK: uir.if %c
+  // CHECK: uir.loop
+  // CHECK: uir.phase 1 {
+  // CHECK: hir.pick
+  // CHECK: [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT: hir.mul [[UV]], %a : {{.*}}
+  %r = uir.if %c : %t {
+    %fl = uir.expr : %t {
+      %s = uir.loop : %t {
+        uir.continue
+      }
+      uir.yield %s : %t
+    }
+    %dead = hir.mul %fl, %a : %t
+    %live = hir.add %a, %a : %t
+    uir.yield %live : %t
+  } else {
+    %w = hir.mul %a, %a : %t
+    uir.yield %w : %t
+  }
+  uir.return %r : %t
+}

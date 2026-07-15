@@ -587,6 +587,34 @@ def PhaseCallOp : UIROp<"phase_call", [
   let hasVerifier = 1;
 }
 
+def UnreachableValueOp : UIROp<"unreachable_value", []> {
+  let summary = "value a control-flow path proved never materializes";
+  let description = [{
+    A stand-in for a value that phase analysis proved is never actually
+    produced: the control flow that would deliver it (a loop without
+    breaks, an `if` whose providing paths all exit) reaches the bottom
+    phase `never`, so at runtime the value never exists and every consumer
+    is unreachable.
+
+    Phase sorting materializes this op wherever a real-phase consumer used
+    such a `never` value, at the consumer's own phase, so that the wrap and
+    crossing rules never see a `never`-phased operand. The `never` result
+    stays on its producer, now unused by real-phase content.
+
+    Executing one is a compiler-detected impossibility: an evaluator that
+    reaches it is running a path proved unreachable, and must trap with an
+    internal error rather than produce a value.
+
+    Like `uir.pin` and `hir.inferrable`, this op is deliberately not `Pure`.
+    Distinct unreachable values are placed at specific phases; CSE must not
+    merge them across phase boundaries, and DCE must not silently drop one
+    the sorter has positioned. The single result carries the implied
+    `!hir.any` type, so no result type is printed.
+  }];
+  let results = (outs HIRAnyType:$result);
+  let assemblyFormat = [{ attr-dict }];
+}
+
 } // let opDocGroup = SortedPhases
 
 #endif // SILICON_UIR_OPS_TD
