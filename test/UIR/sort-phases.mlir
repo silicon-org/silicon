@@ -740,6 +740,81 @@ uir.func @DeadExprOutBreakSorts(%x: 0, %c: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// A continue value bounds its frame through a pinned sub-expr: the phase-1
+// value fed back into the loop's iteration argument forces the whole dead
+// frame to phase 1, and it sorts in place there — identical to the same
+// flow without the pin wrapper.
+
+// CHECK-LABEL: uir.func @ContinueValueThroughPinSorts
+uir.func @ContinueValueThroughPinSorts(%p0: 0, %p1: 1, %c: 0) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0, %t0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.phase 1 {
+  // CHECK-NEXT:   uir.loop (%arg0 = %p0
+  // CHECK-NEXT:     uir.if %c
+  // CHECK-NEXT:       [[J:%.+]] = hir.add %arg0, %p1
+  // CHECK-NEXT:       uir.continue [[J]]
+  // CHECK:          uir.yield %arg0
+  // CHECK:        uir.break
+  // CHECK:   uir.phase_return
+  %r = uir.expr : %t {
+    %s = uir.loop (%i = %p0 : %t) : %t {
+      %p = uir.expr pin : %t {
+        %sel = uir.if %c : %t {
+          %j = hir.add %i, %p1 : %t
+          uir.continue %j : %t
+        } else {
+          uir.yield %i : %t
+        }
+        uir.yield %sel : %t
+      }
+      uir.break %p : %t
+    }
+    uir.yield %s : %t
+  }
+  // CHECK: uir.unreachable
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// A nested floating expr locked to the outer frame by an escaping break
+// anchors with it and sorts in place: the whole structure wraps at the
+// loop's phase 0 with the nested expr dissolved.
+
+// CHECK-LABEL: uir.func @NestedFrameExitToOuterLoopSorts
+uir.func @NestedFrameExitToOuterLoopSorts(%p0: 0, %c: 0) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT:   uir.loop (%arg0 = %p0
+  // CHECK-NEXT:     uir.if %c
+  // CHECK-NEXT:       uir.break %arg0
+  // CHECK:          uir.yield %arg0
+  // CHECK:        uir.continue %arg0
+  // CHECK:   uir.phase_return
+  %r = uir.expr : %t {
+    %s = uir.loop (%i = %p0 : %t) : %t {
+      %n = uir.expr : %t {
+        %sel = uir.if %c : %t {
+          uir.break %i : %t
+        } else {
+          uir.yield %i : %t
+        }
+        uir.yield %sel : %t
+      }
+      uir.continue %i : %t
+    }
+    uir.yield %s : %t
+  }
+  // CHECK: uir.unreachable
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
 // A nested dead expr derives independently: the inner frame anchors at the
 // if condition's phase 1 while the outer stays float. Sorting extracts the
 // inner if into phase 1 and the outer expr dissolves entirely (its yield of

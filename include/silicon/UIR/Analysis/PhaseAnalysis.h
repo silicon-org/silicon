@@ -196,16 +196,25 @@ private:
   /// entries may only tighten.
   void fillRegionResults(Operation *op, bool overwrite);
 
+  /// Whether the expr transitively contains a break/continue whose target
+  /// loop lies outside it. Such an exit is observable control flow of the
+  /// target loop, so the expr cannot float independently: it is locked to
+  /// the loop's phase.
+  bool hasEscapingExit(ExprOp exprOp);
+
   /// First pass of floating-expr derivation: derive the pure content, scan
   /// nested regions, and accumulate into `bound` the lower bounds the
   /// anchored content imposes on the expr's phase. Bound sources are frame-
   /// consumed channels (CF conditions, loop inits, continue values, type
-  /// operands, out-targeting exits) and internal crossings — an interior op
-  /// consuming an operand at a phase below its own, which forces the frame
-  /// to materialize at that op's phase. Nested floating exprs derive
-  /// independently here and impose no bound. `shift` is the pin offset of
-  /// the current frame relative to the expr.
-  void scanFloatingContent(Block &block, int16_t shift, int16_t &bound);
+  /// operands) and internal crossings — an interior op consuming an operand
+  /// at a phase below its own, which forces the frame to materialize at
+  /// that op's phase. A nested floating expr with an exit escaping it is
+  /// locked to this frame and scanned as frame-locked interior; one without
+  /// derives independently here and imposes no bound. `shift` is the pin
+  /// offset of the current frame relative to `frameRoot`, the expr being
+  /// derived; every directly scanned exit targets a loop inside it.
+  void scanFloatingContent(Block &block, int16_t shift, int16_t &bound,
+                           ExprOp frameRoot);
 
   /// Second pass of floating-expr derivation: anchor CF ops, terminators,
   /// pinned exprs, and loop iteration arguments at the derived phase, and

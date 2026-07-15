@@ -4617,6 +4617,77 @@ uir.func @NestedOutBreak(%x: 0, %c: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Pinned exprs are frame-locked content, not frame boundaries: a continue
+// value bounds the derived frame even when a shift-0 pin block sits between
+// the continue and its in-frame loop. This function is semantically
+// identical to the same flow without the pin wrapper and must derive the
+// same phases: the phase-1 continue value forces the frame, loop, and
+// iteration argument to phase 1.
+
+// CHECK-LABEL: uir.func @ContinueValueThroughPin
+uir.func @ContinueValueThroughPin(%p0: 0, %p1: 1, %c: 0) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0, %t0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr : {{.*}}pa.phase = "1"
+  %r = uir.expr : %t {
+    // CHECK: uir.loop {{.*}}pa.phase = "1"
+    %s = uir.loop (%i = %p0 : %t) : %t {
+      // CHECK: uir.expr pin : {{.*}}pa.phase = "1"
+      %p = uir.expr pin : %t {
+        %sel = uir.if %c : %t {
+          // CHECK: hir.add {{.*}} {pa.operands = ["1", "1", "float"], pa.phase = "1", pa.results = ["1"]}
+          %j = hir.add %i, %p1 : %t
+          // CHECK: uir.continue {{.*}} {pa.operands = ["1", "float"], pa.phase = "1"}
+          uir.continue %j : %t
+        } else {
+          uir.yield %i : %t
+        }
+        uir.yield %sel : %t
+      }
+      uir.break %p : %t
+    }
+    uir.yield %s : %t
+  }
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// A nested floating expr with an exit escaping it is locked to the frame
+// the exit targets: the break inside the inner expr is observable control
+// flow of the outer frame's loop, so the inner expr cannot derive as an
+// independent frame — it anchors with the outer frame at the loop's phase.
+
+// CHECK-LABEL: uir.func @NestedFrameExitToOuterLoop
+uir.func @NestedFrameExitToOuterLoop(%p0: 0, %c: 0) -> () {
+  %t0 = hir.int_type
+  uir.signature (%t0, %t0) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr : {{.*}}pa.phase = "0"
+  %r = uir.expr : %t {
+    // CHECK: uir.loop {{.*}}pa.phase = "0"
+    %s = uir.loop (%i = %p0 : %t) : %t {
+      // CHECK: uir.expr : {{.*}}pa.phase = "0"
+      %n = uir.expr : %t {
+        // CHECK: uir.if {{.*}}pa.phase = "0"
+        %sel = uir.if %c : %t {
+          // CHECK: uir.break {{.*}}pa.phase = "0"
+          uir.break %i : %t
+        } else {
+          uir.yield %i : %t
+        }
+        uir.yield %sel : %t
+      }
+      uir.continue %i : %t
+    }
+    uir.yield %s : %t
+  }
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
 // Undemanded floating exprs with side effects fall back to their block
 // phase: effects execute where they stand when no consumer pulls them
 // elsewhere, as if the expression statement stood alone.
