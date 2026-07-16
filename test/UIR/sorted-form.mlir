@@ -422,3 +422,63 @@ uir.func @BreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
   }
   uir.unreachable
 }
+
+//===----------------------------------------------------------------------===//
+// Rejoining-arm content: an exit-carrying branch whose rejoining arm holds dyn
+// content is rebuilt so the arm yields an arm-choice of the content's samples.
+// The choice rides the divergence's `continued` link, and the receiving
+// `continued` alternative dispatches it with a nested pick before the following
+// segment content, in program order.
+
+uir.func @RejoiningArmContent(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %ct = hir.choice_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  %p = uir.phase -1 {
+    %list = hir.opaque_list_create
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      %ac = uir.if %done : %ct {
+        %ex = hir.choice 0(%i)
+        %re = hir.opaque_pack(%ex)
+        hir.opaque_list_push %list, %re
+        uir.break
+      } else {
+        %m = hir.add %i, %one : %t
+        %ac0 = hir.choice 0(%m)
+        uir.yield %ac0 : %ct
+      }
+      %next = hir.add %i, %one : %t
+      %co = hir.choice 1(%i, %ac)
+      %rc = hir.opaque_pack(%co)
+      hir.opaque_list_push %list, %rc
+      uir.continue %next : %t
+    }
+    uir.phase_return yield %list
+  }
+  uir.phase 0 {
+    %vacc = hir.var : %t
+    hir.replicate (%rec) in %p {
+      hir.pick %rec [0 (%sc): {
+        hir.write_var %vacc, %sc : %t
+        hir.yield
+      } 1 (%se, %acarg): {
+        hir.pick %acarg [0 (%sm): {
+          hir.write_var %vacc, %sm : %t
+          hir.yield
+        }]
+        hir.write_var %vacc, %se : %t
+        hir.yield
+      }]
+      hir.yield
+    }
+    %rd = hir.read_var %vacc : %t
+    uir.phase_return %rd : %t
+  }
+  uir.unreachable
+}

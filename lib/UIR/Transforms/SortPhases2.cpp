@@ -86,11 +86,15 @@
 //   content moves into a `hir.replicate` at phase p+1 that replays the
 //   records. Loop-phase early exits (`break`/`continue` in branch arms) make
 //   the record end in a nested exit-path choice that a nested `hir.pick` in
-//   the replicate dispatches on. The list crosses phases as an ordinary
-//   crossing. A loop delivering a later-phase result first has that break
-//   value choice-ified: each break site carries a `hir.choice` of the value's
-//   snapshots in place of the value, and a `hir.pick` at phase p+1 after the
-//   loop reconstructs it (composing with record extraction).
+//   the replicate dispatches on. When an exit-carrying branch's rejoining arm
+//   holds later-phase content, the rebuilt branch yields an arm-choice of that
+//   content's snapshots; the choice rides the `continued` link and a nested
+//   `hir.pick` in the replicate replays the arm content before the following
+//   segment. The list crosses phases as an ordinary crossing. A loop delivering
+//   a later-phase result first has that break value choice-ified: each break
+//   site carries a `hir.choice` of the value's snapshots in place of the value,
+//   and a `hir.pick` at phase p+1 after the loop reconstructs it (composing
+//   with record extraction).
 //
 // A `never`-phased value (a control-flow result no path provides) is
 // non-viral: before extraction, every real-phase use of one is rewritten to a
@@ -148,8 +152,22 @@ struct ExitPath {
 /// An exit-carrying op in a loop body with later-phase content: activations
 /// diverge here in how much of that content they instantiate, and every
 /// exit path contributes one chain link to the activation's record.
+///
+/// The single rejoining arm of the divergence (the arm that falls back out
+/// instead of exiting) may itself hold later-phase content. That content is
+/// choice-ified: the rebuilt `if` yields an `hir.choice` (the arm-choice)
+/// capturing the values the content samples, the choice rides the divergence's
+/// `continued` chain link, and a nested `hir.pick` in the receiving
+/// `continued` alternative replays the content before the following segment.
+/// `rejoinContent` is empty for flat-form divergences whose rejoining arm runs
+/// no later-phase content; then `armChoice` stays null and no nesting occurs.
 struct Divergence {
   SmallVector<ExitPath> exits;
+  IfOp ifOp;
+  Region *rejoinArm = nullptr;
+  SmallVector<Operation *> rejoinContent;
+  llvm::SetVector<Value> rejoinFields;
+  mlir::Value armChoice;
 };
 
 /// Sorts the content of a single `uir.func` into per-phase `uir.phase` ops
@@ -180,6 +198,7 @@ private:
   scanLoopBody(Operation *op, Block &body, int16_t p,
                SmallVectorImpl<SmallVector<Operation *>> &segments,
                SmallVectorImpl<Divergence> &divergences);
+  Value rebuildRejoiningIf(Divergence &divergence, int16_t p);
   LogicalResult rejectUnimplemented();
   LogicalResult sortRegion(Region &region);
 
@@ -1015,12 +1034,23 @@ LogicalResult PhaseSorter::extractFromBranch(IfOp ifOp, int16_t p) {
 // its own exit tag. The receiving replicate mirrors this shape with nested
 // picks (`function-exit-choices.md` §3, sampling-model.md §6).
 //
+// A divergence's rejoining arm (the one that falls back out) may itself hold
+// later-phase content. Because the other arm exits rather than rejoining, every
+// activation that reaches the `continued` link ran that single rejoining arm,
+// so no separate `not_ran` tag is needed; its content is nonetheless
+// choice-ified rather than folded into the following segment, so that samples
+// defined arm-interior — not in scope at the activation-end record push — still
+// cross. The rebuilt `if` yields an arm-choice capturing those samples; the
+// choice rides the `continued` link as one field, and a nested pick in the
+// receiving `continued` alternative replays the arm content before the
+// following segment, in program order.
+//
 // Only single-boundary loop-record extraction is handled here (later-phase
 // loop results are choice-ified by break-value extraction first): returns
-// under loops (function-level exit chains), rejoining-arm content and nested
-// divergence inside exit arms, and content more than one phase later (which
-// needs the replicate re-extracted at the next boundary) are rejected below
-// and by `rejectUnimplemented`.
+// under loops (function-level exit chains), nested divergence inside exit or
+// rejoining arms, exit-carrying branches with demanded later-phase results, and
+// content more than one phase later (which needs the replicate re-extracted at
+// the next boundary) are rejected below and by `rejectUnimplemented`.
 
 /// Decompose a loop body's top level into content segments separated by
 /// exit-carrying divergence points. `segments` holds the later-phase ops
@@ -1097,6 +1127,27 @@ PhaseSorter::scanLoopBody(Operation *op, Block &body, int16_t p,
         return blockOp.emitOpError()
                << "carries a loop exit but is not a branch; cannot build "
                   "partial activation records";
+      divergence.ifOp = ifOp;
+
+      // An arm is straight-line for extraction when its only later-phase
+      // content sits at its top level and no arm-interior CF hides a further
+      // exit or later-phase content. Both exit arms and the rejoining arm must
+      // satisfy this; nested divergence inside either is not implemented.
+      auto requireStraightLine = [&](Block &armBlock, Operation *term,
+                                     ArrayRef<Operation *> content,
+                                     const Twine &what) -> LogicalResult {
+        for (auto &armOp : armBlock) {
+          if (&armOp == term || llvm::is_contained(content, &armOp))
+            continue;
+          bool nestedExit = false;
+          for (auto &inner : armOp.getRegions())
+            nestedExit |= findExitTerminator(inner, p) != nullptr;
+          if (nestedExit || hasLaterContent(&armOp, p))
+            return armOp.emitOpError() << what;
+        }
+        return success();
+      };
+
       for (auto &region : ifOp->getRegions()) {
         if (region.empty())
           continue;
@@ -1109,37 +1160,26 @@ PhaseSorter::scanLoopBody(Operation *op, Block &body, int16_t p,
           ExitPath exit;
           exit.terminator = term;
           exit.content = collectLaterContent(armBlock, p);
-          // The arm must be straight-line up to its exit: nested divergence
-          // (further exits or later-phase content inside arm-interior CF) is
-          // not implemented.
-          for (auto &armOp : armBlock) {
-            if (&armOp == term || llvm::is_contained(exit.content, &armOp))
-              continue;
-            bool nestedExit = false;
-            for (auto &inner : armOp.getRegions())
-              nestedExit |= findExitTerminator(inner, p) != nullptr;
-            if (nestedExit || hasLaterContent(&armOp, p))
-              return armOp.emitOpError()
-                     << "diverges inside an exit-carrying arm; nested "
-                        "divergence is not implemented in phase sorting yet";
-          }
+          if (failed(requireStraightLine(
+                  armBlock, term, exit.content,
+                  "diverges inside an exit-carrying arm; nested divergence is "
+                  "not implemented in phase sorting yet")))
+            return failure();
           divergence.exits.push_back(std::move(exit));
         } else {
-          // Rejoining arm: its content would need a sub-choice covering the
-          // arm-local divergence, which is not implemented.
+          // Rejoining arm: its later-phase content is choice-ified. A nested
+          // exit inside it would need its own exit-path choices, which is not
+          // implemented; require the arm straight-line otherwise.
           if (findExitTerminator(region, p))
             return blockOp.emitOpError()
                    << "has a rejoining arm containing a nested exit; nested "
                       "divergence is not implemented in phase sorting yet";
-          bool armHasContent = !collectLaterContent(armBlock, p).empty() ||
-                               llvm::any_of(armBlock, [&](Operation &armOp) {
-                                 return hasLaterContent(&armOp, p);
-                               });
-          if (armHasContent)
-            return blockOp.emitOpError()
-                   << "has later-phase content on a rejoining arm of an "
-                      "exit-carrying branch; not implemented in phase sorting "
-                      "yet";
+          // The rejoining arm's top-level later-phase content is choice-ified.
+          // Later content nested inside arm-interior CF is not collected here;
+          // it stays at phase p+1 under a phase-p parent and is caught by the
+          // nested-phase rejection after extraction.
+          divergence.rejoinArm = &region;
+          divergence.rejoinContent = collectLaterContent(armBlock, p);
         }
       }
     }
@@ -1148,6 +1188,67 @@ PhaseSorter::scanLoopBody(Operation *op, Block &body, int16_t p,
     segments.emplace_back();
   }
   return success();
+}
+
+/// Rebuild an exit-carrying `if` whose rejoining arm holds later-phase content
+/// so the rejoining arm yields an arm-choice capturing that content's samples.
+///
+/// The choice (tag 0, since a two-arm exit-carrying `if` has exactly one
+/// rejoining arm) is an ordinary phase-p value the rebuilt `if` delivers as its
+/// last result. It is built inside the rejoining arm, so it captures values the
+/// content samples even when they are defined arm-interior and not in scope at
+/// the activation-end record push. The exit arm is untouched: it breaks or
+/// continues and never reaches the yield, so it provides no arm-choice tag and
+/// the choice is consumed only on the `continued` path where the rejoining arm
+/// ran. Returns the arm-choice value.
+Value PhaseSorter::rebuildRejoiningIf(Divergence &divergence, int16_t p) {
+  IfOp ifOp = divergence.ifOp;
+  auto loc = ifOp.getLoc();
+  auto anyTy = hir::AnyType::get(ifOp.getContext());
+
+  OpBuilder builder(ifOp);
+  auto choiceTypeOp = hir::ChoiceTypeOp::create(builder, loc);
+  setPhase(choiceTypeOp, PhaseAnalysis::kFloatPhase);
+  Value choiceType = choiceTypeOp.getResult();
+
+  // Build the arm-choice in the rejoining arm, right before its yield, and
+  // rewrite the yield to carry it after the arm's existing yield values.
+  auto &armBlock = divergence.rejoinArm->front();
+  auto yieldOp = cast<YieldOp>(armBlock.getTerminator());
+  OpBuilder armBuilder(yieldOp);
+  auto choice = hir::ChoiceOp::create(armBuilder, loc, anyTy, 0,
+                                      divergence.rejoinFields.getArrayRef());
+  setPhase(choice, p);
+  SmallVector<Value> yieldValues(yieldOp.getValues());
+  SmallVector<Value> yieldTypes(yieldOp.getTypeOfValues());
+  yieldValues.push_back(choice.getResult());
+  yieldTypes.push_back(choiceType);
+  auto newYield = YieldOp::create(armBuilder, loc, yieldValues, yieldTypes);
+  setPhase(newYield, p);
+  forget(yieldOp);
+  yieldOp.erase();
+
+  // Rebuild the `if` with an extra result for the arm-choice. Existing results
+  // (all delivered at phase p) are preserved in order; every if result is an
+  // `!hir.any`. The `resultTypes` operand carries the per-result type operands.
+  SmallVector<Type> resultTypes(ifOp.getNumResults() + 1, anyTy);
+  SmallVector<Value> typeOperands(ifOp.getResultTypes());
+  typeOperands.push_back(choiceType);
+  auto newIf = IfOp::create(builder, loc, resultTypes, ifOp.getCondition(),
+                            typeOperands);
+  newIf.getThenRegion().takeBody(ifOp.getThenRegion());
+  newIf.getElseRegion().takeBody(ifOp.getElseRegion());
+  setPhase(newIf, p);
+  for (auto [old, rebuilt] : llvm::zip(ifOp.getResults(), newIf.getResults())) {
+    analysis.actualPhase[rebuilt] = analysis.actualPhase.at(old);
+    old.replaceAllUsesWith(rebuilt);
+  }
+  Value armChoice = newIf.getResult(newIf.getNumResults() - 1);
+  analysis.actualPhase[armChoice] = p;
+  divergence.ifOp = newIf;
+  forget(ifOp);
+  ifOp.erase();
+  return armChoice;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1400,7 +1501,7 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
 
   Block *body = &loopOp.getBody().front();
   SmallVector<SmallVector<Operation *>> segments;
-  SmallVector<Divergence> divergences;
+  SmallVector<Divergence, 4> divergences;
   if (failed(scanLoopBody(op, *body, p, segments, divergences)))
     return failure();
   size_t numDivs = divergences.size();
@@ -1413,9 +1514,11 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
   SmallVector<Operation *> allMoved;
   for (auto &segment : segments)
     allMoved.append(segment);
-  for (auto &divergence : divergences)
+  for (auto &divergence : divergences) {
     for (auto &exit : divergence.exits)
       allMoved.append(exit.content);
+    allMoved.append(divergence.rejoinContent);
+  }
 
   SmallVector<llvm::SetVector<Value>> segFields(segments.size());
   llvm::SetVector<Value> prefixFields;
@@ -1423,6 +1526,15 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
     segFields[k] = collectCrossingValues(op, segment, allMoved);
     segFields[k].set_subtract(prefixFields);
     prefixFields.set_union(segFields[k]);
+    // Divergence k-1's rejoining content runs in level k (its `continued`
+    // alternative), nested under the segments up to and including this one;
+    // collect its samples now that those fields are in the prefix.
+    if (k >= 1 && !divergences[k - 1].rejoinContent.empty()) {
+      auto &rejoin = divergences[k - 1];
+      rejoin.rejoinFields =
+          collectCrossingValues(op, rejoin.rejoinContent, allMoved);
+      rejoin.rejoinFields.set_subtract(prefixFields);
+    }
     if (k < numDivs) {
       for (auto &exit : divergences[k].exits) {
         exit.fields = collectCrossingValues(op, exit.content, allMoved);
@@ -1430,6 +1542,13 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
       }
     }
   }
+
+  // With the fields known, rebuild each exit-carrying `if` whose rejoining arm
+  // holds later-phase content so it yields an arm-choice capturing that
+  // content's samples; the choice rides the `continued` links below.
+  for (auto &divergence : divergences)
+    if (!divergence.rejoinContent.empty())
+      divergence.armChoice = rebuildRejoiningIf(divergence, p);
 
   // Hit list before the op.
   OpBuilder builder(op);
@@ -1451,6 +1570,8 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
       chain = choice.getResult();
       for (int i = exitLevel - 1; i >= 0; --i) {
         SmallVector<Value> link(segFields[i + 1].getArrayRef());
+        if (divergences[i].armChoice)
+          link.push_back(divergences[i].armChoice);
         link.push_back(chain);
         auto continued = hir::ChoiceOp::create(
             b, loc, anyTy, static_cast<uint32_t>(divergences[i].exits.size()),
@@ -1477,12 +1598,17 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
   // replicate body's yield; the record with the full chain is pushed there.
   auto *bodyTerm = body->getTerminator();
   if (isa<BreakOp, ContinueOp>(bodyTerm)) {
-    if (numDivs == 0)
+    if (numDivs == 0) {
       buildRecordPush(bodyTerm, -1, 0, {});
-    else
+    } else {
+      // The full-activation `continued` link of the last divergence carries
+      // that divergence's arm-choice alongside the final segment's samples.
+      SmallVector<Value> lastPayload(segFields[numDivs].getArrayRef());
+      if (divergences[numDivs - 1].armChoice)
+        lastPayload.push_back(divergences[numDivs - 1].armChoice);
       buildRecordPush(bodyTerm, numDivs - 1,
-                      divergences[numDivs - 1].exits.size(),
-                      segFields[numDivs].getArrayRef());
+                      divergences[numDivs - 1].exits.size(), lastPayload);
+    }
   } else if (isa<ReturnOp>(bodyTerm)) {
     return bodyTerm->emitOpError()
            << "terminates a loop body with later-phase content; "
@@ -1505,14 +1631,44 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
   Block *levelBlock = &replicate.getBody().emplaceBlock();
   for (auto [k, segment] : llvm::enumerate(segments)) {
     bool hasChain = k < numDivs;
+    // Block args mirror the record link this level consumes: the segment's
+    // samples, then (for a `continued` alternative whose divergence has
+    // rejoining content) the arm-choice, then the chain into the next level.
     for (unsigned i = 0; i < segFields[k].size(); ++i)
       levelBlock->addArgument(anyTy, loc);
+    Divergence *rejoin = (k >= 1 && !divergences[k - 1].rejoinContent.empty())
+                             ? &divergences[k - 1]
+                             : nullptr;
+    Value armChoiceArg;
+    if (rejoin) {
+      armChoiceArg = levelBlock->addArgument(anyTy, loc);
+      analysis.actualPhase[armChoiceArg] = p;
+    }
     Value chainArg;
     if (hasChain) {
       chainArg = levelBlock->addArgument(anyTy, loc);
       analysis.actualPhase[chainArg] = p;
     }
     remapBlocks.push_back({levelBlock, &segFields[k]});
+
+    // Replay the previous divergence's rejoining content before this segment,
+    // via a nested pick over its arm-choice (tag 0, the single rejoining arm).
+    if (rejoin) {
+      OpBuilder rejoinBuilder(levelBlock, levelBlock->end());
+      auto armPick =
+          hir::PickOp::create(rejoinBuilder, loc, TypeRange{}, armChoiceArg, 1);
+      analysis.opPhases[armPick] = p + 1;
+      auto &altBlock = armPick.getAlternatives()[0].emplaceBlock();
+      for (unsigned i = 0; i < rejoin->rejoinFields.size(); ++i)
+        altBlock.addArgument(anyTy, loc);
+      remapBlocks.push_back({&altBlock, &rejoin->rejoinFields});
+      for (auto *moved : rejoin->rejoinContent)
+        moved->moveBefore(&altBlock, altBlock.end());
+      OpBuilder altBuilder(&altBlock, altBlock.end());
+      auto altYield = hir::YieldOp::create(altBuilder, loc, ValueRange{});
+      analysis.opPhases[altYield] = p + 1;
+    }
+
     for (auto *moved : segment)
       moved->moveBefore(levelBlock, levelBlock->end());
 
