@@ -329,9 +329,12 @@ uir.func @ReturnUnderLoop(%c: 0, %x: 0) -> (result: 0) {
 
 // -----
 
-// An exit-carrying divergence whose branch has a later-phase result would need
-// break-value reconstruction from the divergence; not implemented.
-uir.func @DivergenceLaterResult(%n: -1, %x: 0) -> (result: 0) {
+// An exit-carrying divergence whose rejoining arm yields a demanded later-phase
+// result the arm produces no later content for: the value comes from outside
+// the arm (a function argument), so the arm-pick has nothing to replay and
+// yield. This is a single-provider result that needs plain forwarding into the
+// receiving phase, which is not implemented.
+uir.func @DivergenceLaterResultForwarded(%n: -1, %x: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
@@ -342,15 +345,11 @@ uir.func @DivergenceLaterResult(%n: -1, %x: 0) -> (result: 0) {
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       %done = hir.geq %i, %n : %t
-      // expected-error @below {{carries a loop exit and has later-phase results; exit-carrying branches with demanded later-phase results are not implemented in phase sorting yet}}
+      // expected-error @below {{carries a loop exit and a later-phase result its rejoining content does not produce; single-provider result forwarding is not implemented in phase sorting yet}}
       %r = uir.if %done : %t {
         uir.break
       } else {
-        %d = uir.expr pin 1 : %t {
-          %s = hir.add %x, %x : %t
-          uir.yield %s : %t
-        }
-        uir.yield %d : %t
+        uir.yield %x : %t
       }
       uir.expr pin 1 {
         hir.write_var %acc, %r : %t

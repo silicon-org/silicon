@@ -2081,6 +2081,93 @@ uir.func @RejoiningArmContent(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// An exit-carrying divergence whose rejoining arm yields a demanded later-phase
+// result. The result is the value the rejoining arm's later content produces,
+// so the arm-pick that replays that content is made valued: it yields the
+// result, and the following segment consumes the pick's result. The exit arm
+// (break) provides no result; on the break path the value never materializes,
+// and the consumer sits only in the `continued` alternative.
+
+// CHECK-LABEL: uir.func @DivergenceLaterResult
+uir.func @DivergenceLaterResult(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // The rebuilt if drops the later result and yields only the arm-choice; the
+  // exit arm pushes its own exit record and breaks.
+  // CHECK: uir.phase -1 {
+  // CHECK-NEXT:   [[LIST:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop ([[I:%.+]] = %{{.+}} : %{{.+}}) {
+  // CHECK-NEXT:     [[DONE:%.+]] = hir.geq [[I]], %n
+  // CHECK-NEXT:     hir.choice_type
+  // CHECK-NEXT:     [[AC:%.+]] = uir.if [[DONE]] : %{{.+}} {
+  // CHECK-NEXT:       [[EX:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[RE:%.+]] = hir.opaque_pack([[EX]])
+  // CHECK-NEXT:       hir.opaque_list_push [[LIST]], [[RE]]
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[AC0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       uir.yield [[AC0]]
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[NEXT:%.+]] = hir.add [[I]], %{{.+}}
+  // CHECK-NEXT:     [[CO:%.+]] = hir.choice 1([[AC]])
+  // CHECK-NEXT:     [[RC:%.+]] = hir.opaque_pack([[CO]])
+  // CHECK-NEXT:     hir.opaque_list_push [[LIST]], [[RC]]
+  // CHECK-NEXT:     uir.continue [[NEXT]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[LIST]]
+  // CHECK-NEXT: }
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      %r = uir.if %done : %t {
+        uir.break
+      } else {
+        %d = uir.expr pin 1 : %t {
+          %s = hir.add %x, %x : %t
+          uir.yield %s : %t
+        }
+        uir.yield %d : %t
+      }
+      uir.expr pin 1 {
+        hir.write_var %acc, %r : %t
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  // The continued alternative's arm-pick is valued: it reconstructs the later
+  // result by yielding the rejoining arm's content value, which the following
+  // segment then writes.
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[ACC:%.+]] = hir.var
+  // CHECK-NEXT:   hir.replicate ([[REC:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.pick [[REC]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[ACARG:%.+]]): {
+  // CHECK-NEXT:       [[RES:%.+]] = hir.pick [[ACARG]] : !hir.any [0 (): {
+  // CHECK-NEXT:         [[S:%.+]] = hir.add %x, %x
+  // CHECK-NEXT:         hir.yield [[S]] : !hir.any
+  // CHECK-NEXT:       }]
+  // CHECK-NEXT:       hir.write_var [[ACC]], [[RES]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   [[RD:%.+]] = hir.read_var [[ACC]]
+  // CHECK-NEXT:   uir.phase_return [[RD]]
+  // CHECK-NEXT: }
+  %rr = hir.read_var %acc : %t
+  uir.return %rr : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Rejoining content with an empty trailing segment: the exit-carrying branch is
 // the loop's last op, so the `continued` alternative holds only the nested
 // arm-pick and no following segment content.
