@@ -367,9 +367,10 @@ uir.func @DivergenceLaterResult(%n: -1, %x: 0) -> (result: 0) {
 
 // -----
 
-// An exit-carrying branch whose rejoining arm hides a nested exit needs
-// nested exit-path choices; not implemented.
-uir.func @RejoiningNestedExit(%n: -1, %x: 0) -> (result: 0) {
+// A rejoining arm that both hides a nested exit and runs later-phase content
+// before it: that content runs on the exit path and on the fall-through, so it
+// would have to move into two disjoint receiving blocks. Not implemented.
+uir.func @RejoinSharedPrefix(%n: -1, %x: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
@@ -379,17 +380,67 @@ uir.func @RejoiningNestedExit(%n: -1, %x: 0) -> (result: 0) {
   %acc = hir.var : %t
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
-      %done = hir.geq %i, %n : %t
-      // expected-error @below {{has a rejoining arm containing a nested exit; nested divergence is not implemented in phase sorting yet}}
-      uir.if %done {
-        uir.expr pin 1 {
-          hir.write_var %acc, %i : %t
-          uir.yield
-        }
+      %c = hir.geq %i, %n : %t
+      // expected-error @below {{has a rejoining arm with later-phase content before a nested exit; shared content across an exit and its fall-through is not implemented in phase sorting yet}}
+      uir.if %c {
         uir.break
       } else {
-        %d2 = hir.geq %i, %n : %t
-        uir.if %d2 { uir.break }
+        %w = hir.add %i, %one : %t
+        uir.expr pin 1 {
+          hir.write_var %acc, %w : %t
+          uir.yield
+        }
+        %d = hir.geq %n, %i : %t
+        uir.if %d { uir.break }
+        %f = hir.add %i, %one : %t
+        uir.expr pin 1 {
+          hir.write_var %acc, %f : %t
+          uir.yield
+        }
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  %r = hir.read_var %acc : %t
+  uir.return %r : %t
+}
+
+// -----
+
+// A rejoining arm whose fall-through (after a nested exit) carries another
+// exit-carrying branch with its own rejoining content needs a nested arm-choice
+// in the fall-through. Not implemented.
+uir.func @RejoinNestedFallthrough(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %c = hir.geq %i, %n : %t
+      // expected-error @below {{has a rejoining arm whose fall-through carries a nested rejoining divergence; not implemented in phase sorting yet}}
+      uir.if %c {
+        uir.break
+      } else {
+        %d = hir.geq %n, %i : %t
+        uir.if %d { uir.break }
+        %e = hir.geq %i, %n : %t
+        uir.if %e {
+          uir.break
+        } else {
+          %h = hir.add %i, %one : %t
+          uir.expr pin 1 {
+            hir.write_var %acc, %h : %t
+            uir.yield
+          }
+          uir.yield
+        }
         uir.yield
       }
       %next = hir.add %i, %one : %t
