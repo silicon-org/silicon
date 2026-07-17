@@ -24,6 +24,7 @@
 - Add an HIR identifier op that just pass through an operand to its result.
   We'll use this op to have a mechanism to capture the location of a named expression like `x`.
   When reporting phase errors, we can stop at `x` and indicate an error right there, instead of pointing the user at a definition like the `x: const int` arg of a function, which is far more confusing.
+- Figure out why yield/break arity is not verifier enforced, and make it so if possible.
 
 ## Phase Inference Redesign (sampling model)
 
