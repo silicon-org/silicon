@@ -86,11 +86,14 @@
 //   content moves into a `hir.replicate` at phase p+1 that replays the
 //   records. Loop-phase early exits (`break`/`continue` in branch arms) make
 //   the record end in a nested exit-path choice that a nested `hir.pick` in
-//   the replicate dispatches on. When an exit-carrying branch's rejoining arm
-//   holds later-phase content, the rebuilt branch yields an arm-choice of that
-//   content's snapshots; the choice rides the `continued` link and a nested
-//   `hir.pick` in the replicate replays the arm content before the following
-//   segment. The list crosses phases as an ordinary crossing. A loop delivering
+//   the replicate dispatches on. An exit-carrying arm is itself a block that
+//   decomposes recursively, so a nested exit-carrying branch inside it deepens
+//   the record's chain and the replicate's picks by one more level. When an
+//   exit-carrying branch's rejoining arm holds later-phase content, the rebuilt
+//   branch yields an arm-choice of that content's snapshots; the choice rides
+//   the `continued` link and a nested `hir.pick` in the replicate replays the
+//   arm content before the following segment. The list crosses phases as an
+//   ordinary crossing. A loop delivering
 //   a later-phase result first has that break value choice-ified: each break
 //   site carries a `hir.choice` of the value's snapshots in place of the value,
 //   and a `hir.pick` at phase p+1 after the loop reconstructs it (composing
@@ -139,19 +142,24 @@ namespace uir {
 //===----------------------------------------------------------------------===//
 
 namespace {
-/// One exit path of a divergence point: a break/continue terminator at the
-/// loop's phase, together with the later-phase content on its path and the
-/// crossing values that content samples; both are empty for paths that run
-/// no later-phase content.
-struct ExitPath {
+struct BodyPlan;
+
+/// One exit path of a divergence: a break/continue terminator that ends an
+/// activation, together with the recursive decomposition of the arm block that
+/// leads to it. A straight-line arm decomposes into a single content segment
+/// and no nested divergences (the flat form); an arm that itself carries a
+/// nested exit-carrying branch decomposes recursively, so the exit path's
+/// record and the receiving pick nest one level deeper per nested divergence.
+struct ExitArm {
   Operation *terminator;
-  SmallVector<Operation *> content;
-  llvm::SetVector<Value> fields;
+  std::unique_ptr<BodyPlan> plan;
 };
 
-/// An exit-carrying op in a loop body with later-phase content: activations
-/// diverge here in how much of that content they instantiate, and every
-/// exit path contributes one chain link to the activation's record.
+/// An exit-carrying op in a loop body — or in a nested exit arm — with
+/// later-phase content: activations diverge here in how much of that content
+/// they instantiate, and every exit path contributes one chain link to the
+/// activation's record. Divergences without any later-phase content carry one
+/// exit path per exit terminator with a trivial (empty, divergence-free) plan.
 ///
 /// The single rejoining arm of the divergence (the arm that falls back out
 /// instead of exiting) may itself hold later-phase content. That content is
@@ -159,15 +167,30 @@ struct ExitPath {
 /// capturing the values the content samples, the choice rides the divergence's
 /// `continued` chain link, and a nested `hir.pick` in the receiving
 /// `continued` alternative replays the content before the following segment.
-/// `rejoinContent` is empty for flat-form divergences whose rejoining arm runs
-/// no later-phase content; then `armChoice` stays null and no nesting occurs.
+/// `rejoinContent` is empty for divergences whose rejoining arm runs no
+/// later-phase content; then `armChoice` stays null and no nesting occurs.
 struct Divergence {
-  SmallVector<ExitPath> exits;
   IfOp ifOp;
+  SmallVector<ExitArm> exits;
   Region *rejoinArm = nullptr;
   SmallVector<Operation *> rejoinContent;
   llvm::SetVector<Value> rejoinFields;
   mlir::Value armChoice;
+};
+
+/// The recursive decomposition of a block — a loop body or an exit arm — into
+/// content segments separated by exit-carrying divergences. `segments` holds
+/// the later-phase ops between consecutive divergences in program order (one
+/// more entry than `divergences`); `segFields` are the crossing values each
+/// segment samples, deduplicated against every enclosing level. `terminal` is
+/// the block terminator that ends the fully-continued path: a loop body's
+/// back-edge continue/break (or unreachable), or an exit arm's own
+/// break/continue.
+struct BodyPlan {
+  Operation *terminal = nullptr;
+  SmallVector<SmallVector<Operation *>> segments;
+  SmallVector<llvm::SetVector<Value>> segFields;
+  SmallVector<Divergence> divergences;
 };
 
 /// Sorts the content of a single `uir.func` into per-phase `uir.phase` ops
@@ -194,10 +217,14 @@ private:
   LogicalResult extractLoops();
   LogicalResult extractFromLoop(LoopOp loopOp, int16_t p);
   FailureOr<LoopOp> extractBreakValues(LoopOp loopOp, int16_t p);
-  LogicalResult
-  scanLoopBody(Operation *op, Block &body, int16_t p,
-               SmallVectorImpl<SmallVector<Operation *>> &segments,
-               SmallVectorImpl<Divergence> &divergences);
+  LogicalResult scanBlock(Operation *loopOp, Block &block, int16_t p,
+                          BodyPlan &plan);
+  void collectPlanFields(Operation *loopOp, BodyPlan &plan,
+                         ArrayRef<Operation *> allMoved,
+                         llvm::SetVector<Value> visible);
+  static void collectPlanContent(BodyPlan &plan,
+                                 SmallVectorImpl<Operation *> &content);
+  void rebuildRejoins(BodyPlan &plan, int16_t p);
   Value rebuildRejoiningIf(Divergence &divergence, int16_t p);
   LogicalResult rejectUnimplemented();
   LogicalResult sortRegion(Region &region);
@@ -1034,6 +1061,14 @@ LogicalResult PhaseSorter::extractFromBranch(IfOp ifOp, int16_t p) {
 // its own exit tag. The receiving replicate mirrors this shape with nested
 // picks (`function-exit-choices.md` §3, sampling-model.md §6).
 //
+// The decomposition is recursive: an exit-carrying arm is a block like the loop
+// body, so a nested exit-carrying branch inside it is itself a divergence. Its
+// exit tag's payload is not a flat sample list but the arm's own record body
+// (the arm's first-segment samples plus a nested chain over the arm's own
+// divergences), and the receiving exit alternative is the arm sub-plan's own
+// level structure, one pick deeper. The flat form is the base case — an exit
+// arm with a single content segment and no nested divergence.
+//
 // A divergence's rejoining arm (the one that falls back out) may itself hold
 // later-phase content. Because the other arm exits rather than rejoining, every
 // activation that reaches the `continued` link ran that single rejoining arm,
@@ -1047,28 +1082,34 @@ LogicalResult PhaseSorter::extractFromBranch(IfOp ifOp, int16_t p) {
 //
 // Only single-boundary loop-record extraction is handled here (later-phase
 // loop results are choice-ified by break-value extraction first): returns
-// under loops (function-level exit chains), nested divergence inside exit or
-// rejoining arms, exit-carrying branches with demanded later-phase results, and
+// under loops (function-level exit chains), nested divergence inside a
+// rejoining arm, exit-carrying branches with demanded later-phase results, and
 // content more than one phase later (which needs the replicate re-extracted at
 // the next boundary) are rejected below and by `rejectUnimplemented`.
 
-/// Decompose a loop body's top level into content segments separated by
-/// exit-carrying divergence points. `segments` holds the later-phase ops
-/// between consecutive divergences in program order (one more entry than
-/// `divergences`); each divergence records its exit terminators and the
-/// later-phase content on their paths. Exit paths that run no later-phase
-/// content get an empty chain link, so every activation pushes exactly one
-/// record and the hit list length always equals the activation count.
-LogicalResult
-PhaseSorter::scanLoopBody(Operation *op, Block &body, int16_t p,
-                          SmallVectorImpl<SmallVector<Operation *>> &segments,
-                          SmallVectorImpl<Divergence> &divergences) {
-  segments.emplace_back();
-  for (auto &blockOp : body) {
-    if (&blockOp == body.getTerminator())
+// NOLINTBEGIN(misc-no-recursion)
+
+/// Decompose a block — a loop body or an exit arm — into content segments
+/// separated by exit-carrying divergences. `plan.segments` holds the
+/// later-phase ops between consecutive divergences in program order (one more
+/// entry than `plan.divergences`); `plan.terminal` is the block terminator that
+/// ends the fully-continued path.
+///
+/// An exit-carrying arm is a block like any other, so it is scanned
+/// recursively: a nested exit-carrying branch inside it becomes a nested
+/// divergence whose exit paths build their own nested chain links. A divergence
+/// with no later-phase content anywhere carries one exit path per exit
+/// terminator with a trivial plan, no matter how deeply the terminator is
+/// nested; only content-bearing divergences must be branches and recurse.
+LogicalResult PhaseSorter::scanBlock(Operation *loopOp, Block &block, int16_t p,
+                                     BodyPlan &plan) {
+  plan.terminal = block.getTerminator();
+  plan.segments.emplace_back();
+  for (auto &blockOp : block) {
+    if (&blockOp == plan.terminal)
       break;
     if (auto ph = realPhaseOf(&blockOp); ph && *ph > p) {
-      segments.back().push_back(&blockOp);
+      plan.segments.back().push_back(&blockOp);
       continue;
     }
     if (blockOp.getNumRegions() == 0)
@@ -1111,42 +1152,25 @@ PhaseSorter::scanLoopBody(Operation *op, Block &body, int16_t p,
     Divergence divergence;
     if (!hasLaterContent(&blockOp, p)) {
       // No later-phase content anywhere in the divergence: every exit path
-      // contributes an empty chain link built at its terminator, no matter
-      // how deeply the terminator is nested.
+      // contributes an empty chain link built at its terminator with a trivial
+      // plan, no matter how deeply the terminator is nested.
       for (auto *term : exitTerms) {
-        ExitPath exit;
-        exit.terminator = term;
-        divergence.exits.push_back(std::move(exit));
+        ExitArm arm;
+        arm.terminator = term;
+        arm.plan = std::make_unique<BodyPlan>();
+        arm.plan->terminal = term;
+        arm.plan->segments.emplace_back();
+        divergence.exits.push_back(std::move(arm));
       }
     } else {
       // Later-phase content inside the divergence must be attributed to the
-      // paths that run it; only the flat form (a branch whose exit arms are
-      // straight-line up to their terminator) is implemented.
+      // paths that run it, which requires a branch whose arms name the paths.
       auto ifOp = dyn_cast<IfOp>(&blockOp);
       if (!ifOp)
         return blockOp.emitOpError()
                << "carries a loop exit but is not a branch; cannot build "
                   "partial activation records";
       divergence.ifOp = ifOp;
-
-      // An arm is straight-line for extraction when its only later-phase
-      // content sits at its top level and no arm-interior CF hides a further
-      // exit or later-phase content. Both exit arms and the rejoining arm must
-      // satisfy this; nested divergence inside either is not implemented.
-      auto requireStraightLine = [&](Block &armBlock, Operation *term,
-                                     ArrayRef<Operation *> content,
-                                     const Twine &what) -> LogicalResult {
-        for (auto &armOp : armBlock) {
-          if (&armOp == term || llvm::is_contained(content, &armOp))
-            continue;
-          bool nestedExit = false;
-          for (auto &inner : armOp.getRegions())
-            nestedExit |= findExitTerminator(inner, p) != nullptr;
-          if (nestedExit || hasLaterContent(&armOp, p))
-            return armOp.emitOpError() << what;
-        }
-        return success();
-      };
 
       for (auto &region : ifOp->getRegions()) {
         if (region.empty())
@@ -1157,19 +1181,19 @@ PhaseSorter::scanLoopBody(Operation *op, Block &body, int16_t p,
         bool isExitTerm =
             termPhase && *termPhase <= p && isa<BreakOp, ContinueOp>(term);
         if (isExitTerm) {
-          ExitPath exit;
-          exit.terminator = term;
-          exit.content = collectLaterContent(armBlock, p);
-          if (failed(requireStraightLine(
-                  armBlock, term, exit.content,
-                  "diverges inside an exit-carrying arm; nested divergence is "
-                  "not implemented in phase sorting yet")))
+          // An exit arm is a block like the loop body: decompose it recursively
+          // so a nested exit-carrying branch inside it builds its own nested
+          // chain link.
+          ExitArm arm;
+          arm.terminator = term;
+          arm.plan = std::make_unique<BodyPlan>();
+          if (failed(scanBlock(loopOp, armBlock, p, *arm.plan)))
             return failure();
-          divergence.exits.push_back(std::move(exit));
+          divergence.exits.push_back(std::move(arm));
         } else {
           // Rejoining arm: its later-phase content is choice-ified. A nested
           // exit inside it would need its own exit-path choices, which is not
-          // implemented; require the arm straight-line otherwise.
+          // implemented; require the arm free of nested exits otherwise.
           if (findExitTerminator(region, p))
             return blockOp.emitOpError()
                    << "has a rejoining arm containing a nested exit; nested "
@@ -1184,11 +1208,76 @@ PhaseSorter::scanLoopBody(Operation *op, Block &body, int16_t p,
       }
     }
 
-    divergences.push_back(std::move(divergence));
-    segments.emplace_back();
+    plan.divergences.push_back(std::move(divergence));
+    plan.segments.emplace_back();
   }
   return success();
 }
+
+/// Collect every op the plan moves into the receiving replicate — segment
+/// content, exit-arm sub-plan content (recursively), and rejoining-arm content.
+/// These count as moved for the crossing analysis, so a value one segment
+/// samples that another produces does not spuriously become a record field.
+void PhaseSorter::collectPlanContent(BodyPlan &plan,
+                                     SmallVectorImpl<Operation *> &content) {
+  for (auto &segment : plan.segments)
+    content.append(segment.begin(), segment.end());
+  for (auto &divergence : plan.divergences) {
+    for (auto &arm : divergence.exits)
+      collectPlanContent(*arm.plan, content);
+    content.append(divergence.rejoinContent.begin(),
+                   divergence.rejoinContent.end());
+  }
+}
+
+/// Collect the crossing values of every segment, exit-arm sub-plan, and
+/// rejoining arm of `plan`, deduplicating each level's fields against the
+/// values already visible from its enclosing levels. `visible` is the set of
+/// values the enclosing continued spine already carries; the spine extends it
+/// segment by segment, and each exit arm receives a copy so its own extension
+/// stays local to its subtree (sibling exits and the continued path never see
+/// an exit arm's interior fields).
+void PhaseSorter::collectPlanFields(Operation *loopOp, BodyPlan &plan,
+                                    ArrayRef<Operation *> allMoved,
+                                    llvm::SetVector<Value> visible) {
+  plan.segFields.assign(plan.segments.size(), {});
+  size_t numDivs = plan.divergences.size();
+  for (auto [k, segment] : llvm::enumerate(plan.segments)) {
+    plan.segFields[k] = collectCrossingValues(loopOp, segment, allMoved);
+    plan.segFields[k].set_subtract(visible);
+    visible.set_union(plan.segFields[k]);
+    // The previous divergence's rejoining content runs in this level (its
+    // `continued` alternative), nested under the levels up to and including
+    // this one; collect its samples now that those fields are visible.
+    if (k >= 1 && !plan.divergences[k - 1].rejoinContent.empty()) {
+      auto &rejoin = plan.divergences[k - 1];
+      rejoin.rejoinFields =
+          collectCrossingValues(loopOp, rejoin.rejoinContent, allMoved);
+      rejoin.rejoinFields.set_subtract(visible);
+    }
+    // Each exit arm of this level's divergence is nested under the levels up to
+    // and including this one; scan its sub-plan against a copy of the current
+    // visible set.
+    if (k < numDivs)
+      for (auto &arm : plan.divergences[k].exits)
+        collectPlanFields(loopOp, *arm.plan, allMoved, visible);
+  }
+}
+
+/// Rebuild every exit-carrying `if` in `plan` whose rejoining arm holds
+/// later-phase content so it yields an arm-choice, recursing into exit-arm
+/// sub-plans first so a nested divergence's `if` is rebuilt before its
+/// enclosing arm moves under a new parent.
+void PhaseSorter::rebuildRejoins(BodyPlan &plan, int16_t p) {
+  for (auto &divergence : plan.divergences) {
+    for (auto &arm : divergence.exits)
+      rebuildRejoins(*arm.plan, p);
+    if (!divergence.rejoinContent.empty())
+      divergence.armChoice = rebuildRejoiningIf(divergence, p);
+  }
+}
+
+// NOLINTEND(misc-no-recursion)
 
 /// Rebuild an exit-carrying `if` whose rejoining arm holds later-phase content
 /// so the rejoining arm yields an arm-choice capturing that content's samples.
@@ -1499,88 +1588,78 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
   if (!hasLaterContent(op, p))
     return success();
 
-  Block *body = &loopOp.getBody().front();
-  SmallVector<SmallVector<Operation *>> segments;
-  SmallVector<Divergence, 4> divergences;
-  if (failed(scanLoopBody(op, *body, p, segments, divergences)))
+  // A loop body whose activation ends in a return is a function-level exit
+  // chain, not loop-record extraction. Catch it before scanning; nested returns
+  // are caught inside `scanBlock`.
+  auto *bodyTerm = loopOp.getBody().front().getTerminator();
+  if (isa<ReturnOp>(bodyTerm))
+    return bodyTerm->emitOpError()
+           << "terminates a loop body with later-phase content; "
+              "function-level exit chains are not implemented in phase "
+              "sorting yet";
+  if (!isa<BreakOp, ContinueOp, UnreachableOp>(bodyTerm))
+    return bodyTerm->emitOpError()
+           << "unsupported loop body terminator for record extraction";
+
+  // Decompose the loop body into the recursive plan of content segments and
+  // exit-carrying divergences, then collect the crossing values every segment,
+  // exit-arm sub-plan, and rejoining arm samples. Everything the plan moves
+  // counts as moved for the crossing analysis.
+  BodyPlan plan;
+  if (failed(scanBlock(op, loopOp.getBody().front(), p, plan)))
     return failure();
-  size_t numDivs = divergences.size();
 
-  // Collect the crossing values per segment and per exit path. Everything that
-  // leaves the region counts as moved for the crossing analysis. A segment's
-  // fields are deduplicated against all enclosing segments (their
-  // receiving-block arguments dominate the nested levels); an exit path's
-  // fields against the segments enclosing its pick.
   SmallVector<Operation *> allMoved;
-  for (auto &segment : segments)
-    allMoved.append(segment);
-  for (auto &divergence : divergences) {
-    for (auto &exit : divergence.exits)
-      allMoved.append(exit.content);
-    allMoved.append(divergence.rejoinContent);
-  }
+  collectPlanContent(plan, allMoved);
+  collectPlanFields(op, plan, allMoved, {});
 
-  SmallVector<llvm::SetVector<Value>> segFields(segments.size());
-  llvm::SetVector<Value> prefixFields;
-  for (auto [k, segment] : llvm::enumerate(segments)) {
-    segFields[k] = collectCrossingValues(op, segment, allMoved);
-    segFields[k].set_subtract(prefixFields);
-    prefixFields.set_union(segFields[k]);
-    // Divergence k-1's rejoining content runs in level k (its `continued`
-    // alternative), nested under the segments up to and including this one;
-    // collect its samples now that those fields are in the prefix.
-    if (k >= 1 && !divergences[k - 1].rejoinContent.empty()) {
-      auto &rejoin = divergences[k - 1];
-      rejoin.rejoinFields =
-          collectCrossingValues(op, rejoin.rejoinContent, allMoved);
-      rejoin.rejoinFields.set_subtract(prefixFields);
-    }
-    if (k < numDivs) {
-      for (auto &exit : divergences[k].exits) {
-        exit.fields = collectCrossingValues(op, exit.content, allMoved);
-        exit.fields.set_subtract(prefixFields);
-      }
-    }
-  }
-
-  // With the fields known, rebuild each exit-carrying `if` whose rejoining arm
+  // With the fields known, rebuild every exit-carrying `if` whose rejoining arm
   // holds later-phase content so it yields an arm-choice capturing that
   // content's samples; the choice rides the `continued` links below.
-  for (auto &divergence : divergences)
-    if (!divergence.rejoinContent.empty())
-      divergence.armChoice = rebuildRejoiningIf(divergence, p);
+  rebuildRejoins(plan, p);
 
   // Hit list before the op.
   OpBuilder builder(op);
   auto list = hir::OpaqueListCreateOp::create(builder, loc, anyTy);
   setPhase(list, p);
 
-  // Build one record push per exit path, in place at its terminator. The
-  // record is the shared prefix segment plus, for each divergence the path
-  // fell past, a `continued` link carrying that segment's samples, ending in
-  // the path's own exit tag. The `continued` tag of each divergence is one
-  // past its exit tags.
-  auto buildRecordPush = [&](Operation *beforeTerm, int exitLevel, uint32_t tag,
-                             ArrayRef<Value> payload) {
-    OpBuilder b(beforeTerm);
-    Value chain;
-    if (exitLevel >= 0) {
-      auto choice = hir::ChoiceOp::create(b, loc, anyTy, tag, payload);
-      setPhase(choice, p);
-      chain = choice.getResult();
-      for (int i = exitLevel - 1; i >= 0; --i) {
-        SmallVector<Value> link(segFields[i + 1].getArrayRef());
-        if (divergences[i].armChoice)
-          link.push_back(divergences[i].armChoice);
-        link.push_back(chain);
-        auto continued = hir::ChoiceOp::create(
-            b, loc, anyTy, static_cast<uint32_t>(divergences[i].exits.size()),
-            link);
-        setPhase(continued, p);
-        chain = continued.getResult();
-      }
+  // # Build the record pushes
+  //
+  // Every terminator that ends an activation — each exit arm's break/continue,
+  // however deeply nested, and the loop's own back edge — pushes exactly one
+  // record, built in place. The record encodes the statically-known path from
+  // the loop body root to that terminator: the root segment's samples, then one
+  // chain link per divergence the path fell past. An exit path's link is a
+  // choice tagged by the taken arm; its payload is the arm's own record body
+  // (the arm sub-plan's first-segment samples plus, recursively, the arm's
+  // nested chain). A fully-continued path's link is the `continued` tag (one
+  // past the exit tags) carrying the following segment's samples and, for a
+  // divergence with rejoining content, its arm-choice.
+  //
+  // `wrapContinued` wraps a chain that is divergence `level`'s choice with the
+  // `continued` links of the earlier divergences of `pl`, yielding the chain at
+  // the plan's outermost divergence. `emit` walks a plan, recursing into each
+  // exit arm with a wrapper that turns the arm's chain into the enclosing
+  // exited choice and threads it up to the enclosing plan's record.
+  auto wrapContinued = [&](BodyPlan &pl, int level, Value chain,
+                           OpBuilder &b) -> Value {
+    for (int i = level - 1; i >= 0; --i) {
+      SmallVector<Value> link(pl.segFields[i + 1].getArrayRef());
+      if (pl.divergences[i].armChoice)
+        link.push_back(pl.divergences[i].armChoice);
+      link.push_back(chain);
+      auto continued = hir::ChoiceOp::create(
+          b, loc, anyTy, static_cast<uint32_t>(pl.divergences[i].exits.size()),
+          link);
+      setPhase(continued, p);
+      chain = continued.getResult();
     }
-    SmallVector<Value> recordFields(segFields[0].getArrayRef());
+    return chain;
+  };
+
+  using Wrap = std::function<void(OpBuilder &, Value)>;
+  auto rootWrap = [&](OpBuilder &b, Value chain) {
+    SmallVector<Value> recordFields(plan.segFields[0].getArrayRef());
     if (chain)
       recordFields.push_back(chain);
     auto record = hir::OpaquePackOp::create(b, loc, anyTy, recordFields);
@@ -1590,114 +1669,136 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
     setPhase(push, p);
   };
 
-  for (auto [k, divergence] : llvm::enumerate(divergences))
-    for (auto [tag, exit] : llvm::enumerate(divergence.exits))
-      buildRecordPush(exit.terminator, k, tag, exit.fields.getArrayRef());
-
-  // A break/continue body terminator ends a full activation just like a
-  // replicate body's yield; the record with the full chain is pushed there.
-  auto *bodyTerm = body->getTerminator();
-  if (isa<BreakOp, ContinueOp>(bodyTerm)) {
-    if (numDivs == 0) {
-      buildRecordPush(bodyTerm, -1, 0, {});
-    } else {
-      // The full-activation `continued` link of the last divergence carries
-      // that divergence's arm-choice alongside the final segment's samples.
-      SmallVector<Value> lastPayload(segFields[numDivs].getArrayRef());
-      if (divergences[numDivs - 1].armChoice)
-        lastPayload.push_back(divergences[numDivs - 1].armChoice);
-      buildRecordPush(bodyTerm, numDivs - 1,
-                      divergences[numDivs - 1].exits.size(), lastPayload);
+  std::function<void(BodyPlan &, const Wrap &)> emit = [&](BodyPlan &pl,
+                                                           const Wrap &wrap) {
+    size_t numDivs = pl.divergences.size();
+    // Each exit arm's terminators wrap their sub-plan chain into this
+    // divergence's exited choice, then up through this plan's `continued`
+    // links.
+    for (size_t k = 0; k < numDivs; ++k) {
+      auto &divergence = pl.divergences[k];
+      for (size_t a = 0; a < divergence.exits.size(); ++a) {
+        BodyPlan &armPlan = *divergence.exits[a].plan;
+        Wrap armWrap = [&, k, a](OpBuilder &b, Value subChain) {
+          SmallVector<Value> payload(armPlan.segFields[0].getArrayRef());
+          if (subChain)
+            payload.push_back(subChain);
+          auto exited = hir::ChoiceOp::create(
+              b, loc, anyTy, static_cast<uint32_t>(a), payload);
+          setPhase(exited, p);
+          Value chain =
+              wrapContinued(pl, static_cast<int>(k), exited.getResult(), b);
+          wrap(b, chain);
+        };
+        emit(armPlan, armWrap);
+      }
     }
-  } else if (isa<ReturnOp>(bodyTerm)) {
-    return bodyTerm->emitOpError()
-           << "terminates a loop body with later-phase content; "
-              "function-level exit chains are not implemented in phase "
-              "sorting yet";
-  } else if (!isa<UnreachableOp>(bodyTerm)) {
-    return bodyTerm->emitOpError()
-           << "unsupported loop body terminator for record extraction";
-  }
+    // The plan's own terminal ends the fully-continued path; an unreachable
+    // terminal (a loop whose every path exits) pushes no record there.
+    if (!isa<BreakOp, ContinueOp>(pl.terminal))
+      return;
+    OpBuilder b(pl.terminal);
+    if (numDivs == 0) {
+      wrap(b, Value());
+      return;
+    }
+    auto &last = pl.divergences[numDivs - 1];
+    SmallVector<Value> payload(pl.segFields[numDivs].getArrayRef());
+    if (last.armChoice)
+      payload.push_back(last.armChoice);
+    auto tail = hir::ChoiceOp::create(
+        b, loc, anyTy, static_cast<uint32_t>(last.exits.size()), payload);
+    setPhase(tail, p);
+    Value chain =
+        wrapContinued(pl, static_cast<int>(numDivs) - 1, tail.getResult(), b);
+    wrap(b, chain);
+  };
+  emit(plan, rootWrap);
 
-  // Receiving replicate after the op, mirroring the record shape: one level
-  // per segment, connected by picks over the chain links. Level k holds
-  // segment k's content; its pick's exit alternatives hold the arm content,
-  // and the `continued` alternative is level k+1.
+  // # Build the receiving replicate
+  //
+  // The replicate mirrors the record shape: one level block per segment along
+  // the continued spine, connected by picks over the chain links. A divergence
+  // pick's exit alternative is the exit arm sub-plan's own level-0 block —
+  // recursively built — and its `continued` alternative is the next spine
+  // level. In the flat case (an exit arm with no nested divergence) the
+  // recursion bottoms out at a single-segment sub-plan: the alternative simply
+  // holds the arm's content and yields.
   builder.setInsertionPointAfter(op);
   auto replicate = hir::ReplicateOp::create(builder, loc, list.getResult());
   analysis.opPhases[replicate] = p + 1;
 
   SmallVector<std::pair<Block *, const llvm::SetVector<Value> *>> remapBlocks;
-  Block *levelBlock = &replicate.getBody().emplaceBlock();
-  for (auto [k, segment] : llvm::enumerate(segments)) {
-    bool hasChain = k < numDivs;
-    // Block args mirror the record link this level consumes: the segment's
-    // samples, then (for a `continued` alternative whose divergence has
-    // rejoining content) the arm-choice, then the chain into the next level.
-    for (unsigned i = 0; i < segFields[k].size(); ++i)
-      levelBlock->addArgument(anyTy, loc);
-    Divergence *rejoin = (k >= 1 && !divergences[k - 1].rejoinContent.empty())
-                             ? &divergences[k - 1]
-                             : nullptr;
-    Value armChoiceArg;
-    if (rejoin) {
-      armChoiceArg = levelBlock->addArgument(anyTy, loc);
-      analysis.actualPhase[armChoiceArg] = p;
-    }
-    Value chainArg;
-    if (hasChain) {
-      chainArg = levelBlock->addArgument(anyTy, loc);
-      analysis.actualPhase[chainArg] = p;
-    }
-    remapBlocks.push_back({levelBlock, &segFields[k]});
+  std::function<void(BodyPlan &, Block *)> buildLevels = [&](BodyPlan &pl,
+                                                             Block *block0) {
+    Block *levelBlock = block0;
+    size_t numDivs = pl.divergences.size();
+    for (size_t k = 0; k < pl.segments.size(); ++k) {
+      bool hasChain = k < numDivs;
+      // Block args mirror the record link this level consumes: the segment's
+      // samples, then (for a `continued` alternative whose divergence has
+      // rejoining content) the arm-choice, then the chain into the next level.
+      for (unsigned i = 0; i < pl.segFields[k].size(); ++i)
+        levelBlock->addArgument(anyTy, loc);
+      Divergence *rejoin =
+          (k >= 1 && !pl.divergences[k - 1].rejoinContent.empty())
+              ? &pl.divergences[k - 1]
+              : nullptr;
+      Value armChoiceArg;
+      if (rejoin) {
+        armChoiceArg = levelBlock->addArgument(anyTy, loc);
+        analysis.actualPhase[armChoiceArg] = p;
+      }
+      Value chainArg;
+      if (hasChain) {
+        chainArg = levelBlock->addArgument(anyTy, loc);
+        analysis.actualPhase[chainArg] = p;
+      }
+      remapBlocks.push_back({levelBlock, &pl.segFields[k]});
 
-    // Replay the previous divergence's rejoining content before this segment,
-    // via a nested pick over its arm-choice (tag 0, the single rejoining arm).
-    if (rejoin) {
-      OpBuilder rejoinBuilder(levelBlock, levelBlock->end());
-      auto armPick =
-          hir::PickOp::create(rejoinBuilder, loc, TypeRange{}, armChoiceArg, 1);
-      analysis.opPhases[armPick] = p + 1;
-      auto &altBlock = armPick.getAlternatives()[0].emplaceBlock();
-      for (unsigned i = 0; i < rejoin->rejoinFields.size(); ++i)
-        altBlock.addArgument(anyTy, loc);
-      remapBlocks.push_back({&altBlock, &rejoin->rejoinFields});
-      for (auto *moved : rejoin->rejoinContent)
-        moved->moveBefore(&altBlock, altBlock.end());
-      OpBuilder altBuilder(&altBlock, altBlock.end());
-      auto altYield = hir::YieldOp::create(altBuilder, loc, ValueRange{});
-      analysis.opPhases[altYield] = p + 1;
-    }
-
-    for (auto *moved : segment)
-      moved->moveBefore(levelBlock, levelBlock->end());
-
-    Block *nextLevel = nullptr;
-    if (hasChain) {
-      auto &divergence = divergences[k];
-      OpBuilder levelBuilder(levelBlock, levelBlock->end());
-      auto pick = hir::PickOp::create(levelBuilder, loc, TypeRange{}, chainArg,
-                                      divergence.exits.size() + 1);
-      analysis.opPhases[pick] = p + 1;
-      for (auto [tag, exit] : llvm::enumerate(divergence.exits)) {
-        auto &altBlock = pick.getAlternatives()[tag].emplaceBlock();
-        for (unsigned i = 0; i < exit.fields.size(); ++i)
+      // Replay the previous divergence's rejoining content before this segment,
+      // via a nested pick over its arm-choice (tag 0, the single rejoining
+      // arm).
+      if (rejoin) {
+        OpBuilder rejoinBuilder(levelBlock, levelBlock->end());
+        auto armPick = hir::PickOp::create(rejoinBuilder, loc, TypeRange{},
+                                           armChoiceArg, 1);
+        analysis.opPhases[armPick] = p + 1;
+        auto &altBlock = armPick.getAlternatives()[0].emplaceBlock();
+        for (unsigned i = 0; i < rejoin->rejoinFields.size(); ++i)
           altBlock.addArgument(anyTy, loc);
-        remapBlocks.push_back({&altBlock, &exit.fields});
-        for (auto *moved : exit.content)
+        remapBlocks.push_back({&altBlock, &rejoin->rejoinFields});
+        for (auto *moved : rejoin->rejoinContent)
           moved->moveBefore(&altBlock, altBlock.end());
         OpBuilder altBuilder(&altBlock, altBlock.end());
         auto altYield = hir::YieldOp::create(altBuilder, loc, ValueRange{});
         analysis.opPhases[altYield] = p + 1;
       }
-      nextLevel =
-          &pick.getAlternatives()[divergence.exits.size()].emplaceBlock();
+
+      for (auto *moved : pl.segments[k])
+        moved->moveBefore(levelBlock, levelBlock->end());
+
+      Block *nextLevel = nullptr;
+      if (hasChain) {
+        auto &divergence = pl.divergences[k];
+        OpBuilder levelBuilder(levelBlock, levelBlock->end());
+        auto pick = hir::PickOp::create(levelBuilder, loc, TypeRange{},
+                                        chainArg, divergence.exits.size() + 1);
+        analysis.opPhases[pick] = p + 1;
+        for (size_t a = 0; a < divergence.exits.size(); ++a) {
+          auto &altBlock = pick.getAlternatives()[a].emplaceBlock();
+          buildLevels(*divergence.exits[a].plan, &altBlock);
+        }
+        nextLevel =
+            &pick.getAlternatives()[divergence.exits.size()].emplaceBlock();
+      }
+      OpBuilder levelBuilder(levelBlock, levelBlock->end());
+      auto levelYield = hir::YieldOp::create(levelBuilder, loc, ValueRange{});
+      analysis.opPhases[levelYield] = p + 1;
+      levelBlock = nextLevel;
     }
-    OpBuilder levelBuilder(levelBlock, levelBlock->end());
-    auto levelYield = hir::YieldOp::create(levelBuilder, loc, ValueRange{});
-    analysis.opPhases[levelYield] = p + 1;
-    levelBlock = nextLevel;
-  }
+  };
+  buildLevels(plan, &replicate.getBody().emplaceBlock());
 
   // Remap fields outermost-first so that deduplicated inner uses resolve to
   // the enclosing level's arguments, then clone floating trees once over the

@@ -367,46 +367,6 @@ uir.func @DivergenceLaterResult(%n: -1, %x: 0) -> (result: 0) {
 
 // -----
 
-// An exit-carrying arm that itself diverges (later-phase content plus a nested
-// exit) needs nested exit-path choices; not implemented.
-uir.func @NestedDivergence(%n: -1, %x: 0) -> (result: 0) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %zero = hir.constant_int 0 : %t
-  %one = hir.constant_int 1 : %t
-  %acc = hir.var : %t
-  uir.expr pin -1 {
-    uir.loop (%i = %zero : %t) {
-      %done = hir.geq %i, %n : %t
-      uir.if %done {
-        uir.expr pin 1 {
-          hir.write_var %acc, %i : %t
-          uir.yield
-        }
-        %d2 = hir.geq %i, %n : %t
-        // expected-error @below {{diverges inside an exit-carrying arm; nested divergence is not implemented in phase sorting yet}}
-        uir.if %d2 {
-          uir.break
-        }
-        uir.break
-      }
-      %next = hir.add %i, %one : %t
-      uir.expr pin 1 {
-        hir.write_var %acc, %i : %t
-        uir.yield
-      }
-      uir.continue %next : %t
-    }
-    uir.yield
-  }
-  %r = hir.read_var %acc : %t
-  uir.return %r : %t
-}
-
-// -----
-
 // An exit-carrying branch whose rejoining arm hides a nested exit needs
 // nested exit-path choices; not implemented.
 uir.func @RejoiningNestedExit(%n: -1, %x: 0) -> (result: 0) {
