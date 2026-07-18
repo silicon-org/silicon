@@ -424,11 +424,15 @@ uir.func @BreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// Rejoining-arm content: an exit-carrying branch whose rejoining arm holds dyn
-// content is rebuilt so the arm yields an arm-choice of the content's samples.
-// The choice rides the divergence's `continued` link, and the receiving
-// `continued` alternative dispatches it with a nested pick before the following
-// segment content, in program order.
+// Rejoining-arm content: a divergence with dyn content in its arms carries two
+// record slots. The cf choice (one tag per arm) dispatches the arm content's
+// replay and carries its samples; it is built at every arm-ending point — at
+// an exit site for a path that ends the activation inside the arm, at the arm
+// yield otherwise — and rides the rebuilt if's result on rejoining paths. The
+// reach choice gates the following segment: REACHED with the segment's samples
+// at the back edge, empty NOT_REACHED at exit sites. The receiving replicate
+// replays by data alone — a cf pick (arm dispatch), then a reach pick (segment
+// gate) — with no exit ops; a record's tags fully determine which content runs.
 
 uir.func @RejoiningArmContent(%n: -1, %x: 0) -> (result: 0) {
   %0 = hir.int_type
@@ -443,36 +447,120 @@ uir.func @RejoiningArmContent(%n: -1, %x: 0) -> (result: 0) {
     %list = hir.opaque_list_create
     uir.loop (%i = %zero : %t) {
       %done = hir.geq %i, %n : %t
-      %ac = uir.if %done : %ct {
-        %ex = hir.choice 0(%i)
-        %re = hir.opaque_pack(%ex)
-        hir.opaque_list_push %list, %re
+      %cf = uir.if %done : %ct {
+        %c0 = hir.choice 0(%i)
+        %l0 = hir.choice 0()
+        %r0 = hir.opaque_pack(%c0, %l0)
+        hir.opaque_list_push %list, %r0
         uir.break
       } else {
         %m = hir.add %i, %one : %t
-        %ac0 = hir.choice 0(%m)
-        uir.yield %ac0 : %ct
+        %c1 = hir.choice 1(%m)
+        uir.yield %c1 : %ct
       }
       %next = hir.add %i, %one : %t
-      %co = hir.choice 1(%i, %ac)
-      %rc = hir.opaque_pack(%co)
-      hir.opaque_list_push %list, %rc
+      %l1 = hir.choice 1(%i)
+      %r1 = hir.opaque_pack(%cf, %l1)
+      hir.opaque_list_push %list, %r1
       uir.continue %next : %t
     }
     uir.phase_return yield %list
   }
   uir.phase 0 {
     %vacc = hir.var : %t
-    hir.replicate (%rec) in %p {
-      hir.pick %rec [0 (%sc): {
-        hir.write_var %vacc, %sc : %t
+    hir.replicate (%cfr, %lr) in %p {
+      hir.pick %cfr [0 (%si): {
+        hir.write_var %vacc, %si : %t
         hir.yield
-      } 1 (%se, %acarg): {
-        hir.pick %acarg [0 (%sm): {
+      } 1 (%sm): {
+        hir.write_var %vacc, %sm : %t
+        hir.yield
+      }]
+      hir.pick %lr [0 (): {
+        hir.yield
+      } 1 (%se): {
+        hir.write_var %vacc, %se : %t
+        hir.yield
+      }]
+      hir.yield
+    }
+    %rd = hir.read_var %vacc : %t
+    uir.phase_return %rd : %t
+  }
+  uir.unreachable
+}
+
+//===----------------------------------------------------------------------===//
+// Shared arm prefix: dyn content before a nested exit inside a rejoining arm
+// runs on both the exit path and the fall-through. Its replay lives once in
+// the cf pick's arm alternative, ahead of the arm's own nested reach pick, so
+// no content is cloned across record variants. The cf payload nests the arm's
+// reach link (NOT_REACHED at the nested break, REACHED with the fall-through
+// samples at the arm yield). A post-branch sample (%g, effectful at phase -1)
+// exists only on continuing activations; it rides the loop-level reach
+// choice's REACHED payload, and exit records carry the empty NOT_REACHED tag.
+
+uir.func @SharedArmPrefix(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %ct = hir.choice_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  %p = uir.phase -1 {
+    %v = hir.var : %t
+    %list = hir.opaque_list_create
+    uir.loop (%i = %zero : %t) {
+      hir.write_var %v, %i : %t
+      %c = hir.geq %i, %n : %t
+      %cf = uir.if %c : %ct {
+        %d = hir.geq %n, %i : %t
+        uir.if %d {
+          %a0 = hir.choice 0()
+          %c0 = hir.choice 0(%i, %a0)
+          %l0 = hir.choice 0()
+          %r0 = hir.opaque_pack(%c0, %l0)
+          hir.opaque_list_push %list, %r0
+          uir.break
+        }
+        %m = hir.add %i, %one : %t
+        %a1 = hir.choice 1(%m)
+        %c1 = hir.choice 0(%i, %a1)
+        uir.yield %c1 : %ct
+      } else {
+        %c2 = hir.choice 1()
+        uir.yield %c2 : %ct
+      }
+      %g = hir.read_var %v : %t
+      %next = hir.add %i, %one : %t
+      %l1 = hir.choice 1(%g)
+      %r1 = hir.opaque_pack(%cf, %l1)
+      hir.opaque_list_push %list, %r1
+      uir.continue %next : %t
+    }
+    uir.phase_return yield %list
+  }
+  uir.phase 0 {
+    %vacc = hir.var : %t
+    hir.replicate (%cfr, %lr) in %p {
+      hir.pick %cfr [0 (%si, %alink): {
+        hir.write_var %vacc, %si : %t
+        hir.pick %alink [0 (): {
+          hir.yield
+        } 1 (%sm): {
           hir.write_var %vacc, %sm : %t
           hir.yield
         }]
-        hir.write_var %vacc, %se : %t
+        hir.yield
+      } 1 (): {
+        hir.yield
+      }]
+      hir.pick %lr [0 (): {
+        hir.yield
+      } 1 (%sg): {
+        hir.write_var %vacc, %sg : %t
         hir.yield
       }]
       hir.yield

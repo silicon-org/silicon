@@ -1987,12 +1987,13 @@ uir.func @BreakValueWithRecords(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// Rejoining-arm content: an exit-carrying branch whose rejoining arm holds
-// later-phase content is rebuilt so the arm yields an arm-choice of that
-// content's samples. The choice rides the divergence's `continued` link, and a
-// nested pick in the receiving `continued` alternative replays the arm content
-// before the following segment. The rejoining arm samples an arm-interior
-// phase -1 value (%m), which the arm-choice captures inside the arm.
+// Rejoining-arm content: a divergence with later-phase content in both arms
+// carries a cf choice tagging which arm ran, with the arm's samples as its
+// payload. The exit arm builds its cf (and the NOT_REACHED reach link) at its
+// break; the rejoining arm yields its cf, which becomes the rebuilt branch's
+// result and rides the back-edge record next to the REACHED reach link. The
+// rejoining arm samples an arm-interior phase -1 value (%m), which its cf tag
+// captures inside the arm.
 
 // CHECK-LABEL: uir.func @RejoiningArmContent
 uir.func @RejoiningArmContent(%n: -1, %x: 0) -> (result: 0) {
@@ -2008,22 +2009,20 @@ uir.func @RejoiningArmContent(%n: -1, %x: 0) -> (result: 0) {
   // CHECK-NEXT:   uir.loop ([[I:%.+]] = %{{.+}} : %{{.+}}) {
   // CHECK-NEXT:     [[DONE:%.+]] = hir.geq [[I]], %n
   // CHECK-NEXT:     hir.choice_type
-  // The rebuilt if yields the arm-choice; the exit arm breaks after pushing its
-  // own exit record.
-  // CHECK-NEXT:     [[AC:%.+]] = uir.if [[DONE]] : %{{.+}} {
-  // CHECK-NEXT:       [[EX:%.+]] = hir.choice 0([[I]])
-  // CHECK-NEXT:       [[RE:%.+]] = hir.opaque_pack([[EX]])
+  // CHECK-NEXT:     [[CF:%.+]] = uir.if [[DONE]] : %{{.+}} {
+  // CHECK-NEXT:       [[CF0:%.+]] = hir.choice 0([[I]])
+  // CHECK-NEXT:       [[NR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[RE:%.+]] = hir.opaque_pack([[CF0]], [[NR]])
   // CHECK-NEXT:       hir.opaque_list_push [[LIST]], [[RE]]
   // CHECK-NEXT:       uir.break
   // CHECK-NEXT:     } else {
   // CHECK-NEXT:       [[M:%.+]] = hir.add [[I]], %{{.+}}
-  // CHECK-NEXT:       [[AC0:%.+]] = hir.choice 0([[M]])
-  // CHECK-NEXT:       uir.yield [[AC0]]
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1([[M]])
+  // CHECK-NEXT:       uir.yield [[CF1]]
   // CHECK-NEXT:     }
   // CHECK-NEXT:     [[NEXT:%.+]] = hir.add [[I]], %{{.+}}
-  // The continued link carries the segment sample and the arm-choice.
-  // CHECK-NEXT:     [[CO:%.+]] = hir.choice 1([[I]], [[AC]])
-  // CHECK-NEXT:     [[RC:%.+]] = hir.opaque_pack([[CO]])
+  // CHECK-NEXT:     [[R:%.+]] = hir.choice 1([[I]])
+  // CHECK-NEXT:     [[RC:%.+]] = hir.opaque_pack([[CF]], [[R]])
   // CHECK-NEXT:     hir.opaque_list_push [[LIST]], [[RC]]
   // CHECK-NEXT:     uir.continue [[NEXT]]
   // CHECK-NEXT:   }
@@ -2055,19 +2054,21 @@ uir.func @RejoiningArmContent(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield
   }
+  // The receiving replicate replays by data alone: the cf pick dispatches the
+  // arm that ran, then the reach pick gates the following segment.
   // CHECK-NEXT: uir.phase 0 {
   // CHECK-NEXT:   [[ACC:%.+]] = hir.var
-  // CHECK-NEXT:   hir.replicate ([[REC:%.+]]) in %{{.+}} {
-  // CHECK-NEXT:     hir.pick [[REC]] [0 ([[SC:%.+]]): {
-  // CHECK-NEXT:       hir.write_var [[ACC]], [[SC]]
+  // CHECK-NEXT:   hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 ([[SI:%.+]]): {
+  // CHECK-NEXT:       hir.write_var [[ACC]], [[SI]]
   // CHECK-NEXT:       hir.yield
-  // The continued alternative dispatches the arm-choice (rejoining content)
-  // before the following segment content.
-  // CHECK-NEXT:     } 1 ([[SE:%.+]], [[ACARG:%.+]]): {
-  // CHECK-NEXT:       hir.pick [[ACARG]] [0 ([[SM:%.+]]): {
-  // CHECK-NEXT:         hir.write_var [[ACC]], [[SM]]
-  // CHECK-NEXT:         hir.yield
-  // CHECK-NEXT:       }]
+  // CHECK-NEXT:     } 1 ([[SM:%.+]]): {
+  // CHECK-NEXT:       hir.write_var [[ACC]], [[SM]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[SE:%.+]]): {
   // CHECK-NEXT:       hir.write_var [[ACC]], [[SE]]
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     }]
@@ -2083,10 +2084,11 @@ uir.func @RejoiningArmContent(%n: -1, %x: 0) -> (result: 0) {
 //===----------------------------------------------------------------------===//
 // An exit-carrying divergence whose rejoining arm yields a demanded later-phase
 // result. The result is the value the rejoining arm's later content produces,
-// so the arm-pick that replays that content is made valued: it yields the
-// result, and the following segment consumes the pick's result. The exit arm
-// (break) provides no result; on the break path the value never materializes,
-// and the consumer sits only in the `continued` alternative.
+// so the cf pick that replays that content is made valued: the rejoining arm's
+// alternative yields the result, the exit arm's alternative yields an
+// `uir.unreachable_value` (it provides none), and the following segment —
+// gated by the reach pick, so it never consumes the unreachable value —
+// writes the pick's result.
 
 // CHECK-LABEL: uir.func @DivergenceLaterResult
 uir.func @DivergenceLaterResult(%n: -1, %x: 0) -> (result: 0) {
@@ -2097,25 +2099,26 @@ uir.func @DivergenceLaterResult(%n: -1, %x: 0) -> (result: 0) {
   %zero = hir.constant_int 0 : %t
   %one = hir.constant_int 1 : %t
   %acc = hir.var : %t
-  // The rebuilt if drops the later result and yields only the arm-choice; the
-  // exit arm pushes its own exit record and breaks.
+  // The rebuilt if drops the later result and yields only the cf choice; the
+  // exit arm pushes its own record and breaks.
   // CHECK: uir.phase -1 {
   // CHECK-NEXT:   [[LIST:%.+]] = hir.opaque_list_create
   // CHECK-NEXT:   uir.loop ([[I:%.+]] = %{{.+}} : %{{.+}}) {
   // CHECK-NEXT:     [[DONE:%.+]] = hir.geq [[I]], %n
   // CHECK-NEXT:     hir.choice_type
-  // CHECK-NEXT:     [[AC:%.+]] = uir.if [[DONE]] : %{{.+}} {
-  // CHECK-NEXT:       [[EX:%.+]] = hir.choice 0()
-  // CHECK-NEXT:       [[RE:%.+]] = hir.opaque_pack([[EX]])
+  // CHECK-NEXT:     [[CF:%.+]] = uir.if [[DONE]] : %{{.+}} {
+  // CHECK-NEXT:       [[CF0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[NR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[RE:%.+]] = hir.opaque_pack([[CF0]], [[NR]])
   // CHECK-NEXT:       hir.opaque_list_push [[LIST]], [[RE]]
   // CHECK-NEXT:       uir.break
   // CHECK-NEXT:     } else {
-  // CHECK-NEXT:       [[AC0:%.+]] = hir.choice 0()
-  // CHECK-NEXT:       uir.yield [[AC0]]
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.yield [[CF1]]
   // CHECK-NEXT:     }
   // CHECK-NEXT:     [[NEXT:%.+]] = hir.add [[I]], %{{.+}}
-  // CHECK-NEXT:     [[CO:%.+]] = hir.choice 1([[AC]])
-  // CHECK-NEXT:     [[RC:%.+]] = hir.opaque_pack([[CO]])
+  // CHECK-NEXT:     [[R:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     [[RC:%.+]] = hir.opaque_pack([[CF]], [[R]])
   // CHECK-NEXT:     hir.opaque_list_push [[LIST]], [[RC]]
   // CHECK-NEXT:     uir.continue [[NEXT]]
   // CHECK-NEXT:   }
@@ -2142,19 +2145,21 @@ uir.func @DivergenceLaterResult(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield
   }
-  // The continued alternative's arm-pick is valued: it reconstructs the later
-  // result by yielding the rejoining arm's content value, which the following
-  // segment then writes.
+  // The valued cf pick reconstructs the later result; the reach pick gates
+  // the consuming segment.
   // CHECK-NEXT: uir.phase 0 {
   // CHECK-NEXT:   [[ACC:%.+]] = hir.var
-  // CHECK-NEXT:   hir.replicate ([[REC:%.+]]) in %{{.+}} {
-  // CHECK-NEXT:     hir.pick [[REC]] [0 (): {
+  // CHECK-NEXT:   hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     [[RES:%.+]] = hir.pick [[CFR]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:       hir.yield [[UV]] : !hir.any
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       [[S:%.+]] = hir.add %x, %x
+  // CHECK-NEXT:       hir.yield [[S]] : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
   // CHECK-NEXT:       hir.yield
-  // CHECK-NEXT:     } 1 ([[ACARG:%.+]]): {
-  // CHECK-NEXT:       [[RES:%.+]] = hir.pick [[ACARG]] : !hir.any [0 (): {
-  // CHECK-NEXT:         [[S:%.+]] = hir.add %x, %x
-  // CHECK-NEXT:         hir.yield [[S]] : !hir.any
-  // CHECK-NEXT:       }]
+  // CHECK-NEXT:     } 1 (): {
   // CHECK-NEXT:       hir.write_var [[ACC]], [[RES]]
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     }]
@@ -2182,15 +2187,17 @@ uir.func @RejoiningArmTrailingEmpty(%n: -1, %x: 0) -> () {
   %one = hir.constant_int 1 : %t
   %acc = hir.var : %t
   // CHECK: uir.phase -1 {
-  // CHECK:     [[AC:%.+]] = uir.if %{{.+}} : %{{.+}} {
+  // CHECK:     [[CF:%.+]] = uir.if %{{.+}} : %{{.+}} {
+  // CHECK-NEXT:       hir.choice 0()
   // CHECK-NEXT:       hir.choice 0()
   // CHECK:            uir.break
   // CHECK-NEXT:     } else {
-  // CHECK-NEXT:       [[AC0:%.+]] = hir.choice 0([[I:%.+]])
-  // CHECK-NEXT:       uir.yield [[AC0]]
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1([[I:%.+]])
+  // CHECK-NEXT:       uir.yield [[CF1]]
   // CHECK-NEXT:     }
-  // The continued link carries only the arm-choice (empty trailing segment).
-  // CHECK:          [[CO:%.+]] = hir.choice 1([[AC]])
+  // The back-edge reach link carries no payload (empty trailing segment).
+  // CHECK:          [[R:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.opaque_pack([[CF]], [[R]])
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       %done = hir.geq %i, %n : %t
@@ -2208,14 +2215,16 @@ uir.func @RejoiningArmTrailingEmpty(%n: -1, %x: 0) -> () {
     }
     uir.yield
   }
-  // CHECK: hir.replicate ([[REC:%.+]]) in %{{.+}} {
-  // CHECK-NEXT:     hir.pick [[REC]] [0 (): {
+  // CHECK: hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 (): {
   // CHECK-NEXT:       hir.yield
-  // CHECK-NEXT:     } 1 ([[ACARG:%.+]]): {
-  // CHECK-NEXT:       hir.pick [[ACARG]] [0 ([[SM:%.+]]): {
-  // CHECK-NEXT:         hir.write_var %{{.+}}, [[SM]]
-  // CHECK-NEXT:         hir.yield
-  // CHECK-NEXT:       }]
+  // CHECK-NEXT:     } 1 ([[SI:%.+]]): {
+  // CHECK-NEXT:       hir.write_var %{{.+}}, [[SI]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     }]
   uir.return
@@ -2237,24 +2246,28 @@ uir.func @TwoDivergencesRejoin(%n: -1, %x: 0) -> (result: 0) {
   %one = hir.constant_int 1 : %t
   %acc = hir.var : %t
   // CHECK: uir.phase -1 {
-  // CHECK:     [[AC0:%.+]] = uir.if %{{.+}} : %{{.+}} {
+  // CHECK:     [[CFA:%.+]] = uir.if %{{.+}} : %{{.+}} {
   // CHECK:            uir.break
   // CHECK-NEXT:     } else {
-  // CHECK-NEXT:       [[C0:%.+]] = hir.choice 0([[I:%.+]])
-  // CHECK-NEXT:       uir.yield [[C0]]
+  // CHECK-NEXT:       [[CA1:%.+]] = hir.choice 1([[I:%.+]])
+  // CHECK-NEXT:       uir.yield [[CA1]]
   // CHECK-NEXT:     }
-  // The second divergence's exit record wraps div0's continued link (ac0).
-  // CHECK:     [[AC1:%.+]] = uir.if %{{.+}} : %{{.+}} {
-  // CHECK-NEXT:       hir.choice 0()
-  // CHECK-NEXT:       hir.choice 1([[AC0]], %{{.+}})
+  // The second divergence's exit record carries div0's cf result and a
+  // REACHED div0 link wrapping div1's exit-built cf and NOT_REACHED link.
+  // CHECK:     [[CFB:%.+]] = uir.if %{{.+}} : %{{.+}} {
+  // CHECK-NEXT:       [[XB:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[XNR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[XR:%.+]] = hir.choice 1([[XB]], [[XNR]])
+  // CHECK-NEXT:       hir.opaque_pack([[CFA]], [[XR]])
   // CHECK:            uir.break
   // CHECK-NEXT:     } else {
-  // CHECK-NEXT:       hir.choice 0()
-  // CHECK-NEXT:       uir.yield
+  // CHECK-NEXT:       [[CB1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.yield [[CB1]]
   // CHECK-NEXT:     }
-  // The full record nests both continued links and both arm-choices.
-  // CHECK:          [[TAIL:%.+]] = hir.choice 1([[AC1]])
-  // CHECK-NEXT:     hir.choice 1([[AC0]], [[TAIL]])
+  // The full record nests div1's slots inside div0's REACHED link.
+  // CHECK:          [[R1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     [[R0:%.+]] = hir.choice 1([[CFB]], [[R1]])
+  // CHECK-NEXT:     hir.opaque_pack([[CFA]], [[R0]])
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       %d1 = hir.geq %i, %n : %t
@@ -2286,19 +2299,25 @@ uir.func @TwoDivergencesRejoin(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield
   }
-  // CHECK: hir.replicate ([[REC:%.+]]) in %{{.+}} {
-  // CHECK:     hir.pick [[REC]] [0 (): {
-  // CHECK:     } 1 ([[A0:%.+]], [[CHAIN:%.+]]): {
-  // div0 rejoining content, then the middle segment, then div1's pick.
-  // CHECK-NEXT:       hir.pick [[A0]] [0 ([[SM0:%.+]]): {
-  // CHECK-NEXT:         hir.write_var %{{.+}}, [[SM0]]
-  // CHECK:            }]
+  // div0's cf pick (arm content), then div0's reach pick gating the middle
+  // segment, div1's cf pick, and div1's reach pick, nested in program order.
+  // CHECK: hir.replicate ([[CF0:%.+]], [[L0:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.pick [[CF0]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[SM0:%.+]]): {
+  // CHECK-NEXT:       hir.write_var %{{.+}}, [[SM0]]
+  // CHECK:          }]
+  // CHECK-NEXT:     hir.pick [[L0]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[CF1:%.+]], [[L1:%.+]]): {
   // CHECK-NEXT:       hir.write_var %{{.+}}, %n
-  // CHECK-NEXT:       hir.pick [[CHAIN]] [0 (): {
-  // CHECK:            } 1 ([[A1:%.+]]): {
-  // CHECK-NEXT:         hir.pick [[A1]] [0 (): {
-  // CHECK-NEXT:           hir.write_var
-  // CHECK:              }]
+  // CHECK-NEXT:       hir.pick [[CF1]] [0 (): {
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       } 1 (): {
+  // CHECK-NEXT:         hir.write_var
+  // CHECK:            }]
+  // CHECK-NEXT:       hir.pick [[L1]] [0 (): {
+  // CHECK:            }]
   %r = hir.read_var %acc : %t
   uir.return %r : %t
 }
@@ -2306,9 +2325,9 @@ uir.func @TwoDivergencesRejoin(%n: -1, %x: 0) -> (result: 0) {
 //===----------------------------------------------------------------------===//
 // Nested exit inside an exit-carrying arm: the `if done` continue-arm is not
 // straight-line -- it carries content, a nested exit-carrying `if d2`, and its
-// own `break`. The exit arm decomposes recursively: its `exited` chain link
-// nests a sub-chain over the nested divergence, and the receiving `exited`
-// alternative holds a nested pick over that sub-chain. Both nested paths run no
+// own `break`. The arm decomposes recursively: its cf payload nests the arm's
+// first-segment samples and the nested divergence's reach link, and the
+// receiving cf alternative holds a nested reach pick. Both nested paths run no
 // further content here, so both sub-alternatives are empty.
 
 // CHECK-LABEL: uir.func @NestedExitArm
@@ -2323,25 +2342,30 @@ uir.func @NestedExitArm(%n: -1, %x: 0) -> (result: 0) {
   // CHECK: uir.phase -1 {
   // CHECK-NEXT:   [[LIST:%.+]] = hir.opaque_list_create
   // CHECK-NEXT:   uir.loop ([[I:%.+]] = %{{.+}} : %{{.+}}) {
-  // CHECK:          uir.if %{{.+}} {
-  // The nested `if d2` exit: exited(div0) wraps exited(sub_div0) (empty).
+  // CHECK:          uir.if %{{.+}} : %{{.+}} {
+  // The nested `if d2` exit: the arm's cf nests a NOT_REACHED arm link.
   // CHECK:            uir.if %{{.+}} {
-  // CHECK-NEXT:         [[SE:%.+]] = hir.choice 0()
-  // CHECK-NEXT:         [[EE:%.+]] = hir.choice 0([[I]], [[SE]])
-  // CHECK-NEXT:         hir.opaque_pack([[EE]])
+  // CHECK-NEXT:         [[SNR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         [[EE:%.+]] = hir.choice 0([[I]], [[SNR]])
+  // CHECK-NEXT:         [[NR0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.opaque_pack([[EE]], [[NR0]])
   // CHECK-NEXT:         hir.opaque_list_push [[LIST]]
   // CHECK-NEXT:         uir.break
   // CHECK-NEXT:       }
-  // The outer `break`: exited(div0) wraps continued(sub_div0) (empty payload).
-  // CHECK-NEXT:       [[SC:%.+]] = hir.choice 1()
-  // CHECK-NEXT:       [[EC:%.+]] = hir.choice 0([[I]], [[SC]])
-  // CHECK-NEXT:       hir.opaque_pack([[EC]])
+  // The outer `break`: the arm's cf nests a REACHED arm link (empty payload).
+  // CHECK-NEXT:       [[SR:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       [[EC:%.+]] = hir.choice 0([[I]], [[SR]])
+  // CHECK-NEXT:       [[NR1:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.opaque_pack([[EC]], [[NR1]])
   // CHECK-NEXT:       hir.opaque_list_push [[LIST]]
   // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.yield [[CF1]]
   // CHECK-NEXT:     }
-  // The body back-edge: continued(div0) carrying the trailing segment sample.
-  // CHECK:          [[BC:%.+]] = hir.choice 1([[I]])
-  // CHECK-NEXT:     hir.opaque_pack([[BC]])
+  // The body back-edge: a REACHED link carrying the trailing segment sample.
+  // CHECK:          [[BR:%.+]] = hir.choice 1([[I]])
+  // CHECK-NEXT:     hir.opaque_pack(%{{.+}}, [[BR]])
   // CHECK-NEXT:     hir.opaque_list_push [[LIST]]
   // CHECK-NEXT:     uir.continue
   uir.expr pin -1 {
@@ -2369,14 +2393,19 @@ uir.func @NestedExitArm(%n: -1, %x: 0) -> (result: 0) {
   }
   // CHECK: uir.phase 0 {
   // CHECK-NEXT:   [[ACC:%.+]] = hir.var
-  // CHECK-NEXT:   hir.replicate ([[REC:%.+]]) in %{{.+}} {
-  // CHECK-NEXT:     hir.pick [[REC]] [0 ([[BARG:%.+]], [[SUB:%.+]]): {
+  // CHECK-NEXT:   hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 ([[BARG:%.+]], [[SUB:%.+]]): {
   // CHECK-NEXT:       hir.write_var [[ACC]], [[BARG]]
   // CHECK-NEXT:       hir.pick [[SUB]] [0 (): {
   // CHECK-NEXT:         hir.yield
   // CHECK-NEXT:       } 1 (): {
   // CHECK-NEXT:         hir.yield
   // CHECK-NEXT:       }]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     } 1 ([[DARG:%.+]]): {
   // CHECK-NEXT:       hir.write_var [[ACC]], [[DARG]]
@@ -2392,8 +2421,8 @@ uir.func @NestedExitArm(%n: -1, %x: 0) -> (result: 0) {
 // Nested exit inside a continue-arm carrying content on both nested paths. The
 // exit arm runs content B, then a nested exit-carrying `if d`, then content C
 // before its `continue`. Distinct arm-interior samples (%e for B, %f for C)
-// cross via the nesting: %e rides the `exited(div0)` payload (visible on both
-// nested paths), %f rides the nested `continued` link (only the fall-through).
+// cross via the cf nesting: %e rides the arm's cf payload (visible on both
+// nested paths), %f rides the arm's REACHED link (only the fall-through).
 
 // CHECK-LABEL: uir.func @NestedExitArmContent
 uir.func @NestedExitArmContent(%n: -1, %x: 0) -> (result: 0) {
@@ -2407,27 +2436,35 @@ uir.func @NestedExitArmContent(%n: -1, %x: 0) -> (result: 0) {
   // CHECK: uir.phase -1 {
   // CHECK-NEXT:   [[LIST:%.+]] = hir.opaque_list_create
   // CHECK-NEXT:   uir.loop ([[I:%.+]] = %{{.+}} : %{{.+}}) {
-  // CHECK:          uir.if %{{.+}} {
+  // CHECK:          uir.if %{{.+}} : %{{.+}} {
   // CHECK-NEXT:       [[E:%.+]] = hir.add [[I]], %{{.+}}
   // CHECK-NEXT:       [[D:%.+]] = hir.geq %n, [[I]]
-  // The nested break: exited(div0)(%e, exited(sub_div0)()).
+  // The nested break: cf(%e, NOT_REACHED()), loop link NOT_REACHED.
   // CHECK-NEXT:       uir.if [[D]] {
-  // CHECK-NEXT:         [[SE:%.+]] = hir.choice 0()
-  // CHECK-NEXT:         [[EE:%.+]] = hir.choice 0([[E]], [[SE]])
-  // CHECK-NEXT:         hir.opaque_pack([[I]], [[EE]])
+  // CHECK-NEXT:         [[SNR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         [[EE:%.+]] = hir.choice 0([[E]], [[SNR]])
+  // CHECK-NEXT:         [[NR0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.opaque_pack([[I]], [[EE]], [[NR0]])
   // CHECK-NEXT:         hir.opaque_list_push [[LIST]]
   // CHECK-NEXT:         uir.break
   // CHECK-NEXT:       }
-  // The arm continue: exited(div0)(%e, continued(sub_div0)(%f)).
+  // The arm continue: cf(%e, REACHED(%f)), loop link NOT_REACHED — the arm
+  // ends the activation, so the trailing segment does not run.
   // CHECK-NEXT:       [[F:%.+]] = hir.add [[E]], %{{.+}}
-  // CHECK-NEXT:       [[SC:%.+]] = hir.choice 1([[F]])
-  // CHECK-NEXT:       [[EC:%.+]] = hir.choice 0([[E]], [[SC]])
-  // CHECK-NEXT:       hir.opaque_pack([[I]], [[EC]])
+  // CHECK-NEXT:       [[SR:%.+]] = hir.choice 1([[F]])
+  // CHECK-NEXT:       [[EC:%.+]] = hir.choice 0([[E]], [[SR]])
+  // CHECK-NEXT:       [[NR1:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.opaque_pack([[I]], [[EC]], [[NR1]])
   // CHECK-NEXT:       hir.opaque_list_push [[LIST]]
   // CHECK-NEXT:       uir.continue [[I]]
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.yield [[CF1]]
   // CHECK-NEXT:     }
-  // CHECK:          [[BC:%.+]] = hir.choice 1()
-  // CHECK-NEXT:     hir.opaque_pack([[I]], [[BC]])
+  // The back edge: a REACHED link with no payload — the trailing segment's
+  // sample deduplicates against the record's shared prefix field.
+  // CHECK:          [[BR:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.opaque_pack([[I]], %{{.+}}, [[BR]])
   // CHECK-NEXT:     hir.opaque_list_push [[LIST]]
   // CHECK-NEXT:     uir.continue
   uir.expr pin -1 {
@@ -2465,9 +2502,9 @@ uir.func @NestedExitArmContent(%n: -1, %x: 0) -> (result: 0) {
   }
   // CHECK: uir.phase 0 {
   // CHECK-NEXT:   [[ACC:%.+]] = hir.var
-  // CHECK-NEXT:   hir.replicate ([[SI:%.+]], [[REC:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:   hir.replicate ([[SI:%.+]], [[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
   // CHECK-NEXT:     hir.write_var [[ACC]], [[SI]]
-  // CHECK-NEXT:     hir.pick [[REC]] [0 ([[EARG:%.+]], [[SUB:%.+]]): {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 ([[EARG:%.+]], [[SUB:%.+]]): {
   // CHECK-NEXT:       hir.write_var [[ACC]], [[EARG]]
   // CHECK-NEXT:       hir.pick [[SUB]] [0 (): {
   // CHECK-NEXT:         hir.yield
@@ -2475,6 +2512,11 @@ uir.func @NestedExitArmContent(%n: -1, %x: 0) -> (result: 0) {
   // CHECK-NEXT:         hir.write_var [[ACC]], [[FARG]]
   // CHECK-NEXT:         hir.yield
   // CHECK-NEXT:       }]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     } 1 (): {
   // CHECK-NEXT:       hir.write_var [[ACC]], [[SI]]
@@ -2488,11 +2530,11 @@ uir.func @NestedExitArmContent(%n: -1, %x: 0) -> (result: 0) {
 
 //===----------------------------------------------------------------------===//
 // Recursive rejoining content: a nested exit-carrying `if d` inside the
-// continue-arm of `if c` has a rejoining arm holding later-phase content X. The
-// nested divergence is rebuilt to yield an arm-choice; the choice rides the
-// nested `continued` link, and the receiving nested `continued` alternative
-// replays X (via an arm-pick) before the following segment C. Case 7a composes
-// under case 7b-i with no extra machinery.
+// continue-arm of `if c` has a rejoining arm holding later-phase content X.
+// The nested divergence gets its own cf choice inside the arm's plan: it
+// rides the arm's cf payload next to the arm's reach link, and the receiving
+// arm alternative dispatches it with a nested cf pick before the nested reach
+// pick gating the following segment C.
 
 // CHECK-LABEL: uir.func @NestedRejoinInExitArm
 uir.func @NestedRejoinInExitArm(%n: -1, %x: 0) -> (result: 0) {
@@ -2504,16 +2546,26 @@ uir.func @NestedRejoinInExitArm(%n: -1, %x: 0) -> (result: 0) {
   %one = hir.constant_int 1 : %t
   %acc = hir.var : %t
   // CHECK: uir.phase -1 {
-  // The nested `if d` is rebuilt with an arm-choice result.
-  // CHECK:          [[AC:%.+]] = uir.if %{{.+}} : %{{.+}} {
-  // CHECK-NEXT:       hir.choice 0()
-  // CHECK:            uir.break
-  // CHECK-NEXT:     } else {
-  // CHECK:            [[ACHOICE:%.+]] = hir.choice 0(%{{.+}})
-  // CHECK-NEXT:       uir.yield [[ACHOICE]]
-  // CHECK-NEXT:     }
-  // The arm continue: continued(sub_div0) carries segment %f and the arm-choice.
-  // CHECK:          [[SC:%.+]] = hir.choice 1(%{{.+}}, [[AC]])
+  // CHECK:          uir.if %{{.+}} : %{{.+}} {
+  // CHECK-NEXT:       [[E:%.+]] = hir.add
+  // CHECK-NEXT:       hir.geq
+  // CHECK-NEXT:       hir.choice_type
+  // The nested `if d` is rebuilt with its own cf result; its break site
+  // builds the whole record bottom-up.
+  // CHECK-NEXT:       [[NCF:%.+]] = uir.if %{{.+}} : %{{.+}} {
+  // CHECK-NEXT:         [[XC:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         [[XNR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.choice 0([[E]], [[XC]], [[XNR]])
+  // CHECK:              uir.break
+  // CHECK-NEXT:       } else {
+  // CHECK:              [[NCF1:%.+]] = hir.choice 1(%{{.+}})
+  // CHECK-NEXT:         uir.yield [[NCF1]]
+  // CHECK-NEXT:       }
+  // The arm continue: the arm's cf carries B's sample, the nested cf result,
+  // and the arm's REACHED link with segment %f.
+  // CHECK-NEXT:       [[F:%.+]] = hir.add
+  // CHECK-NEXT:       [[SR:%.+]] = hir.choice 1([[F]])
+  // CHECK-NEXT:       hir.choice 0([[E]], [[NCF]], [[SR]])
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       %c = hir.geq %i, %n : %t
@@ -2550,17 +2602,20 @@ uir.func @NestedRejoinInExitArm(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield
   }
-  // The nested continued alternative replays X before segment C, in order.
+  // The arm alternative replays B, dispatches X via the nested cf pick, then
+  // gates C behind the arm's reach pick, in program order.
   // CHECK: hir.replicate
-  // CHECK:     hir.pick %{{.+}} [0 ([[EARG:%.+]], [[SUB:%.+]]): {
+  // CHECK:     hir.pick %{{.+}} [0 ([[EARG:%.+]], [[NCFR:%.+]], [[SUB:%.+]]): {
   // CHECK-NEXT:       hir.write_var [[ACC:%.+]], [[EARG]]
+  // CHECK-NEXT:       hir.pick [[NCFR]] [0 (): {
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       } 1 ([[GARG:%.+]]): {
+  // CHECK-NEXT:         hir.write_var [[ACC]], [[GARG]]
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       }]
   // CHECK-NEXT:       hir.pick [[SUB]] [0 (): {
   // CHECK-NEXT:         hir.yield
-  // CHECK-NEXT:       } 1 ([[FARG:%.+]], [[ACARG:%.+]]): {
-  // CHECK-NEXT:         hir.pick [[ACARG]] [0 ([[GARG:%.+]]): {
-  // CHECK-NEXT:           hir.write_var [[ACC]], [[GARG]]
-  // CHECK-NEXT:           hir.yield
-  // CHECK-NEXT:         }]
+  // CHECK-NEXT:       } 1 ([[FARG:%.+]]): {
   // CHECK-NEXT:         hir.write_var [[ACC]], [[FARG]]
   // CHECK-NEXT:         hir.yield
   // CHECK-NEXT:       }]
@@ -2569,11 +2624,11 @@ uir.func @NestedRejoinInExitArm(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// A rejoining arm that hides a nested exit but runs no fall-through content. The
-// arm is a block like the loop body: its nested exit builds its own record under
-// the arm's exit tag, and its content-free fall-through takes the `continued`
-// tag with no arm-choice. The `if` gains a second exit tag (then=0, else=1),
-// and the receiving pick a third alternative (continued=2).
+// A rejoining arm that hides a nested exit but runs no fall-through content.
+// The arm is a block like the loop body: its nested exit builds its record
+// with the arm's cf tag wrapping a NOT_REACHED arm link, and its content-free
+// fall-through yields the same tag with a REACHED arm link. The cf stays
+// binary (one tag per arm) and the reach link gates the back edge.
 
 // CHECK-LABEL: uir.func @RejoiningNestedExit
 uir.func @RejoiningNestedExit(%n: -1, %x: 0) -> (result: 0) {
@@ -2587,24 +2642,28 @@ uir.func @RejoiningNestedExit(%n: -1, %x: 0) -> (result: 0) {
   // CHECK: uir.phase -1 {
   // CHECK-NEXT:   [[LIST:%.+]] = hir.opaque_list_create
   // CHECK-NEXT:   uir.loop ([[I:%.+]] = %{{.+}} : %{{.+}}) {
-  // The then arm exits (tag 0) after pushing content %i.
-  // CHECK:          uir.if %{{.+}} {
-  // CHECK-NEXT:       [[EX0:%.+]] = hir.choice 0([[I]])
-  // CHECK-NEXT:       hir.opaque_pack([[EX0]])
+  // The then arm exits (cf tag 0) after pushing content %i.
+  // CHECK:          uir.if %{{.+}} : %{{.+}} {
+  // CHECK-NEXT:       [[CF0:%.+]] = hir.choice 0([[I]])
+  // CHECK-NEXT:       [[NR0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.opaque_pack([[CF0]], [[NR0]])
   // CHECK:            uir.break
-  // The else arm rejoins but hides a nested exit (tag 1) with an empty sub-chain.
+  // The else arm's nested exit wraps a NOT_REACHED arm link in cf tag 1.
   // CHECK:          } else {
   // CHECK:            uir.if %{{.+}} {
-  // CHECK-NEXT:         [[SUB:%.+]] = hir.choice 0()
-  // CHECK-NEXT:         [[EX1:%.+]] = hir.choice 1([[SUB]])
-  // CHECK-NEXT:         hir.opaque_pack([[EX1]])
+  // CHECK-NEXT:         [[SNR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         [[CF1X:%.+]] = hir.choice 1([[SNR]])
+  // CHECK-NEXT:         [[NR1:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.opaque_pack([[CF1X]], [[NR1]])
   // CHECK:              uir.break
   // CHECK-NEXT:       }
-  // CHECK-NEXT:       uir.yield
+  // The content-free fall-through yields cf tag 1 with a REACHED arm link.
+  // CHECK-NEXT:       [[SRR:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1([[SRR]])
+  // CHECK-NEXT:       uir.yield [[CF1]]
   // CHECK-NEXT:     }
-  // The content-free fall-through takes the continued tag (2).
-  // CHECK:          [[CO:%.+]] = hir.choice 2()
-  // CHECK-NEXT:     hir.opaque_pack([[CO]])
+  // CHECK:          [[R:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.opaque_pack(%{{.+}}, [[R]])
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       %done = hir.geq %i, %n : %t
@@ -2624,8 +2683,8 @@ uir.func @RejoiningNestedExit(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield
   }
-  // CHECK: hir.replicate ([[REC:%.+]]) in %{{.+}} {
-  // CHECK-NEXT:     hir.pick [[REC]] [0 ([[BARG:%.+]]): {
+  // CHECK: hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 ([[BARG:%.+]]): {
   // CHECK-NEXT:       hir.write_var %{{.+}}, [[BARG]]
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     } 1 ([[SUBARG:%.+]]): {
@@ -2635,7 +2694,10 @@ uir.func @RejoiningNestedExit(%n: -1, %x: 0) -> (result: 0) {
   // CHECK-NEXT:         hir.yield
   // CHECK-NEXT:       }]
   // CHECK-NEXT:       hir.yield
-  // CHECK-NEXT:     } 2 (): {
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     }]
   %r = hir.read_var %acc : %t
@@ -2643,12 +2705,13 @@ uir.func @RejoiningNestedExit(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// Both arms of an exit-carrying `if` rejoin, and one hides a nested exit. Both
-// arms carry fall-through content, so the arm-choice has one tag per rejoining
-// arm (then=0, else=1). The else arm's nested exit builds an exit record (exit
-// tag 0) while its fall-through content %f rides the arm-choice, not the exit
-// record. The receiving continued alternative dispatches the two-tag arm-choice
-// (replaying %e or %f), then runs the trailing segment %i in program order.
+// Both arms of an exit-carrying `if` rejoin, and one hides a nested exit.
+// Both arms carry fall-through content, so the cf choice has one tag per arm
+// (then=0, else=1) carrying that arm's samples. The else arm's nested exit
+// builds its record with cf tag 1 wrapping a NOT_REACHED arm link, while the
+// fall-through yields tag 1 with %f in the REACHED arm link. The receiving cf
+// pick replays %e or the else arm's nested structure, then the reach pick
+// runs the trailing segment %i.
 
 // CHECK-LABEL: uir.func @ExArmsRejoinNestedExit
 uir.func @ExArmsRejoinNestedExit(%n: -1, %x: 0) -> (result: 0) {
@@ -2660,26 +2723,31 @@ uir.func @ExArmsRejoinNestedExit(%n: -1, %x: 0) -> (result: 0) {
   %one = hir.constant_int 1 : %t
   %acc = hir.var : %t
   // CHECK: uir.phase -1 {
-  // CHECK:          [[AC:%.+]] = uir.if %{{.+}} : %{{.+}} {
-  // Then rejoins with content %e as arm-choice tag 0.
+  // CHECK:          [[CF:%.+]] = uir.if %{{.+}} : %{{.+}} {
+  // Then rejoins with content %e as cf tag 0 (no nested divergence, so the
+  // payload is just the arm's samples).
   // CHECK-NEXT:       [[E:%.+]] = hir.add
-  // CHECK-NEXT:       [[AC0:%.+]] = hir.choice 0([[E]])
-  // CHECK-NEXT:       uir.yield [[AC0]]
+  // CHECK-NEXT:       [[CF0:%.+]] = hir.choice 0([[E]])
+  // CHECK-NEXT:       uir.yield [[CF0]]
   // CHECK-NEXT:     } else {
-  // Else hides a nested exit (exit tag 0, empty payload) and rejoins with %f as
-  // arm-choice tag 1.
+  // The else arm's nested exit wraps a NOT_REACHED arm link in cf tag 1; its
+  // fall-through yields tag 1 with %f in the REACHED arm link.
   // CHECK:            uir.if %{{.+}} {
-  // CHECK-NEXT:         [[SUB:%.+]] = hir.choice 0()
-  // CHECK-NEXT:         [[EX:%.+]] = hir.choice 0([[SUB]])
-  // CHECK-NEXT:         hir.opaque_pack([[EX]])
+  // CHECK-NEXT:         [[SNR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         [[CF1X:%.+]] = hir.choice 1([[SNR]])
+  // CHECK-NEXT:         [[NR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.opaque_pack([[CF1X]], [[NR]])
   // CHECK:              uir.break
   // CHECK-NEXT:       }
   // CHECK-NEXT:       [[F:%.+]] = hir.add
-  // CHECK-NEXT:       [[AC1:%.+]] = hir.choice 1([[F]])
-  // CHECK-NEXT:       uir.yield [[AC1]]
+  // CHECK-NEXT:       [[SR:%.+]] = hir.choice 1([[F]])
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1([[SR]])
+  // CHECK-NEXT:       uir.yield [[CF1]]
   // CHECK-NEXT:     }
-  // The continued record carries the trailing segment %i and the arm-choice.
-  // CHECK:          [[CO:%.+]] = hir.choice 1([[I:%.+]], [[AC]])
+  // The back-edge record carries the cf result and the trailing segment %i in
+  // the REACHED link.
+  // CHECK:          [[R:%.+]] = hir.choice 1([[I:%.+]])
+  // CHECK-NEXT:     hir.opaque_pack([[CF]], [[R]])
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       %c = hir.geq %i, %n : %t
@@ -2709,23 +2777,24 @@ uir.func @ExArmsRejoinNestedExit(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield
   }
-  // CHECK: hir.replicate ([[REC:%.+]]) in %{{.+}} {
-  // CHECK-NEXT:     hir.pick [[REC]] [0 ([[SUBARG:%.+]]): {
-  // CHECK-NEXT:       hir.pick [[SUBARG]] [0 (): {
-  // CHECK-NEXT:         hir.yield
-  // CHECK-NEXT:       } 1 (): {
-  // CHECK-NEXT:         hir.yield
-  // CHECK-NEXT:       }]
+  // The cf pick replays %e or the else arm's nested structure; the reach pick
+  // then runs the trailing segment %i.
+  // CHECK: hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 ([[EARG:%.+]]): {
+  // CHECK-NEXT:       hir.write_var [[ACC:%.+]], [[EARG]]
   // CHECK-NEXT:       hir.yield
-  // The continued alternative replays the two-tag arm-choice, then segment %i.
-  // CHECK-NEXT:     } 1 ([[IARG:%.+]], [[ACARG:%.+]]): {
-  // CHECK-NEXT:       hir.pick [[ACARG]] [0 ([[EARG:%.+]]): {
-  // CHECK-NEXT:         hir.write_var [[ACC:%.+]], [[EARG]]
+  // CHECK-NEXT:     } 1 ([[SUBARG:%.+]]): {
+  // CHECK-NEXT:       hir.pick [[SUBARG]] [0 (): {
   // CHECK-NEXT:         hir.yield
   // CHECK-NEXT:       } 1 ([[FARG:%.+]]): {
   // CHECK-NEXT:         hir.write_var [[ACC]], [[FARG]]
   // CHECK-NEXT:         hir.yield
   // CHECK-NEXT:       }]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[IARG:%.+]]): {
   // CHECK-NEXT:       hir.write_var [[ACC]], [[IARG]]
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     }]
@@ -2734,10 +2803,10 @@ uir.func @ExArmsRejoinNestedExit(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// Both arms rejoin and both hide a nested exit. Each arm is exit-capable (two
-// exit tags, then=0 and else=1) and rejoins with content (two arm-choice tags).
-// The two exit records both end in an empty nested sub-chain, and the continued
-// record replays whichever arm's content ran (%p or %q) before the segment %i.
+// Both arms rejoin and both hide a nested exit. Each cf tag nests its arm's
+// reach link: NOT_REACHED at the arm's nested break, REACHED with the arm's
+// content sample (%p or %q) at its yield. The receiving cf pick replays
+// whichever arm ran, and the loop's reach pick gates the segment %i.
 
 // CHECK-LABEL: uir.func @BothArmsRejoinNestedExit
 uir.func @BothArmsRejoinNestedExit(%n: -1, %x: 0) -> (result: 0) {
@@ -2749,30 +2818,36 @@ uir.func @BothArmsRejoinNestedExit(%n: -1, %x: 0) -> (result: 0) {
   %one = hir.constant_int 1 : %t
   %acc = hir.var : %t
   // CHECK: uir.phase -1 {
-  // CHECK:          [[AC:%.+]] = uir.if %{{.+}} : %{{.+}} {
-  // The then arm: nested exit under exit tag 0, rejoin content %p as arm tag 0.
+  // CHECK:          [[CF:%.+]] = uir.if %{{.+}} : %{{.+}} {
+  // The then arm: its nested exit wraps a NOT_REACHED arm link in cf tag 0;
+  // the fall-through yields tag 0 with %p in the REACHED arm link.
   // CHECK:            uir.if %{{.+}} {
   // CHECK-NEXT:         [[SP:%.+]] = hir.choice 0()
   // CHECK-NEXT:         [[EP:%.+]] = hir.choice 0([[SP]])
-  // CHECK-NEXT:         hir.opaque_pack([[EP]])
+  // CHECK-NEXT:         [[NRP:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.opaque_pack([[EP]], [[NRP]])
   // CHECK:              uir.break
   // CHECK-NEXT:       }
   // CHECK-NEXT:       [[P:%.+]] = hir.add
-  // CHECK-NEXT:       [[AC0:%.+]] = hir.choice 0([[P]])
-  // CHECK-NEXT:       uir.yield [[AC0]]
-  // The else arm: nested exit under exit tag 1, rejoin content %q as arm tag 1.
+  // CHECK-NEXT:       [[RP:%.+]] = hir.choice 1([[P]])
+  // CHECK-NEXT:       [[CF0:%.+]] = hir.choice 0([[RP]])
+  // CHECK-NEXT:       uir.yield [[CF0]]
+  // The else arm: the same shape under cf tag 1 with %q.
   // CHECK-NEXT:     } else {
   // CHECK:            uir.if %{{.+}} {
   // CHECK-NEXT:         [[SQ:%.+]] = hir.choice 0()
   // CHECK-NEXT:         [[EQ:%.+]] = hir.choice 1([[SQ]])
-  // CHECK-NEXT:         hir.opaque_pack([[EQ]])
+  // CHECK-NEXT:         [[NRQ:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.opaque_pack([[EQ]], [[NRQ]])
   // CHECK:              uir.break
   // CHECK-NEXT:       }
   // CHECK-NEXT:       [[Q:%.+]] = hir.add
-  // CHECK-NEXT:       [[AC1:%.+]] = hir.choice 1([[Q]])
-  // CHECK-NEXT:       uir.yield [[AC1]]
+  // CHECK-NEXT:       [[RQ:%.+]] = hir.choice 1([[Q]])
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1([[RQ]])
+  // CHECK-NEXT:       uir.yield [[CF1]]
   // CHECK-NEXT:     }
-  // CHECK:          [[CO:%.+]] = hir.choice 2([[I:%.+]], [[AC]])
+  // CHECK:          [[R:%.+]] = hir.choice 1([[I:%.+]])
+  // CHECK-NEXT:     hir.opaque_pack([[CF]], [[R]])
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       %c = hir.geq %i, %n : %t
@@ -2804,23 +2879,27 @@ uir.func @BothArmsRejoinNestedExit(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield
   }
-  // CHECK: hir.replicate ([[REC:%.+]]) in %{{.+}} {
-  // CHECK-NEXT:     hir.pick [[REC]] [0 ([[SUB0:%.+]]): {
+  // CHECK: hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 ([[SUB0:%.+]]): {
   // CHECK-NEXT:       hir.pick [[SUB0]] [0 (): {
-  // CHECK:            }]
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       } 1 ([[PARG:%.+]]): {
+  // CHECK-NEXT:         hir.write_var [[ACC:%.+]], [[PARG]]
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       }]
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     } 1 ([[SUB1:%.+]]): {
   // CHECK-NEXT:       hir.pick [[SUB1]] [0 (): {
-  // CHECK:            }]
-  // CHECK-NEXT:       hir.yield
-  // CHECK-NEXT:     } 2 ([[IARG:%.+]], [[ACARG:%.+]]): {
-  // CHECK-NEXT:       hir.pick [[ACARG]] [0 ([[PARG:%.+]]): {
-  // CHECK-NEXT:         hir.write_var [[ACC:%.+]], [[PARG]]
   // CHECK-NEXT:         hir.yield
   // CHECK-NEXT:       } 1 ([[QARG:%.+]]): {
   // CHECK-NEXT:         hir.write_var [[ACC]], [[QARG]]
   // CHECK-NEXT:         hir.yield
   // CHECK-NEXT:       }]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[IARG:%.+]]): {
   // CHECK-NEXT:       hir.write_var [[ACC]], [[IARG]]
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     }]
@@ -2829,12 +2908,13 @@ uir.func @BothArmsRejoinNestedExit(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// A rejoining arm whose every path exits (its yield is unreachable): the nested
-// `if d { break } else { continue }` leaves the arm's yield dead. The arm is a
-// pure exit-capable arm — its content %y rides the exit records, and it makes no
-// arm-choice contribution. Content before the nested exit (%y) is shared across
-// the break and continue records, but both sit under the arm's single exit tag,
-// so %y is replayed once before the nested pick.
+// A rejoining arm whose every path exits (its yield is unreachable): the
+// nested `if d { break } else { continue }` leaves the arm's yield dead, so
+// the arm provides no cf result (its yield is emptied) and the cf is provided
+// by the else fall-through alone. Content before the nested exit (%y) rides
+// the arm's cf payload — built identically at both exit sites, since a
+// content-free nested divergence records only NOT_REACHED regardless of which
+// exit fired — so %y is replayed once before the arm's reach pick.
 
 // CHECK-LABEL: uir.func @RejoinArmAllExits
 uir.func @RejoinArmAllExits(%n: -1, %x: 0) -> () {
@@ -2846,25 +2926,31 @@ uir.func @RejoinArmAllExits(%n: -1, %x: 0) -> () {
   %one = hir.constant_int 1 : %t
   %acc = hir.var : %t
   // CHECK: uir.phase -1 {
-  // CHECK:          uir.if %{{.+}} {
-  // The break record: exited(then) carries %y then the nested break tag 0.
+  // CHECK:          uir.if %{{.+}} : %{{.+}} {
+  // The break record: cf tag 0 carries %y and a NOT_REACHED arm link.
   // CHECK:            uir.if %{{.+}} {
   // CHECK-NEXT:         [[SB:%.+]] = hir.choice 0()
   // CHECK-NEXT:         [[EB:%.+]] = hir.choice 0([[Y:%.+]], [[SB]])
-  // CHECK-NEXT:         hir.opaque_pack([[I:%.+]], [[EB]])
+  // CHECK-NEXT:         [[NRB:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.opaque_pack([[I:%.+]], [[EB]], [[NRB]])
   // CHECK:              uir.break
-  // The continue record: exited(then) carries %y then the nested continue tag 1.
+  // The continue record: identical — which exit fired is not recorded, since
+  // the content-free nested divergence gates nothing.
   // CHECK-NEXT:       } else {
-  // CHECK-NEXT:         [[SC:%.+]] = hir.choice 1()
+  // CHECK-NEXT:         [[SC:%.+]] = hir.choice 0()
   // CHECK-NEXT:         [[EC:%.+]] = hir.choice 0([[Y]], [[SC]])
-  // CHECK-NEXT:         hir.opaque_pack([[I]], [[EC]])
+  // CHECK-NEXT:         [[NRC:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.opaque_pack([[I]], [[EC]], [[NRC]])
   // CHECK:              uir.continue
   // CHECK-NEXT:       }
+  // The arm's dead yield is emptied; the else fall-through provides the cf.
   // CHECK-NEXT:       uir.yield
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.yield [[CF1]]
   // CHECK-NEXT:     }
-  // The c-false fall-through takes the continued tag (1) with no arm-choice.
-  // CHECK:          [[CO:%.+]] = hir.choice 1()
-  // CHECK-NEXT:     hir.opaque_pack([[I]], [[CO]])
+  // CHECK:          [[R:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.opaque_pack([[I]], %{{.+}}, [[R]])
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       uir.expr pin 1 {
@@ -2895,24 +2981,404 @@ uir.func @RejoinArmAllExits(%n: -1, %x: 0) -> () {
     }
     uir.yield
   }
-  // CHECK: hir.replicate ([[IREC:%.+]], [[REC:%.+]]) in %{{.+}} {
-  // %x runs unconditionally, before the divergence pick.
+  // CHECK: hir.replicate ([[IREC:%.+]], [[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // %x runs unconditionally, before the cf pick.
   // CHECK-NEXT:     hir.write_var [[ACC:%.+]], [[IREC]]
-  // CHECK-NEXT:     hir.pick [[REC]] [0 ([[YARG:%.+]], [[SUBARG:%.+]]): {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 ([[YARG:%.+]], [[SUBARG:%.+]]): {
   // CHECK-NEXT:       hir.write_var [[ACC]], [[YARG]]
   // CHECK-NEXT:       hir.pick [[SUBARG]] [0 (): {
   // CHECK-NEXT:         hir.yield
   // CHECK-NEXT:       } 1 (): {
   // CHECK-NEXT:         hir.yield
-  // CHECK-NEXT:       } 2 (): {
-  // CHECK-NEXT:         hir.yield
   // CHECK-NEXT:       }]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     } 1 (): {
   // CHECK-NEXT:       hir.write_var [[ACC]], [[IREC]]
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     }]
   uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Both arms carry content and exit: no path falls through the divergence, so
+// the rebuilt `if` keeps no cf result (an `if` whose regions all exit early
+// produces no results) — every record's cf is built at its own exit site, and
+// the loop body terminal is unreachable, so no back-edge record is pushed.
+
+// CHECK-LABEL: uir.func @BothArmsBreakContent
+uir.func @BothArmsBreakContent(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: uir.phase -1 {
+  // CHECK:          uir.if %{{.+}} {
+  // CHECK-NEXT:       [[CF0:%.+]] = hir.choice 0([[I:%.+]])
+  // CHECK-NEXT:       [[NR0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.opaque_pack([[CF0]], [[NR0]])
+  // CHECK:            uir.break
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[M:%.+]] = hir.add
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1([[M]])
+  // CHECK-NEXT:       [[NR1:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.opaque_pack([[CF1]], [[NR1]])
+  // CHECK:            uir.break
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     uir.unreachable
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      uir.if %done {
+        uir.expr pin 1 {
+          hir.write_var %acc, %i : %t
+          uir.yield
+        }
+        uir.break
+      } else {
+        %m = hir.add %i, %one : %t
+        uir.expr pin 1 {
+          hir.write_var %acc, %m : %t
+          uir.yield
+        }
+        uir.break
+      }
+      uir.unreachable
+    }
+    uir.yield
+  }
+  // CHECK: hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 ([[SI:%.+]]): {
+  // CHECK-NEXT:       hir.write_var [[ACC:%.+]], [[SI]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[SM:%.+]]): {
+  // CHECK-NEXT:       hir.write_var [[ACC]], [[SM]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  %r = hir.read_var %acc : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Shared arm prefix: later-phase content before a nested exit inside a
+// rejoining arm runs on both the exit path and the fall-through. Its replay
+// lives once in the cf pick's arm alternative, ahead of the arm's reach pick,
+// so no content is cloned across record variants: the cf is built with a
+// NOT_REACHED arm link at the nested break and with a REACHED link at the arm
+// yield, and both carry the shared prefix sample %w.
+
+// CHECK-LABEL: uir.func @RejoinSharedPrefix
+uir.func @RejoinSharedPrefix(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: uir.phase -1 {
+  // CHECK:          uir.if %{{.+}} : %{{.+}} {
+  // CHECK:            uir.break
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[W:%.+]] = hir.add
+  // The nested break: cf tag 1 carries %w and a NOT_REACHED arm link.
+  // CHECK-NEXT:       hir.geq
+  // CHECK-NEXT:       uir.if %{{.+}} {
+  // CHECK-NEXT:         [[SNR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         [[XC:%.+]] = hir.choice 1([[W]], [[SNR]])
+  // CHECK-NEXT:         [[NR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.opaque_pack([[XC]], [[NR]])
+  // CHECK:              uir.break
+  // CHECK-NEXT:       }
+  // The fall-through: the same tag with %f in the REACHED arm link.
+  // CHECK-NEXT:       [[F:%.+]] = hir.add
+  // CHECK-NEXT:       [[SR:%.+]] = hir.choice 1([[F]])
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1([[W]], [[SR]])
+  // CHECK-NEXT:       uir.yield [[CF1]]
+  // CHECK-NEXT:     }
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %c = hir.geq %i, %n : %t
+      uir.if %c {
+        uir.break
+      } else {
+        %w = hir.add %i, %one : %t
+        uir.expr pin 1 {
+          hir.write_var %acc, %w : %t
+          uir.yield
+        }
+        %d = hir.geq %n, %i : %t
+        uir.if %d { uir.break }
+        %f = hir.add %i, %one : %t
+        uir.expr pin 1 {
+          hir.write_var %acc, %f : %t
+          uir.yield
+        }
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  // The shared prefix %w replays once, before the arm's reach pick.
+  // CHECK: hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[WARG:%.+]], [[SUB:%.+]]): {
+  // CHECK-NEXT:       hir.write_var [[ACC:%.+]], [[WARG]]
+  // CHECK-NEXT:       hir.pick [[SUB]] [0 (): {
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       } 1 ([[FARG:%.+]]): {
+  // CHECK-NEXT:         hir.write_var [[ACC]], [[FARG]]
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       }]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  %r = hir.read_var %acc : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Shared arm prefix with a post-branch sample: the trailing segment samples an
+// effectful phase -1 value (%g) that exists only on continuing activations. It
+// rides the loop-level reach link's REACHED payload; exit records carry the
+// empty NOT_REACHED tag, and the receiving reach pick binds %g exactly on the
+// paths that replay its consumer.
+
+// CHECK-LABEL: uir.func @SharedPrefixPostBranchSample
+uir.func @SharedPrefixPostBranchSample(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: uir.phase -1 {
+  // CHECK:          uir.if %{{.+}} : %{{.+}} {
+  // The nested break: NOT_REACHED loop link, no %g field.
+  // CHECK:            uir.if %{{.+}} {
+  // CHECK-NEXT:         [[SNR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         [[XC:%.+]] = hir.choice 0([[I:%.+]], [[SNR]])
+  // CHECK-NEXT:         [[NR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.opaque_pack([[XC]], [[NR]])
+  // CHECK:              uir.break
+  // CHECK-NEXT:       }
+  // CHECK:          } else {
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.yield [[CF1]]
+  // CHECK-NEXT:     }
+  // The back edge samples %g into the REACHED loop link.
+  // CHECK-NEXT:     [[G:%.+]] = hir.read_var
+  // CHECK-NEXT:     hir.add
+  // CHECK-NEXT:     [[R:%.+]] = hir.choice 1([[G]])
+  // CHECK-NEXT:     hir.opaque_pack(%{{.+}}, [[R]])
+  uir.expr pin -1 {
+    %v = hir.var : %t
+    uir.loop (%i = %zero : %t) {
+      hir.write_var %v, %i : %t
+      %c = hir.geq %i, %n : %t
+      uir.if %c {
+        uir.expr pin 1 {
+          hir.write_var %acc, %i : %t
+          uir.yield
+        }
+        %d = hir.geq %n, %i : %t
+        uir.if %d { uir.break }
+        %m = hir.add %i, %one : %t
+        uir.expr pin 1 {
+          hir.write_var %acc, %m : %t
+          uir.yield
+        }
+        uir.yield
+      }
+      %g = hir.read_var %v : %t
+      uir.expr pin 1 {
+        hir.write_var %acc, %g : %t
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  // CHECK: hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 ([[SI:%.+]], [[SUB:%.+]]): {
+  // CHECK-NEXT:       hir.write_var [[ACC:%.+]], [[SI]]
+  // CHECK-NEXT:       hir.pick [[SUB]] [0 (): {
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       } 1 ([[SM:%.+]]): {
+  // CHECK-NEXT:         hir.write_var [[ACC]], [[SM]]
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       }]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[SG:%.+]]): {
+  // CHECK-NEXT:       hir.write_var [[ACC]], [[SG]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  %r = hir.read_var %acc : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A rejoining arm whose fall-through (after a nested exit) carries another
+// exit-carrying branch with its own rejoining content: the nested rejoining
+// divergence gets its own cf choice inside the arm's REACHED link, and the
+// receiving structure recurses — a cf pick and reach pick per level.
+
+// CHECK-LABEL: uir.func @RejoinNestedFallthrough
+uir.func @RejoinNestedFallthrough(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: uir.phase -1 {
+  // CHECK:          uir.if %{{.+}} : %{{.+}} {
+  // CHECK:            uir.break
+  // CHECK-NEXT:     } else {
+  // The first nested exit ends the arm's chain before the inner divergence.
+  // CHECK:            uir.if %{{.+}} {
+  // CHECK-NEXT:         [[ANR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         [[XC:%.+]] = hir.choice 1([[ANR]])
+  // CHECK-NEXT:         [[NR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.opaque_pack([[XC]], [[NR]])
+  // CHECK:              uir.break
+  // CHECK-NEXT:       }
+  // The inner rejoining divergence is rebuilt with its own cf result, which
+  // rides the arm's REACHED link.
+  // CHECK:            [[ICF:%.+]] = uir.if %{{.+}} : %{{.+}} {
+  // CHECK:              uir.break
+  // CHECK-NEXT:       } else {
+  // CHECK-NEXT:         [[H:%.+]] = hir.add
+  // CHECK-NEXT:         [[ICF1:%.+]] = hir.choice 1([[H]])
+  // CHECK-NEXT:         uir.yield [[ICF1]]
+  // CHECK-NEXT:       }
+  // CHECK-NEXT:       [[IR:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       [[AR:%.+]] = hir.choice 1([[ICF]], [[IR]])
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1([[AR]])
+  // CHECK-NEXT:       uir.yield [[CF1]]
+  // CHECK-NEXT:     }
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %c = hir.geq %i, %n : %t
+      uir.if %c {
+        uir.break
+      } else {
+        %d = hir.geq %n, %i : %t
+        uir.if %d { uir.break }
+        %e = hir.geq %i, %n : %t
+        uir.if %e {
+          uir.break
+        } else {
+          %h = hir.add %i, %one : %t
+          uir.expr pin 1 {
+            hir.write_var %acc, %h : %t
+            uir.yield
+          }
+          uir.yield
+        }
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  // CHECK: hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[ALINK:%.+]]): {
+  // CHECK-NEXT:       hir.pick [[ALINK]] [0 (): {
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       } 1 ([[ICFR:%.+]], [[ILR:%.+]]): {
+  // CHECK-NEXT:         hir.pick [[ICFR]] [0 (): {
+  // CHECK-NEXT:           hir.yield
+  // CHECK-NEXT:         } 1 ([[SH:%.+]]): {
+  // CHECK-NEXT:           hir.write_var %{{.+}}, [[SH]]
+  // CHECK-NEXT:           hir.yield
+  // CHECK-NEXT:         }]
+  // CHECK-NEXT:         hir.pick [[ILR]] [0 (): {
+  // CHECK-NEXT:           hir.yield
+  // CHECK-NEXT:         } 1 (): {
+  // CHECK-NEXT:           hir.yield
+  // CHECK-NEXT:         }]
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       }]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  %r = hir.read_var %acc : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// An exit-carrying divergence whose rejoining arm yields a demanded
+// later-phase result the arm produces no later content for: the value comes
+// from outside the arm (a function argument), so the receiving cf pick's
+// rejoining alternative yields it directly, and the exit alternative yields
+// an `uir.unreachable_value` that only gated-off paths could consume.
+
+// CHECK-LABEL: uir.func @DivergenceLaterResultForwarded
+uir.func @DivergenceLaterResultForwarded(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %done = hir.geq %i, %n : %t
+      %r = uir.if %done : %t {
+        uir.break
+      } else {
+        uir.yield %x : %t
+      }
+      uir.expr pin 1 {
+        hir.write_var %acc, %r : %t
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  // CHECK: hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     [[RES:%.+]] = hir.pick [[CFR]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:       hir.yield [[UV]] : !hir.any
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield %x : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.write_var %{{.+}}, [[RES]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  %rr = hir.read_var %acc : %t
+  uir.return %rr : %t
 }
 
 //===----------------------------------------------------------------------===//

@@ -305,6 +305,86 @@ uir.func @BreakMissingKeptResult(%n: -1, %x: 0) -> (a: 0, b: -1) {
 
 // -----
 
+// A rejoining arm that yields a demanded later-phase result whose producer
+// sits after a nested exit in the arm: the producer replays only under the
+// arm's reach picks, so yielding it from the receiving cf pick's alternative
+// would need threading it out of them. Not implemented.
+uir.func @LaterResultAfterNestedExit(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %c = hir.geq %i, %n : %t
+      // expected-error @below {{yields a later-phase result produced after a nested exit in its arm; threading such results through the reach picks is not implemented in phase sorting yet}}
+      %r = uir.if %c : %t {
+        uir.break
+      } else {
+        %d = hir.geq %n, %i : %t
+        uir.if %d { uir.break }
+        %v = uir.expr pin 1 : %t {
+          %s = hir.add %x, %x : %t
+          uir.yield %s : %t
+        }
+        uir.yield %v : %t
+      }
+      uir.expr pin 1 {
+        hir.write_var %acc, %r : %t
+        uir.yield
+      }
+      %next = hir.add %i, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  %rr = hir.read_var %acc : %t
+  uir.return %rr : %t
+}
+
+// -----
+
+// A rejoining arm that under-provides the branch's phase-p results: the cf
+// choice must land in the rebuilt branch's last result slot, so a short yield
+// ahead of it cannot be rebuilt positionally. Not implemented (yield arity is
+// not verifier-enforced yet).
+uir.func @ShortYieldKeptResult(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %c = hir.geq %i, %n : %t
+      // expected-error @below {{rejoining arm under-provides the branch's results ahead of the cf choice; short yields on cf-carrying divergences are not implemented in phase sorting yet}}
+      %r = uir.if %c : %t {
+        uir.expr pin 1 {
+          hir.write_var %acc, %i : %t
+          uir.yield
+        }
+        uir.yield %i : %t
+      } else {
+        %d = hir.geq %n, %i : %t
+        uir.if %d { uir.break }
+        uir.yield
+      }
+      %next = hir.add %r, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  %rr = hir.read_var %acc : %t
+  uir.return %rr : %t
+}
+
+// -----
+
 // A return exiting the function under a const loop with later-phase content is
 // a function-level exit chain, not loop-record extraction.
 uir.func @ReturnUnderLoop(%c: 0, %x: 0) -> (result: 0) {
@@ -325,130 +405,6 @@ uir.func @ReturnUnderLoop(%c: 0, %x: 0) -> (result: 0) {
     uir.continue
   }
   uir.unreachable
-}
-
-// -----
-
-// An exit-carrying divergence whose rejoining arm yields a demanded later-phase
-// result the arm produces no later content for: the value comes from outside
-// the arm (a function argument), so the arm-pick has nothing to replay and
-// yield. This is a single-provider result that needs plain forwarding into the
-// receiving phase, which is not implemented.
-uir.func @DivergenceLaterResultForwarded(%n: -1, %x: 0) -> (result: 0) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %zero = hir.constant_int 0 : %t
-  %one = hir.constant_int 1 : %t
-  %acc = hir.var : %t
-  uir.expr pin -1 {
-    uir.loop (%i = %zero : %t) {
-      %done = hir.geq %i, %n : %t
-      // expected-error @below {{carries a loop exit and a later-phase result its rejoining content does not produce; single-provider result forwarding is not implemented in phase sorting yet}}
-      %r = uir.if %done : %t {
-        uir.break
-      } else {
-        uir.yield %x : %t
-      }
-      uir.expr pin 1 {
-        hir.write_var %acc, %r : %t
-        uir.yield
-      }
-      %next = hir.add %i, %one : %t
-      uir.continue %next : %t
-    }
-    uir.yield
-  }
-  %rr = hir.read_var %acc : %t
-  uir.return %rr : %t
-}
-
-// -----
-
-// A rejoining arm that both hides a nested exit and runs later-phase content
-// before it: that content runs on the exit path and on the fall-through, so it
-// would have to move into two disjoint receiving blocks. Not implemented.
-uir.func @RejoinSharedPrefix(%n: -1, %x: 0) -> (result: 0) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %zero = hir.constant_int 0 : %t
-  %one = hir.constant_int 1 : %t
-  %acc = hir.var : %t
-  uir.expr pin -1 {
-    uir.loop (%i = %zero : %t) {
-      %c = hir.geq %i, %n : %t
-      // expected-error @below {{has a rejoining arm with later-phase content before a nested exit; shared content across an exit and its fall-through is not implemented in phase sorting yet}}
-      uir.if %c {
-        uir.break
-      } else {
-        %w = hir.add %i, %one : %t
-        uir.expr pin 1 {
-          hir.write_var %acc, %w : %t
-          uir.yield
-        }
-        %d = hir.geq %n, %i : %t
-        uir.if %d { uir.break }
-        %f = hir.add %i, %one : %t
-        uir.expr pin 1 {
-          hir.write_var %acc, %f : %t
-          uir.yield
-        }
-        uir.yield
-      }
-      %next = hir.add %i, %one : %t
-      uir.continue %next : %t
-    }
-    uir.yield
-  }
-  %r = hir.read_var %acc : %t
-  uir.return %r : %t
-}
-
-// -----
-
-// A rejoining arm whose fall-through (after a nested exit) carries another
-// exit-carrying branch with its own rejoining content needs a nested arm-choice
-// in the fall-through. Not implemented.
-uir.func @RejoinNestedFallthrough(%n: -1, %x: 0) -> (result: 0) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %zero = hir.constant_int 0 : %t
-  %one = hir.constant_int 1 : %t
-  %acc = hir.var : %t
-  uir.expr pin -1 {
-    uir.loop (%i = %zero : %t) {
-      %c = hir.geq %i, %n : %t
-      // expected-error @below {{has a rejoining arm whose fall-through carries a nested rejoining divergence; not implemented in phase sorting yet}}
-      uir.if %c {
-        uir.break
-      } else {
-        %d = hir.geq %n, %i : %t
-        uir.if %d { uir.break }
-        %e = hir.geq %i, %n : %t
-        uir.if %e {
-          uir.break
-        } else {
-          %h = hir.add %i, %one : %t
-          uir.expr pin 1 {
-            hir.write_var %acc, %h : %t
-            uir.yield
-          }
-          uir.yield
-        }
-        uir.yield
-      }
-      %next = hir.add %i, %one : %t
-      uir.continue %next : %t
-    }
-    uir.yield
-  }
-  %r = hir.read_var %acc : %t
-  uir.return %r : %t
 }
 
 // -----
