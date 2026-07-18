@@ -270,6 +270,7 @@ private:
                                  SmallVectorImpl<Operation *> &content);
   LogicalResult rebuildDivergences(BodyPlan &plan, int16_t p);
   LogicalResult rebuildDivergenceIf(Divergence &divergence, int16_t p);
+  static std::optional<size_t> spinePosition(BodyPlan &plan, Value value);
   void appendTail(BodyPlan &plan, size_t seg, ArrayRef<PathStep> path,
                   OpBuilder &builder, Location loc, int16_t p,
                   SmallVectorImpl<Value> &out);
@@ -1156,13 +1157,20 @@ LogicalResult PhaseSorter::extractFromBranch(IfOp ifOp, int16_t p) {
 // yields `uir.unreachable_value` — its consumers replay only on paths the
 // reach links gate off.
 //
+// A demanded later result produced on the arm's spine after a nested exit is
+// reconstructed by threading it up through the arm's reach picks: the reach
+// pick gating the segment that defines it (and every reach pick above) becomes
+// valued, its NOT_REACHED alternative yielding `uir.unreachable_value` and its
+// REACHED alternative forwarding the value from the level below, exactly as the
+// valued cf pick reconstructs arm results.
+//
 // Only single-boundary loop-record extraction is handled here (later-phase
 // loop results are choice-ified by break-value extraction first): returns
-// under loops (function-level exit chains), later results produced after a
-// nested exit in their arm (which need threading through the reach picks),
-// and content more than one phase later (which needs the replicate
-// re-extracted at the next boundary) are rejected below and by
-// `rejectUnimplemented`.
+// under loops (function-level exit chains), later results defined off the arm's
+// spine inside a nested single-provider divergence (which need reconstructing
+// through that divergence's own picks), and content more than one phase later
+// (which needs the replicate re-extracted at the next boundary) are rejected
+// below and by `rejectUnimplemented`.
 
 // NOLINTBEGIN(misc-no-recursion)
 
@@ -1318,6 +1326,30 @@ void PhaseSorter::collectPlanFields(Operation *loopOp, int16_t p,
         if (arm.plan)
           collectPlanFields(loopOp, p, *arm.plan, allMoved, visible);
   }
+}
+
+/// The spine segment index of `plan` at which `value` becomes available during
+/// replay, or `nullopt` if `value` is defined inside the plan but off its spine
+/// (a nested-divergence result), which threading does not reconstruct.
+///
+/// A null operand (an arm that provides nothing) and a value defined outside
+/// the plan's block subtree both dominate the plan root, so they sit at index
+/// 0. Spine content is located by the segment holding its defining op; a value
+/// deeper than the level consuming it rides that level's reach picks.
+std::optional<size_t> PhaseSorter::spinePosition(BodyPlan &plan, Value value) {
+  if (!value)
+    return 0;
+  auto *defOp = value.getDefiningOp();
+  if (!defOp)
+    return 0; // A block argument (crossing field / loop init) dominates root.
+  auto *planRegion = plan.terminal->getBlock()->getParent();
+  if (!planRegion->isAncestor(defOp->getParentRegion()))
+    return 0; // Defined outside the plan; dominates the plan root.
+  for (auto [k, segment] : llvm::enumerate(plan.segments))
+    for (auto *op : segment)
+      if (op == defOp || op->isProperAncestor(defOp))
+        return k;
+  return std::nullopt;
 }
 
 /// Rebuild every cf-carrying divergence `if` in `plan` so its fall-through
@@ -1502,23 +1534,19 @@ LogicalResult PhaseSorter::rebuildDivergenceIf(Divergence &divergence,
       arm.laterYieldOperands.push_back(idx < yieldOp.getValues().size()
                                            ? yieldOp.getValues()[idx]
                                            : Value());
-    // A later result is reconstructible from the arm's ungated replay: its
-    // operand either replays in the arm's first segment or is defined outside
-    // the arm entirely. An operand produced after a nested exit replays only
-    // under the arm's reach picks and would need threading out of them.
-    for (auto operand : arm.laterYieldOperands) {
-      if (!operand)
-        continue;
-      auto *defOp = operand.getDefiningOp();
-      if (!defOp)
-        continue;
-      for (auto [si, segment] : llvm::enumerate(arm.plan->segments))
-        if (si > 0 && llvm::is_contained(segment, defOp))
-          return ifOp.emitOpError()
-                 << "yields a later-phase result produced after a nested exit "
-                    "in its arm; threading such results through the reach "
-                    "picks is not implemented in phase sorting yet";
-    }
+    // A later result is reconstructible from the arm's replay when its operand
+    // sits on the arm's spine (in some segment) or comes from outside the arm.
+    // The receiving cf pick's alternative threads a deeper-segment operand up
+    // through the reach picks (see `buildLevel`). An operand defined inside a
+    // nested divergence of the arm — not on the spine — would need
+    // reconstructing from that divergence's own picks, which is not
+    // implemented; reject it here before any building.
+    for (auto operand : arm.laterYieldOperands)
+      if (!spinePosition(*arm.plan, operand))
+        return ifOp.emitOpError()
+               << "yields a later-phase result defined inside a nested "
+                  "divergence of its arm; reconstructing it through that "
+                  "divergence's picks is not implemented in phase sorting yet";
     SmallVector<Value> payload;
     appendTail(*arm.plan, 0, {}, armBuilder, loc, p, payload);
     auto choice = hir::ChoiceOp::create(armBuilder, loc, anyTy,
@@ -1945,6 +1973,26 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
         for (auto *moved : pl.segments[seg])
           moved->moveBefore(block, block->end());
 
+        // Partition the demanded later values by spine position: those defined
+        // in a deeper segment are not in scope at this block's terminal, so
+        // they ride this level's reach pick as its results (threaded up from
+        // the level that defines them); the rest are delivered here. A value at
+        // this level (or dominating the root, index 0) is available directly.
+        SmallVector<bool> deeperMask(levelYield.size(), false);
+        SmallVector<Value> deeperValues;
+        for (auto [i, value] : llvm::enumerate(levelYield)) {
+          auto pos = spinePosition(pl, value);
+          assert(pos && "off-spine later operand should have been rejected");
+          if (*pos > seg) {
+            deeperMask[i] = true;
+            deeperValues.push_back(value);
+          }
+        }
+
+        // The reach pick's results, one per deeper value, in `deeperValues`
+        // order; empty when no deeper value threads through this level.
+        SmallVector<Value> reachResults;
+
         if (seg < pl.divergences.size()) {
           auto &divergence = pl.divergences[seg];
           if (divergence.needsCf()) {
@@ -1990,29 +2038,57 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
           auto linkArg = block->addArgument(anyTy, loc);
           analysis.actualPhase[linkArg] = p;
           OpBuilder linkBuilder(block, block->end());
-          auto reachPick =
-              hir::PickOp::create(linkBuilder, loc, TypeRange{}, linkArg, 2);
+          // A demanded later value defined beyond this divergence rides the
+          // reach pick: NOT_REACHED cannot provide it (the activation exited
+          // here) and yields `uir.unreachable_value`; REACHED forwards it from
+          // the level below. The pick's results reconstruct the values at this
+          // level, exactly as the valued cf pick reconstructs arm results.
+          SmallVector<Type> reachResultTypes(deeperValues.size(), anyTy);
+          auto reachPick = hir::PickOp::create(linkBuilder, loc,
+                                               reachResultTypes, linkArg, 2);
           analysis.opPhases[reachPick] = p + 1;
           auto &nrBlock = reachPick.getAlternatives()[0].emplaceBlock();
           OpBuilder nrBuilder(&nrBlock, nrBlock.end());
-          auto nrYield = hir::YieldOp::create(nrBuilder, loc, ValueRange{});
+          SmallVector<Value> nrYieldValues;
+          for (unsigned i = 0; i < deeperValues.size(); ++i) {
+            auto unreachable =
+                UnreachableValueOp::create(nrBuilder, loc, anyTy);
+            setPhase(unreachable, static_cast<int16_t>(p + 1));
+            nrYieldValues.push_back(unreachable.getResult());
+          }
+          auto nrYield = hir::YieldOp::create(nrBuilder, loc, nrYieldValues);
           analysis.opPhases[nrYield] = p + 1;
           auto &rBlock = reachPick.getAlternatives()[1].emplaceBlock();
-          buildLevel(pl, seg + 1, &rBlock, {});
+          buildLevel(pl, seg + 1, &rBlock, deeperValues);
+          for (auto result : reachPick.getResults()) {
+            analysis.actualPhase[result] = static_cast<int16_t>(p + 1);
+            reachResults.push_back(result);
+          }
+        } else {
+          assert(deeperValues.empty() &&
+                 "deeper later value with no divergence to gate it");
         }
 
         // Terminal yield of this level, carrying the cf alternative's later
-        // result values (empty elsewhere); a null value is a result the arm
-        // does not provide, yielded as `uir.unreachable_value` — its
-        // consumers replay only on paths the reach links gate off.
+        // result values (empty elsewhere): a deeper value comes from the reach
+        // pick's result, a null value is a result the arm does not provide and
+        // is yielded as `uir.unreachable_value` (its consumers replay only on
+        // paths the reach links gate off), and any other value is in scope
+        // here and yielded directly.
         OpBuilder endBuilder(block, block->end());
         SmallVector<Value> yieldValues;
-        for (auto value : levelYield) {
+        size_t deeperIdx = 0;
+        for (auto [i, value] : llvm::enumerate(levelYield)) {
+          if (deeperMask[i]) {
+            yieldValues.push_back(reachResults[deeperIdx++]);
+            continue;
+          }
           if (!value) {
             auto unreachable =
                 UnreachableValueOp::create(endBuilder, loc, anyTy);
             setPhase(unreachable, static_cast<int16_t>(p + 1));
-            value = unreachable.getResult();
+            yieldValues.push_back(unreachable.getResult());
+            continue;
           }
           yieldValues.push_back(value);
         }

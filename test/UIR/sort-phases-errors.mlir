@@ -305,11 +305,13 @@ uir.func @BreakMissingKeptResult(%n: -1, %x: 0) -> (a: 0, b: -1) {
 
 // -----
 
-// A rejoining arm that yields a demanded later-phase result whose producer
-// sits after a nested exit in the arm: the producer replays only under the
-// arm's reach picks, so yielding it from the receiving cf pick's alternative
-// would need threading it out of them. Not implemented.
-uir.func @LaterResultAfterNestedExit(%n: -1, %x: 0) -> (result: 0) {
+// A rejoining arm that yields a demanded later-phase result defined inside a
+// nested single-provider divergence of the arm: the value is reconstructed by
+// that nested divergence's own cf pick, off the arm's spine, so threading it up
+// through the arm's reach picks does not reach it. Not implemented. (A value on
+// the arm's spine produced after a nested exit does thread; see
+// @LaterResultAfterNestedExit in sort-phases.mlir.)
+uir.func @LaterResultInNestedDivergence(%n: -1, %x: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
@@ -320,17 +322,21 @@ uir.func @LaterResultAfterNestedExit(%n: -1, %x: 0) -> (result: 0) {
   uir.expr pin -1 {
     uir.loop (%i = %zero : %t) {
       %c = hir.geq %i, %n : %t
-      // expected-error @below {{yields a later-phase result produced after a nested exit in its arm; threading such results through the reach picks is not implemented in phase sorting yet}}
+      // expected-error @below {{yields a later-phase result defined inside a nested divergence of its arm; reconstructing it through that divergence's picks is not implemented in phase sorting yet}}
       %r = uir.if %c : %t {
         uir.break
       } else {
         %d = hir.geq %n, %i : %t
-        uir.if %d { uir.break }
-        %v = uir.expr pin 1 : %t {
-          %s = hir.add %x, %x : %t
-          uir.yield %s : %t
+        %w = uir.if %d : %t {
+          %v = uir.expr pin 1 : %t {
+            %s = hir.add %x, %x : %t
+            uir.yield %s : %t
+          }
+          uir.yield %v : %t
+        } else {
+          uir.break
         }
-        uir.yield %v : %t
+        uir.yield %w : %t
       }
       uir.expr pin 1 {
         hir.write_var %acc, %r : %t
