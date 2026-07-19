@@ -272,13 +272,16 @@ def PickOp : HIROp<"pick", [
 
     Picks are valued: an alternative on a rejoining path is terminated
     by `hir.yield` whose operands become the pick's results. An
-    alternative on an exit path is terminated by an exit terminator
-    such as `uir.return` instead; the pick's results never materialize
-    on such a path and their consumers are unreachable. All values have
-    the implicit `!hir.any` type. The pick is always expanded by
-    `SpecializeFuncs` and never lowered to MIR; a pick whose choice
-    value was never produced during phase evaluation is an internal
-    compiler error at expansion time.
+    alternative may instead be terminated by a loop exit (`uir.break`,
+    `uir.continue`) targeting an enclosing loop, or by `uir.unreachable`
+    on a dead path; the pick's results never materialize on such a path
+    and their consumers are unreachable. Function exits never appear in
+    alternatives: exit normalization rewrites them into choice/pick
+    value form before any pick is built. All values have the implicit
+    `!hir.any` type. The pick is always expanded by `SpecializeFuncs`
+    and never lowered to MIR; a pick whose choice value was never
+    produced during phase evaluation is an internal compiler error at
+    expansion time.
   }];
   let arguments = (ins HIRAnyType:$choice);
   let results = (outs Variadic<HIRAnyType>:$results);

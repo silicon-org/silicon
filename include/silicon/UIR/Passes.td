@@ -34,6 +34,42 @@ def FlattenCFPass : Pass<"flatten-cf", "mlir::ModuleOp"> {
   ];
 }
 
+def NormalizeExitsPass : Pass<"normalize-exits", "mlir::ModuleOp"> {
+  let summary = "Rewrite early uir.return exits into single-exit value form";
+  let description = [{
+    Rewrites every `uir.return` that is not a function body's terminator into
+    choice/pick value form, leaving exactly one `uir.return` as the body
+    terminator. The pass is phase-blind: it consults no phase information and
+    runs before phase analysis, so analysis and sorting input is always
+    single-exit.
+
+    Each structured control flow op (`uir.if`, `uir.expr`, `uir.loop`) whose
+    regions hold a function exit is rebuilt with one extra trailing result: a
+    choice tagging how the region ended. Exit paths produce tag 0, carrying
+    the returned values and their type operands as payload; all other paths
+    produce the payload-free tag 1. On `uir.if` and `uir.expr` the choice
+    rides the region's yield; on `uir.loop` it rides `uir.break` in the
+    loop's trailing result slot (existing breaks gain the tag-1 slot, and
+    exits become breaks), so returns under loops become break-carried
+    choices. Result slots an exit path does not provide are filled with
+    `uir.unreachable_value`, never omitted.
+
+    After each rebuilt op, an `hir.pick` on the choice dispatches: the tag-0
+    alternative re-encodes the exit for the enclosing block, and the tag-1
+    alternative receives the remainder of the block. Nested exits produce a
+    linear chain of binary picks, so continuations are never duplicated. At
+    the function body's top level the picks thread the returned values and
+    type operands to the single trailing `uir.return`; dead code after
+    exhaustive exits lands in tag-1 alternatives terminated by
+    `uir.unreachable`.
+
+    Choice construction and pick dispatch are executable single-phase control
+    flow here, not phase-crossing vocabulary: which alternative runs is
+    decided by the same-phase choice operand.
+  }];
+  let dependentDialects = ["silicon::hir::HIRDialect"];
+}
+
 def SortPhasesPass : Pass<"sort-phases", "mlir::ModuleOp"> {
   let summary = "Sort uir.func content into per-phase uir.phase ops";
   let description = [{
