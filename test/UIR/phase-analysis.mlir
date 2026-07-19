@@ -5352,3 +5352,55 @@ uir.func @DeadFloatingExprPick(%c: 1, %x: 0) -> () {
   }
   uir.return
 }
+
+//===----------------------------------------------------------------------===//
+// The normalized form of a later-phase early exit (normalize-exits output):
+// the exit-value slot floors to its provider's phase while the payload-free
+// tag stays at the deciding phase, so the dispatch pick anchors at the
+// deciding phase and only its result floors to the value's phase. This is
+// the one-value-one-phase invariant: decision and value travel separately,
+// and the shared result-type inferrable floats below any demand.
+
+// CHECK-LABEL: uir.func @NormalizedLaterExit
+uir.func @NormalizedLaterExit(%e: 0, %x: 0) -> (result: 1) {
+  %0 = hir.bool_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%1)
+} {
+  %ct = hir.choice_type
+  %st = hir.inferrable
+  %t = hir.int_type
+  %va = hir.var : %t
+  // CHECK: uir.if %e
+  // CHECK-SAME: pa.phase = "0"
+  // CHECK-SAME: pa.results = ["1", "0"]
+  %if:2 = uir.if %e : %st, %ct {
+    %v = uir.expr pin 1 : %t {
+      %y = hir.read_var %va : %t
+      uir.yield %y : %t
+    }
+    %u = hir.unify %st, %t
+    %c0 = hir.choice 0()
+    uir.yield %v, %c0 : %t, %ct
+  } else {
+    %uv = uir.unreachable_value
+    %c1 = hir.choice 1()
+    uir.yield %uv, %c1 : %st, %ct
+  }
+  // The pick's own attributes print after its alternative regions.
+  // CHECK: hir.pick
+  // CHECK: }] {pa.operands = ["0"], pa.phase = "0", pa.results = ["1"]}
+  %r = hir.pick %if#1 : !hir.any [0 (): {
+    hir.yield %if#0 : !hir.any
+  } 1 (): {
+    %w = uir.expr pin 1 : %t {
+      %z = hir.read_var %va : %t
+      uir.yield %z : %t
+    }
+    %u = hir.unify %st, %t
+    hir.yield %w : !hir.any
+  }]
+  // CHECK: uir.return
+  // CHECK-SAME: pa.operands = ["1", "float"]
+  uir.return %r : %st
+}

@@ -9,41 +9,51 @@
 // # Normalize Early Function Exits into Single-Exit Value Form
 //
 // This pass rewrites every `uir.return` that is not a function body's
-// terminator into choice/pick value form, bottom-up per region, leaving one
-// `uir.return` as the body terminator. It is phase-blind — no phase
-// information is consulted — and runs before phase analysis, so analysis and
-// sorting never see an early exit.
+// terminator into value form, bottom-up per region, leaving one `uir.return`
+// as the body terminator. It is phase-blind — no phase information is
+// consulted — and runs before phase analysis, so analysis and sorting never
+// see an early exit.
 //
-// The rewrite applies two rules uniformly at every nesting level:
+// The encoding keeps every SSA value at a single phase: the exit *decision*
+// and the exit *values* have different phases in general, so they travel as
+// separate values and are never fused into one.
 //
 // - **Encode**: a structured CF op (`uir.if`, `uir.expr`, `uir.loop`) whose
-//   regions hold a function exit is rebuilt with one extra trailing result,
-//   a choice tagging how the region ended. Exit paths build tag 0 with the
-//   returned values and their type operands as payload; every other path
-//   builds the payload-free tag 1. On ifs and exprs the choice rides the
-//   yield; on loops it rides `uir.break` in the loop's trailing result slot
-//   (existing breaks gain the tag-1 slot, and exit paths become breaks).
-//   Result slots an exit path does not provide are `uir.unreachable_value`,
-//   never omitted, matching the exact-arity yield/break invariant.
+//   regions hold a function exit is rebuilt with extra trailing results: one
+//   slot per function result carrying the exit path's returned value, plus a
+//   payload-free choice tagging how the region ended (tag 0 = exited, tag 1
+//   = fell through). The tag lives at the op's own phase; the value slots
+//   are ordinary CF results that the standard floor, forwarding, and
+//   choice-ification rules deliver at whatever phase their providers have.
+//   Paths that do not provide a slot fill it with `uir.unreachable_value`,
+//   never omit it, matching the exact-arity yield/break invariant. On ifs
+//   and exprs the slots and tag ride the yield; on loops they ride
+//   `uir.break` (existing breaks gain the tag-1 slots, and exit paths become
+//   breaks). The value slots' result types are one shared `hir.inferrable`
+//   per function result, created once at the body top: every exit site's own
+//   type operands unify into it, and being floating it satisfies the type
+//   operand rule's one-phase-earlier demand at any phase.
 //
-// - **Dispatch**: right after the rebuilt op, an `hir.pick` on its choice
-//   result branches between the exit and the continuation: the tag-0
-//   alternative re-encodes the exit for the enclosing block, and the tag-1
-//   alternative receives the rest of the block, where the same rules recurse.
-//   Multiple exits in one block right-nest into a linear chain of binary
-//   picks, so no continuation is ever duplicated.
+// - **Dispatch**: right after the rebuilt op, an `hir.pick` on its tag
+//   branches between the exit and the continuation: the tag-0 alternative
+//   consumes the op's exit-value slots directly (alternatives carry no
+//   block arguments), and the tag-1 alternative receives the rest of the
+//   block, where the same rules recurse. Multiple exits in one block
+//   right-nest into a linear chain of binary picks, so no continuation is
+//   ever duplicated.
 //
 // How an exit is encoded depends only on the block's parent op — its
-// `ExitPlan`. The function body threads the returned values and their type
-// operands through valued picks into the single trailing `uir.return`.
-// If/expr regions yield their result slots plus the choice. Loop bodies
-// break out of the loop directly, with a resultless dispatch pick and
-// `uir.unreachable` after it, since break/continue are ordinary loop-real
-// control flow. Dead code after exhaustive exits lands in tag-1 alternatives
-// terminated by `uir.unreachable` and is never picked.
+// `ExitPlan`. The function body threads the exit values through valued picks
+// into the single trailing `uir.return`, whose type operands are the shared
+// result-type inferrables. If/expr regions yield their original slots, the
+// exit-value slots, and the tag. Loop bodies break out of the loop directly,
+// with a resultless dispatch pick and `uir.unreachable` after it, since
+// break/continue are ordinary loop-real control flow. Dead code after
+// exhaustive exits lands in tag-1 alternatives terminated by
+// `uir.unreachable` and is never picked.
 //
 // The choices and picks this pass creates are executable single-phase
-// control flow, not phase-crossing vocabulary: the pick's choice operand is
+// control flow, not phase-crossing vocabulary: the pick's tag operand is
 // decided in the same phase that runs the alternative.
 //
 //===----------------------------------------------------------------------===//
@@ -74,20 +84,33 @@ namespace {
 /// by the block's parent op.
 struct ExitPlan {
   enum Kind {
-    /// The function body block: exits thread through valued dispatch picks
-    /// as (values..., type operands...) and feed the single trailing
-    /// `uir.return`.
+    /// The function body block: exit values thread through valued dispatch
+    /// picks and feed the single trailing `uir.return`.
     FuncBody,
-    /// A region block of an exit-carrying `uir.if` or `uir.expr`: exits ride
-    /// the block's yield as a trailing choice slot.
+    /// A region block of an exit-carrying `uir.if` or `uir.expr`: exit
+    /// values and the tag ride the block's yield as trailing slots.
     Arm,
-    /// The body block of an exit-carrying `uir.loop`: exits leave the loop
-    /// as breaks carrying the choice in the loop's trailing result slot.
+    /// The body block of an exit-carrying `uir.loop`: exit values and the
+    /// tag leave the loop as trailing `uir.break` slots.
     LoopBody,
   } kind;
   /// Type operands of the enclosing op's original result slots (empty for
   /// the function body).
   SmallVector<Value> slotTypes;
+};
+
+/// An op rebuilt into exit-encoding form: its trailing results are the
+/// exit-value slots followed by the tag choice.
+struct RebuiltExit {
+  Operation *op;
+
+  /// The exit-value slot results.
+  ValueRange exitValues(unsigned numResults) const {
+    return op->getResults().slice(op->getNumResults() - numResults - 1,
+                                  numResults);
+  }
+  /// The tag choice result.
+  Value tag() const { return op->getResults().back(); }
 };
 
 /// Rewrites all early `uir.return` ops out of one `uir.func`.
@@ -100,10 +123,10 @@ private:
   LogicalResult normalizeBlock(Block &block, const ExitPlan &plan,
                                bool threading);
   LogicalResult finishEnd(Block &block, const ExitPlan &plan, bool threading);
-  FailureOr<Value> normalizeExitOp(Operation *op);
-  FailureOr<Value> normalizeIf(IfOp ifOp);
-  FailureOr<Value> normalizeExpr(ExprOp exprOp);
-  FailureOr<Value> normalizeLoop(LoopOp loopOp);
+  FailureOr<RebuiltExit> normalizeExitOp(Operation *op);
+  FailureOr<RebuiltExit> normalizeIf(IfOp ifOp);
+  FailureOr<RebuiltExit> normalizeExpr(ExprOp exprOp);
+  FailureOr<RebuiltExit> normalizeLoop(LoopOp loopOp);
   void buildExitEndpoint(OpBuilder &builder, Location loc, const ExitPlan &plan,
                          ValueRange values, ValueRange typeOfValues,
                          bool terminatorFlavor);
@@ -111,8 +134,14 @@ private:
   FuncOp funcOp;
   /// The one `hir.choice_type` shared by all encodings in this function.
   Value choiceType;
-  /// The function's declared result arity; every exit payload carries this
-  /// many values plus as many type operands.
+  /// One shared `hir.inferrable` per function result, created at the body
+  /// top: the exit-value slot type of every rebuilt op, the unification
+  /// target of every exit site's type operands, and the final return's type
+  /// operands. Floating, so it satisfies the type operand rule's
+  /// one-phase-earlier demand at any phase.
+  SmallVector<Value> resultTypeVars;
+  /// The function's declared result arity; every exit path provides this
+  /// many values.
   unsigned numResults = 0;
   Type anyTy;
 };
@@ -149,68 +178,59 @@ LogicalResult ExitNormalizer::run() {
   anyTy = hir::AnyType::get(funcOp.getContext());
   OpBuilder builder(&body, body.begin());
   choiceType = hir::ChoiceTypeOp::create(builder, funcOp.getLoc()).getResult();
+  for (unsigned i = 0; i < numResults; ++i)
+    resultTypeVars.push_back(
+        hir::InferrableOp::create(builder, funcOp.getLoc()).getResult());
   return normalizeBlock(body, ExitPlan{ExitPlan::FuncBody, {}},
                         /*threading=*/false);
 }
 
-/// Build the encoding of a function exit that returns `values` with
-/// `typeOfValues`, per the enclosing block's plan. With `terminatorFlavor`
-/// the encoding ends in the enclosing region's real terminator (`uir.yield`
-/// with type operands); without, it ends in the `hir.yield` that threads
-/// through a dispatch pick. Loop bodies always break — their dispatch never
-/// threads.
+/// Build the encoding of a function exit that delivers `values` with
+/// `typeOfValues`, per the enclosing block's plan: unify each value's type
+/// with the enclosing op's exit slot type, then provide all slots — original
+/// slots as `uir.unreachable_value`, exit slots as the values, and the
+/// payload-free tag-0 choice. With `terminatorFlavor` the encoding ends in
+/// the enclosing region's real terminator (`uir.yield` with type operands);
+/// without, it ends in the `hir.yield` that threads through a dispatch pick.
+/// Loop bodies always break — their dispatch never threads. The function
+/// body threads the bare values.
 void ExitNormalizer::buildExitEndpoint(OpBuilder &builder, Location loc,
                                        const ExitPlan &plan, ValueRange values,
                                        ValueRange typeOfValues,
                                        bool terminatorFlavor) {
-  switch (plan.kind) {
-  case ExitPlan::FuncBody: {
+  for (auto [slotType, valueType] : llvm::zip(resultTypeVars, typeOfValues))
+    if (slotType != valueType)
+      builder.createOrFold<hir::UnifyOp>(loc, anyTy, slotType, valueType);
+
+  if (plan.kind == ExitPlan::FuncBody) {
     assert(!terminatorFlavor && "the function body's exits always thread");
-    SmallVector<Value> operands(values);
-    llvm::append_range(operands, typeOfValues);
-    hir::YieldOp::create(builder, loc, operands);
+    hir::YieldOp::create(builder, loc, values);
     return;
   }
-  case ExitPlan::Arm: {
-    SmallVector<Value> payload(values);
-    llvm::append_range(payload, typeOfValues);
-    auto choice = hir::ChoiceOp::create(builder, loc, anyTy, 0, payload);
-    SmallVector<Value> slotValues, slotTypes;
-    for (Value slotType : plan.slotTypes) {
-      slotValues.push_back(
-          UnreachableValueOp::create(builder, loc, anyTy).getResult());
-      slotTypes.push_back(slotType);
-    }
-    slotValues.push_back(choice.getResult());
-    slotTypes.push_back(choiceType);
-    if (terminatorFlavor)
-      YieldOp::create(builder, loc, slotValues, slotTypes);
-    else
-      hir::YieldOp::create(builder, loc, slotValues);
-    return;
+
+  SmallVector<Value> slotValues, slotTypes;
+  for (Value slotType : plan.slotTypes) {
+    slotValues.push_back(
+        UnreachableValueOp::create(builder, loc, anyTy).getResult());
+    slotTypes.push_back(slotType);
   }
-  case ExitPlan::LoopBody: {
-    SmallVector<Value> payload(values);
-    llvm::append_range(payload, typeOfValues);
-    auto choice = hir::ChoiceOp::create(builder, loc, anyTy, 0, payload);
-    SmallVector<Value> slotValues, slotTypes;
-    for (Value slotType : plan.slotTypes) {
-      slotValues.push_back(
-          UnreachableValueOp::create(builder, loc, anyTy).getResult());
-      slotTypes.push_back(slotType);
-    }
-    slotValues.push_back(choice.getResult());
-    slotTypes.push_back(choiceType);
+  llvm::append_range(slotValues, values);
+  llvm::append_range(slotTypes, typeOfValues);
+  auto choice = hir::ChoiceOp::create(builder, loc, anyTy, 0, ValueRange{});
+  slotValues.push_back(choice.getResult());
+  slotTypes.push_back(choiceType);
+
+  if (plan.kind == ExitPlan::LoopBody)
     BreakOp::create(builder, loc, slotValues, slotTypes);
-    return;
-  }
-  }
-  llvm_unreachable("covered switch");
+  else if (terminatorFlavor)
+    YieldOp::create(builder, loc, slotValues, slotTypes);
+  else
+    hir::YieldOp::create(builder, loc, slotValues);
 }
 
 /// Normalize one block: recurse into the first op holding a function exit,
-/// rebuild it into choice-yielding form, and dispatch on the choice right
-/// after it, moving the rest of the block into the continuation alternative.
+/// rebuild it into exit-encoding form, and dispatch on its tag right after
+/// it, moving the rest of the block into the continuation alternative.
 /// `threading` marks blocks that are dispatch-pick alternatives created by
 /// this pass, whose endpoints thread via `hir.yield` instead of rebuilding
 /// the enclosing region's terminator.
@@ -226,20 +246,19 @@ LogicalResult ExitNormalizer::normalizeBlock(Block &block, const ExitPlan &plan,
     return finishEnd(block, plan, threading);
 
   auto loc = exitOp->getLoc();
-  auto choice = normalizeExitOp(exitOp);
-  if (failed(choice))
+  auto rebuilt = normalizeExitOp(exitOp);
+  if (failed(rebuilt))
     return failure();
 
-  // Dispatch on the choice right after the rebuilt op.
-  OpBuilder builder(&block,
-                    std::next(Block::iterator(choice->getDefiningOp())));
+  // Dispatch on the tag right after the rebuilt op.
+  OpBuilder builder(&block, std::next(Block::iterator(rebuilt->op)));
   unsigned numPickResults;
   switch (plan.kind) {
   case ExitPlan::FuncBody:
-    numPickResults = 2 * numResults;
+    numPickResults = numResults;
     break;
   case ExitPlan::Arm:
-    numPickResults = plan.slotTypes.size() + 1;
+    numPickResults = plan.slotTypes.size() + numResults + 1;
     break;
   case ExitPlan::LoopBody:
     numPickResults = 0;
@@ -247,19 +266,15 @@ LogicalResult ExitNormalizer::normalizeBlock(Block &block, const ExitPlan &plan,
   }
   auto pick = hir::PickOp::create(builder, loc,
                                   SmallVector<Type>(numPickResults, anyTy),
-                                  *choice, /*alternativesCount=*/2);
+                                  rebuilt->tag(), /*alternativesCount=*/2);
 
-  // Tag 0: the exit, re-encoded for this block. The payload is always the
-  // returned values plus their type operands.
+  // Tag 0: the exit, re-encoded for this block. The exit values are the
+  // rebuilt op's exit slots, consumed directly — no block arguments.
   auto &exitAlt = pick.getAlternatives()[0].emplaceBlock();
-  exitAlt.addArguments(SmallVector<Type>(2 * numResults, anyTy),
-                       SmallVector<Location>(2 * numResults, loc));
   {
     OpBuilder altBuilder(&exitAlt, exitAlt.end());
-    buildExitEndpoint(altBuilder, loc, plan,
-                      exitAlt.getArguments().take_front(numResults),
-                      exitAlt.getArguments().drop_front(numResults),
-                      /*terminatorFlavor=*/false);
+    buildExitEndpoint(altBuilder, loc, plan, rebuilt->exitValues(numResults),
+                      resultTypeVars, /*terminatorFlavor=*/false);
   }
 
   // Tag 1: the continuation. The rest of the block, terminator included,
@@ -277,9 +292,7 @@ LogicalResult ExitNormalizer::normalizeBlock(Block &block, const ExitPlan &plan,
     if (threading) {
       hir::YieldOp::create(endBuilder, loc, pick.getResults());
     } else {
-      ReturnOp::create(endBuilder, loc,
-                       pick.getResults().take_front(numResults),
-                       pick.getResults().drop_front(numResults));
+      ReturnOp::create(endBuilder, loc, pick.getResults(), resultTypeVars);
     }
     break;
   case ExitPlan::Arm:
@@ -287,6 +300,7 @@ LogicalResult ExitNormalizer::normalizeBlock(Block &block, const ExitPlan &plan,
       hir::YieldOp::create(endBuilder, loc, pick.getResults());
     } else {
       SmallVector<Value> slotTypes(plan.slotTypes);
+      llvm::append_range(slotTypes, resultTypeVars);
       slotTypes.push_back(choiceType);
       YieldOp::create(endBuilder, loc, pick.getResults(), slotTypes);
     }
@@ -300,8 +314,9 @@ LogicalResult ExitNormalizer::normalizeBlock(Block &block, const ExitPlan &plan,
 
 /// Rewrite the terminator of an exit-free block per the block's plan: a
 /// terminating return becomes the exit encoding, a yield of a rebuilt
-/// if/expr gains the tag-1 choice slot, and loop terminators, unreachables,
-/// and loop exits passing through an arm stay untouched.
+/// if/expr gains the unreachable exit slots and the tag-1 choice, and loop
+/// terminators, unreachables, and loop exits passing through an arm stay
+/// untouched.
 LogicalResult ExitNormalizer::finishEnd(Block &block, const ExitPlan &plan,
                                         bool threading) {
   auto *terminator = block.getTerminator();
@@ -318,19 +333,25 @@ LogicalResult ExitNormalizer::finishEnd(Block &block, const ExitPlan &plan,
   }
   if (auto yieldOp = dyn_cast<YieldOp>(terminator);
       yieldOp && plan.kind == ExitPlan::Arm) {
-    // The enclosing op gains a choice slot; this path continues normally.
+    // The enclosing op gains the exit slots and the tag; this path continues
+    // normally, providing no exit values.
     OpBuilder builder(yieldOp);
+    SmallVector<Value> values(yieldOp.getValues());
+    SmallVector<Value> types(yieldOp.getTypeOfValues());
+    for (Value slotType : resultTypeVars) {
+      values.push_back(
+          UnreachableValueOp::create(builder, yieldOp.getLoc(), anyTy)
+              .getResult());
+      types.push_back(slotType);
+    }
     auto choice = hir::ChoiceOp::create(builder, yieldOp.getLoc(), anyTy, 1,
                                         ValueRange{});
-    SmallVector<Value> values(yieldOp.getValues());
     values.push_back(choice.getResult());
-    if (threading) {
+    types.push_back(choiceType);
+    if (threading)
       hir::YieldOp::create(builder, yieldOp.getLoc(), values);
-    } else {
-      SmallVector<Value> types(yieldOp.getTypeOfValues());
-      types.push_back(choiceType);
+    else
       YieldOp::create(builder, yieldOp.getLoc(), values, types);
-    }
     yieldOp.erase();
     return success();
   }
@@ -340,9 +361,8 @@ LogicalResult ExitNormalizer::finishEnd(Block &block, const ExitPlan &plan,
   return success();
 }
 
-/// Rebuild one exit-carrying op into choice-yielding form and return its
-/// trailing choice result.
-FailureOr<Value> ExitNormalizer::normalizeExitOp(Operation *op) {
+/// Rebuild one exit-carrying op into exit-encoding form.
+FailureOr<RebuiltExit> ExitNormalizer::normalizeExitOp(Operation *op) {
   if (auto ifOp = dyn_cast<IfOp>(op))
     return normalizeIf(ifOp);
   if (auto exprOp = dyn_cast<ExprOp>(op))
@@ -354,95 +374,106 @@ FailureOr<Value> ExitNormalizer::normalizeExitOp(Operation *op) {
             "that exit normalization can encode through";
 }
 
-FailureOr<Value> ExitNormalizer::normalizeIf(IfOp ifOp) {
+FailureOr<RebuiltExit> ExitNormalizer::normalizeIf(IfOp ifOp) {
   // Materialize an absent else region: it is the empty fall-through path and
-  // must produce the tag-1 choice.
+  // must provide the unreachable exit slots and the tag-1 choice.
   if (ifOp.getElseRegion().empty()) {
     auto &elseBlock = ifOp.getElseRegion().emplaceBlock();
     OpBuilder builder(&elseBlock, elseBlock.end());
     YieldOp::create(builder, ifOp.getLoc(), ValueRange{}, ValueRange{});
   }
+  OpBuilder builder(ifOp);
   ExitPlan plan{ExitPlan::Arm, SmallVector<Value>(ifOp.getResultTypes())};
   for (auto &region : ifOp->getRegions())
     if (failed(normalizeBlock(region.front(), plan, /*threading=*/false)))
       return failure();
 
-  OpBuilder builder(ifOp);
   SmallVector<Value> typeOperands(ifOp.getResultTypes());
+  llvm::append_range(typeOperands, resultTypeVars);
   typeOperands.push_back(choiceType);
-  auto newIf = IfOp::create(builder, ifOp.getLoc(),
-                            SmallVector<Type>(ifOp.getNumResults() + 1, anyTy),
-                            ifOp.getCondition(), typeOperands);
+  auto newIf = IfOp::create(
+      builder, ifOp.getLoc(),
+      SmallVector<Type>(ifOp.getNumResults() + numResults + 1, anyTy),
+      ifOp.getCondition(), typeOperands);
   newIf.getThenRegion().takeBody(ifOp.getThenRegion());
   newIf.getElseRegion().takeBody(ifOp.getElseRegion());
   for (auto [oldResult, newResult] :
        llvm::zip(ifOp.getResults(), newIf.getResults()))
     oldResult.replaceAllUsesWith(newResult);
   ifOp.erase();
-  return newIf.getResults().back();
+  return RebuiltExit{newIf};
 }
 
-FailureOr<Value> ExitNormalizer::normalizeExpr(ExprOp exprOp) {
+FailureOr<RebuiltExit> ExitNormalizer::normalizeExpr(ExprOp exprOp) {
+  OpBuilder builder(exprOp);
   ExitPlan plan{ExitPlan::Arm, SmallVector<Value>(exprOp.getResultTypes())};
   if (failed(normalizeBlock(exprOp.getBody().front(), plan,
                             /*threading=*/false)))
     return failure();
 
-  OpBuilder builder(exprOp);
   SmallVector<Value> typeOperands(exprOp.getResultTypes());
+  llvm::append_range(typeOperands, resultTypeVars);
   typeOperands.push_back(choiceType);
   auto newExpr = ExprOp::create(
       builder, exprOp.getLoc(),
-      SmallVector<Type>(exprOp.getNumResults() + 1, anyTy), exprOp.getPinAttr(),
-      exprOp.getPhaseShiftAttr(), typeOperands);
+      SmallVector<Type>(exprOp.getNumResults() + numResults + 1, anyTy),
+      exprOp.getPinAttr(), exprOp.getPhaseShiftAttr(), typeOperands);
   newExpr.getBody().takeBody(exprOp.getBody());
   for (auto [oldResult, newResult] :
        llvm::zip(exprOp.getResults(), newExpr.getResults()))
     oldResult.replaceAllUsesWith(newResult);
   exprOp.erase();
-  return newExpr.getResults().back();
+  return RebuiltExit{newExpr};
 }
 
-FailureOr<Value> ExitNormalizer::normalizeLoop(LoopOp loopOp) {
+FailureOr<RebuiltExit> ExitNormalizer::normalizeLoop(LoopOp loopOp) {
+  OpBuilder builder(loopOp);
+  ExitPlan plan{ExitPlan::LoopBody,
+                SmallVector<Value>(loopOp.getResultTypes())};
+
   // Existing breaks mean ordinary loop completion: they gain the trailing
-  // tag-1 choice slot before exits are rewritten, so only exit paths carry
-  // tag 0.
+  // unreachable exit slots and the tag-1 choice before exits are rewritten,
+  // so only exit paths carry tag 0.
   SmallVector<BreakOp> breaks;
   loopOp.getBody().walk([&](BreakOp breakOp) {
     if (enclosingLoop(breakOp) == loopOp)
       breaks.push_back(breakOp);
   });
   for (auto breakOp : breaks) {
-    OpBuilder builder(breakOp);
-    auto choice = hir::ChoiceOp::create(builder, breakOp.getLoc(), anyTy, 1,
-                                        ValueRange{});
+    OpBuilder breakBuilder(breakOp);
     SmallVector<Value> values(breakOp.getValues());
-    values.push_back(choice.getResult());
     SmallVector<Value> types(breakOp.getTypeOfValues());
+    for (Value slotType : resultTypeVars) {
+      values.push_back(
+          UnreachableValueOp::create(breakBuilder, breakOp.getLoc(), anyTy)
+              .getResult());
+      types.push_back(slotType);
+    }
+    auto choice = hir::ChoiceOp::create(breakBuilder, breakOp.getLoc(), anyTy,
+                                        1, ValueRange{});
+    values.push_back(choice.getResult());
     types.push_back(choiceType);
-    BreakOp::create(builder, breakOp.getLoc(), values, types);
+    BreakOp::create(breakBuilder, breakOp.getLoc(), values, types);
     breakOp.erase();
   }
 
-  ExitPlan plan{ExitPlan::LoopBody,
-                SmallVector<Value>(loopOp.getResultTypes())};
   if (failed(normalizeBlock(loopOp.getBody().front(), plan,
                             /*threading=*/false)))
     return failure();
 
-  OpBuilder builder(loopOp);
   SmallVector<Value> typeOperands(loopOp.getResultTypes());
+  llvm::append_range(typeOperands, resultTypeVars);
   typeOperands.push_back(choiceType);
-  auto newLoop =
-      LoopOp::create(builder, loopOp.getLoc(),
-                     SmallVector<Type>(loopOp.getNumResults() + 1, anyTy),
-                     loopOp.getInits(), loopOp.getInitTypes(), typeOperands);
+  auto newLoop = LoopOp::create(
+      builder, loopOp.getLoc(),
+      SmallVector<Type>(loopOp.getNumResults() + numResults + 1, anyTy),
+      loopOp.getInits(), loopOp.getInitTypes(), typeOperands);
   newLoop.getBody().takeBody(loopOp.getBody());
   for (auto [oldResult, newResult] :
        llvm::zip(loopOp.getResults(), newLoop.getResults()))
     oldResult.replaceAllUsesWith(newResult);
   loopOp.erase();
-  return newLoop.getResults().back();
+  return RebuiltExit{newLoop};
 }
 
 //===----------------------------------------------------------------------===//

@@ -43,29 +43,37 @@ def NormalizeExitsPass : Pass<"normalize-exits", "mlir::ModuleOp"> {
     runs before phase analysis, so analysis and sorting input is always
     single-exit.
 
-    Each structured control flow op (`uir.if`, `uir.expr`, `uir.loop`) whose
-    regions hold a function exit is rebuilt with one extra trailing result: a
-    choice tagging how the region ended. Exit paths produce tag 0, carrying
-    the returned values and their type operands as payload; all other paths
-    produce the payload-free tag 1. On `uir.if` and `uir.expr` the choice
-    rides the region's yield; on `uir.loop` it rides `uir.break` in the
-    loop's trailing result slot (existing breaks gain the tag-1 slot, and
-    exits become breaks), so returns under loops become break-carried
-    choices. Result slots an exit path does not provide are filled with
-    `uir.unreachable_value`, never omitted.
+    The encoding keeps every SSA value at a single phase: the exit decision
+    and the exit values have different phases in general, so they travel as
+    separate values and are never fused into one. Each structured control
+    flow op (`uir.if`, `uir.expr`, `uir.loop`) whose regions hold a function
+    exit is rebuilt with extra trailing results: one slot per function result
+    carrying the exit path's returned value, plus a payload-free choice
+    tagging how the region ended (tag 0 = exited, tag 1 = fell through). The
+    tag lives at the op's own phase; the value slots are ordinary CF results
+    that the standard floor, forwarding, and choice-ification rules deliver
+    at their providers' phases. Slots a path does not provide are filled
+    with `uir.unreachable_value`, never omitted. On `uir.if` and `uir.expr`
+    the slots and tag ride the yield; on `uir.loop` they ride `uir.break`
+    (existing breaks gain the tag-1 slots, and exits become breaks), so
+    returns under loops become break-carried tags. The value slots' result
+    types are one shared `hir.inferrable` per function result, created at
+    the body top; every exit site's own type operands unify into them.
 
-    After each rebuilt op, an `hir.pick` on the choice dispatches: the tag-0
-    alternative re-encodes the exit for the enclosing block, and the tag-1
-    alternative receives the remainder of the block. Nested exits produce a
-    linear chain of binary picks, so continuations are never duplicated. At
-    the function body's top level the picks thread the returned values and
-    type operands to the single trailing `uir.return`; dead code after
-    exhaustive exits lands in tag-1 alternatives terminated by
+    After each rebuilt op, an `hir.pick` on the tag dispatches: the tag-0
+    alternative consumes the op's exit-value slots directly (alternatives
+    carry no block arguments), and the tag-1 alternative receives the
+    remainder of the block. Nested exits produce a linear chain of binary
+    picks, so continuations are never duplicated. At the function body's top
+    level the picks thread the exit values to the single trailing
+    `uir.return`, typed by the shared inferrables (floating, they satisfy
+    the type operand rule's one-phase-earlier demand at any phase); dead
+    code after exhaustive exits lands in tag-1 alternatives terminated by
     `uir.unreachable`.
 
     Choice construction and pick dispatch are executable single-phase control
     flow here, not phase-crossing vocabulary: which alternative runs is
-    decided by the same-phase choice operand.
+    decided by the same-phase tag operand.
   }];
   let dependentDialects = ["silicon::hir::HIRDialect"];
 }
