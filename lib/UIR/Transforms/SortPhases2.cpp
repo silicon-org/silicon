@@ -270,6 +270,7 @@ private:
                                  SmallVectorImpl<Operation *> &content);
   LogicalResult rebuildDivergences(BodyPlan &plan, int16_t p);
   LogicalResult rebuildDivergenceIf(Divergence &divergence, int16_t p);
+  unsigned countResultProviders(IfOp ifOp, unsigned idx);
   static std::optional<size_t> spinePosition(BodyPlan &plan, Value value);
   void appendTail(BodyPlan &plan, size_t seg, ArrayRef<PathStep> path,
                   OpBuilder &builder, Location loc, int16_t p,
@@ -864,28 +865,21 @@ void PhaseSorter::cloneFloatingUses(Operation *regionOp, Block &rootBlock) {
   });
 }
 
-/// Whether `value` marks a control-flow slot that delivers no result: an
-/// operand defined by `uir.unreachable_value`. A yield/break carries one
-/// operand per result slot (verifier-enforced), and such an operand names the
-/// non-provided slots.
-static bool isNonProviding(Value value) {
-  return value.getDefiningOp<UnreachableValueOp>();
-}
-
 /// The number of arm yields providing result `idx` of `ifOp`. An arm
 /// terminated by an exit (return/break/continue) rather than a yield does not
-/// provide the result, nor does an arm whose yield operand for the slot is a
-/// `uir.unreachable_value`. A result provided by more than one yield is a
+/// provide the result, nor does an arm whose yield operand for the slot does
+/// not `materialize` (a `uir.unreachable_value`, or a nested control-flow
+/// result no path provides). A result provided by more than one yield is a
 /// selection and a choice-ification obligation when it is later-phase; a
 /// single-provider result (the other arm exits or does not provide) is not
 /// choice-ified but left for the early-exit rejection.
-static unsigned countResultProviders(IfOp ifOp, unsigned idx) {
+unsigned PhaseSorter::countResultProviders(IfOp ifOp, unsigned idx) {
   unsigned count = 0;
   for (auto *region : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
     if (region->empty())
       continue;
     auto yieldOp = dyn_cast<YieldOp>(region->front().getTerminator());
-    if (yieldOp && !isNonProviding(yieldOp.getValues()[idx]))
+    if (yieldOp && analysis.materializes(yieldOp.getValues()[idx]))
       ++count;
   }
   return count;
@@ -927,9 +921,9 @@ LogicalResult PhaseSorter::extractBranches() {
         hasChoiceResult = true;
         continue; // Choice-ification obligation.
       }
-      // Single-provider divergence, or a never result (unused after
-      // never-forwarding but still un-extractable: its short-yielding arms
-      // carry no value for the kept-result rebuild).
+      // Single-provider divergence, or a never result (no arm delivers a
+      // materializing value; unused after never-forwarding but still not a
+      // choice-ification obligation).
       extractable = false;
       break;
     }
@@ -997,11 +991,11 @@ LogicalResult PhaseSorter::extractFromBranch(IfOp ifOp, int16_t p) {
 
     auto yieldOp = cast<YieldOp>(arm->front().getTerminator());
     // Every later result here choice-ifies (provided by both arms), so each arm
-    // carries a real operand for it — the full-arity yield indexes in range and
-    // never hits a `uir.unreachable_value`.
+    // carries a materializing operand for it — the full-arity yield indexes in
+    // range and never hits a non-providing slot.
     for (auto idx : laterIdx) {
       Value operand = yieldOp.getValues()[idx];
-      assert(!isNonProviding(operand) &&
+      assert(analysis.materializes(operand) &&
              "choice-ified later result has a non-providing arm");
       info.laterYieldOperands.push_back(operand);
     }
@@ -1560,13 +1554,13 @@ LogicalResult PhaseSorter::rebuildDivergenceIf(Divergence &divergence,
       yieldOp.erase();
       continue;
     }
-    // A slot the arm does not provide (a `uir.unreachable_value`) becomes a
+    // A slot the arm does not provide (a non-materializing operand) becomes a
     // null operand: the receiving cf pick yields a fresh unreachable_value for
     // it, and it needs no spine position.
     for (auto idx : laterIdx) {
       Value operand = yieldOp.getValues()[idx];
-      arm.laterYieldOperands.push_back(isNonProviding(operand) ? Value()
-                                                               : operand);
+      arm.laterYieldOperands.push_back(
+          analysis.materializes(operand) ? operand : Value());
     }
     // A later result is reconstructible from the arm's replay when its operand
     // sits on the arm's spine (in some segment) or comes from outside the arm.

@@ -144,6 +144,29 @@ uir.func @SingleProviderBackward(%a: -1, %c: 0) -> (r: 0) {
 
 // -----
 
+// The other arm becomes a non-provider by yielding a value that never
+// materializes (a breakless loop's result), not by exiting: the result is
+// still single-provider on the surviving arm. The analysis and the extraction
+// now agree on the provider count (both exclude the never arm), so this lands
+// as the ordinary single-provider forwarding rejection rather than a spurious
+// mismatch.
+uir.func @NeverArmForwardResult(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // expected-error @below {{delivers result #0 at phase 1 instead of its own phase 0; result forwarding (single-provider control-flow results, and receivers of crossings more than one phase wide) is not implemented in phase sorting yet}}
+  %v = uir.if %c : %t {
+    uir.yield %y : %t
+  } else {
+    %loop = uir.loop : %t { uir.continue }
+    uir.yield %loop : %t
+  }
+  uir.return %v : %t
+}
+
+// -----
+
 // An if with a later-phase result whose arms do not all yield: the else arm
 // exits early instead. Branch extraction classifies the result by counting
 // its providing yields, which must tolerate the non-yield arm rather than

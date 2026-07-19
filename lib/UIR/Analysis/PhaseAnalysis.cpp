@@ -693,48 +693,96 @@ LogicalResult PhaseAnalysis::deriveFloatingExpr(ExprOp exprOp,
 
 // NOLINTEND(misc-no-recursion)
 
-/// Collect the (value, terminator) pairs that provide a given result of a
-/// region-bearing op.
+/// Invoke `fn(value, term)` for each terminator operand feeding a result slot.
 ///
-/// A result is provided only by terminators that hand control to the op's
-/// continuation carrying the value: a `uir.yield` for exprs and ifs, and a
-/// `uir.break` of that loop for loops. Any other arm terminator diverts
-/// control elsewhere — an if/expr arm that breaks, continues, returns, or is
-/// unreachable never delivers a value to the op's result, so its operands (a
-/// break's values belong to the enclosing loop's result, not this op's) are
-/// not providers. Yields and breaks carry one operand per result slot; a slot
-/// whose operand is a `uir.unreachable_value` marks a path that does not
-/// deliver that result and is likewise not a provider.
-SmallVector<std::pair<Value, Operation *>, 2>
-PhaseAnalysis::resultProviders(Operation *regionOp, unsigned resultIdx) {
-  SmallVector<std::pair<Value, Operation *>, 2> providers;
-  auto addCarrier = [&](Operation *term, ValueRange values) {
-    // Verifier guarantees one operand per result slot.
+/// A result is carried only by terminators that hand control to the op's
+/// continuation: a `uir.yield` for exprs and ifs, and a `uir.break` of that
+/// loop for loops. Any other arm terminator diverts control elsewhere — an
+/// if/expr arm that breaks, continues, returns, or is unreachable never
+/// delivers a value to the op's result, so its operands (a break's values
+/// belong to the enclosing loop's result, not this op's) are not carriers.
+/// Yields and breaks carry one operand per result slot (verifier-enforced).
+void PhaseAnalysis::eachCarrier(
+    Operation *regionOp, unsigned resultIdx,
+    llvm::function_ref<void(Value, Operation *)> fn) {
+  auto carrier = [&](Operation *term, ValueRange values) {
     assert(resultIdx < values.size() && "terminator under-provides results");
-    Value value = values[resultIdx];
-    if (value.getDefiningOp<UnreachableValueOp>())
-      return;
-    providers.push_back({value, term});
+    fn(values[resultIdx], term);
   };
-  auto addYield = [&](Operation *term) {
+  auto yield = [&](Operation *term) {
     if (auto yieldOp = dyn_cast<YieldOp>(term))
-      addCarrier(term, yieldOp.getValues());
+      carrier(term, yieldOp.getValues());
   };
 
   if (auto exprOp = dyn_cast<ExprOp>(regionOp)) {
-    addYield(exprOp.getBody().front().getTerminator());
+    yield(exprOp.getBody().front().getTerminator());
   } else if (auto ifOp = dyn_cast<IfOp>(regionOp)) {
-    addYield(ifOp.getThenRegion().front().getTerminator());
+    yield(ifOp.getThenRegion().front().getTerminator());
     if (!ifOp.getElseRegion().empty())
-      addYield(ifOp.getElseRegion().front().getTerminator());
+      yield(ifOp.getElseRegion().front().getTerminator());
   } else if (auto loopOp = dyn_cast<LoopOp>(regionOp)) {
     auto it = loopBreaks.find(loopOp);
     if (it != loopBreaks.end())
       for (auto breakOp : it->second)
-        addCarrier(breakOp, breakOp.getValues());
+        carrier(breakOp, breakOp.getValues());
   } else {
-    llvm_unreachable("unexpected region op in resultProviders");
+    llvm_unreachable("unexpected region op in eachCarrier");
   }
+}
+
+/// Whether `value` can take on a concrete value on some execution path.
+///
+/// See the header for the full contract. A `uir.unreachable_value` never
+/// materializes; a control-flow result materializes iff some terminator
+/// delivers a materializing value into its slot; every other value
+/// materializes. The recursion bottoms out on the use-def DAG — a slot's
+/// carriers precede the result — and the memo makes one query linear even when
+/// arms share a nested result. The predicate uses no phase numbers and holds
+/// before phases are derived.
+bool PhaseAnalysis::materializes(Value value) {
+  DenseMap<Value, bool> memo;
+  return materializesMemo(value, memo);
+}
+
+bool PhaseAnalysis::materializesMemo(Value value, DenseMap<Value, bool> &memo) {
+  if (value.getDefiningOp<UnreachableValueOp>())
+    return false;
+  auto result = dyn_cast<OpResult>(value);
+  if (!result || !isModeledRegionOp(result.getOwner()))
+    return true;
+
+  auto it = memo.find(value);
+  if (it != memo.end())
+    return it->second;
+  // Mark in-progress as non-materializing so a hypothetical cycle resolves to
+  // the least fixed point; the IR is acyclic, so this is only a safety net. Do
+  // not hold the map reference across the recursion — it invalidates on insert.
+  memo[value] = false;
+
+  bool m = false;
+  eachCarrier(result.getOwner(), result.getResultNumber(),
+              [&](Value operand, Operation *) {
+                if (materializesMemo(operand, memo))
+                  m = true;
+              });
+  memo[value] = m;
+  return m;
+}
+
+/// Collect the (value, terminator) pairs that provide a given result of a
+/// region-bearing op: the carriers whose operand for the slot materializes. A
+/// carrier whose operand does not materialize (a `uir.unreachable_value`, or a
+/// nested control-flow result no path provides) marks a path that does not
+/// deliver that result and is not a provider. One memo spans the whole query so
+/// shared nested results are evaluated once.
+SmallVector<std::pair<Value, Operation *>, 2>
+PhaseAnalysis::resultProviders(Operation *regionOp, unsigned resultIdx) {
+  DenseMap<Value, bool> memo;
+  SmallVector<std::pair<Value, Operation *>, 2> providers;
+  eachCarrier(regionOp, resultIdx, [&](Value value, Operation *term) {
+    if (materializesMemo(value, memo))
+      providers.push_back({value, term});
+  });
   return providers;
 }
 

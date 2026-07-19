@@ -112,6 +112,21 @@ struct PhaseAnalysis {
   /// Look up the resolved phase for a value. Asserts if not found.
   int16_t getValuePhase(Value value) const;
 
+  /// Whether `value` can take on a concrete value on some execution path.
+  ///
+  /// A `uir.unreachable_value` never materializes. A control-flow result
+  /// (if/loop/expr result) materializes iff some terminator delivers a
+  /// materializing value into its slot — so a breakless loop's results and an
+  /// if whose arms all fail to deliver never materialize. Every other value —
+  /// block argument, pure op, call, pin, constant — materializes.
+  ///
+  /// The predicate is purely structural (IR shape only, no phase numbers): it
+  /// is well-defined before any phase is derived, and it is what decides
+  /// whether a yield/break operand provides a result slot. Never-value
+  /// forwarding only ever rewrites a non-materializing value into a
+  /// `uir.unreachable_value`, so the answer is invariant under sorting.
+  bool materializes(Value value);
+
   /// Annotate every op in the function with its resolved phase (`pa.phase`)
   /// and the phases of its operands and results (`pa.operands`,
   /// `pa.results`), for lit testing. Sentinel phases print as "float" and
@@ -164,10 +179,24 @@ private:
                                       int16_t latest);
 
   /// Collect the (value, terminator) pairs providing a given result of a
-  /// region-bearing op: yields for exprs/ifs, breaks for loops. Terminators
-  /// that do not carry the result are omitted.
+  /// region-bearing op: yields for exprs/ifs, breaks for loops. A terminator
+  /// whose operand for the slot does not `materialize` (a
+  /// `uir.unreachable_value` or a nested never result) is not a provider and
+  /// is omitted.
   SmallVector<std::pair<Value, Operation *>, 2>
   resultProviders(Operation *regionOp, unsigned resultIdx);
+
+  /// Invoke `fn(value, term)` for each terminator operand feeding result slot
+  /// `resultIdx` of a region-bearing op: yield operands for exprs/ifs, break
+  /// operands for loops. No materialization filter — every raw carrier.
+  void eachCarrier(Operation *regionOp, unsigned resultIdx,
+                   llvm::function_ref<void(Value, Operation *)> fn);
+
+  /// The memoized core of `materializes`. The memo spans one top-level query,
+  /// so a control-flow result shared across arms is evaluated once (the
+  /// unmemoized recursion is exponential on such diamonds), and it is rebuilt
+  /// per query, so it never goes stale when the sorter mutates the IR.
+  bool materializesMemo(Value value, DenseMap<Value, bool> &memo);
 
   /// Push blockPhase down to all ops in a block (including the terminator).
   LogicalResult processBlock(Block &block, int16_t blockPhase);

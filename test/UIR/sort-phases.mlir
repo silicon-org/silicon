@@ -3887,3 +3887,73 @@ uir.func @FloatingFrameNeverInterior(%c: 0, %a: 1) -> (result: 1) {
   }
   uir.return %r : %t
 }
+
+// An if whose else arm yields a breakless loop's (never) result: that arm does
+// not provide the result, so the if is single-provider on the then arm. Since
+// the surviving provider sits at the if's own phase, the result is delivered
+// there and the if wraps whole. Never-forwarding leaves the never loop in place
+// and rewrites the else yield's use of it to a fresh `uir.unreachable_value`.
+// CHECK-LABEL: uir.func @NeverArmSingleProvider
+uir.func @NeverArmSingleProvider(%c: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT: [[IF:%.+]] = uir.if %c : [[T:%.+]] {
+  // CHECK-NEXT:   uir.yield %x : [[T]]
+  // CHECK-NEXT: } else {
+  // CHECK-NEXT:   uir.loop : [[T]] {
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:   uir.yield [[UV]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase_return [[IF]] : [[T]]
+  %v = uir.if %c : %t {
+    uir.yield %x : %t
+  } else {
+    %loop = uir.loop : %t { uir.continue }
+    uir.yield %loop : %t
+  }
+  uir.return %v : %t
+}
+
+// An if whose both arms yield a breakless loop's (never) result: no arm
+// provides the result, so it is `never` — the same phasing as if both arms
+// yielded an explicit `uir.unreachable_value`. The consuming add's operand is
+// forwarded to a fresh unreachable value; each never loop is left in place,
+// unused.
+// CHECK-LABEL: uir.func @BothArmsNeverLoopResult
+uir.func @BothArmsNeverLoopResult(%c: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT: uir.if %c : [[T:%.+]] {
+  // CHECK-NEXT:   uir.loop : [[T]] {
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   [[A:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:   uir.yield [[A]] : [[T]]
+  // CHECK-NEXT: } else {
+  // CHECK-NEXT:   uir.loop : [[T]] {
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   [[B:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:   uir.yield [[B]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT: [[U:%.+]] = hir.add %x, [[UV]] : [[T]]
+  // CHECK-NEXT: uir.phase_return [[U]] : [[T]]
+  %v = uir.if %c : %t {
+    %l1 = uir.loop : %t { uir.continue }
+    uir.yield %l1 : %t
+  } else {
+    %l2 = uir.loop : %t { uir.continue }
+    uir.yield %l2 : %t
+  }
+  %u = hir.add %x, %v : %t
+  uir.return %u : %t
+}

@@ -5063,6 +5063,54 @@ uir.func @IfBothReturnValued(%sel: 0, %a: 0) -> (result: 0) {
   uir.return %r : %t
 }
 
+// A yield operand that itself never materializes does not provide the result:
+// an arm yielding a breakless loop's (never) result is a non-provider, so the
+// if is single-provider on the surviving arm and delivers at that arm's phase.
+// The never arm contributes nothing — it does not make the result a two-way
+// selection floored at the op phase.
+// CHECK-LABEL: uir.func @ArmYieldsNeverResult
+uir.func @ArmYieldsNeverResult(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // Single materializing provider (%y at phase 1); the never else arm is
+  // excluded, so the result is phase 1, not a phase-0 selection.
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["1"]
+  %v = uir.if %c : %t {
+    uir.yield %y : %t
+  } else {
+    // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.results = ["never"]
+    %loop = uir.loop : %t { uir.continue }
+    uir.yield %loop : %t
+  }
+  uir.return %v : %t
+}
+
+// Both arms yield a value that never materializes (each a breakless loop's
+// result): no arm provides the result, so it is `never` — matching the
+// spelling where both arms yield an explicit `uir.unreachable_value`. The
+// phasing does not depend on how non-provision is spelled.
+// CHECK-LABEL: uir.func @BothArmsYieldNeverResult
+uir.func @BothArmsYieldNeverResult(%c: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.if {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["never"]
+  %v = uir.if %c : %t {
+    %l1 = uir.loop : %t { uir.continue }
+    uir.yield %l1 : %t
+  } else {
+    %l2 = uir.loop : %t { uir.continue }
+    uir.yield %l2 : %t
+  }
+  // CHECK: hir.add
+  // CHECK-SAME: pa.operands = ["0", "never", "float"]
+  %u = hir.add %x, %v : %t
+  uir.return %u : %t
+}
+
 // Never satisfies even const demands: the bottom phase passes a call's
 // const arg requirement and a const function result without error.
 uir.func @NeverConstTarget(%x: -1) -> (result: 0) {
