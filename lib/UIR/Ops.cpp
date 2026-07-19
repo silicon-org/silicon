@@ -37,12 +37,37 @@ static LoopOp getEnclosingLoop(Operation *op) {
 }
 
 //===----------------------------------------------------------------------===//
+// YieldOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult YieldOp::verify() {
+  // A yield provides exactly one value per result of the op whose region it
+  // terminates. Non-provided slots carry a `uir.unreachable_value`, never a
+  // missing operand.
+  auto *parentOp = (*this)->getParentOp();
+  if (getValues().size() != parentOp->getNumResults())
+    return emitOpError() << "provides " << getValues().size()
+                         << " values but the enclosing '"
+                         << parentOp->getName().getStringRef() << "' declares "
+                         << parentOp->getNumResults() << " results";
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // BreakOp
 //===----------------------------------------------------------------------===//
 
 LogicalResult BreakOp::verify() {
-  if (!hasAncestorOp(*this, "uir.loop"))
+  auto loopOp = getEnclosingLoop(*this);
+  if (!loopOp)
     return emitOpError("must be nested inside a 'uir.loop'");
+  // A break provides exactly one value per result of the loop it exits.
+  // Non-provided slots carry a `uir.unreachable_value`, never a missing
+  // operand.
+  if (getValues().size() != loopOp.getNumResults())
+    return emitOpError() << "provides " << getValues().size()
+                         << " values but the target 'uir.loop' declares "
+                         << loopOp.getNumResults() << " results";
   return success();
 }
 

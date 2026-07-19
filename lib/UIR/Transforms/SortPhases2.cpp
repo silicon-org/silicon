@@ -329,14 +329,16 @@ private:
 // Input Vocabulary Check
 //===----------------------------------------------------------------------===//
 
-/// The sorted-phase ops are this pass's output vocabulary: they are only
-/// ever produced by sorting itself, and their presence in the input means
-/// the pipeline is out of order. Reject them loudly instead of treating
-/// them as opaque content, which would silently mis-sort their phase
-/// structure (the phase analysis does not model them).
+/// The sorted-phase structure ops are this pass's output vocabulary: they are
+/// only ever produced by sorting itself, and their presence in the input means
+/// the pipeline is out of order. Reject them loudly instead of treating them as
+/// opaque content, which would silently mis-sort their phase structure (the
+/// phase analysis does not model them). `uir.unreachable_value` is not among
+/// them: it is legal input marking a control-flow slot no path provides, and
+/// analysis models it at the bottom phase `never`.
 LogicalResult PhaseSorter::rejectSortedVocabulary() {
   auto result = funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
-    if (!isa<PhaseOp, PhaseReturnOp, PhaseCallOp, UnreachableValueOp>(op))
+    if (!isa<PhaseOp, PhaseReturnOp, PhaseCallOp>(op))
       return WalkResult::advance();
     op->emitOpError() << "is phase-sorting output vocabulary and cannot "
                          "appear in phase-sorting input";
@@ -862,19 +864,28 @@ void PhaseSorter::cloneFloatingUses(Operation *regionOp, Block &rootBlock) {
   });
 }
 
+/// Whether `value` marks a control-flow slot that delivers no result: an
+/// operand defined by `uir.unreachable_value`. A yield/break carries one
+/// operand per result slot (verifier-enforced), and such an operand names the
+/// non-provided slots.
+static bool isNonProviding(Value value) {
+  return value.getDefiningOp<UnreachableValueOp>();
+}
+
 /// The number of arm yields providing result `idx` of `ifOp`. An arm
 /// terminated by an exit (return/break/continue) rather than a yield does not
-/// provide the result. A result provided by more than one yield is a
+/// provide the result, nor does an arm whose yield operand for the slot is a
+/// `uir.unreachable_value`. A result provided by more than one yield is a
 /// selection and a choice-ification obligation when it is later-phase; a
-/// single-provider result (the other arm exits) is not choice-ified but left
-/// for the early-exit rejection.
+/// single-provider result (the other arm exits or does not provide) is not
+/// choice-ified but left for the early-exit rejection.
 static unsigned countResultProviders(IfOp ifOp, unsigned idx) {
   unsigned count = 0;
   for (auto *region : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
     if (region->empty())
       continue;
     auto yieldOp = dyn_cast<YieldOp>(region->front().getTerminator());
-    if (yieldOp && idx < yieldOp.getValues().size())
+    if (yieldOp && !isNonProviding(yieldOp.getValues()[idx]))
       ++count;
   }
   return count;
@@ -985,9 +996,15 @@ LogicalResult PhaseSorter::extractFromBranch(IfOp ifOp, int16_t p) {
     info.fields = collectCrossingValues(op, p, info.moved);
 
     auto yieldOp = cast<YieldOp>(arm->front().getTerminator());
-    for (auto idx : laterIdx)
-      if (idx < yieldOp.getValues().size())
-        info.laterYieldOperands.push_back(yieldOp.getValues()[idx]);
+    // Every later result here choice-ifies (provided by both arms), so each arm
+    // carries a real operand for it — the full-arity yield indexes in range and
+    // never hits a `uir.unreachable_value`.
+    for (auto idx : laterIdx) {
+      Value operand = yieldOp.getValues()[idx];
+      assert(!isNonProviding(operand) &&
+             "choice-ified later result has a non-providing arm");
+      info.laterYieldOperands.push_back(operand);
+    }
 
     // The later yield operands cross the boundary too: collect their crossing
     // needs as if the yield were moved content.
@@ -1518,11 +1535,24 @@ LogicalResult PhaseSorter::rebuildDivergenceIf(Divergence &divergence,
     }
     OpBuilder armBuilder(yieldOp);
     if (!arm.reachesYield) {
-      // Unreachable yield: the arm provides nothing; empty the yield so the
-      // rebuilt result mapping stays positional.
+      // The arm's yield is unreachable (every path exits before it), so it
+      // provides nothing. Rebuild it at full arity with `uir.unreachable_value`
+      // in every slot the rebuilt branch carries — the kept results, plus the
+      // cf choice when some arm falls through — keeping the result mapping
+      // positional.
       arm.laterYieldOperands.assign(laterIdx.size(), Value());
-      auto newYield =
-          YieldOp::create(armBuilder, loc, ValueRange{}, ValueRange{});
+      SmallVector<Value> deadValues, deadTypes;
+      auto addDead = [&](Value typeOperand) {
+        auto uv = UnreachableValueOp::create(armBuilder, loc, anyTy);
+        setPhase(uv, p);
+        deadValues.push_back(uv.getResult());
+        deadTypes.push_back(typeOperand);
+      };
+      for (auto idx : keptIdx)
+        addDead(ifOp.getResultTypes()[idx]);
+      if (anyFallthrough)
+        addDead(choiceType);
+      auto newYield = YieldOp::create(armBuilder, loc, deadValues, deadTypes);
       setPhase(newYield, p);
       if (arm.plan->terminal == yieldOp.getOperation())
         arm.plan->terminal = newYield;
@@ -1530,10 +1560,14 @@ LogicalResult PhaseSorter::rebuildDivergenceIf(Divergence &divergence,
       yieldOp.erase();
       continue;
     }
-    for (auto idx : laterIdx)
-      arm.laterYieldOperands.push_back(idx < yieldOp.getValues().size()
-                                           ? yieldOp.getValues()[idx]
-                                           : Value());
+    // A slot the arm does not provide (a `uir.unreachable_value`) becomes a
+    // null operand: the receiving cf pick yields a fresh unreachable_value for
+    // it, and it needs no spine position.
+    for (auto idx : laterIdx) {
+      Value operand = yieldOp.getValues()[idx];
+      arm.laterYieldOperands.push_back(isNonProviding(operand) ? Value()
+                                                               : operand);
+    }
     // A later result is reconstructible from the arm's replay when its operand
     // sits on the arm's spine (in some segment) or comes from outside the arm.
     // The receiving cf pick's alternative threads a deeper-segment operand up
@@ -1554,13 +1588,12 @@ LogicalResult PhaseSorter::rebuildDivergenceIf(Divergence &divergence,
     setPhase(choice, p);
     SmallVector<Value> yieldValues, yieldTypes;
     for (auto idx : keptIdx) {
-      // The cf choice must land in the rebuilt branch's last result slot, so
-      // a rejoining arm cannot under-provide the kept results ahead of it.
-      if (idx >= yieldOp.getValues().size())
-        return ifOp.emitOpError()
-               << "rejoining arm under-provides the branch's results ahead of "
-                  "the cf choice; short yields on cf-carrying divergences are "
-                  "not implemented in phase sorting yet";
+      // The cf choice lands in the rebuilt branch's last result slot; the kept
+      // results precede it. Full-arity yields guarantee an operand per kept
+      // slot — a slot the arm does not provide is a `uir.unreachable_value`,
+      // which rides the kept-result slot exactly like a real value.
+      assert(idx < yieldOp.getValues().size() &&
+             "yield under-provides the branch's kept results");
       yieldValues.push_back(yieldOp.getValues()[idx]);
       yieldTypes.push_back(yieldOp.getTypeOfValues()[idx]);
     }
@@ -1710,17 +1743,11 @@ FailureOr<LoopOp> PhaseSorter::extractBreakValues(LoopOp loopOp, int16_t p) {
   DenseSet<Operation *> allSliceOps;
   for (auto breakOp : breaks) {
     SiteInfo info;
-    // Break arity is not a verifier invariant against the loop's results, so a
-    // break need not carry every result. Every later result (reconstructed by
-    // the pick) and every kept result (rebuilt onto the new break) is indexed
-    // positionally below, so require the break to supply all of them here.
-    for (auto result : op->getResults()) {
-      unsigned idx = result.getResultNumber();
-      if (idx >= breakOp.getValues().size()) {
-        breakOp.emitOpError() << "does not provide the loop's result " << idx;
-        return failure();
-      }
-    }
+    // A break carries one operand per loop result (verifier-enforced), so
+    // every later result (reconstructed by the pick) and kept result (rebuilt
+    // onto the new break) below indexes in range.
+    assert(breakOp.getValues().size() == op->getNumResults() &&
+           "break under-provides the loop's results");
     for (auto idx : laterIdx)
       info.laterValues.push_back(breakOp.getValues()[idx]);
 

@@ -209,6 +209,59 @@ func.func @continue_nested_arity_mismatch(%cond: !hir.any, %a: !hir.any) {
 
 // -----
 
+// Verify that uir.yield checks its value count against the enclosing if's
+// result count.
+func.func @yield_arity_mismatch(%cond: !hir.any, %a: !hir.any, %ty: !hir.any) {
+  %r = uir.if %cond : %ty {
+    // expected-error @below {{provides 0 values but the enclosing 'uir.if' declares 1 results}}
+    uir.yield
+  } else {
+    uir.yield %a : %ty
+  }
+  func.return
+}
+
+// -----
+
+// Verify that uir.yield checks its value count against the enclosing expr's
+// result count.
+func.func @yield_expr_arity_mismatch(%a: !hir.any, %ty: !hir.any) {
+  %r = uir.expr : %ty {
+    // expected-error @below {{provides 2 values but the enclosing 'uir.expr' declares 1 results}}
+    uir.yield %a, %a : %ty, %ty
+  }
+  func.return
+}
+
+// -----
+
+// Verify that uir.break checks its value count against the target loop's
+// result count.
+func.func @break_arity_mismatch(%a: !hir.any, %ty: !hir.any) {
+  %r = uir.loop : %ty {
+    // expected-error @below {{provides 0 values but the target 'uir.loop' declares 1 results}}
+    uir.break
+  }
+  func.return
+}
+
+// -----
+
+// Verify that a uir.break nested inside a uir.if is checked against the target
+// loop's result count.
+func.func @break_nested_arity_mismatch(%cond: !hir.any, %a: !hir.any, %ty: !hir.any) {
+  %r = uir.loop : %ty {
+    uir.if %cond {
+      // expected-error @below {{provides 2 values but the target 'uir.loop' declares 1 results}}
+      uir.break %a, %a : %ty, %ty
+    }
+    uir.break %a : %ty
+  }
+  func.return
+}
+
+// -----
+
 // Verify that uir.signature cannot terminate the function body.
 uir.func @sig_in_body(%a: 0) -> () {
   uir.signature (%a) -> ()

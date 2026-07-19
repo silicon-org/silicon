@@ -3186,8 +3186,10 @@ uir.func @RejoinArmAllExits(%n: -1, %x: 0) -> () {
   // CHECK-NEXT:         hir.opaque_pack([[I]], [[EC]], [[NRC]])
   // CHECK:              uir.continue
   // CHECK-NEXT:       }
-  // The arm's dead yield is emptied; the else fall-through provides the cf.
-  // CHECK-NEXT:       uir.yield
+  // The arm's dead yield provides unreachable_value; the else fall-through
+  // provides the cf.
+  // CHECK-NEXT:       [[DEAD:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:       uir.yield [[DEAD]]
   // CHECK-NEXT:     } else {
   // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1()
   // CHECK-NEXT:       uir.yield [[CF1]]
@@ -3624,6 +3626,69 @@ uir.func @DivergenceLaterResultForwarded(%n: -1, %x: 0) -> (result: 0) {
   uir.return %rr : %t
 }
 
+// A rejoining arm that does not deliver the branch's kept result yields
+// `uir.unreachable_value` in that slot. The cf choice lands in the branch's
+// last result and the unreachable value rides the kept slot exactly like a real
+// value, so the divergence sorts through the ordinary valued cf pick; the
+// unreachable value is consumed only on the never-taken fall-through path.
+// CHECK-LABEL: uir.func @ShortYieldKeptResult
+uir.func @ShortYieldKeptResult(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: uir.phase -1 {
+  // CHECK:          [[CT:%.+]] = hir.choice_type
+  // CHECK-NEXT:     [[IF:%.+]]:2 = uir.if %{{.+}} : %{{.+}}, [[CT]] {
+  // The then arm delivers the kept result and cf tag 0.
+  // CHECK-NEXT:       [[TCF:%.+]] = hir.choice 0([[I:%.+]])
+  // CHECK-NEXT:       uir.yield [[I]], [[TCF]] : %{{.+}}, [[CT]]
+  // CHECK-NEXT:     } else {
+  // The else arm records its nested break, then rejoins yielding an unreachable
+  // value for the kept slot and cf tag 1. The authored `uir.unreachable_value`
+  // is a `never` producer left in place; never-forwarding rewrites the yield's
+  // use of it to a fresh stand-in at this phase, exactly as it leaves a never
+  // loop in place and forwards its result.
+  // CHECK:            uir.unreachable_value
+  // CHECK-NEXT:       [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:       [[EIN:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       [[ECF:%.+]] = hir.choice 1([[EIN]])
+  // CHECK-NEXT:       uir.yield [[UV]], [[ECF]] : %{{.+}}, [[CT]]
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     hir.add [[IF]]#0
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      %c = hir.geq %i, %n : %t
+      %r = uir.if %c : %t {
+        uir.expr pin 1 {
+          hir.write_var %acc, %i : %t
+          uir.yield
+        }
+        uir.yield %i : %t
+      } else {
+        %d = hir.geq %n, %i : %t
+        uir.if %d { uir.break }
+        %uv = uir.unreachable_value
+        uir.yield %uv : %t
+      }
+      %next = hir.add %r, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield
+  }
+  // The phase-0 replicate reconstructs the then arm's later write via the cf
+  // pick; the else alternative replays only its nested break record.
+  // CHECK: uir.phase 0 {
+  // CHECK:          hir.replicate ([[CFR:%.+]], %{{.+}}) in %{{.+}} {
+  // CHECK-NEXT:       hir.pick [[CFR]] [0 ([[YARG:%.+]]): {
+  // CHECK-NEXT:         hir.write_var %{{.+}}, [[YARG]]
+  %rr = hir.read_var %acc : %t
+  uir.return %rr : %t
+}
+
 //===----------------------------------------------------------------------===//
 // Never-value forwarding: a control-flow result no path provides gets the
 // bottom phase `never`. Every real-phase use of it is rewritten to a fresh
@@ -3631,9 +3696,9 @@ uir.func @DivergenceLaterResultForwarded(%n: -1, %x: 0) -> (result: 0) {
 // left unused on its producer. `never` is non-viral, so the consumer keeps its
 // own real phase.
 
-// A never `uir.if` result (both arms short-yield) consumed by a same-phase op:
-// the unreachable value and the consumer wrap into the consumer's phase, and
-// the never-producing if wraps into its own phase with an unused result.
+// A never `uir.if` result (neither arm provides it) consumed by a same-phase
+// op: the unreachable value and the consumer wrap into the consumer's phase,
+// and the never-producing if wraps into its own phase with an unused result.
 // CHECK-LABEL: uir.func @NeverConsumedSamePhase
 uir.func @NeverConsumedSamePhase(%c: 0, %x: 0) -> (out: 0) {
   %0 = hir.int_type
@@ -3643,14 +3708,18 @@ uir.func @NeverConsumedSamePhase(%c: 0, %x: 0) -> (out: 0) {
   %t = hir.int_type
   // CHECK: uir.phase 0 {
   // CHECK-NEXT: [[IF:%.+]] = uir.if %c : [[T]] {
-  // CHECK-NEXT:   uir.yield
+  // CHECK-NEXT:   [[A:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:   uir.yield [[A]] : [[T]]
   // CHECK-NEXT: } else {
-  // CHECK-NEXT:   uir.yield
+  // CHECK-NEXT:   [[B:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:   uir.yield [[B]] : [[T]]
   // CHECK-NEXT: }
   %r = uir.if %c : %t {
-    uir.yield
+    %uv0 = uir.unreachable_value
+    uir.yield %uv0 : %t
   } else {
-    uir.yield
+    %uv1 = uir.unreachable_value
+    uir.yield %uv1 : %t
   }
   // CHECK-NEXT: [[UV:%.+]] = uir.unreachable_value
   // CHECK-NEXT: [[U:%.+]] = hir.add %x, [[UV]] : [[T]]
@@ -3672,12 +3741,20 @@ uir.func @NeverConsumedLater(%c: 0, %x: 1) -> (out: 1) {
   %t = hir.int_type
   // CHECK: uir.phase 0 {
   // CHECK-NEXT: uir.if %c : [[T]] {
-  // CHECK: uir.phase_return{{$}}
+  // CHECK-NEXT:   [[A:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:   uir.yield [[A]] : [[T]]
+  // CHECK-NEXT: } else {
+  // CHECK-NEXT:   [[B:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:   uir.yield [[B]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase_return{{$}}
   // CHECK-NEXT: }
   %r = uir.if %c : %t {
-    uir.yield
+    %uv0 = uir.unreachable_value
+    uir.yield %uv0 : %t
   } else {
-    uir.yield
+    %uv1 = uir.unreachable_value
+    uir.yield %uv1 : %t
   }
   // CHECK: uir.phase 1 {
   // CHECK-NEXT: [[UV:%.+]] = uir.unreachable_value
@@ -3704,13 +3781,21 @@ uir.func @NeverReturnedConst(%c: 0) -> (out: -1) {
   // CHECK-NEXT: uir.phase_return [[UV]] : [[T]]
   // CHECK-NEXT: }
   %r = uir.if %c : %t {
-    uir.yield
+    %uv0 = uir.unreachable_value
+    uir.yield %uv0 : %t
   } else {
-    uir.yield
+    %uv1 = uir.unreachable_value
+    uir.yield %uv1 : %t
   }
   // CHECK: uir.phase 0 {
   // CHECK-NEXT: uir.if %c : [[T]] {
-  // CHECK: uir.phase_return{{$}}
+  // CHECK-NEXT:   [[A:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:   uir.yield [[A]] : [[T]]
+  // CHECK-NEXT: } else {
+  // CHECK-NEXT:   [[B:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:   uir.yield [[B]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase_return{{$}}
   // CHECK-NEXT: }
   uir.return %r : %t
 }

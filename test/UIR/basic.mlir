@@ -8,12 +8,20 @@
 
 // CHECK-LABEL: @yield_void
 func.func @yield_void() {
-  uir.yield
+  // CHECK: uir.yield
+  uir.expr {
+    uir.yield
+  }
+  func.return
 }
 
 // CHECK-LABEL: @yield_values
 func.func @yield_values(%a: !hir.any, %a_ty: !hir.any, %b: !hir.any, %b_ty: !hir.any) {
-  uir.yield %a, %b : %a_ty, %b_ty
+  // CHECK: uir.yield %{{.*}}, %{{.*}} : %{{.*}}, %{{.*}}
+  uir.expr : %a_ty, %b_ty {
+    uir.yield %a, %b : %a_ty, %b_ty
+  }
+  func.return
 }
 
 // CHECK-LABEL: @return_void

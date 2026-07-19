@@ -74,8 +74,13 @@ def YieldOp : UIROp<"yield", [
   let summary = "yield values from a region";
   let description = [{
     Terminates and yields values from a `uir.expr` or `uir.if` region.
-    Each value has a corresponding type operand. For void regions the op
-    carries no operands.
+    Each value has a corresponding type operand.
+
+    A yield provides exactly one value per result of the op whose region it
+    terminates: the operand count matches the enclosing op's result count.
+    A result the yielding path does not deliver is spelled with a
+    `uir.unreachable_value` operand in its slot, never by omitting it. For
+    void regions the op carries no operands.
   }];
   let arguments = (ins
     Variadic<HIRAnyType>:$values,
@@ -85,6 +90,7 @@ def YieldOp : UIROp<"yield", [
     ($values^ `:` $typeOfValues)?
     attr-dict
   }];
+  let hasVerifier = 1;
 }
 
 def BreakOp : UIROp<"break", [
@@ -100,6 +106,11 @@ def BreakOp : UIROp<"break", [
     values. Must be transitively nested inside a `uir.loop` region
     (possibly inside `uir.if` etc.). Each value has a corresponding type
     operand, unified with the enclosing loop's result type operands.
+
+    A break provides exactly one value per result of the loop it exits: the
+    operand count matches the loop's result count. A result the breaking
+    path does not deliver is spelled with a `uir.unreachable_value` operand
+    in its slot, never by omitting it.
   }];
   let arguments = (ins
     Variadic<HIRAnyType>:$values,

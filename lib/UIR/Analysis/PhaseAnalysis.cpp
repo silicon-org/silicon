@@ -349,6 +349,15 @@ LogicalResult PhaseAnalysis::recomputeBlock(Block &block) {
       continue;
     }
 
+    // A value proved never to materialize sits at the bottom phase `never`,
+    // whether or not any demand reached it. Assign it here so no later pass
+    // sees a `uir.unreachable_value` without a phase.
+    if (isa<UnreachableValueOp>(op)) {
+      actualPhase.try_emplace(op.getResult(0), kNeverPhase);
+      opPhases.try_emplace(&op, kNeverPhase);
+      continue;
+    }
+
     if (!hir::isEffectivelyPure(&op) || op.hasTrait<OpTrait::IsTerminator>() ||
         op.getNumRegions() > 0)
       continue;
@@ -693,17 +702,23 @@ LogicalResult PhaseAnalysis::deriveFloatingExpr(ExprOp exprOp,
 /// control elsewhere — an if/expr arm that breaks, continues, returns, or is
 /// unreachable never delivers a value to the op's result, so its operands (a
 /// break's values belong to the enclosing loop's result, not this op's) are
-/// not providers. Result-index positions a provider does not carry are
-/// omitted.
+/// not providers. Yields and breaks carry one operand per result slot; a slot
+/// whose operand is a `uir.unreachable_value` marks a path that does not
+/// deliver that result and is likewise not a provider.
 SmallVector<std::pair<Value, Operation *>, 2>
 PhaseAnalysis::resultProviders(Operation *regionOp, unsigned resultIdx) {
   SmallVector<std::pair<Value, Operation *>, 2> providers;
-  auto addYield = [&](Operation *term) {
-    auto yieldOp = dyn_cast<YieldOp>(term);
-    if (!yieldOp)
+  auto addCarrier = [&](Operation *term, ValueRange values) {
+    // Verifier guarantees one operand per result slot.
+    assert(resultIdx < values.size() && "terminator under-provides results");
+    Value value = values[resultIdx];
+    if (value.getDefiningOp<UnreachableValueOp>())
       return;
-    if (resultIdx < yieldOp.getValues().size())
-      providers.push_back({yieldOp.getValues()[resultIdx], term});
+    providers.push_back({value, term});
+  };
+  auto addYield = [&](Operation *term) {
+    if (auto yieldOp = dyn_cast<YieldOp>(term))
+      addCarrier(term, yieldOp.getValues());
   };
 
   if (auto exprOp = dyn_cast<ExprOp>(regionOp)) {
@@ -716,8 +731,7 @@ PhaseAnalysis::resultProviders(Operation *regionOp, unsigned resultIdx) {
     auto it = loopBreaks.find(loopOp);
     if (it != loopBreaks.end())
       for (auto breakOp : it->second)
-        if (resultIdx < breakOp.getValues().size())
-          providers.push_back({breakOp.getValues()[resultIdx], breakOp});
+        addCarrier(breakOp, breakOp.getValues());
   } else {
     llvm_unreachable("unexpected region op in resultProviders");
   }
@@ -758,6 +772,18 @@ FailureOr<int16_t> PhaseAnalysis::constrainValue(Value value, int16_t latest) {
     for (auto r : op->getResults())
       actualPhase[r] = kFloatPhase;
     return kFloatPhase;
+  }
+
+  // A value proved never to materialize sits at the bottom phase `never`. Its
+  // phase is intrinsic (the op has no operands and stands for a value that
+  // never exists), so it satisfies any demand and imposes no lower bound.
+  if (isa<UnreachableValueOp>(op)) {
+    LLVM_DEBUG(dbgs() << INDENT << "constrainValue(unreachable_value, <="
+                      << latest << "): never\n");
+    opPhases[op] = kNeverPhase;
+    for (auto r : op->getResults())
+      actualPhase[r] = kNeverPhase;
+    return kNeverPhase;
   }
 
   LLVM_DEBUG({
