@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "silicon/HIR/Ops.h"
 #include "silicon/Support/MLIR.h"
 #include "silicon/UIR/Ops.h"
 
@@ -36,7 +37,7 @@ namespace uir {
 ///    adjusts its phase, then pushes DOWN to all ops.
 /// 3. **Region op results:** demand passes through the yield transparently
 ///    to the inner value. When more than one terminator of a merging CF op
-///    (if/loop) provides a result, the op selects between the provided
+///    (if/loop/pick) provides a result, the op selects between the provided
 ///    values — regardless of their identity — and the result phase is the
 ///    max over the contributing values, floored at the op's phase. A result
 ///    phase *later* than the op phase is a choice-ification obligation:
@@ -75,8 +76,8 @@ namespace uir {
 ///    sentinel, in both `opPhases` and `actualPhase`. Afterwards every op,
 ///    result, and block argument the analysis models has an entry; a
 ///    missing entry means the op or value sits inside a region the analysis
-///    does not model (e.g. `hir.pick`/`hir.replicate` interiors), which
-///    consumers must treat as an error.
+///    does not model (e.g. `hir.replicate` interiors), which consumers must
+///    treat as an error.
 ///
 /// Usage:
 ///   PhaseAnalysis analysis(funcOp);
@@ -99,7 +100,7 @@ struct PhaseAnalysis {
   /// a missing entry means exactly that, and consumers must treat it as an
   /// error.
   static bool isModeledRegionOp(Operation *op) {
-    return isa<ExprOp, IfOp, LoopOp>(op);
+    return isa<ExprOp, IfOp, LoopOp, hir::PickOp>(op);
   }
 
   /// Run the phase analysis. Returns failure if phase errors are detected
@@ -115,7 +116,7 @@ struct PhaseAnalysis {
   /// Whether `value` can take on a concrete value on some execution path.
   ///
   /// A `uir.unreachable_value` never materializes. A control-flow result
-  /// (if/loop/expr result) materializes iff some terminator delivers a
+  /// (if/loop/pick/expr result) materializes iff some terminator delivers a
   /// materializing value into its slot — so a breakless loop's results and an
   /// if whose arms all fail to deliver never materialize. Every other value —
   /// block argument, pure op, call, pin, constant — materializes.
@@ -179,16 +180,16 @@ private:
                                       int16_t latest);
 
   /// Collect the (value, terminator) pairs providing a given result of a
-  /// region-bearing op: yields for exprs/ifs, breaks for loops. A terminator
-  /// whose operand for the slot does not `materialize` (a
+  /// region-bearing op: yields for exprs/ifs/picks, breaks for loops. A
+  /// terminator whose operand for the slot does not `materialize` (a
   /// `uir.unreachable_value` or a nested never result) is not a provider and
   /// is omitted.
   SmallVector<std::pair<Value, Operation *>, 2>
   resultProviders(Operation *regionOp, unsigned resultIdx);
 
   /// Invoke `fn(value, term)` for each terminator operand feeding result slot
-  /// `resultIdx` of a region-bearing op: yield operands for exprs/ifs, break
-  /// operands for loops. No materialization filter — every raw carrier.
+  /// `resultIdx` of a region-bearing op: yield operands for exprs/ifs/picks,
+  /// break operands for loops. No materialization filter — every raw carrier.
   void eachCarrier(Operation *regionOp, unsigned resultIdx,
                    llvm::function_ref<void(Value, Operation *)> fn);
 

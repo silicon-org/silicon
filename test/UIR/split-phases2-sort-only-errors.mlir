@@ -21,46 +21,9 @@ uir.func @NoWitness(%x: 0) -> (result: 0) {
 
 // -----
 
-// Receiving constructs (hir.pick, hir.replicate) are only ever produced by
-// sorting itself; phase analysis does not model their regions, so their
-// presence in sorting input is a coverage gap that must abort loudly
-// instead of silently mis-sorting the region contents.
-uir.func @PickInInput(%n: -1, %x: 0) -> (result: 0) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %zero = hir.constant_int 0 : %t
-  %one = hir.constant_int 1 : %t
-  %acc = hir.var : %t
-  uir.expr pin -1 {
-    uir.loop (%i = %zero : %t) {
-      %c = hir.choice 1()
-      hir.pick %c [0 (): {
-        // expected-error @below {{is not covered by phase analysis; cannot sort ops the analysis does not model}}
-        uir.break
-      } 1 (): {
-        hir.yield
-      }]
-      uir.expr pin 1 {
-        %a0 = hir.read_var %acc : %t
-        %a1 = hir.add %a0, %i : %t
-        hir.write_var %acc, %a1 : %t
-        uir.yield
-      }
-      %next = hir.add %i, %one : %t
-      uir.continue %next : %t
-    }
-    uir.yield
-  }
-  %r = hir.read_var %acc : %t
-  uir.return %r : %t
-}
-
-// -----
-
-// Later-phase content hidden inside an unmodeled region must abort too; it
-// would otherwise be invisible to content collection and stay behind.
+// hir.replicate is only ever produced by sorting itself; phase analysis does
+// not model its region, so later-phase content hidden inside is invisible to
+// content collection and must abort loudly instead of staying behind.
 uir.func @ReplicateInInput(%n: -1, %x: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)

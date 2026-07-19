@@ -525,6 +525,14 @@ void PhaseAnalysis::scanFloatingContent(Block &block, int16_t shift,
       continue;
     }
 
+    if (auto pickOp = dyn_cast<hir::PickOp>(&op)) {
+      addBound(pickOp.getChoice(), shift, /*isType=*/false);
+      for (auto &region : pickOp.getAlternatives())
+        scanFloatingContent(region.front(), shift, bound, frameRoot);
+      fillRegionResults(&op, /*overwrite=*/true);
+      continue;
+    }
+
     if (auto loopOp = dyn_cast<LoopOp>(&op)) {
       for (auto init : loopOp.getInits())
         addBound(init, shift, /*isType=*/false);
@@ -560,7 +568,7 @@ void PhaseAnalysis::scanFloatingContent(Block &block, int16_t shift,
     if (op.hasTrait<OpTrait::IsTerminator>())
       continue;
 
-    // Pure region-bearing ops outside the model (e.g. hir.pick): their
+    // Pure region-bearing ops outside the model (e.g. hir.replicate): their
     // interiors carry no entries and they derive no phase.
     if (op.getNumRegions() > 0) {
       assert(hir::isEffectivelyPure(&op) &&
@@ -610,6 +618,20 @@ LogicalResult PhaseAnalysis::assignDerivedBlock(Block &block,
         if (failed(
                 assignDerivedBlock(ifOp.getElseRegion().front(), blockPhase)))
           return failure();
+      fillRegionResults(&op, /*overwrite=*/true);
+      continue;
+    }
+
+    if (auto pickOp = dyn_cast<hir::PickOp>(&op)) {
+      opPhases[&op] = blockPhase;
+      // Alternative block arguments (choice payload bindings) live at the
+      // pick's phase.
+      for (auto &region : pickOp.getAlternatives()) {
+        for (auto arg : region.getArguments())
+          actualPhase[arg] = blockPhase;
+        if (failed(assignDerivedBlock(region.front(), blockPhase)))
+          return failure();
+      }
       fillRegionResults(&op, /*overwrite=*/true);
       continue;
     }
@@ -696,12 +718,13 @@ LogicalResult PhaseAnalysis::deriveFloatingExpr(ExprOp exprOp,
 /// Invoke `fn(value, term)` for each terminator operand feeding a result slot.
 ///
 /// A result is carried only by terminators that hand control to the op's
-/// continuation: a `uir.yield` for exprs and ifs, and a `uir.break` of that
-/// loop for loops. Any other arm terminator diverts control elsewhere — an
-/// if/expr arm that breaks, continues, returns, or is unreachable never
-/// delivers a value to the op's result, so its operands (a break's values
-/// belong to the enclosing loop's result, not this op's) are not carriers.
-/// Yields and breaks carry one operand per result slot (verifier-enforced).
+/// continuation: a `uir.yield` for exprs and ifs, an `hir.yield` for pick
+/// alternatives, and a `uir.break` of that loop for loops. Any other arm
+/// terminator diverts control elsewhere — an if/expr/pick arm that breaks,
+/// continues, returns, or is unreachable never delivers a value to the op's
+/// result, so its operands (a break's values belong to the enclosing loop's
+/// result, not this op's) are not carriers. Yields and breaks carry one
+/// operand per result slot (verifier-enforced).
 void PhaseAnalysis::eachCarrier(
     Operation *regionOp, unsigned resultIdx,
     llvm::function_ref<void(Value, Operation *)> fn) {
@@ -720,6 +743,10 @@ void PhaseAnalysis::eachCarrier(
     yield(ifOp.getThenRegion().front().getTerminator());
     if (!ifOp.getElseRegion().empty())
       yield(ifOp.getElseRegion().front().getTerminator());
+  } else if (auto pickOp = dyn_cast<hir::PickOp>(regionOp)) {
+    for (auto &region : pickOp.getAlternatives())
+      if (auto yieldOp = dyn_cast<hir::YieldOp>(region.front().getTerminator()))
+        carrier(yieldOp, yieldOp.getOperands());
   } else if (auto loopOp = dyn_cast<LoopOp>(regionOp)) {
     auto it = loopBreaks.find(loopOp);
     if (it != loopBreaks.end())
@@ -1006,8 +1033,8 @@ FailureOr<int16_t> PhaseAnalysis::constrainBlock(Block &block,
     return demandedPhase;
   }
 
-  // Anchored CF (if/loop): propagate to parent block.
-  if (isa<IfOp, LoopOp>(parentOp))
+  // Anchored CF (if/loop/pick): propagate to parent block.
+  if (isa<IfOp, LoopOp, hir::PickOp>(parentOp))
     return constrainBlock(*parentOp->getBlock(), demandedPhase);
 
   llvm_unreachable("unexpected parent op in constrainBlock");
@@ -1016,10 +1043,10 @@ FailureOr<int16_t> PhaseAnalysis::constrainBlock(Block &block,
 /// Push demand through yield/break to a specific result of a region-bearing op.
 /// Yields and breaks forward the demand to the corresponding operand.
 ///
-/// For merging CF ops (IfOp, LoopOp), the result phase floor applies: a
-/// result provided by more than one terminator is a selection the CF op
-/// performs at its own phase — regardless of the values' identity — so the
-/// result cannot be delivered earlier. A demand below the op phase is an
+/// For merging CF ops (IfOp, LoopOp, hir::PickOp), the result phase floor
+/// applies: a result provided by more than one terminator is a selection the
+/// CF op performs at its own phase — regardless of the values' identity — so
+/// the result cannot be delivered earlier. A demand below the op phase is an
 /// error, and the recorded result phase is the max over the contributing
 /// values, floored at the op phase.
 ///
@@ -1051,13 +1078,18 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
   auto constrainTermOperand =
       [&](Operation *term) -> FailureOr<std::optional<int16_t>> {
     // Only the terminator kind that hands control to this op's continuation
-    // provides its results: a yield for exprs/ifs, a break for loops. An
-    // if/expr arm terminated otherwise (a break diverting to an enclosing
-    // loop, a continue, a return) delivers no value to this op's result.
+    // provides its results: a yield for exprs/ifs, an `hir.yield` for pick
+    // alternatives (plain operands, no type-operand list), a break for loops.
+    // An arm terminated otherwise (a break diverting to an enclosing loop, a
+    // continue, a return, an unreachable) delivers no value to this op's
+    // result.
     auto getOperands = [&](Operation *t) -> std::pair<ValueRange, ValueRange> {
       if (isa<ExprOp, IfOp>(regionOp)) {
         if (auto yieldOp = dyn_cast<YieldOp>(t))
           return {yieldOp.getValues(), yieldOp.getTypeOfValues()};
+      } else if (isa<hir::PickOp>(regionOp)) {
+        if (auto yieldOp = dyn_cast<hir::YieldOp>(t))
+          return {yieldOp.getOperands(), ValueRange()};
       } else if (isa<LoopOp>(regionOp)) {
         if (auto breakOp = dyn_cast<BreakOp>(t))
           return {breakOp.getValues(), breakOp.getTypeOfValues()};
@@ -1115,6 +1147,9 @@ LogicalResult PhaseAnalysis::constrainRegionResult(Operation *regionOp,
     terms.push_back(ifOp.getThenRegion().front().getTerminator());
     if (!ifOp.getElseRegion().empty())
       terms.push_back(ifOp.getElseRegion().front().getTerminator());
+  } else if (auto pickOp = dyn_cast<hir::PickOp>(regionOp)) {
+    for (auto &region : pickOp.getAlternatives())
+      terms.push_back(region.front().getTerminator());
   } else if (auto loopOp = dyn_cast<LoopOp>(regionOp)) {
     auto it = loopBreaks.find(loopOp);
     if (it != loopBreaks.end())
@@ -1288,6 +1323,35 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
     return success();
   }
 
+  // hir.pick: anchored at blockPhase, modeled exactly like an if whose
+  // condition is the selector. The choice value is frame-consumed at the
+  // pick's phase; each alternative is an arm region whose block arguments
+  // (the choice payload bindings) live at the pick's phase, like loop
+  // iteration arguments. A pick has no result type operands.
+  if (auto pickOp = dyn_cast<hir::PickOp>(op)) {
+    auto it = opPhases.find(op);
+    if (it != opPhases.end() && it->second <= blockPhase)
+      return success();
+
+    LLVM_DEBUG(dbgs() << INDENT << "processOp(pick, phase " << blockPhase
+                      << ")\n");
+    opPhases[op] = blockPhase;
+
+    if (failed(constrainValue(pickOp.getChoice(), blockPhase))) {
+      emitRemark(pickOp.getLoc())
+          << "required by pick choice at phase " << blockPhase;
+      return failure();
+    }
+
+    for (auto &region : pickOp.getAlternatives()) {
+      for (auto arg : region.getArguments())
+        actualPhase[arg] = blockPhase;
+      if (failed(processBlock(region.front(), blockPhase)))
+        return failure();
+    }
+    return success();
+  }
+
   // LoopOp: anchored at blockPhase. Loop-carried iteration arguments live at
   // the loop body's phase; their initial values are constrained to be
   // available there, and the type operands one phase earlier.
@@ -1375,7 +1439,9 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
   }
 
   // Terminators: assign block phase and validate phase-shift constraints.
-  if (isa<YieldOp, UnreachableOp>(op)) {
+  // `hir.yield` terminates pick alternatives and, like `uir.yield`, has its
+  // operands constrained only through demand on the pick's results.
+  if (isa<YieldOp, UnreachableOp, hir::YieldOp>(op)) {
     opPhases[op] = blockPhase;
     return success();
   }

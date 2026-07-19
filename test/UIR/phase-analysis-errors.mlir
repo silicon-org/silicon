@@ -2187,3 +2187,31 @@ uir.func @ShiftedBreakInDeadFrame(%x: 0) -> () {
   }
   uir.return
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Pick result floor: two alternatives yield distinct const values, so the
+// pick at phase 0 selects between them and the result can't be at -1 —
+// exactly the if-result floor rule.
+
+uir.func @PickDistinctYieldFloorError(%sel: -1, %a: -1, %b: -1) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  %ch = hir.choice 0(%sel)
+  // expected-error @below {{result at phase -1 is selected by control flow at phase 0; result phase must be >= 0}}
+  %r = hir.pick %ch : !hir.any [0 (): {
+    // expected-note @below {{value provided here}}
+    hir.yield %a : !hir.any
+  } 1 (): {
+    // expected-note @below {{value provided here}}
+    hir.yield %b : !hir.any
+  }]
+  // expected-remark @below {{required by return value at phase -1}}
+  uir.return %r : %t
+}

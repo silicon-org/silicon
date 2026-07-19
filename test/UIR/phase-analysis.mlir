@@ -5144,3 +5144,211 @@ uir.func @NeverCoercesToAnyPhase() -> (r0: 0, r1: -1) {
   // CHECK-SAME: pa.operands = ["0", "never", "float", "float"]
   uir.return %c, %r : %tr, %t
 }
+
+//===----------------------------------------------------------------------===//
+// hir.pick: modeled exactly like a uir.if whose condition is the selector.
+// The choice value is frame-consumed at the pick's phase, alternatives are
+// arm regions whose block arguments (the choice payload bindings) live at
+// the pick's phase, and results follow the standard CF-result floor rule.
+// hir.choice is a pure region-free constructor and floats like any pure op.
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// Same-phase pick: selector, alternatives, and consumer all at phase 0. The
+// alternative's block argument lives at the pick's phase, so the add inside
+// sees it at 0.
+
+// CHECK-LABEL: uir.func @PickSamePhase
+uir.func @PickSamePhase(%c: 0, %x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  // CHECK: hir.choice 0(%c) {pa.operands = ["0"], pa.phase = "0", pa.results = ["0"]}
+  %ch = hir.choice 0(%c)
+  // CHECK: hir.pick
+  %r = hir.pick %ch : !hir.any [0 (%p): {
+    // The payload binding %p is at the pick's phase 0.
+    // CHECK: hir.add {{.*}} {pa.operands = ["0", "0", "float"], pa.phase = "0"
+    %s = hir.add %p, %x : %t
+    // CHECK: hir.yield {{.*}} {pa.operands = ["0"], pa.phase = "0"}
+    hir.yield %s : !hir.any
+  } 1 (): {
+    // CHECK: hir.yield {{.*}} {pa.operands = ["0"], pa.phase = "0"}
+    hir.yield %x : !hir.any
+  }]
+  // The pick's own annotations print after the closing bracket.
+  // CHECK: }] {pa.operands = ["0"], pa.phase = "0", pa.results = ["0"]}
+  // CHECK: uir.return
+  // CHECK-SAME: pa.operands = ["0", "float"]
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Later-phase content inside an alternative: the pick stays at its
+// selector's phase 0, the pinned interior expr anchors one phase later.
+
+// CHECK-LABEL: uir.func @PickLaterInterior
+uir.func @PickLaterInterior(%c: 0, %x: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %ch = hir.choice 0(%x)
+  // CHECK: hir.pick
+  %r = hir.pick %ch : !hir.any [0 (%p): {
+    // CHECK: uir.expr pin 1 attributes {pa.phase = "1"}
+    uir.expr pin 1 {
+      // CHECK: func.call @dummyA() {pa.phase = "1"}
+      func.call @dummyA() : () -> ()
+      uir.yield
+    }
+    // CHECK: hir.yield {{.*}} {pa.operands = ["0"], pa.phase = "0"}
+    hir.yield %p : !hir.any
+  } 1 (): {
+    hir.yield %x : !hir.any
+  }]
+  // CHECK: }] {pa.operands = ["0"], pa.phase = "0", pa.results = ["0"]}
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Pick result floor: two providers make a selection, so the result phase is
+// max over the provided values, floored at the pick's phase — here
+// max(0, 1, 0) = 1, exactly the if-result rule.
+
+// CHECK-LABEL: uir.func @PickResultFloor
+uir.func @PickResultFloor(%c: 0, %a: 1, %b: 0) -> (result: 1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  %ch = hir.choice 0(%b)
+  // CHECK: hir.pick
+  %r = hir.pick %ch : !hir.any [0 (): {
+    // CHECK: hir.yield {{.*}} {pa.operands = ["1"], pa.phase = "0"}
+    hir.yield %a : !hir.any
+  } 1 (): {
+    // CHECK: hir.yield {{.*}} {pa.operands = ["0"], pa.phase = "0"}
+    hir.yield %b : !hir.any
+  }]
+  // CHECK: }] {pa.operands = ["0"], pa.phase = "0", pa.results = ["1"]}
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Unreachable-terminated alternative: provides nothing, so the yielding
+// alternative is the single provider and no floor applies — the result
+// arrives at the provider's phase -1.
+
+// CHECK-LABEL: uir.func @PickUnreachableAlt
+uir.func @PickUnreachableAlt(%c: 0, %x: -1) -> (result: -1) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  uir.signature (%t0, %t1) -> (%t2)
+} {
+  %t = hir.int_type
+  %ch = hir.choice 0(%c)
+  // CHECK: hir.pick
+  %r = hir.pick %ch : !hir.any [0 (): {
+    // CHECK: hir.yield {{.*}} {pa.operands = ["-1"], pa.phase = "0"}
+    hir.yield %x : !hir.any
+  } 1 (): {
+    // CHECK: uir.unreachable {pa.phase = "0"}
+    uir.unreachable
+  }]
+  // CHECK: }] {pa.operands = ["0"], pa.phase = "0", pa.results = ["-1"]}
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// hir.choice floats like a pure op: a choice built from a const payload
+// derives the payload's phase, and an operand-free choice floats.
+
+// CHECK-LABEL: uir.func @ChoiceFloats
+uir.func @ChoiceFloats(%x: -1) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0) -> (%t1)
+} {
+  %t = hir.int_type
+  // CHECK: hir.choice 0(%x) {pa.operands = ["-1"], pa.phase = "-1", pa.results = ["-1"]}
+  %c1 = hir.choice 0(%x)
+  // CHECK: hir.choice 1() {pa.phase = "float", pa.results = ["float"]}
+  %c2 = hir.choice 1()
+  // CHECK: hir.add {{.*}} {pa.operands = ["-1", "float", "float"], pa.phase = "-1"
+  %s = hir.add %c1, %c2 : %t
+  uir.return %s : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A pick alternative terminated by uir.break targeting the enclosing loop
+// provides the loop's result, not the pick's: the pick result comes only
+// from the yielding alternative, exactly the if-arm-break rule.
+
+// CHECK-LABEL: uir.func @PickBreakAlt
+uir.func @PickBreakAlt(%c: 0, %x: 0, %y: 0) -> (result: 0) {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  %t2 = hir.int_type
+  %t3 = hir.int_type
+  uir.signature (%t0, %t1, %t2) -> (%t3)
+} {
+  %t = hir.int_type
+  // The loop result comes from the break inside the pick (%y at phase 0).
+  // CHECK: uir.loop {{.*}} attributes {{{.*}}pa.phase = "0", pa.results = ["0"]
+  %r = uir.loop : %t {
+    %ch = hir.choice 0(%c)
+    // CHECK: hir.pick
+    %v = hir.pick %ch : !hir.any [0 (%p): {
+      // CHECK: uir.break {{.*}} {pa.operands = ["0", "float"], pa.phase = "0"}
+      uir.break %y : %t
+    } 1 (): {
+      // CHECK: hir.yield {{.*}} {pa.operands = ["0"], pa.phase = "0"}
+      hir.yield %x : !hir.any
+    }]
+    // CHECK: }] {pa.operands = ["0"], pa.phase = "0", pa.results = ["0"]}
+    // CHECK: uir.pin {{.*}} {pa.operands = ["0"], pa.phase = "0"
+    %pv = uir.pin %v, 0 : !hir.any
+    uir.continue
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Pick inside a dead floating expr: the selector is frame-consumed like an
+// if condition, so its phase-1 choice raises the derived frame to 1, and
+// the payload bindings live at that derived pick phase.
+
+// CHECK-LABEL: uir.func @DeadFloatingExprPick
+uir.func @DeadFloatingExprPick(%c: 1, %x: 0) -> () {
+  %t0 = hir.int_type
+  %t1 = hir.int_type
+  uir.signature (%t0, %t1) -> ()
+} {
+  %t = hir.int_type
+  // CHECK: uir.expr : {{.*}} attributes {{{.*}}pa.phase = "1", pa.results = ["1"]
+  %e = uir.expr : %t {
+    // CHECK: hir.choice 0(%c) {pa.operands = ["1"], pa.phase = "1", pa.results = ["1"]}
+    %ch = hir.choice 0(%c)
+    // CHECK: hir.pick
+    %r = hir.pick %ch : !hir.any [0 (%p): {
+      // CHECK: hir.yield {{.*}} {pa.operands = ["1"], pa.phase = "1"}
+      hir.yield %p : !hir.any
+    } 1 (): {
+      // CHECK: hir.yield {{.*}} {pa.operands = ["0"], pa.phase = "1"}
+      hir.yield %x : !hir.any
+    }]
+    // CHECK: }] {pa.operands = ["1"], pa.phase = "1", pa.results = ["1"]}
+    uir.yield %r : %t
+  }
+  uir.return
+}

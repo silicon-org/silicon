@@ -372,9 +372,9 @@ LogicalResult PhaseSorter::rejectSortedVocabulary() {
 /// analysis stamps everything it models — including dead pure content, which
 /// gets the float sentinel — so a missing entry means exactly that the op
 /// sits inside a region the analysis does not model. In particular, sorted
-/// vocabulary (`uir.phase` interiors) and receiving constructs (`hir.pick`,
-/// `hir.replicate`) are illegal in the input. Abort loudly before mutating
-/// anything.
+/// vocabulary (`uir.phase` interiors) and `hir.replicate` interiors are
+/// illegal in the input; `hir.pick` and `hir.choice` are analyzable
+/// single-phase CF and pass. Abort loudly before mutating anything.
 LogicalResult PhaseSorter::checkCoverage() {
   auto coverage = funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
     if (op == funcOp || analysis.opPhases.contains(op))
