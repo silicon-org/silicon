@@ -133,12 +133,11 @@
 // single-boundary loop-record extraction, break-value choices, and single-
 // provider result forwarding. Inputs that need the remaining sorting machinery
 // are rejected with explicit diagnostics instead of being sorted incorrectly:
-// early function exits (function-level exit chains), a cross-phase result whose
-// delivery this pass cannot complete (the receiving pick of a multi-provider
-// selection crossing more than one phase wide, or a single-provider value the
-// op holds at a float phase awaiting float sinking), hoisting and content more
-// than one phase away from its control flow, and backward uses from floating
-// content nested under earlier-phase control flow.
+// a cross-phase result whose delivery this pass cannot complete (the receiving
+// pick of a multi-provider selection crossing more than one phase wide, or a
+// single-provider value the op holds at a float phase awaiting float sinking),
+// hoisting and content more than one phase away from its control flow, and
+// backward uses from floating content nested under earlier-phase control flow.
 //
 //===----------------------------------------------------------------------===//
 
@@ -399,8 +398,7 @@ LogicalResult PhaseSorter::checkCoverage() {
 
 /// Inline all `uir.expr` bodies and replace all `uir.pin` outputs with their
 /// inputs, in both the signature and body regions. Walks post-order so inner
-/// exprs dissolve before their parents. Return-terminated exprs (later-phase
-/// early exits) are left intact; the early-exit rejection below reports them.
+/// exprs dissolve before their parents.
 LogicalResult PhaseSorter::dissolveExprsAndPins() {
   // Collect first: splicing while walking invalidates the walk.
   SmallVector<ExprOp> exprs;
@@ -415,13 +413,10 @@ LogicalResult PhaseSorter::dissolveExprsAndPins() {
   for (auto exprOp : exprs) {
     auto &block = exprOp.getBody().front();
     auto yieldOp = dyn_cast<YieldOp>(block.getTerminator());
-    if (!yieldOp) {
-      if (isa<ReturnOp>(block.getTerminator()))
-        continue;
+    if (!yieldOp)
       return exprOp.emitOpError()
              << "cannot be dissolved: body is terminated by "
              << block.getTerminator()->getName() << " instead of a yield";
-    }
     for (auto [result, value] :
          llvm::zip(exprOp.getResults(), yieldOp.getValues()))
       result.replaceAllUsesWith(value);
@@ -720,11 +715,10 @@ SmallVector<Operation *> PhaseSorter::collectLaterContent(Block &block,
   return ops;
 }
 
-/// The first terminator at phase <= p that exits the region (return, or
-/// break/continue targeting a loop outside the region), or null if every
-/// path yields. Branch extraction bails on arms with such exits: they belong
-/// to function-level exit chains or the enclosing loop's records, not to
-/// branch extraction.
+/// The first terminator at phase <= p that exits the region — a break/continue
+/// targeting a loop outside the region — or null if every path yields. Branch
+/// extraction bails on arms with such exits: they belong to the enclosing
+/// loop's records, not to branch extraction.
 Operation *PhaseSorter::findExitTerminator(Region &region, int16_t p) {
   Operation *found = nullptr;
   std::function<void(Region &, bool)> visit = [&](Region &r, bool loopScoped) {
@@ -732,8 +726,7 @@ Operation *PhaseSorter::findExitTerminator(Region &region, int16_t p) {
       for (auto &op : block) {
         if (found)
           return;
-        bool isExit =
-            isa<ReturnOp>(op) || (!loopScoped && isa<BreakOp, ContinueOp>(op));
+        bool isExit = !loopScoped && isa<BreakOp, ContinueOp>(op);
         if (isExit)
           if (auto ph = realPhaseOf(&op); ph && *ph <= p) {
             found = &op;
@@ -749,16 +742,16 @@ Operation *PhaseSorter::findExitTerminator(Region &region, int16_t p) {
 }
 
 /// Collect all terminators at phase <= p inside the region that exit out of
-/// the region instead of yielding, in walk order. Break/continue inside loops
-/// (including the queried region itself when it belongs to a loop) target
-/// those loops and do not exit; returns exit the function from any depth.
+/// the region instead of yielding, in walk order. A break/continue targeting a
+/// loop outside the region exits it; break/continue inside a nested loop
+/// (including the queried region itself when it belongs to a loop) target that
+/// loop and do not exit.
 void PhaseSorter::collectExitTerminators(Region &region, int16_t p,
                                          SmallVectorImpl<Operation *> &exits) {
   std::function<void(Region &, bool)> visit = [&](Region &r, bool loopScoped) {
     for (auto &block : r) {
       for (auto &op : block) {
-        bool isExit =
-            isa<ReturnOp>(op) || (!loopScoped && isa<BreakOp, ContinueOp>(op));
+        bool isExit = !loopScoped && isa<BreakOp, ContinueOp>(op);
         if (isExit)
           if (auto ph = realPhaseOf(&op); ph && *ph <= p)
             exits.push_back(&op);
@@ -934,8 +927,9 @@ static std::optional<ValueRange> armProvidedValues(Operation *terminator) {
 /// `uir.unreachable_value`, or a nested control-flow result no path
 /// provides). A result provided by more than one yield is a selection and a
 /// choice-ification obligation when it is later-phase; a single-provider
-/// result (the other arm exits or does not provide) is not choice-ified but
-/// left for the early-exit rejection.
+/// result (the other arm exits or does not provide) is not choice-ified but,
+/// if its provider is defined inside the op, left for the cross-phase-result
+/// rejection.
 unsigned PhaseSorter::countResultProviders(Operation *op, unsigned idx) {
   unsigned count = 0;
   for (auto *region : branchArms(op)) {
@@ -1011,11 +1005,11 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p) {
   auto loc = op->getLoc();
   auto anyTy = hir::AnyType::get(op->getContext());
 
-  // Arms that exit instead of yielding belong to the enclosing loop's records
-  // (break/continue) or to function-level exit chains (return), and an arm
-  // whose own terminator is `uir.unreachable` is a dead path with no
-  // continuation yield to rebuild; neither is branch extraction's concern.
-  // Leave the branch for the corresponding rejection.
+  // Arms that exit instead of yielding (a break/continue targeting the
+  // enclosing loop) belong to that loop's records, and an arm whose own
+  // terminator is `uir.unreachable` is a dead path with no continuation yield
+  // to rebuild; neither is branch extraction's concern. Leave the branch for
+  // the corresponding rejection.
   for (auto *arm : branchArms(op)) {
     if (arm->empty())
       continue;
@@ -1294,23 +1288,22 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p) {
 // valued-carrier mechanism, deepening by a level per nesting.
 //
 // Only single-boundary loop-record extraction is handled here (later-phase
-// loop results are choice-ified by break-value extraction first): returns
-// under loops (function-level exit chains) and content more than one phase
-// later (which needs the replicate re-extracted at the next boundary) are
-// rejected below and by `rejectUnimplemented`.
+// loop results are choice-ified by break-value extraction first): content more
+// than one phase later (which needs the replicate re-extracted at the next
+// boundary) is rejected by `rejectUnimplemented`.
 
 // NOLINTBEGIN(misc-no-recursion)
 
 /// Whether every path through `block` ends the activation with a phase-<=p exit
-/// (a `break`/`continue`/`return`) rather than reaching the block's yield
-/// terminal. A block all-exits when it holds a top-level exit or an `if` whose
-/// both arms all-exit; nested loops are not descended into (their exits target
-/// the inner loop). Such a block's yield is unreachable, so an arm that
-/// all-exits contributes no fall-through even though its terminal is a yield.
+/// (a `break`/`continue`) rather than reaching the block's yield terminal. A
+/// block all-exits when it holds a top-level exit or an `if` whose both arms
+/// all-exit; nested loops are not descended into (their exits target the inner
+/// loop). Such a block's yield is unreachable, so an arm that all-exits
+/// contributes no fall-through even though its terminal is a yield.
 bool PhaseSorter::blockAllExits(Block &block, int16_t p) {
   for (auto &op : block) {
     if (auto ph = realPhaseOf(&op);
-        ph && *ph <= p && isa<BreakOp, ContinueOp, ReturnOp>(op))
+        ph && *ph <= p && isa<BreakOp, ContinueOp>(op))
       return true;
     if (auto ifOp = dyn_cast<IfOp>(&op))
       if (!ifOp.getThenRegion().empty() && !ifOp.getElseRegion().empty() &&
@@ -1359,15 +1352,6 @@ LogicalResult PhaseSorter::scanBlock(Operation *loopOp, Block &block, int16_t p,
                   "not consume";
       continue;
     }
-
-    // A return under a loop with later-phase content is a function-level exit
-    // chain no matter how it is nested; those belong to distribution.
-    for (auto *term : exitTerms)
-      if (isa<ReturnOp>(term))
-        return term->emitOpError()
-               << "exits the function under a loop with later-phase content; "
-                  "function-level exit chains are not implemented in phase "
-                  "sorting yet";
 
     // A demanded later-phase result makes the divergence cf-carrying even
     // without content: the receiving cf pick reconstructs the result from the
@@ -2028,15 +2012,7 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
   if (!hasLaterContent(op, p))
     return success();
 
-  // A loop body whose activation ends in a return is a function-level exit
-  // chain, not loop-record extraction. Catch it before scanning; nested returns
-  // are caught inside `scanBlock`.
   auto *bodyTerm = loopOp.getBody().front().getTerminator();
-  if (isa<ReturnOp>(bodyTerm))
-    return bodyTerm->emitOpError()
-           << "terminates a loop body with later-phase content; "
-              "function-level exit chains are not implemented in phase "
-              "sorting yet";
   if (!isa<BreakOp, ContinueOp, UnreachableOp>(bodyTerm))
     return bodyTerm->emitOpError()
            << "unsupported loop body terminator for record extraction";
@@ -2531,9 +2507,6 @@ static std::string phaseName(int16_t phase) {
 /// decomposition, and forward crossings, with explicit diagnostics instead of
 /// sorting them incorrectly:
 ///
-/// - Early function exits (a `uir.return` anywhere but as the body region's
-///   terminator, including returns still riding inside undissolved expr
-///   carriers), which need function-level exit chains.
 /// - Ops delivering a result at a phase different from their own phase. Single-
 ///   provider results whose operand is defined outside the op were forwarded
 ///   above, and choice-ification obligations (a result provided by more than
@@ -2558,15 +2531,9 @@ static std::string phaseName(int16_t phase) {
 /// content is at that content's phase, which is what makes the wrap and
 /// crossing rules below exact.
 LogicalResult PhaseSorter::rejectUnimplemented() {
-  auto *bodyTerminator = funcOp.getBody().front().getTerminator();
   auto result = funcOp->walk([&](Operation *op) {
     if (op == funcOp)
       return WalkResult::advance();
-    if (isa<ReturnOp>(op) && op != bodyTerminator) {
-      op->emitOpError() << "is an early function exit; function-level exit "
-                           "chains are not implemented in phase sorting yet";
-      return WalkResult::interrupt();
-    }
 
     auto phaseIt = analysis.opPhases.find(op);
     assert(phaseIt != analysis.opPhases.end() && "op phase not computed");
@@ -2823,6 +2790,21 @@ LogicalResult PhaseSorter::sortRegion(Region &region) {
 LogicalResult PhaseSorter::run() {
   LLVM_DEBUG(llvm::dbgs() << "Sorting phases in @" << funcOp.getSymName()
                           << "\n");
+
+  // Normalized input is single-exit: the body's sole `uir.return` is its
+  // terminator, so no `uir.return` is ever nested in control flow. Every stage
+  // below relies on this — dissolution, extraction, and the exit-terminator
+  // helpers all treat only `break`/`continue` as exits — so assert it up front,
+  // before any transformation runs.
+#ifndef NDEBUG
+  auto *bodyTerminator = funcOp.getBody().front().getTerminator();
+  funcOp.getBody().walk([&](ReturnOp op) {
+    assert(op == bodyTerminator &&
+           "expected normalized single-exit input: the sole uir.return is the "
+           "body terminator (run normalize-exits first)");
+  });
+#endif
+
   if (failed(rejectSortedVocabulary()))
     return failure();
   if (failed(checkCoverage()))

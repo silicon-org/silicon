@@ -36,38 +36,6 @@ uir.func @BreakCarrier(%n: 0, %x: 0) -> (result: 0) {
 
 // -----
 
-// An early return nested in structured control flow needs function-level
-// exit chains.
-uir.func @EarlyExit(%c: 0, %x: 0) -> (result: 0) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  uir.if %c {
-    // expected-error @below {{is an early function exit; function-level exit chains are not implemented in phase sorting yet}}
-    uir.return %x : %t
-  }
-  uir.return %x : %t
-}
-
-// -----
-
-// A return-terminated expr carrier is an early exit too; dissolution leaves
-// it intact and the exit rejection reports the return inside it.
-uir.func @ReturnCarrier(%x: 0) -> (result: 0) {
-  %0 = hir.int_type
-  uir.signature (%0) -> (%0)
-} {
-  %t = hir.int_type
-  uir.expr {
-    // expected-error @below {{is an early function exit; function-level exit chains are not implemented in phase sorting yet}}
-    uir.return %x : %t
-  }
-  uir.unreachable
-}
-
-// -----
-
 // A uir.call whose callee resolves to something other than a uir.func or
 // uir.split_func cannot be decomposed: its phase entries are undefined.
 hir.func @NotUnified() -> () {
@@ -209,11 +177,12 @@ uir.func @SingleProviderInternalIf(%c: 0, %y: 1) -> (result: 1) {
 // -----
 
 // An if with a later-phase result whose arms do not all yield: the else arm
-// exits early instead. Branch extraction classifies the result by counting
-// its providing yields, which must tolerate the non-yield arm rather than
-// assume every arm yields. With only one provider the result is not
-// choice-ified, so the if is left for the nested-content rejection.
-uir.func @ExitArmLaterResult(%c: 0, %y: 1) -> (result: 1) {
+// is a dead path terminated by `uir.unreachable`. Branch extraction classifies
+// the result by counting its providing yields, which must tolerate the
+// non-yielding arm rather than assume every arm yields. With only one provider
+// the result is not choice-ified, so the if is left for the nested-content
+// rejection.
+uir.func @UnreachableArmLaterResult(%c: 0, %y: 1) -> (result: 1) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
@@ -223,7 +192,7 @@ uir.func @ExitArmLaterResult(%c: 0, %y: 1) -> (result: 1) {
     %a = hir.add %y, %y : %t
     uir.yield %a : %t
   } else {
-    uir.return %y : %t
+    uir.unreachable
   }
   uir.return %v : %t
 }
@@ -366,49 +335,3 @@ uir.func @SharedAcrossBreaks(%n: -1, %x: 0) -> (result: 0) {
   }
   uir.return %y : %t
 }
-
-// -----
-
-// A return exiting the function under a const loop with later-phase content is
-// a function-level exit chain, not loop-record extraction.
-uir.func @ReturnUnderLoop(%c: 0, %x: 0) -> (result: 0) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %v = hir.var : %t
-  uir.loop {
-    uir.expr pin 1 {
-      hir.write_var %v, %x : %t
-      uir.yield
-    }
-    uir.if %c {
-      // expected-error @below {{exits the function under a loop with later-phase content; function-level exit chains are not implemented in phase sorting yet}}
-      uir.return %x : %t
-    }
-    uir.continue
-  }
-  uir.unreachable
-}
-
-// -----
-
-// A loop body with later-phase content whose activation ends in a return is a
-// function-level exit chain, not loop-record extraction.
-uir.func @LoopBodyReturn(%n: -1, %x: 0) -> (result: 0) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %v = hir.var : %t
-  uir.loop {
-    uir.expr pin 1 {
-      hir.write_var %v, %x : %t
-      uir.yield
-    }
-    // expected-error @below {{terminates a loop body with later-phase content; function-level exit chains are not implemented in phase sorting yet}}
-    uir.return %x : %t
-  }
-  uir.unreachable
-}
-
