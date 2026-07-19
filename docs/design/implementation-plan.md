@@ -2,6 +2,7 @@
 
 Companion to `sampling-model.md` and `function-exit-choices.md`. Maps the model onto the existing codebase.
 Ground truth from the code inventory: the new UIR stack (`uir.func`, PhaseAnalysis, SplitPhases2) is silicon-opt-only; codegen still targets the old HIR stack; assignment and loops do not exist in the language surface at all; the interpreter cannot evaluate opaque lists.
+Two later revisions apply: the merged-pass architecture of stages 5–6 was replaced on 2026-07-11 by the explicit phase-op contract of `phase-ops.md`, and the early-exit mechanism on 2026-07-19 by the exit normalization of the revised `function-exit-choices.md`; the affected statements below are corrected in place.
 
 ## Op changes
 
@@ -42,14 +43,11 @@ Per function, the merged pass runs these stages:
      - One `hir.replicate`/`hir.pick` after the CF op receives all of the region's later-phase content in program order; record fields and choice payloads become block args.
      - Replicates/picks count as CF regions for the next boundary; content more than one phase later rides along and extracts again.
      - Delete replicates/picks only when all bodies/alternatives are empty, along with their lists/choices (materialize-then-DCE).
-   - Function-level `uir.return`s are untouched by this stage; their exit chains belong to distribution.
+   - Function-level `uir.return`s never reach this stage: exit normalization (`function-exit-choices.md`, revised 2026-07-19) rewrites them into single-exit choice/pick value form before phase analysis runs.
    - Anything the stage cannot handle is a hard error, never a silent skip.
 5. **Distribute**: create per-phase `hir.func` ops and distribute straight-line ops by phase map (whole CF ops move as units — after sorting they are single-phase).
-   Function-level early exits materialize here, per `function-exit-choices.md`:
-   - Each `uir.return` site builds its boundary exit chains in place (one choice per boundary its conditional content crosses), from statically-known path dispositions and in-scope values; the per-return context is `(shared-prefix values…, chain)`.
-   - The receiving phase's picks are created directly in the next-phase function, at the producing branch point's position, continuation following in program order; alternatives yield iff the selection rejoins, return iff the path exits.
-   - Receiving phases keep multiple returns; totality (body ends in `return`/`unreachable`) is a cheap structural scan.
-   - Earlier-phase result operands on multi-returns are always the floor-rule error PhaseAnalysis already emits, regardless of the values' identity; the same-SSA-value exemption was dropped (sampling-model.md §7 as revised).
+   Function-level early exits do not materialize here: exit normalization removes them before analysis (`function-exit-choices.md`, revised 2026-07-19), every phase is single-exit, and exit values arrive threaded through ordinary picks.
+   The floor rule survives in general form: a result provided by several exit paths cannot deliver earlier than the deciding phase, emitted as the CF-result floor error on the pick (the same-SSA-value exemption stays dropped, sampling-model.md §7 as revised).
 6. **Signatures and witness**: reconstruct per-phase signatures, emit `uir.split_func` and `hir.multiphase_func` structural ops.
    Prefer threading return/signature scaffolding through explicit IR over side tables of tracked `Value`s that must be manually RAUW'd (a known fragility of the current implementation).
 
@@ -75,8 +73,9 @@ Expansion in SpecializeFuncs re-introduces structured CF into flat functions, so
   The frame's control-flow skeleton anchors at that phase while its pure interior distributes per op, so a dead frame resolves exactly like its live twin; only region-free pure ops and constants still float.
 - **M2 — sorting stage.** `hir.choice_type`; stages 1–4 of the merged pass (dissolve, call decomposition, hoist, extract) behind a `sort-only` option; pick/replicate verifier updates.
   Lit tests, one per model scenario: sum-over-index, sibling regions with interleaving, distance-2 chaining, nested loops, if/match choice (valued and value-less, else-less), break-value choice, filtering (if-const in for-const), partial activation (continue/break mid-region, incl. multi-exit chain), later-phase return under earlier CF (return inside replicate), hoisting (const write and call-earlier-half under dyn if; hoist-before-extract ordering, e.g. const increment under dyn if inside for-const), all-empty deletion, error cases.
-- **M3 — distribution.** Stages 5–6 rewritten on sorted IR: straight-line distribution, function-level exit chains and next-phase picks (`function-exit-choices.md`), signatures, witness; delete the old cross-phase fixup machinery that sorting obsoletes.
-  Tests: multi-return functions (exit chains, leaf returns, rejoining selections), phase −1 exit-freedom, forwarding middle phases, plus the existing split coverage rebased onto the merged pass.
+- **M3 — distribution.** Stages 5–6 rewritten on sorted IR: straight-line distribution, signatures, witness; delete the old cross-phase fixup machinery that sorting obsoletes.
+  Exit chains dropped out of this milestone: exit normalization (`function-exit-choices.md`, revised 2026-07-19) handles early returns before analysis.
+  Tests: normalized early-exit functions (rejoining selections, all-paths-exit bodies), phase −1 exit-freedom, forwarding middle phases, plus the existing split coverage rebased onto the merged pass.
 - **M4 — evaluation.** Interpret list/choice support, SpecializeFuncs expansion; full silicon-opt pipeline tests from unified UIR to fully specialized final phase (zero-record passthrough, accumulation, nested expansion, per-record call specialization).
   Reference cells as `(cell, home)` pairs with eval-time home checks; references surviving into residual programs materialize as constants naming later-phase cells.
 - **M5 — language surface.** Lexer/parser/AST/codegen: assignment statements, `for`/`while`/`loop`, `var` (or `let mut`), codegen to UIR with vars.

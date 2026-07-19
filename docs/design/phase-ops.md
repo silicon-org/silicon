@@ -12,20 +12,22 @@ Because the intermediate state between "sorted" and "split" cannot be expressed 
 
 ## The design
 
-Four stages, each owning a single concern:
+Five stages, each owning a single concern:
 
-1. **PhaseAnalysis** (unchanged) computes phases for ops and values.
+1. **Exit normalization** rewrites early `uir.return`s into choice/pick value form, bottom-up per region, leaving one `uir.return` as the body terminator ({{< page-link "/design/function-exit-choices" >}}).
+   It is phase-blind and runs before PhaseAnalysis, so analysis and sorting input is always single-exit.
+2. **PhaseAnalysis** (unchanged) computes phases for ops and values.
    It is consumed only by the sorting pass; the phase map never crosses a pass boundary.
-2. **Phase sorting** rewrites the *internals* of a `uir.func` and leaves the function op untouched.
+3. **Phase sorting** rewrites the *internals* of a `uir.func` and leaves the function op untouched.
    Output contract: the body and signature regions contain only `uir.phase` ops, floating ops, and the region's terminator (`uir.unreachable` for the body, `uir.signature` for the signature), at most one `uir.phase` per phase, in increasing phase order.
    Values computed inside a phase and consumed in a later one cross as phase-op results: yielded by `uir.phase_return`, consumed by any later phase, at any distance.
    Values already visible at the region top level — function arguments and floating ops — are consumed directly wherever needed, without routing through a phase op.
    Calls are decomposed into `uir.phase_call` ops targeting a specific phase of the callee.
    This is the only pass that runs or consumes PhaseAnalysis.
-3. **Normalization** is a cheap structural pre-pass, run inside the function splitter or as a small pass immediately before it.
+4. **Threading normalization** is a cheap structural pre-pass, run inside the function splitter or as a small pass immediately before it.
    It brings the sorted form into a fully threaded shape: it materializes `uir.phase` ops for externally visible phases that have no content and for intermediate hops of skipping crossings, threads every crossing through adjacent phase ops (function arguments starting at their declared phase), and sinks floating ops into the phase regions that use them.
    Its output contract is purely structural, with no notion of "floating" left: regions hold exactly `uir.phase` ops and the region terminator, every value crossing between phase ops is yielded by the immediately preceding one, and every function result rides the `uir.phase_return` of its phase.
-4. **Function splitting** is phase-blind: it never asks what phase an op has.
+5. **Function splitting** is phase-blind: it never asks what phase an op has.
    It expects the normalized contract, creates one per-phase `hir.func` per `uir.phase` op (never synthesizing any), converts phase-op result flow into opaque context pack/unpack, rewrites `uir.phase_call` to `hir.call`, reconstructs signatures, and emits the structural ops (`uir.split_func`, `hir.multiphase_func`).
 
 ## New ops
@@ -35,7 +37,7 @@ Four stages, each owning a single concern:
   The function's original `uir.return` is replaced by a `uir.unreachable`.
 - `uir.phase_return`: terminator of a `uir.phase` region.
   It carries both the function results belonging to that phase and the values yielded as the phase op's results.
-  Multiple `uir.phase_return`s per region are legal (early exits); all must agree on the yielded signature.
+  Exactly one `uir.phase_return` terminates each phase region: early exits are normalized to value form before analysis, so exit values arrive threaded through picks rather than on extra returns.
 - `uir.phase_call`: calls one specific phase of a `uir.func`, with the callee's args and results filtered down to that phase, plus an opaque context value chaining consecutive phase calls.
   The caller-visible phase entries are exactly the callee's external phases, which are derivable from the callee's *declared* arg/result phases (plus phase 0).
   No split witness is needed at sort time, so there is no callee-before-caller processing order, and recursion is no longer structurally rejected.
@@ -47,9 +49,9 @@ Four stages, each owning a single concern:
   How internal phases end up executing is a function-splitting and evaluation concern (multiphase funcs are the likely vehicle), not a sorting concern; sorting stoically wraps them like any other phase.
 - **No empty phases in sorted output.** Sorting creates a `uir.phase` op only for phases that have content; it never materializes empty ones.
   A `uir.phase_return` carrying function results or yields is content: a result-only phase gets a phase op holding just its `uir.phase_return`.
-  Empty and passthrough-only phase ops are normalization's vocabulary: it materializes them freely for gap phases and threading hops, so the splitter emits exactly one function per phase op and never synthesizes.
+  Empty and passthrough-only phase ops are threading normalization's vocabulary: it materializes them freely for gap phases and threading hops, so the splitter emits exactly one function per phase op and never synthesizes.
 - **Crossings in sorted output may jump.** Sorting yields a value once, from the phase computing it; consumers at any later phase use that result directly, and function arguments and floating ops are consumed directly at any phase.
-  Hop-by-hop threading is normalization's job, not sorting's: no sorting rule depends on whether an intermediate phase op happens to exist.
+  Hop-by-hop threading is threading normalization's job, not sorting's: no sorting rule depends on whether an intermediate phase op happens to exist.
   A floating (dead, phase-free) op that uses values moved into phase regions sinks into the latest such phase; its operands from earlier phases cross as ordinary phase results, so even a yield demanded only by dead content is a real crossing rather than a special case.
 - **Body and signature regions follow one set of rules.** The same control flow and exit arrangements are legal in both, phase ops and their verifiers do not distinguish the regions, and sorting looks at op phases and moves ops around without caring which region it rewrites.
   In particular, which function result values a `uir.phase_return` must carry is part of the splitting contract (diagnosed there), not an op verifier rule, since no single verifier rule covers both regions.
@@ -61,8 +63,8 @@ Four stages, each owning a single concern:
   Effect modeling and canonicalization interactions (CSE across phase regions, constant hoisting out of them) are deferred until a canonicalizer needs to run in between.
 - **The phase-op-only contract is not verifier-enforced.**
   The function-splitting pass errors out with a diagnostic when it encounters content that violates the expectation.
-- **Function-level exit chains** ({{< page-link "/design/function-exit-choices" >}}) surface on `uir.phase_return` instead of being discovered at distribution time.
-  This localizes the chain per phase region and turns the splitter's part into ordinary result plumbing; the design is worked up incrementally after the core port.
+- **Function-level exits** ({{< page-link "/design/function-exit-choices" >}}, revised 2026-07-19) never reach sorting: exit normalization rewrites them to value form up front, so there are no exit chains to surface, and the splitter sees exactly one `uir.phase_return` per phase region.
+  Choice construction and pick dispatch are consequently legal *input* vocabulary for analysis and sorting (a pick is modeled like a `uir.if` whose condition is the selector), not just sorted-output vocabulary.
 
 ## What this dissolves, what it does not
 

@@ -1,7 +1,8 @@
 # Loop Records and Data-Only Replay
 
 Result of the design interview on the 7b-ii sorting walls (2026-07-17).
-Refines {{< page-link "/design/sampling-model" >}} §6 (the record shape for loop activations) and the loop-record parts of {{< page-link "/design/phase-ops" >}}; function-level exits are unchanged and stay as settled in {{< page-link "/design/function-exit-choices" >}}.
+Refines {{< page-link "/design/sampling-model" >}} §6 (the record shape for loop activations) and the loop-record parts of {{< page-link "/design/phase-ops" >}}.
+Function-level exits join the same model through exit normalization ({{< page-link "/design/function-exit-choices" >}}, revised 2026-07-19): early returns rewrite to choice/pick value form before analysis, so the machinery below covers them with no exit-specific rules.
 
 ## The problem this settles
 
@@ -24,8 +25,8 @@ Splitting the two facts into separate record slots removes the cloning entirely.
 
 3. **The receiving replay is data-only.**
    Per level: the segment's content replays first, then the cf pick dispatches the arm that ran (recursing into the arm's own levels), then the reach pick either stops or binds the next segment's samples and continues one level deeper in its `REACHED` alternative.
-   No `break` or `continue` appears in replayed content: every exit decision for a phase-p loop is made at phase p and recorded, so the tags fully determine which content replays, and the list itself ends after an exit record.
-   `uir.return` in receiving phases stays (a recorded function exit must terminate the receiving function; see function-exit-choices), but loop exits never need receiving-side control flow.
+   No exit terminator appears in replayed content: every exit decision for phase-p CF is made at phase p and recorded, so the tags fully determine which content replays, and the list itself ends after an exit record.
+   Function exits are no exception — they are normalized to value form before analysis (see function-exit-choices), so receiving phases thread exit values through the picks to a single `uir.phase_return` instead of holding returns.
 
 4. **Every piece of content replays in exactly one place.**
    Content shared between an exit path and the fall-through sits in the arm's first segment and replays in the cf pick's arm alternative, before the arm's own reach pick — once, whichever way the activation ended.
@@ -51,5 +52,6 @@ Multi-arm dispatch — the actual duplication hazard — lives exclusively in th
 
 - Loop-exit tags disappeared from records: a content-free divergence records only reach, so which of several exits fired is not recorded when nothing downstream depends on it.
 - The interpreter (M4) must trap on evaluating `uir.unreachable_value` during replay; reaching one means the record invariant was violated.
-- Still rejected as scaffolding, not design walls: function-level exit chains under loops, short yields ahead of the cf choice, and content more than one phase later.
+- Still rejected as scaffolding, not design walls: short yields ahead of the cf choice, and content more than one phase later.
+  Function-level exits (including returns under loops) stopped being scaffolding: exit normalization turns them into ordinary value CF before analysis, covered by the rules above.
 - A demanded later result the rejoining arm provides is reconstructed at whichever level defines it: a value produced on the arm's spine after a nested exit threads up through valued reach picks, and a value that is itself a nested divergence's result surfaces as that divergence's own valued cf pick result and threads up identically — one recursion of the valued-carrier mechanism, no new record content.
