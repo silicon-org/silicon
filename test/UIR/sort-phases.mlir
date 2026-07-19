@@ -1410,6 +1410,310 @@ uir.func @IfArmCall(%c: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Branch extraction from a pick, effects: an `hir.pick` is executable
+// single-phase CF and legal sorting input (a receiving pick is the next
+// boundary's producing CF). A phase-0 pick whose alternatives hold phase-1
+// effect content extracts exactly like a `uir.if`: it is rebuilt at phase 0
+// yielding a per-alternative choice, and a receiving pick at phase 1 replays
+// the moved content.
+
+// CHECK-LABEL: uir.func @PickChoiceEffects
+uir.func @PickChoiceEffects(%c: 0, %x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[CH:%.+]] = hir.choice 0()
+  // CHECK-NEXT: [[P:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[VA:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   [[CF:%.+]] = hir.pick [[CH]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C0]]
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C1]]
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[VA]], [[CF]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   hir.pick [[P]]#1 [0 (): {
+  // CHECK-NEXT:     hir.write_var [[P]]#0, %x : [[T]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.write_var [[P]]#0, %c : [[T]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %va = hir.var : %t
+  %ch = hir.choice 0 ()
+  hir.pick %ch [
+    0 (): {
+      uir.expr pin 1 {
+        hir.write_var %va, %x : %t
+        uir.yield
+      }
+      hir.yield
+    }
+    1 (): {
+      uir.expr pin 1 {
+        hir.write_var %va, %c : %t
+        uir.yield
+      }
+      hir.yield
+    }
+  ]
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Branch extraction from a pick, payload block args: the moved phase-1
+// content samples the alternative's own block argument (the consumed
+// choice's payload binding), an arm-local phase-0 value like any other
+// crossing. It rides the cf choice payload and reappears as the receiving
+// alternative's block argument.
+
+// CHECK-LABEL: uir.func @PickPayloadCrossing
+uir.func @PickPayloadCrossing(%c: 0, %x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[P:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[VA:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   [[CH:%.+]] = hir.choice 0(%x)
+  // CHECK-NEXT:   [[CF:%.+]] = hir.pick [[CH]] : !hir.any [0 ([[A:%.+]]): {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0([[A]])
+  // CHECK-NEXT:     hir.yield [[C0]]
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C1]]
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[VA]], [[CF]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   hir.pick [[P]]#1 [0 ([[B:%.+]]): {
+  // CHECK-NEXT:     hir.write_var [[P]]#0, [[B]] : [[T]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %va = hir.var : %t
+  %ch = hir.choice 0 (%x)
+  hir.pick %ch [
+    0 (%a): {
+      uir.expr pin 1 {
+        hir.write_var %va, %a : %t
+        uir.yield
+      }
+      hir.yield
+    }
+    1 (): {
+      hir.yield
+    }
+  ]
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Branch extraction from a pick, demanded later result: the pick's phase-1
+// result is provided by both alternatives, a genuine selection. It is
+// removed from the pick and reconstructed by the valued receiving pick,
+// whose alternatives recompute the per-arm values.
+
+// CHECK-LABEL: uir.func @PickChoiceResult
+uir.func @PickChoiceResult(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%1)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[CH:%.+]] = hir.choice 0()
+  // CHECK-NEXT: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[CF:%.+]] = hir.pick [[CH]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C0]]
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C1]]
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[CF]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[S:%.+]] = hir.add %y, %y : [[T]]
+  // CHECK-NEXT:     hir.yield [[S]]
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[M:%.+]] = hir.mul %y, %y : [[T]]
+  // CHECK-NEXT:     hir.yield [[M]]
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %ch = hir.choice 0 ()
+  %r = hir.pick %ch : !hir.any [
+    0 (): {
+      %a = hir.add %y, %y : %t
+      hir.yield %a : !hir.any
+    }
+    1 (): {
+      %b = hir.mul %y, %y : %t
+      hir.yield %b : !hir.any
+    }
+  ]
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Branch extraction from an N-ary pick whose demanded later result is provided
+// by two of three alternatives and non-provided by the third (which yields
+// `uir.unreachable_value` for the slot). The two providers make it a genuine
+// selection, so the result choice-ifies; the receiving pick reconstructs the
+// two providers and yields a fresh `uir.unreachable_value` in the non-provider
+// alternative. A binary `if` cannot reach this shape — a non-provider there
+// would leave a single provider and forward instead.
+
+// CHECK-LABEL: uir.func @PickPartialChoiceResult
+uir.func @PickPartialChoiceResult(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%1)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[CH:%.+]] = hir.choice 0()
+  // CHECK-NEXT: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[CF:%.+]] = hir.pick [[CH]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C0]]
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C1]]
+  // CHECK-NEXT:   } 2 (): {
+  // CHECK:          [[C2:%.+]] = hir.choice 2()
+  // CHECK-NEXT:     hir.yield [[C2]]
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[CF]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[S:%.+]] = hir.add %y, %y : [[T]]
+  // CHECK-NEXT:     hir.yield [[S]]
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[M:%.+]] = hir.mul %y, %y : [[T]]
+  // CHECK-NEXT:     hir.yield [[M]]
+  // CHECK-NEXT:   } 2 (): {
+  // CHECK-NEXT:     [[U:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     hir.yield [[U]]
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %ch = hir.choice 0 ()
+  %r = hir.pick %ch : !hir.any [
+    0 (): {
+      %a = hir.add %y, %y : %t
+      hir.yield %a : !hir.any
+    }
+    1 (): {
+      %b = hir.mul %y, %y : %t
+      hir.yield %b : !hir.any
+    }
+    2 (): {
+      %u = uir.unreachable_value
+      hir.yield %u : !hir.any
+    }
+  ]
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Nested branch extraction across op kinds: an if inside a pick alternative,
+// both with phase-1 content. The one post-order walk extracts the if first,
+// so its choice result becomes an ordinary phase-0 crossing of the enclosing
+// alternative and rides the pick's cf choice payload; the receiving picks
+// nest one per level.
+
+// CHECK-LABEL: uir.func @IfInPickChoice
+uir.func @IfInPickChoice(%c: 0, %d: 0, %x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[CH:%.+]] = hir.choice 0()
+  // CHECK-NEXT: [[P:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[VA:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   [[CF:%.+]] = hir.pick [[CH]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[CT:%.+]] = hir.choice_type
+  // CHECK-NEXT:     [[IN:%.+]] = uir.if %d : [[CT]] {
+  // CHECK-NEXT:       [[IC0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       uir.yield [[IC0]] : [[CT]]
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[IC1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.yield [[IC1]] : [[CT]]
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0([[IN]])
+  // CHECK-NEXT:     hir.yield [[C0]]
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C1]]
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[VA]], [[CF]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   hir.pick [[P]]#1 [0 ([[A:%.+]]): {
+  // CHECK-NEXT:     hir.pick [[A]] [0 (): {
+  // CHECK-NEXT:       hir.write_var [[P]]#0, %x : [[T]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.write_var [[P]]#0, %c : [[T]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %va = hir.var : %t
+  %ch = hir.choice 0 ()
+  hir.pick %ch [
+    0 (): {
+      uir.if %d {
+        uir.expr pin 1 {
+          hir.write_var %va, %x : %t
+          uir.yield
+        }
+        uir.yield
+      }
+      hir.yield
+    }
+    1 (): {
+      uir.expr pin 1 {
+        hir.write_var %va, %c : %t
+        uir.yield
+      }
+      hir.yield
+    }
+  ]
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
 // Loop records: a const loop with dyn content pushes one record per activation
 // onto a hit list. The loop's break check is an exit-carrying divergence, so
 // each record ends in an exit-path choice: the break path an empty exited()
@@ -4155,6 +4459,95 @@ uir.func @ForwardResultDistance2(%c: 0, %y: 2) -> (result: 2) {
     uir.yield %loop : %t
   }
   uir.return %v : %t
+}
+
+// Forward delivery through a pick: alternative 0 yields the later-phase
+// argument, alternative 1 is a dead path (`uir.unreachable`) and provides
+// nothing — the normalized shape of a body whose paths all exit. The pick
+// forwards result #0 to %y and becomes resultless at phase 0, with the
+// providing alternative's yield emptied; %y rides the phase-1 return
+// directly.
+
+// CHECK-LABEL: uir.func @PickSingleProviderForward
+// CHECK: uir.signature
+uir.func @PickSingleProviderForward(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%1)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[CH:%.+]] = hir.choice 0()
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   hir.pick [[CH]] [0 (): {
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     uir.unreachable
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   uir.phase_return %y : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %ch = hir.choice 0 ()
+  %r = hir.pick %ch : !hir.any [
+    0 (): {
+      hir.yield %y : !hir.any
+    }
+    1 (): {
+      uir.unreachable
+    }
+  ]
+  uir.return %r : %t
+}
+
+// Forward delivery through an N-ary pick whose two non-provider alternatives
+// yield `uir.unreachable_value` (a real `hir.yield` with a non-materializing
+// operand) rather than a dead `uir.unreachable` terminator. Only the external
+// provider %y is counted, so result #0 is a single-provider forward to %y and
+// the pick becomes resultless; the non-provider yields drop their slot. This
+// is the arity-3 counterpart of the dead-terminator forward above.
+
+// CHECK-LABEL: uir.func @PickPartialForward
+// CHECK: uir.signature
+uir.func @PickPartialForward(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%1)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[CH:%.+]] = hir.choice 0()
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   hir.pick [[CH]] [0 (): {
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK:          hir.yield
+  // CHECK-NEXT:   } 2 (): {
+  // CHECK:          hir.yield
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   uir.phase_return %y : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %ch = hir.choice 0 ()
+  %r = hir.pick %ch : !hir.any [
+    0 (): {
+      hir.yield %y : !hir.any
+    }
+    1 (): {
+      %u = uir.unreachable_value
+      hir.yield %u : !hir.any
+    }
+    2 (): {
+      %v = uir.unreachable_value
+      hir.yield %v : !hir.any
+    }
+  ]
+  uir.return %r : %t
 }
 
 // Backward delivery through an if: the then arm breaks the enclosing loop, the

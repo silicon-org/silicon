@@ -230,6 +230,86 @@ uir.func @ExitArmLaterResult(%c: 0, %y: 1) -> (result: 1) {
 
 // -----
 
+// An if arm terminated by `uir.unreachable` is a dead path with no
+// continuation yield for branch extraction to rebuild, so the if is left
+// alone and its later-phase content is reported by the nested-content
+// rejection (this used to crash extraction on the terminator cast).
+uir.func @UnreachableArmIf(%c: 0, %x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  %t = hir.int_type
+  %va = hir.var : %t
+  uir.if %c {
+    uir.expr pin 1 {
+      // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
+      hir.write_var %va, %x : %t
+      uir.yield
+    }
+    uir.yield
+  } else {
+    uir.unreachable
+  }
+  uir.return
+}
+
+// -----
+
+// The same dead-path rule for a pick: an alternative terminated by
+// `uir.unreachable` has no continuation yield, so a pick with later-phase
+// content in another alternative is left for the nested-content rejection.
+uir.func @UnreachableAltPick(%c: 0, %x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  %t = hir.int_type
+  %va = hir.var : %t
+  %ch = hir.choice 0 ()
+  hir.pick %ch [
+    0 (): {
+      uir.expr pin 1 {
+        // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
+        hir.write_var %va, %x : %t
+        uir.yield
+      }
+      hir.yield
+    }
+    1 (): {
+      uir.unreachable
+    }
+  ]
+  uir.return
+}
+
+// -----
+
+// A single-provider pick result whose provider is later-phase content defined
+// inside the alternative (not external): like the if analogue, it does not
+// forward, and with one provider it is not a choice-ification obligation
+// either, so the interior later-phase op is caught by the nested-content
+// rejection.
+uir.func @SingleProviderInternalPick(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%1)
+} {
+  %t = hir.int_type
+  %ch = hir.choice 0 ()
+  %v = hir.pick %ch : !hir.any [
+    0 (): {
+      // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
+      %w = hir.add %y, %y : %t
+      hir.yield %w : !hir.any
+    }
+    1 (): {
+      uir.unreachable
+    }
+  ]
+  uir.return %v : %t
+}
+
+// -----
+
 // A break value shared with other later-phase effects that stay behind cannot
 // be sliced out: the entangled content (here a var written and read for the
 // break value) would be duplicated into the receiving pick. Rejected.
