@@ -112,14 +112,26 @@
 // `uir.unreachable_value` at the consuming phase, so the `never` result stays
 // unused on its producer and never crosses a boundary.
 //
+// A single-provider control-flow result (one arm yields it, the others exit or
+// never provide) is not a selection but a transparent forwarding of the
+// provider's operand: when that operand is defined outside the op it forwards
+// directly to the result's uses and the result drops from the op, in either
+// direction (the operand may be earlier or later than the op). Forwarding runs
+// before extraction, so branch and break-value extraction only ever see genuine
+// selections — a multi-provider result, or a single provider defined inside the
+// op whose value varies per path or iteration and so needs choice-ification
+// even at a provider count of one.
+//
 // The pass covers straight-line content, single-boundary branch extraction,
-// single-boundary loop-record extraction, and break-value choices. Inputs that
-// need the remaining sorting machinery are rejected with explicit diagnostics
-// instead of being sorted incorrectly: early function exits (function-level
-// exit chains), results delivered at a phase different from their op's own
-// phase by single-provider control flow (which needs result forwarding),
-// hoisting and content more than one phase away from its control flow, and
-// backward uses from floating content nested under earlier-phase control flow.
+// single-boundary loop-record extraction, break-value choices, and single-
+// provider result forwarding. Inputs that need the remaining sorting machinery
+// are rejected with explicit diagnostics instead of being sorted incorrectly:
+// early function exits (function-level exit chains), a cross-phase result whose
+// delivery this pass cannot complete (the receiving pick of a multi-provider
+// selection crossing more than one phase wide, or a single-provider value the
+// op holds at a float phase awaiting float sinking), hoisting and content more
+// than one phase away from its control flow, and backward uses from floating
+// content nested under earlier-phase control flow.
 //
 //===----------------------------------------------------------------------===//
 
@@ -260,6 +272,9 @@ private:
   LogicalResult extractLoops();
   LogicalResult extractFromLoop(LoopOp loopOp, int16_t p);
   FailureOr<LoopOp> extractBreakValues(LoopOp loopOp, int16_t p);
+  LogicalResult forwardSingleProviderResults();
+  SmallVector<Value> collectResultProviders(Operation *op, unsigned idx);
+  void forwardResults(Operation *op, ArrayRef<Value> forwardTo, int16_t p);
   LogicalResult scanBlock(Operation *loopOp, Block &block, int16_t p,
                           BodyPlan &plan);
   bool blockAllExits(Block &block, int16_t p);
@@ -893,10 +908,11 @@ unsigned PhaseSorter::countResultProviders(IfOp ifOp, unsigned idx) {
 /// its own phase after extraction: results already at phase p stay, and
 /// results at a later phase are removed and reconstructed by the pick — but
 /// only if they choice-ify (provided by more than one arm yield). A result
-/// diverging from the op's phase in any other way (a single-provider result
-/// whose other arm exits, or a never-produced result whose short-yielding arms
-/// would break the kept-result rebuild) is not extracted; the residual if is
-/// left for the divergence rejection, except a never result, whose consumers
+/// diverging from the op's phase in any other way (a single provider defined
+/// inside the op, whose external single providers were already forwarded away,
+/// or a never-produced result whose short-yielding arms would break the
+/// kept-result rebuild) is not extracted; the residual if is left for the
+/// divergence rejection, except a never result, whose consumers
 /// never-forwarding already rewrote, so it is simply left unused.
 LogicalResult PhaseSorter::extractBranches() {
   SmallVector<IfOp> ifOps;
@@ -1665,6 +1681,26 @@ LogicalResult PhaseSorter::rebuildDivergenceIf(Divergence &divergence,
 
 // NOLINTEND(misc-no-recursion)
 
+/// Invoke `fn` on every `uir.break` targeting `loopOp`, i.e. every break in its
+/// body not nested inside an inner loop (whose breaks target that inner loop).
+static void forEachLoopBreak(LoopOp loopOp,
+                             llvm::function_ref<void(BreakOp)> fn) {
+  std::function<void(Block &)> visit = [&](Block &block) {
+    for (auto &blockOp : block) {
+      if (isa<LoopOp>(&blockOp))
+        continue;
+      if (auto breakOp = dyn_cast<BreakOp>(&blockOp)) {
+        fn(breakOp);
+        continue;
+      }
+      for (auto &region : blockOp.getRegions())
+        for (auto &inner : region)
+          visit(inner);
+    }
+  };
+  visit(loopOp.getBody().front());
+}
+
 //===----------------------------------------------------------------------===//
 // Break-Value Extraction
 //===----------------------------------------------------------------------===//
@@ -1710,20 +1746,7 @@ FailureOr<LoopOp> PhaseSorter::extractBreakValues(LoopOp loopOp, int16_t p) {
   // Collect this loop's break sites, not descending into nested loops (whose
   // breaks target the inner loop).
   SmallVector<BreakOp> breaks;
-  std::function<void(Block &)> collectBreaks = [&](Block &block) {
-    for (auto &blockOp : block) {
-      if (isa<LoopOp>(&blockOp))
-        continue;
-      if (auto breakOp = dyn_cast<BreakOp>(&blockOp)) {
-        breaks.push_back(breakOp);
-        continue;
-      }
-      for (auto &region : blockOp.getRegions())
-        for (auto &inner : region)
-          collectBreaks(inner);
-    }
-  };
-  collectBreaks(loopOp.getBody().front());
+  forEachLoopBreak(loopOp, [&](BreakOp breakOp) { breaks.push_back(breakOp); });
 
   // Per break site: the later-phase values it provides, the transitive later-
   // phase ops computing them (the value slice, which moves into the pick
@@ -2167,6 +2190,201 @@ LogicalResult PhaseSorter::extractLoops() {
 }
 
 //===----------------------------------------------------------------------===//
+// Forward Single-Provider Control-Flow Results
+//===----------------------------------------------------------------------===//
+//
+// # Forward Single-Provider Control-Flow Results to Their Provider
+//
+// A control-flow result (`uir.if`, `uir.loop`) whose value is delivered by
+// exactly one terminator is not a selection: it *is* that terminator's operand.
+// When the operand is defined outside the op it dominates the op, hence every
+// use of the result, so the result forwards: every use is replaced by the
+// operand and the result — with its type operand and the terminators' operands
+// for the slot — is dropped from the op.
+//
+// This restores the invariant the wrap and cross rules rely on: every op
+// delivers each of its results at its own phase. A single-provider result may
+// otherwise sit at the operand's phase, earlier or later than the op (the op
+// imposes no floor on a non-selection), which those rules cannot express — the
+// same forwarding covers both directions.
+//
+// The externality of the provider, not its count, is the boundary between
+// forwarding and selection. Only a single-provider result whose operand is
+// defined outside the op forwards; everything else is a genuine selection left
+// to branch and break-value extraction, which run *after* this step. Running
+// forwarding first means extraction only ever sees selections: a multi-provider
+// result (choice-ified regardless of distance), or a single provider defined
+// *inside* the op — later-phase arm content or an iteration-snapshotted break
+// value, where the interior value genuinely varies per path or iteration and so
+// needs choice-ification even at a provider count of one. A multi-provider
+// result is skipped here without inspecting its operands. Never results were
+// already severed by never-forwarding. A single provider defined inside the op
+// at an earlier phase (backward interior content) or a non-real float phase
+// needs hoisting or float sinking and is left for the corresponding rejection.
+
+/// The materializing terminator operands delivering result `idx` of a
+/// control-flow op: the yield operands of an `if`'s non-exiting arms, or the
+/// break operands of a `loop`. A non-materializing operand (a
+/// `uir.unreachable_value` or a never result) delivers nothing and is not a
+/// provider, so a single entry marks a single-provider result.
+SmallVector<Value> PhaseSorter::collectResultProviders(Operation *op,
+                                                       unsigned idx) {
+  SmallVector<Value> providers;
+  auto keepMaterializing = [&](Value operand) {
+    if (analysis.materializes(operand))
+      providers.push_back(operand);
+  };
+  if (auto ifOp = dyn_cast<IfOp>(op)) {
+    for (auto *region : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
+      if (region->empty())
+        continue;
+      if (auto yieldOp = dyn_cast<YieldOp>(region->front().getTerminator()))
+        keepMaterializing(yieldOp.getValues()[idx]);
+    }
+  } else {
+    forEachLoopBreak(cast<LoopOp>(op), [&](BreakOp breakOp) {
+      keepMaterializing(breakOp.getValues()[idx]);
+    });
+  }
+  return providers;
+}
+
+/// Whether `value` is defined outside `op` and thus dominates it: a result of
+/// an op that is neither `op` nor nested in it, or a block argument whose owner
+/// is neither `op` nor nested in it.
+static bool definedOutside(Value value, Operation *op) {
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    Operation *owner = blockArg.getOwner()->getParentOp();
+    return owner != op && !op->isProperAncestor(owner);
+  }
+  Operation *defOp = value.getDefiningOp();
+  return defOp && defOp != op && !op->isProperAncestor(defOp);
+}
+
+/// Forward the results of `op` whose entry in `forwardTo` is non-null: replace
+/// every use of the result with its provider operand, then rebuild `op` (an
+/// `if` or `loop`) without those results, dropping the same slots from every
+/// result-carrying terminator and preserving the kept results' phases.
+void PhaseSorter::forwardResults(Operation *op, ArrayRef<Value> forwardTo,
+                                 int16_t p) {
+  for (auto [idx, result] : llvm::enumerate(op->getResults()))
+    if (forwardTo[idx])
+      result.replaceAllUsesWith(forwardTo[idx]);
+
+  SmallVector<unsigned> keptIdx;
+  for (unsigned idx = 0, e = op->getNumResults(); idx < e; ++idx)
+    if (!forwardTo[idx])
+      keptIdx.push_back(idx);
+
+  auto loc = op->getLoc();
+  auto anyTy = hir::AnyType::get(op->getContext());
+  SmallVector<Type> keptTypes(keptIdx.size(), anyTy);
+
+  // Rewrite one result-carrying terminator (yield or break) to keep only the
+  // kept slots, preserving its phase.
+  auto rewriteTerminator = [&](auto termOp) {
+    SmallVector<Value> values, typeOfValues;
+    for (auto idx : keptIdx) {
+      values.push_back(termOp.getValues()[idx]);
+      typeOfValues.push_back(termOp.getTypeOfValues()[idx]);
+    }
+    int16_t phase = analysis.opPhases.at(termOp);
+    OpBuilder builder(termOp);
+    auto newTerm = std::decay_t<decltype(termOp)>::create(
+        builder, termOp.getLoc(), values, typeOfValues);
+    setPhase(newTerm, phase);
+    forget(termOp);
+    termOp.erase();
+  };
+
+  // Rebuild the op with the kept result types and type operands, moving the
+  // regions across and re-pointing the kept results.
+  auto finalize = [&](Operation *newOp) {
+    analysis.opPhases[newOp] = p;
+    for (auto [i, idx] : llvm::enumerate(keptIdx)) {
+      analysis.actualPhase[newOp->getResult(i)] =
+          analysis.actualPhase.at(op->getResult(idx));
+      op->getResult(idx).replaceAllUsesWith(newOp->getResult(i));
+    }
+    forget(op);
+    op->erase();
+  };
+
+  OpBuilder builder(op);
+  if (auto ifOp = dyn_cast<IfOp>(op)) {
+    for (auto *region : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
+      if (region->empty())
+        continue;
+      if (auto yieldOp = dyn_cast<YieldOp>(region->front().getTerminator()))
+        rewriteTerminator(yieldOp);
+    }
+    SmallVector<Value> keptTypeOperands;
+    for (auto idx : keptIdx)
+      keptTypeOperands.push_back(ifOp.getResultTypes()[idx]);
+    auto newIf = IfOp::create(builder, loc, keptTypes, ifOp.getCondition(),
+                              keptTypeOperands);
+    newIf.getThenRegion().takeBody(ifOp.getThenRegion());
+    newIf.getElseRegion().takeBody(ifOp.getElseRegion());
+    finalize(newIf);
+  } else {
+    auto loopOp = cast<LoopOp>(op);
+    // Collect the breaks before rewriting: rewriting erases each in place,
+    // which would invalidate a live walk of the body.
+    SmallVector<BreakOp> breaks;
+    forEachLoopBreak(loopOp,
+                     [&](BreakOp breakOp) { breaks.push_back(breakOp); });
+    for (auto breakOp : breaks)
+      rewriteTerminator(breakOp);
+    SmallVector<Value> keptTypeOperands;
+    for (auto idx : keptIdx)
+      keptTypeOperands.push_back(loopOp.getResultTypes()[idx]);
+    auto newLoop = LoopOp::create(builder, loc, keptTypes, loopOp.getInits(),
+                                  loopOp.getInitTypes(), keptTypeOperands);
+    newLoop.getBody().takeBody(loopOp.getBody());
+    finalize(newLoop);
+  }
+}
+
+/// Forward every single-provider control-flow result whose provider operand is
+/// defined outside its op. See the section header for the rule and invariant.
+LogicalResult PhaseSorter::forwardSingleProviderResults() {
+  // Innermost first, so a forwarded inner result is already an ordinary
+  // external operand of its enclosing op when that op is considered (forwarding
+  // chains).
+  SmallVector<Operation *> ops;
+  funcOp.getBody().walk<WalkOrder::PostOrder>([&](Operation *op) {
+    if (isa<IfOp, LoopOp>(op) && realPhaseOf(op))
+      ops.push_back(op);
+  });
+
+  for (auto *op : ops) {
+    int16_t p = analysis.opPhases.at(op);
+    SmallVector<Value> forwardTo(op->getNumResults());
+    bool anyForward = false;
+    for (auto [idx, result] : llvm::enumerate(op->getResults())) {
+      int16_t vph = analysis.actualPhase.at(result);
+      if (vph == p || vph == PhaseAnalysis::kNeverPhase)
+        continue;
+      // Only a single-provider result is a transparent forwarding; a
+      // multi-provider selection is left for branch/break-value extraction to
+      // choice-ify, and its provider operands are irrelevant here.
+      auto providers = collectResultProviders(op, idx);
+      if (providers.size() != 1)
+        continue;
+      // A provider defined inside the op is later- or earlier-phase interior
+      // content; leave it for the nested-content rejection.
+      if (definedOutside(providers.front(), op)) {
+        forwardTo[idx] = providers.front();
+        anyForward = true;
+      }
+    }
+    if (anyForward)
+      forwardResults(op, forwardTo, p);
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Reject Unimplemented Sorting Machinery
 //===----------------------------------------------------------------------===//
 
@@ -2187,16 +2405,20 @@ static std::string phaseName(int16_t phase) {
 /// - Early function exits (a `uir.return` anywhere but as the body region's
 ///   terminator, including returns still riding inside undissolved expr
 ///   carriers), which need function-level exit chains.
-/// - Ops delivering a result at a phase different from their own phase by a
-///   transparent forwarding of a single-provider value (the other arms exit).
-///   These need result forwarding. Choice-ification obligations (a result
-///   provided by more than one terminator at a later phase) are already
-///   lifted by branch and break-value extraction above, and never-produced
-///   results are skipped here (their consumers are already
-///   `uir.unreachable_value`, so the result is unused), so the residual
-///   divergence is single-provider results, plus the receiving picks of
-///   crossings more than one phase wide (whose re-extraction at the next
-///   boundary this pass does not do).
+/// - Ops delivering a result at a phase different from their own phase. Single-
+///   provider results whose operand is defined outside the op were forwarded
+///   above, and choice-ification obligations (a result provided by more than
+///   one terminator, or a single provider defined inside the op at a later real
+///   phase) were lifted into a choice plus a receiving pick by branch and
+///   break-value extraction; never-produced results are skipped here (their
+///   consumers are already `uir.unreachable_value`, so the result is unused).
+///   Two residuals remain. A multi-provider selection whose receiving pick
+///   crosses more than one phase (its reconstructed value materializes two or
+///   more phases past the op, so the pick itself needs re-extraction at the
+///   next boundary). And a single-provider value the op holds at a non-real
+///   float phase, which neither forwards (its provider is defined inside the
+///   op, not iteration-invariant external content) nor choice-ifies (a float
+///   phase is not a later real phase), and so awaits float sinking.
 /// - Anchored content whose phase differs from its parent op's phase, which
 ///   needs hoisting across the phase boundary (branch content is handled by
 ///   branch extraction and single-boundary loop content by loop-record
@@ -2238,9 +2460,11 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
               << "delivers result #" << index << " at phase "
               << phaseName(valueIt->second) << " instead of its own phase "
               << phaseName(opPhase)
-              << "; result forwarding (single-provider control-flow results, "
-                 "and receivers of crossings more than one phase wide) is not "
-                 "implemented in phase sorting yet";
+              << "; delivering this cross-phase result is not implemented in "
+                 "phase sorting yet (a multi-provider selection whose "
+                 "receiving pick would cross more than one phase, or a "
+                 "single-provider float value that neither forwards nor "
+                 "choice-ifies)";
           return WalkResult::interrupt();
         }
       }
@@ -2479,6 +2703,8 @@ LogicalResult PhaseSorter::run() {
   if (failed(decomposeCalls()))
     return failure();
   if (failed(forwardNeverValues()))
+    return failure();
+  if (failed(forwardSingleProviderResults()))
     return failure();
   if (failed(extractBranches()))
     return failure();

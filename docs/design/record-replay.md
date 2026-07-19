@@ -36,7 +36,9 @@ Splitting the two facts into separate record slots removes the cloning entirely.
    A consumer that could run without its operand cannot exist: it would not have been dominated by the operand's definition in the source.
 
 6. **Demanded later-phase results ride the cf pick's yields.**
-   The rebuilt phase-p branch cannot deliver a later value, so the cf pick is valued: each arm alternative yields that arm's operand for the result (its own replayed content, or a value from outside the arm, which covers single-provider forwarding for free).
+   The rebuilt phase-p branch cannot deliver a later value, so the cf pick is valued: each arm alternative yields that arm's operand for the result (its own replayed content, or a value from outside the arm).
+   This covers only genuine selections: a result with more than one providing arm.
+   A single-provider result whose sole provider is a value defined outside the op is not a selection and never reaches the cf pick — it is a transparent forward, rewritten to its provider operand before extraction runs, in either phase direction (see the phase-sorting `forwardSingleProviderResults` step).
    An arm that provides no value for a result (an exit arm, a short yield, a materialized else) yields `uir.unreachable_value`; its consumers replay only on paths the reach links gate off, and evaluating one is a loud interpreter trap.
 
 ## Relation to the program-order rule

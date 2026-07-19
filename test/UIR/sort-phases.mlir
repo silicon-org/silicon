@@ -1857,12 +1857,13 @@ uir.func @MixedKeptLater(%n: -1, %x: 0) -> (rc: -1, rd: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// Nested loops with the result-only trigger cascading: the inner const loop
-// breaks with a dyn value defined outside both loops (single break site, no
-// later body content). Inner extraction plants a receiving pick inside the
-// outer loop's body; the outer loop's break then carries that pick's dyn
-// result, so the outer loop break-value-extracts with the inner pick as its
-// slice, and the receiving picks nest at phase 0.
+// Nested loops break with a value defined outside both loops (single break
+// site, no later body content), so the break value forwards rather than choice-
+// ifying: the inner loop's result forwards to %x, which makes %x the outer
+// loop's break operand (external to it too), so the outer loop forwards as well.
+// Both loops end resultless and %x rides the phase-0 return — a forwarding
+// cascade through nested loops. Innermost-first processing forwards the inner
+// loop before the outer.
 
 // CHECK-LABEL: uir.func @NestedResultOnly
 uir.func @NestedResultOnly(%n: -1, %x: 0) -> (result: 0) {
@@ -1872,15 +1873,21 @@ uir.func @NestedResultOnly(%n: -1, %x: 0) -> (result: 0) {
   %t = hir.int_type
   %zero = hir.constant_int 0 : %t
   %one = hir.constant_int 1 : %t
-  // CHECK: [[OCH:%.+]] = uir.loop (
-  // CHECK:   [[ICH:%.+]] = uir.loop (
-  // CHECK:     hir.choice 0()
-  // CHECK:     uir.break
-  // CHECK:   }
-  // CHECK:   [[OC0:%.+]] = hir.choice 0([[ICH]])
-  // CHECK:   uir.break [[OC0]] :
-  // CHECK: }
-  // CHECK: uir.phase_return yield [[OCH]]
+  // CHECK: uir.phase -1 {
+  // CHECK-NEXT:   uir.loop (
+  // CHECK:          uir.if
+  // CHECK-NEXT:       uir.loop (
+  // CHECK:              uir.if
+  // CHECK-NEXT:           uir.break
+  // CHECK-NEXT:         }
+  // CHECK:              uir.continue
+  // CHECK-NEXT:       }
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     }
+  // CHECK:          uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
   %y = uir.expr pin -1 : %t {
     %o = uir.loop (%k = %zero : %t) : %t {
       %done = hir.geq %k, %n : %t
@@ -1900,12 +1907,9 @@ uir.func @NestedResultOnly(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield %o : %t
   }
-  // CHECK: hir.pick %{{.+}} : !hir.any [0 ([[ARG:%.+]]): {
-  // CHECK-NEXT:   [[IV:%.+]] = hir.pick [[ARG]] : !hir.any [0 (): {
-  // CHECK-NEXT:     hir.yield %x : !hir.any
-  // CHECK-NEXT:   }]
-  // CHECK-NEXT:   hir.yield [[IV]] : !hir.any
-  // CHECK-NEXT: }]
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   uir.phase_return %x : %0
+  // CHECK-NEXT: }
   uir.return %y : %t
 }
 
@@ -3703,11 +3707,12 @@ uir.func @RejoinNestedFallthrough(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// An exit-carrying divergence whose rejoining arm yields a demanded
-// later-phase result the arm produces no later content for: the value comes
-// from outside the arm (a function argument), so the receiving cf pick's
-// rejoining alternative yields it directly, and the exit alternative yields
-// an `uir.unreachable_value` that only gated-off paths could consume.
+// An exit-carrying divergence whose rejoining arm yields a later-phase result
+// the arm produces no later content for: the value comes from outside the arm
+// (a function argument), so it forwards directly to the consumer rather than
+// being reconstructed by a valued cf pick. The divergence carries no data
+// result, so its record is just the binary reach link, and the receiving
+// replicate replays the write with the forwarded value.
 
 // CHECK-LABEL: uir.func @DivergenceLaterResultForwarded
 uir.func @DivergenceLaterResultForwarded(%n: -1, %x: 0) -> (result: 0) {
@@ -3735,19 +3740,15 @@ uir.func @DivergenceLaterResultForwarded(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield
   }
-  // CHECK: hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in %{{.+}} {
-  // CHECK-NEXT:     [[RES:%.+]] = hir.pick [[CFR]] : !hir.any [0 (): {
-  // CHECK-NEXT:       [[UV:%.+]] = uir.unreachable_value
-  // CHECK-NEXT:       hir.yield [[UV]] : !hir.any
-  // CHECK-NEXT:     } 1 (): {
-  // CHECK-NEXT:       hir.yield %x : !hir.any
-  // CHECK-NEXT:     }]
+  // CHECK: hir.replicate ([[LR:%.+]]) in %{{.+}} {
   // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     } 1 (): {
-  // CHECK-NEXT:       hir.write_var %{{.+}}, [[RES]]
+  // CHECK-NEXT:       hir.write_var %{{.+}}, %x : {{.+}}
   // CHECK-NEXT:       hir.yield
   // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
   %rr = hir.read_var %acc : %t
   uir.return %rr : %t
 }
@@ -4082,4 +4083,356 @@ uir.func @BothArmsNeverLoopResult(%c: 0, %x: 0) -> (result: 0) {
   }
   %u = hir.add %x, %v : %t
   uir.return %u : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Single-provider result forwarding: a control-flow result delivered by exactly
+// one terminator whose operand is defined outside the op is not a selection but
+// a transparent forwarding of that operand. Every use of the result is
+// redirected to the operand and the result is dropped from the op, covering
+// both directions with one rule.
+//===----------------------------------------------------------------------===//
+
+// Forward delivery: the then arm yields the later-phase argument, the else arm
+// yields a never value (a breakless loop's result) and provides nothing. The if
+// forwards result #0 to %y and becomes resultless at phase 0; %y rides the
+// phase-1 return directly.
+
+// CHECK-LABEL: uir.func @ForwardResult
+// CHECK: uir.signature
+uir.func @ForwardResult(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   uir.if %c {
+  // CHECK-NEXT:     uir.yield
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     uir.loop : [[T]] {
+  // CHECK-NEXT:       uir.continue
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     uir.unreachable_value
+  // CHECK-NEXT:     uir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   uir.phase_return %y : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %v = uir.if %c : %t {
+    uir.yield %y : %t
+  } else {
+    %loop = uir.loop : %t { uir.continue }
+    uir.yield %loop : %t
+  }
+  uir.return %v : %t
+}
+
+// Forward delivery is independent of distance: with the result demanded two
+// phases past the if, forwarding is still a direct redirect to the external
+// value (no receiving pick, so no crossing-more-than-one-phase-wide obligation).
+
+// CHECK-LABEL: uir.func @ForwardResultDistance2
+// CHECK: uir.signature
+uir.func @ForwardResultDistance2(%c: 0, %y: 2) -> (result: 2) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   uir.if %c {
+  // CHECK: uir.phase 2 {
+  // CHECK-NEXT:   uir.phase_return %y : [[T]]
+  // CHECK-NEXT: }
+  %v = uir.if %c : %t {
+    uir.yield %y : %t
+  } else {
+    %loop = uir.loop : %t { uir.continue }
+    uir.yield %loop : %t
+  }
+  uir.return %v : %t
+}
+
+// Backward delivery through an if: the then arm breaks the enclosing loop, the
+// else arm yields the earlier-phase argument %a. The if forwards result #0 to
+// %a and becomes resultless; the loop's break carries %a directly.
+
+// CHECK-LABEL: uir.func @BackwardResultIf
+// CHECK: uir.signature
+uir.func @BackwardResultIf(%a: -1, %c: 0) -> (r: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[L:%.+]] = uir.loop : [[T]] {
+  // CHECK-NEXT:     uir.if %c {
+  // CHECK-NEXT:       uir.break %a : [[T]]
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       uir.yield
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     uir.break %a : [[T]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return [[L]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %l = uir.loop : %t {
+    %r = uir.if %c : %t {
+      uir.break %a : %t
+    } else {
+      uir.yield %a : %t
+    }
+    uir.break %r : %t
+  }
+  uir.return %l : %t
+}
+
+// Backward delivery through a loop: a single unconditional break of the
+// earlier-phase argument. The loop forwards its result to %a and becomes
+// resultless; the function result rides the phase-0 return as %a directly.
+
+// CHECK-LABEL: uir.func @BackwardResultLoop
+// CHECK: uir.signature
+uir.func @BackwardResultLoop(%a: -1, %c: 0) -> (r: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   uir.loop {
+  // CHECK-NEXT:     uir.break
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return %a : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %l = uir.loop : %t {
+    uir.break %a : %t
+  }
+  uir.return %l : %t
+}
+
+// Partial drop: a two-result loop where result #0 is delivered backward (and
+// forwards to %a) while result #1 stays at the loop's own phase. The rebuilt
+// loop keeps only result #1; the forwarded value rides the return beside it.
+
+// CHECK-LABEL: uir.func @PartialForward
+// CHECK: uir.signature
+uir.func @PartialForward(%a: -1, %c: 0) -> (r0: 0, r1: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0, %0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[L:%.+]] = uir.loop : [[T]] {
+  // CHECK-NEXT:     [[K:%.+]] = hir.mul %c, %c : [[T]]
+  // CHECK-NEXT:     uir.break [[K]] : [[T]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return %a, [[L]] : [[T]], [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %l:2 = uir.loop : %t, %t {
+    %k = hir.mul %c, %c : %t
+    uir.break %a, %k : %t, %t
+  }
+  uir.return %l#0, %l#1 : %t, %t
+}
+
+// Forwarding chain: the inner if forwards its result to %y, which makes %y the
+// outer if's single provider operand (now external to the outer if too), so the
+// outer forwards as well. Both ifs end up resultless; %y rides the phase-1
+// return. Post-order processing forwards innermost first.
+
+// CHECK-LABEL: uir.func @ForwardChain
+// CHECK: uir.signature
+uir.func @ForwardChain(%c: 0, %d: 0, %y: 1) -> (r: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // Both ifs are resultless (no result binding), evidencing the forwarded
+  // chain; the empty phase-0 return and the phase-1 return of %y confirm the
+  // value forwards to the function result at its own phase.
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   uir.if %c {
+  // CHECK-NEXT:     uir.if %d {
+  // CHECK-NEXT:       uir.yield
+  // CHECK:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   uir.phase_return %y : [[T]]
+  // CHECK-NEXT: }
+  %v = uir.if %c : %t {
+    %inner = uir.if %d : %t {
+      uir.yield %y : %t
+    } else {
+      %loop = uir.loop : %t { uir.continue }
+      uir.yield %loop : %t
+    }
+    uir.yield %inner : %t
+  } else {
+    %loop2 = uir.loop : %t { uir.continue }
+    uir.yield %loop2 : %t
+  }
+  uir.return %v : %t
+}
+
+// Per-result mechanism split on one `if`: result #0 forwards to the external
+// value %a while result #1 is a genuine multi-provider selection (both arms
+// yield a distinct external phase-1 value) that choice-ifies into a phase-1
+// pick. Forwarding runs before branch extraction, so the single-provider result
+// is gone by the time extraction lifts the multi-provider one — the per-op
+// all-or-nothing bail never triggers.
+
+// CHECK-LABEL: uir.func @MixedProviders
+uir.func @MixedProviders(%c: 0, %a: 1, %b1: 1, %b2: 1) -> (r0: 1, r1: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0, %0) -> (%0, %0)
+} {
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT:   [[IF:%.+]] = uir.if %c
+  // CHECK-NEXT:     hir.choice 0()
+  // CHECK:        } else {
+  // CHECK:          hir.choice 1()
+  // CHECK:        uir.phase_return yield [[IF]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[PICK:%.+]] = hir.pick {{.+}} [0 (): {
+  // CHECK-NEXT:     hir.yield %b1 : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield %b2 : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return %a, [[PICK]] : %0, %0
+  // CHECK-NEXT: }
+  %t = hir.int_type
+  %v:2 = uir.if %c : %t, %t {
+    uir.yield %a, %b1 : %t, %t
+  } else {
+    %loop = uir.loop : %t { uir.continue }
+    uir.yield %loop, %b2 : %t, %t
+  }
+  uir.return %v#0, %v#1 : %t, %t
+}
+
+// Forward delivery through a loop: a single unconditional break of the later-
+// phase argument %y. The loop's result is single-provider and external, so it
+// forwards (no break-value choice) and the loop becomes resultless; %y rides the
+// phase-1 return.
+
+// CHECK-LABEL: uir.func @ForwardResultLoop
+// CHECK: uir.signature
+uir.func @ForwardResultLoop(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   uir.loop {
+  // CHECK-NEXT:     uir.break
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   uir.phase_return %y : [[T]]
+  // CHECK-NEXT: }
+  %l = uir.loop : %t {
+    uir.break %y : %t
+  }
+  uir.return %l : %t
+}
+
+// Per-slot on one loop: result #0's break operand is the external value %y
+// (forwards), result #1's is an iteration-dependent value computed inside the
+// loop (choice-ifies with the loop var as its snapshot). The forwarding and the
+// break-value choice apply to different result slots of the same loop.
+
+// CHECK-LABEL: uir.func @PerSlotForward
+uir.func @PerSlotForward(%c: 0, %y: 1) -> (r0: 1, r1: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0, %0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  // The loop keeps only the choice result for slot #1; slot #0 forwards.
+  // CHECK: [[CH:%.+]] = uir.loop ([[K:%.+]] = %{{.+}} : {{.+}}) : {{.+}} {
+  // CHECK:          hir.choice 0([[K]])
+  // CHECK:          uir.break
+  // CHECK: uir.phase 1 {
+  // CHECK-NEXT:   [[BVR:%.+]] = hir.pick {{.+}} [0 ([[SK:%.+]]): {
+  // CHECK-NEXT:     hir.add %y, [[SK]] :
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return %y, [[BVR]] :
+  // CHECK-NEXT: }
+  %l:2 = uir.loop (%k = %zero : %t) : %t, %t {
+    %done = hir.geq %k, %c : %t
+    uir.if %done {
+      %s = hir.add %y, %k : %t
+      uir.break %y, %s : %t, %t
+    }
+    %next = hir.add %k, %one : %t
+    uir.continue %next : %t
+  }
+  uir.return %l#0, %l#1 : %t, %t
+}
+
+// Nested internal break values still choice-ify (the coverage @NestedResultOnly
+// dropped when its external break value became a forwarding cascade): the inner
+// loop breaks with an iteration-dependent value, its receiving pick becomes the
+// outer loop's break value slice, and both loops choice-ify with nested picks.
+
+// CHECK-LABEL: uir.func @NestedBreakValueChoice
+uir.func @NestedBreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  // CHECK: [[OCH:%.+]] = uir.loop (
+  // CHECK:   [[ICH:%.+]] = uir.loop (
+  // CHECK:     hir.choice 0(%{{.+}})
+  // CHECK:     uir.break
+  // CHECK:   }
+  // CHECK:   hir.choice 0([[ICH]])
+  // CHECK:   uir.break
+  // CHECK: }
+  // CHECK: uir.phase_return yield [[OCH]]
+  %y = uir.expr pin -1 : %t {
+    %o = uir.loop (%k = %zero : %t) : %t {
+      %done = hir.geq %k, %n : %t
+      uir.if %done {
+        %inner = uir.loop (%j = %zero : %t) : %t {
+          %jdone = hir.geq %j, %k : %t
+          uir.if %jdone {
+            %s = hir.add %x, %j : %t
+            uir.break %s : %t
+          }
+          %jnext = hir.add %j, %one : %t
+          uir.continue %jnext : %t
+        }
+        uir.break %inner : %t
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %o : %t
+  }
+  // CHECK: hir.pick %{{.+}} : !hir.any [0 ([[ARG:%.+]]): {
+  // CHECK-NEXT:   [[IV:%.+]] = hir.pick [[ARG]] : !hir.any [0 ([[SK:%.+]]): {
+  // CHECK-NEXT:     hir.add %x, [[SK]] : %{{.+}}
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   hir.yield [[IV]] : !hir.any
+  // CHECK-NEXT: }]
+  uir.return %y : %t
 }

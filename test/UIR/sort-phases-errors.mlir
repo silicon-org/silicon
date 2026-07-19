@@ -121,21 +121,23 @@ uir.func @PhaseCallInInput(%x: 0) -> () {
 
 // -----
 
-// A result provided by a single yield while the other arm exits is delivered
-// at the provider's phase, which can precede the CF op. Forwarding the
-// provider instead of crossing is a later sorting case.
+// A single-provider backward result forwards to its provider operand (%a), but
+// the value it feeds is an earlier-phase computation nested inside the loop:
+// once the if is dissolved, the phase -1 `hir.mul` still sits inside the
+// phase-0 loop and must be hoisted out. Forwarding composes with hoisting,
+// which is not implemented, so the residual mul is rejected.
 uir.func @SingleProviderBackward(%a: -1, %c: 0) -> (r: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
   %l = uir.loop : %t {
-    // expected-error @below {{delivers result #0 at phase -1 instead of its own phase 0; result forwarding (single-provider control-flow results, and receivers of crossings more than one phase wide) is not implemented in phase sorting yet}}
     %r = uir.if %c : %t {
       uir.break %a : %t
     } else {
       uir.yield %a : %t
     }
+    // expected-error @below {{at phase -1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
     %s = hir.mul %r, %r : %t
     uir.break %s : %t
   }
@@ -144,20 +146,59 @@ uir.func @SingleProviderBackward(%a: -1, %c: 0) -> (r: 0) {
 
 // -----
 
-// The other arm becomes a non-provider by yielding a value that never
-// materializes (a breakless loop's result), not by exiting: the result is
-// still single-provider on the surviving arm. The analysis and the extraction
-// now agree on the provider count (both exclude the never arm), so this lands
-// as the ordinary single-provider forwarding rejection rather than a spurious
-// mismatch.
-uir.func @NeverArmForwardResult(%c: 0, %y: 1) -> (result: 1) {
+// A multi-provider result demanded more than one phase past its if: both arms
+// yield an external phase-2 value, so branch extraction choice-ifies it into a
+// pick at phase 1, but the reconstructed value materializes at phase 2. The
+// pick is a receiver of a crossing more than one phase wide and would itself
+// need re-extraction at the phase-1-to-2 boundary.
+uir.func @WideReceiver(%c: 0, %x: 2, %y: 2) -> (r: 2) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // expected-error @below {{delivers result #0 at phase 2 instead of its own phase 1; delivering this cross-phase result is not implemented in phase sorting yet (a multi-provider selection whose receiving pick would cross more than one phase, or a single-provider float value that neither forwards nor choice-ifies)}}
+  %v = uir.if %c : %t {
+    uir.yield %x : %t
+  } else {
+    uir.yield %y : %t
+  }
+  uir.return %v : %t
+}
+
+// -----
+
+// A single-provider loop result whose provider is defined inside the loop at a
+// float phase (a constant): it does not forward (not external, iteration-
+// invariant content) and does not choice-ify (a float phase is not a later real
+// phase), so it survives to the delivery rejection awaiting float sinking.
+uir.func @LoopBreakFloatConst(%c: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  // expected-error @below {{delivers result #0 at phase float instead of its own phase 0; delivering this cross-phase result is not implemented in phase sorting yet (a multi-provider selection whose receiving pick would cross more than one phase, or a single-provider float value that neither forwards nor choice-ifies)}}
+  %l = uir.loop : %t {
+    %five = hir.constant_int 5 : %t
+    uir.break %five : %t
+  }
+  uir.return %l : %t
+}
+
+// -----
+
+// A single-provider if result whose provider is later-phase content defined
+// inside the arm (not external): it does not forward. The interior later-phase
+// op is caught by the nested-content rejection before the if's own delivery
+// check (the post-order walk reaches the interior op first).
+uir.func @SingleProviderInternalIf(%c: 0, %y: 1) -> (result: 1) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
-  // expected-error @below {{delivers result #0 at phase 1 instead of its own phase 0; result forwarding (single-provider control-flow results, and receivers of crossings more than one phase wide) is not implemented in phase sorting yet}}
   %v = uir.if %c : %t {
-    uir.yield %y : %t
+    // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
+    %w = hir.add %y, %y : %t
+    uir.yield %w : %t
   } else {
     %loop = uir.loop : %t { uir.continue }
     uir.yield %loop : %t
