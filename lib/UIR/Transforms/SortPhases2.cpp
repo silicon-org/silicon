@@ -1168,20 +1168,22 @@ LogicalResult PhaseSorter::extractFromBranch(IfOp ifOp, int16_t p) {
 // yields `uir.unreachable_value` — its consumers replay only on paths the
 // reach links gate off.
 //
-// A demanded later result produced on the arm's spine after a nested exit is
-// reconstructed by threading it up through the arm's reach picks: the reach
-// pick gating the segment that defines it (and every reach pick above) becomes
+// A demanded later result an arm provides is reconstructed at whichever level
+// defines it, threaded up to the receiving cf pick through the same reach
+// picks. A value produced on the arm's spine after a nested exit rides the
+// reach pick gating its segment (and every reach pick above): each becomes
 // valued, its NOT_REACHED alternative yielding `uir.unreachable_value` and its
-// REACHED alternative forwarding the value from the level below, exactly as the
-// valued cf pick reconstructs arm results.
+// REACHED alternative forwarding the value from the level below. A value that
+// is itself a nested divergence's demanded later result surfaces as that
+// divergence's own valued cf pick result, at the level gating the divergence,
+// and threads up identically — the reconstruction is one recursion of the same
+// valued-carrier mechanism, deepening by a level per nesting.
 //
 // Only single-boundary loop-record extraction is handled here (later-phase
 // loop results are choice-ified by break-value extraction first): returns
-// under loops (function-level exit chains), later results defined off the arm's
-// spine inside a nested single-provider divergence (which need reconstructing
-// through that divergence's own picks), and content more than one phase later
-// (which needs the replicate re-extracted at the next boundary) are rejected
-// below and by `rejectUnimplemented`.
+// under loops (function-level exit chains) and content more than one phase
+// later (which needs the replicate re-extracted at the next boundary) are
+// rejected below and by `rejectUnimplemented`.
 
 // NOLINTBEGIN(misc-no-recursion)
 
@@ -1339,14 +1341,18 @@ void PhaseSorter::collectPlanFields(Operation *loopOp, int16_t p,
   }
 }
 
-/// The spine segment index of `plan` at which `value` becomes available during
-/// replay, or `nullopt` if `value` is defined inside the plan but off its spine
-/// (a nested-divergence result), which threading does not reconstruct.
+/// The level index of `plan` at which `value` becomes available during replay,
+/// or `nullopt` if `value` is defined inside the plan but at no replayable
+/// level.
 ///
-/// A null operand (an arm that provides nothing) and a value defined outside
-/// the plan's block subtree both dominate the plan root, so they sit at index
-/// 0. Spine content is located by the segment holding its defining op; a value
-/// deeper than the level consuming it rides that level's reach picks.
+/// Availability is a level position, not just a spine segment: a value born in
+/// a segment surfaces at that segment's block, and a nested divergence's
+/// demanded later result surfaces — through that divergence's own valued cf
+/// pick — as a value in the same block that gates the divergence, i.e. at the
+/// divergence's index. Both sit at the block for level k and thread up to the
+/// consuming level through the same reach picks (see `buildLevel`). A null
+/// operand (an arm that provides nothing) and a value defined outside the
+/// plan's block subtree both dominate the plan root, so they sit at index 0.
 std::optional<size_t> PhaseSorter::spinePosition(BodyPlan &plan, Value value) {
   if (!value)
     return 0;
@@ -1360,6 +1366,13 @@ std::optional<size_t> PhaseSorter::spinePosition(BodyPlan &plan, Value value) {
     for (auto *op : segment)
       if (op == defOp || op->isProperAncestor(defOp))
         return k;
+  // A demanded later result of a nested divergence is reconstructed by that
+  // divergence's cf pick, which lives in the block that gates the divergence
+  // (its index). The placeholder standing in for the result until the cf pick
+  // is built identifies the divergence.
+  for (auto [k, divergence] : llvm::enumerate(plan.divergences))
+    if (llvm::is_contained(divergence.laterResults, value))
+      return k;
   return std::nullopt;
 }
 
@@ -1562,19 +1575,6 @@ LogicalResult PhaseSorter::rebuildDivergenceIf(Divergence &divergence,
       arm.laterYieldOperands.push_back(
           analysis.materializes(operand) ? operand : Value());
     }
-    // A later result is reconstructible from the arm's replay when its operand
-    // sits on the arm's spine (in some segment) or comes from outside the arm.
-    // The receiving cf pick's alternative threads a deeper-segment operand up
-    // through the reach picks (see `buildLevel`). An operand defined inside a
-    // nested divergence of the arm — not on the spine — would need
-    // reconstructing from that divergence's own picks, which is not
-    // implemented; reject it here before any building.
-    for (auto operand : arm.laterYieldOperands)
-      if (!spinePosition(*arm.plan, operand))
-        return ifOp.emitOpError()
-               << "yields a later-phase result defined inside a nested "
-                  "divergence of its arm; reconstructing it through that "
-                  "divergence's picks is not implemented in phase sorting yet";
     SmallVector<Value> payload;
     appendTail(*arm.plan, 0, {}, armBuilder, loc, p, payload);
     auto choice = hir::ChoiceOp::create(armBuilder, loc, anyTy,
@@ -1986,6 +1986,12 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
   SmallVector<std::pair<Block *, const llvm::SetVector<Value> *>> remapBlocks;
   std::function<void(BodyPlan &, size_t, Block *, ArrayRef<Value>)> buildLevel =
       [&](BodyPlan &pl, size_t seg, Block *block, ArrayRef<Value> levelYield) {
+        // The values this level yields, as a mutable copy: building this
+        // level's cf pick reconstructs a nested divergence's later result and
+        // erases the placeholder that stood in for it, so the yield entry must
+        // be re-pointed to the fresh cf pick result below.
+        SmallVector<Value> yield(levelYield.begin(), levelYield.end());
+
         // Block args mirror the record tail this level consumes: the
         // segment's samples, then the divergence's cf choice and reach link.
         for (unsigned i = 0; i < pl.segFields[seg].size(); ++i)
@@ -1994,14 +2000,14 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
         for (auto *moved : pl.segments[seg])
           moved->moveBefore(block, block->end());
 
-        // Partition the demanded later values by spine position: those defined
-        // in a deeper segment are not in scope at this block's terminal, so
-        // they ride this level's reach pick as its results (threaded up from
-        // the level that defines them); the rest are delivered here. A value at
+        // Partition the demanded later values by level position: those defined
+        // in a deeper level are not in scope at this block's terminal, so they
+        // ride this level's reach pick as its results (threaded up from the
+        // level that defines them); the rest are delivered here. A value at
         // this level (or dominating the root, index 0) is available directly.
-        SmallVector<bool> deeperMask(levelYield.size(), false);
+        SmallVector<bool> deeperMask(yield.size(), false);
         SmallVector<Value> deeperValues;
-        for (auto [i, value] : llvm::enumerate(levelYield)) {
+        for (auto [i, value] : llvm::enumerate(yield)) {
           auto pos = spinePosition(pl, value);
           assert(pos && "off-spine later operand should have been rejected");
           if (*pos > seg) {
@@ -2045,12 +2051,19 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
               }
             }
             // Replace each dropped later result's placeholder with the cf
-            // pick's reconstructed result and drop the placeholder op.
+            // pick's reconstructed result and drop the placeholder op. A value
+            // this level itself yields is the reconstructed result of this same
+            // divergence (a nested divergence whose result the enclosing arm
+            // provides), so re-point the yield copy to the fresh cf pick result
+            // before the placeholder is erased.
             for (auto [j, placeholder] :
                  llvm::enumerate(divergence.laterResults)) {
               Operation *placeholderOp = placeholder.getDefiningOp();
               analysis.actualPhase[cfPick.getResult(j)] =
                   static_cast<int16_t>(p + 1);
+              for (auto &y : yield)
+                if (y == placeholder)
+                  y = cfPick.getResult(j);
               placeholder.replaceAllUsesWith(cfPick.getResult(j));
               forget(placeholderOp);
               placeholderOp->erase();
@@ -2099,7 +2112,7 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
         OpBuilder endBuilder(block, block->end());
         SmallVector<Value> yieldValues;
         size_t deeperIdx = 0;
-        for (auto [i, value] : llvm::enumerate(levelYield)) {
+        for (auto [i, value] : llvm::enumerate(yield)) {
           if (deeperMask[i]) {
             yieldValues.push_back(reachResults[deeperIdx++]);
             continue;

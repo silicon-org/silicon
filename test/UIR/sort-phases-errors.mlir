@@ -248,54 +248,6 @@ uir.func @SharedAcrossBreaks(%n: -1, %x: 0) -> (result: 0) {
 
 // -----
 
-// A rejoining arm that yields a demanded later-phase result defined inside a
-// nested single-provider divergence of the arm: the value is reconstructed by
-// that nested divergence's own cf pick, off the arm's spine, so threading it up
-// through the arm's reach picks does not reach it. Not implemented. (A value on
-// the arm's spine produced after a nested exit does thread; see
-// @LaterResultAfterNestedExit in sort-phases.mlir.)
-uir.func @LaterResultInNestedDivergence(%n: -1, %x: 0) -> (result: 0) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %zero = hir.constant_int 0 : %t
-  %one = hir.constant_int 1 : %t
-  %acc = hir.var : %t
-  uir.expr pin -1 {
-    uir.loop (%i = %zero : %t) {
-      %c = hir.geq %i, %n : %t
-      // expected-error @below {{yields a later-phase result defined inside a nested divergence of its arm; reconstructing it through that divergence's picks is not implemented in phase sorting yet}}
-      %r = uir.if %c : %t {
-        uir.break
-      } else {
-        %d = hir.geq %n, %i : %t
-        %w = uir.if %d : %t {
-          %v = uir.expr pin 1 : %t {
-            %s = hir.add %x, %x : %t
-            uir.yield %s : %t
-          }
-          uir.yield %v : %t
-        } else {
-          uir.break
-        }
-        uir.yield %w : %t
-      }
-      uir.expr pin 1 {
-        hir.write_var %acc, %r : %t
-        uir.yield
-      }
-      %next = hir.add %i, %one : %t
-      uir.continue %next : %t
-    }
-    uir.yield
-  }
-  %rr = hir.read_var %acc : %t
-  uir.return %rr : %t
-}
-
-// -----
-
 // A return exiting the function under a const loop with later-phase content is
 // a function-level exit chain, not loop-record extraction.
 uir.func @ReturnUnderLoop(%c: 0, %x: 0) -> (result: 0) {

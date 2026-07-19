@@ -49,4 +49,5 @@ Multi-arm dispatch — the actual duplication hazard — lives exclusively in th
 
 - Loop-exit tags disappeared from records: a content-free divergence records only reach, so which of several exits fired is not recorded when nothing downstream depends on it.
 - The interpreter (M4) must trap on evaluating `uir.unreachable_value` during replay; reaching one means the record invariant was violated.
-- Still rejected as scaffolding, not design walls: function-level exit chains under loops, later results produced after a nested exit in their arm (threading them through reach picks), short yields ahead of the cf choice, and content more than one phase later.
+- Still rejected as scaffolding, not design walls: function-level exit chains under loops, short yields ahead of the cf choice, and content more than one phase later.
+- A demanded later result the rejoining arm provides is reconstructed at whichever level defines it: a value produced on the arm's spine after a nested exit threads up through valued reach picks, and a value that is itself a nested divergence's result surfaces as that divergence's own valued cf pick result and threads up identically — one recursion of the valued-carrier mechanism, no new record content.
