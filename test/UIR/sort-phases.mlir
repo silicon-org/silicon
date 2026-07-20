@@ -585,8 +585,9 @@ uir.func @DeadIfInDeadExpr(%c: 0, %a: 1) -> () {
 //===----------------------------------------------------------------------===//
 // A fully dead loop inside a dead expr sorts exactly like its live twin: the
 // expr defaults to block phase 0 and dissolves, the loop wraps at phase 0
-// pushing a per-activation record, and the later-phase add moves into a
-// phase-1 pick that replays it. Dead content sorts demand-blind.
+// pushing a per-activation record, and the later-phase break value is delivered
+// through a receiving-phase variable — the add and its write_var replay in the
+// phase-1 replicate, read out after. Dead content sorts demand-blind.
 
 // CHECK-LABEL: uir.func @DeadLoopInDeadExpr
 uir.func @DeadLoopInDeadExpr(%a: 1) -> () {
@@ -595,10 +596,24 @@ uir.func @DeadLoopInDeadExpr(%a: 1) -> () {
 } {
   %t = hir.int_type
   // CHECK: [[L:%.+]] = uir.phase 0 {
-  // CHECK-NEXT:   uir.loop
-  // CHECK: uir.phase 1 {
-  // CHECK-NEXT:   hir.pick [[L]]
-  // CHECK: hir.add %a, %a
+  // CHECK-NEXT:   hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop {
+  // CHECK-NEXT:     hir.opaque_pack()
+  // CHECK-NEXT:     hir.opaque_list_push
+  // CHECK-NEXT:     uir.break
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.var
+  // CHECK-NEXT:   hir.replicate () in [[L]] {
+  // CHECK-NEXT:     [[ADD:%.+]] = hir.add %a, %a
+  // CHECK-NEXT:     hir.write_var [[V]], [[ADD]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   hir.read_var [[V]]
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
   %r = uir.expr : %t {
     %s = uir.loop : %t {
       %x = hir.add %a, %a : %t
@@ -642,9 +657,9 @@ uir.func @DeadIfConstCondInDeadExpr(%a: 1) -> () {
 
 //===----------------------------------------------------------------------===//
 // A live conduit expr with a bystander dead loop: both sort as ordinary
-// phase-0 content. The bystander loop is choice-ified into phase 0 with its
-// later-phase add replayed by a phase-1 pick, alongside the conduit's own
-// phase-0 result.
+// phase-0 content. The bystander loop pushes a per-activation record at phase 0,
+// its later-phase break value delivered through a phase-1 replicate variable,
+// alongside the conduit's own phase-0 result.
 
 // CHECK-LABEL: uir.func @LiveConduitWithBystanderLoop
 uir.func @LiveConduitWithBystanderLoop(%x: 0, %a: 1) -> (result: 0) {
@@ -654,12 +669,16 @@ uir.func @LiveConduitWithBystanderLoop(%x: 0, %a: 1) -> (result: 0) {
   // CHECK: [[T:%.+]] = hir.int_type
   %t = hir.int_type
   // CHECK: uir.phase 0 {
+  // CHECK-NEXT:   hir.opaque_list_create
   // CHECK-NEXT:   uir.loop
   // CHECK:        [[Y:%.+]] = hir.add %x, %x : [[T]]
   // CHECK-NEXT:   uir.phase_return [[Y]] : [[T]] yield
   // CHECK: uir.phase 1 {
-  // CHECK-NEXT:   hir.pick
-  // CHECK:        hir.add %a, %a
+  // CHECK-NEXT:   [[V:%.+]] = hir.var
+  // CHECK-NEXT:   hir.replicate () in
+  // CHECK-NEXT:     [[ADD:%.+]] = hir.add %a, %a
+  // CHECK-NEXT:     hir.write_var [[V]], [[ADD]]
+  // CHECK:        hir.read_var [[V]]
   %r = uir.expr : %t {
     %s = uir.loop : %t {
       %v = hir.add %a, %a : %t
@@ -855,8 +874,9 @@ uir.func @NestedDeadExpr(%d: 1, %x: 1) -> () {
 // A dead frame mixing a phase-0 var read with the phase-1 arg defaults to
 // block phase 0 (no internal-crossing rule sinks it). The loop wraps at
 // phase 0, the var read crosses into phase 1 as a plain phase-op result, and
-// the interior add is replayed by a phase-1 pick where it consumes the
-// crossing — the same shape as a live loop with later-phase content.
+// the interior add is replayed by a phase-1 replicate where it consumes the
+// crossing and writes the break value's delivery variable — the same shape as
+// a live loop with a later-phase break value.
 
 // CHECK-LABEL: uir.func @DeadFrameDistributesInterior
 uir.func @DeadFrameDistributesInterior(%x: 0, %a: 1) -> () {
@@ -869,14 +889,18 @@ uir.func @DeadFrameDistributesInterior(%x: 0, %a: 1) -> () {
   // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
   // CHECK-NEXT:   hir.write_var [[V]], %x : [[T]]
   // CHECK-NEXT:   [[R:%.+]] = hir.read_var [[V]] : [[T]]
+  // CHECK-NEXT:   hir.opaque_list_create
   // CHECK-NEXT:   uir.loop
   // CHECK:        uir.phase_return yield [[R]]
   %v = hir.var : %t
   hir.write_var %v, %x : %t
   %r = hir.read_var %v : %t
   // CHECK: uir.phase 1 {
-  // CHECK-NEXT:   hir.pick [[PH0]]#1
-  // CHECK:          hir.add [[PH0]]#0, %a : [[T]]
+  // CHECK-NEXT:   [[BV:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   hir.replicate () in [[PH0]]#1 {
+  // CHECK-NEXT:     [[ADD:%.+]] = hir.add [[PH0]]#0, %a : [[T]]
+  // CHECK-NEXT:     hir.write_var [[BV]], [[ADD]]
+  // CHECK:        hir.read_var [[BV]]
   %dead = uir.expr : %t {
     %s = uir.loop : %t {
       %m = hir.add %r, %a : %t
@@ -2336,125 +2360,6 @@ uir.func @WideReceiverContent(%c: 0, %x: 1, %z: 2, %w: 2) -> (r: 2) {
 }
 
 //===----------------------------------------------------------------------===//
-// A wide break value: a phase-0 loop with two break sites delivering distinct
-// phase-2 values. Break-value extraction choice-ifies them into a receiving
-// `hir.pick` after the loop, but that pick still delivers its result two phases
-// wide. The joint extraction fixpoint feeds it back through branch extraction —
-// exactly like a branch's own wide receiving pick — so it re-tags through phase
-// 1 before the value is selected at phase 2 (the loop analog of @WideReceiver).
-
-// CHECK-LABEL: uir.func @WideMultiBreak
-uir.func @WideMultiBreak(%c: 0, %x: 2, %y: 2) -> (r: 2) {
-  %0 = hir.int_type
-  uir.signature (%0, %0, %0) -> (%0)
-} {
-  // CHECK: uir.signature
-  // CHECK: [[T:%.+]] = hir.int_type
-  %t = hir.int_type
-  // CHECK-NEXT: hir.choice_type
-  // The loop delivers a per-site break-value choice at phase 0.
-  // CHECK-NEXT: [[P0:%.+]] = uir.phase 0 {
-  // CHECK-NEXT:   [[L:%.+]] = uir.loop : [[CT:%.+]] {
-  // CHECK-NEXT:     uir.if %c {
-  // CHECK-NEXT:       [[B0:%.+]] = hir.choice 0()
-  // CHECK-NEXT:       uir.break [[B0]] : [[CT]]
-  // CHECK-NEXT:     } else {
-  // CHECK-NEXT:       [[B1:%.+]] = hir.choice 1()
-  // CHECK-NEXT:       uir.break [[B1]] : [[CT]]
-  // CHECK-NEXT:     }
-  // CHECK-NEXT:     uir.continue
-  // CHECK-NEXT:   }
-  // CHECK-NEXT:   uir.phase_return yield [[L]]
-  // CHECK-NEXT: }
-  // Phase 1 re-tags the wide receiving pick one boundary forward.
-  // CHECK-NEXT: [[P1:%.+]] = uir.phase 1 {
-  // CHECK-NEXT:   [[CH1:%.+]] = hir.pick [[P0]] : !hir.any [0 (): {
-  // CHECK-NEXT:     [[C10:%.+]] = hir.choice 0()
-  // CHECK-NEXT:     hir.yield [[C10]] : !hir.any
-  // CHECK-NEXT:   } 1 (): {
-  // CHECK-NEXT:     [[C11:%.+]] = hir.choice 1()
-  // CHECK-NEXT:     hir.yield [[C11]] : !hir.any
-  // CHECK-NEXT:   }]
-  // CHECK-NEXT:   uir.phase_return yield [[CH1]]
-  // CHECK-NEXT: }
-  // Phase 2 selects the break value.
-  // CHECK-NEXT: uir.phase 2 {
-  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P1]] : !hir.any [0 (): {
-  // CHECK-NEXT:     hir.yield %x : !hir.any
-  // CHECK-NEXT:   } 1 (): {
-  // CHECK-NEXT:     hir.yield %y : !hir.any
-  // CHECK-NEXT:   }]
-  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
-  // CHECK-NEXT: }
-  // CHECK-NEXT: uir.unreachable
-  %l = uir.loop : %t {
-    uir.if %c {
-      uir.break %x : %t
-    } else {
-      uir.break %y : %t
-    }
-    uir.continue
-  }
-  uir.return %l : %t
-}
-
-//===----------------------------------------------------------------------===//
-// Three phases wide from a loop break: the same joint fixpoint chains a re-tag
-// pick through every intermediate phase (1 and 2) before the value is selected
-// at phase 3, with no distinction from the branch-sourced @ThreeWideReceiver.
-
-// CHECK-LABEL: uir.func @ThreeWideMultiBreak
-uir.func @ThreeWideMultiBreak(%c: 0, %x: 3, %y: 3) -> (r: 3) {
-  %0 = hir.int_type
-  uir.signature (%0, %0, %0) -> (%0)
-} {
-  // CHECK: uir.signature
-  // CHECK: [[T:%.+]] = hir.int_type
-  %t = hir.int_type
-  // CHECK-NEXT: hir.choice_type
-  // CHECK-NEXT: [[P0:%.+]] = uir.phase 0 {
-  // CHECK-NEXT:   uir.loop
-  // CHECK: [[P1:%.+]] = uir.phase 1 {
-  // CHECK-NEXT:   [[CH1:%.+]] = hir.pick [[P0]] : !hir.any [0 (): {
-  // CHECK-NEXT:     [[C10:%.+]] = hir.choice 0()
-  // CHECK-NEXT:     hir.yield [[C10]] : !hir.any
-  // CHECK-NEXT:   } 1 (): {
-  // CHECK-NEXT:     [[C11:%.+]] = hir.choice 1()
-  // CHECK-NEXT:     hir.yield [[C11]] : !hir.any
-  // CHECK-NEXT:   }]
-  // CHECK-NEXT:   uir.phase_return yield [[CH1]]
-  // CHECK-NEXT: }
-  // CHECK-NEXT: [[P2:%.+]] = uir.phase 2 {
-  // CHECK-NEXT:   [[CH2:%.+]] = hir.pick [[P1]] : !hir.any [0 (): {
-  // CHECK-NEXT:     [[C20:%.+]] = hir.choice 0()
-  // CHECK-NEXT:     hir.yield [[C20]] : !hir.any
-  // CHECK-NEXT:   } 1 (): {
-  // CHECK-NEXT:     [[C21:%.+]] = hir.choice 1()
-  // CHECK-NEXT:     hir.yield [[C21]] : !hir.any
-  // CHECK-NEXT:   }]
-  // CHECK-NEXT:   uir.phase_return yield [[CH2]]
-  // CHECK-NEXT: }
-  // CHECK-NEXT: uir.phase 3 {
-  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P2]] : !hir.any [0 (): {
-  // CHECK-NEXT:     hir.yield %x : !hir.any
-  // CHECK-NEXT:   } 1 (): {
-  // CHECK-NEXT:     hir.yield %y : !hir.any
-  // CHECK-NEXT:   }]
-  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
-  // CHECK-NEXT: }
-  // CHECK-NEXT: uir.unreachable
-  %l = uir.loop : %t {
-    uir.if %c {
-      uir.break %x : %t
-    } else {
-      uir.break %y : %t
-    }
-    uir.continue
-  }
-  uir.return %l : %t
-}
-
-//===----------------------------------------------------------------------===//
 // Loop records: a const loop with dyn content pushes one record per activation
 // onto a hit list. The loop's break check is an exit-carrying divergence, so
 // each record ends in an exit-path choice: the break path an empty exited()
@@ -2712,10 +2617,12 @@ uir.func @NestedLoops(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// Break-value choice: a const loop whose break carries a dyn value is rebuilt
-// at phase -1 breaking with a choice of the value's snapshots instead; the
-// choice crosses to phase 0, where a pick reconstructs the value from the
-// snapshots. Matches @BreakValueChoice in sorted-form.mlir.
+// Break-value delivery: a const loop whose break carries a dyn value is a
+// demanded later result of the loop. The break stores its value into a
+// receiving-phase variable — ordinary later-phase content that forces the exit
+// divergence to carry a cf choice — and the loop drops its result. At phase 0 a
+// replicate replays the records: the exit arm's cf pick recomputes the value
+// from the record snapshot and writes the variable, read out after the loop.
 
 // CHECK-LABEL: uir.func @BreakValueChoice
 uir.func @BreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
@@ -2729,18 +2636,30 @@ uir.func @BreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
   %zero = hir.constant_int 0 : %t
   // CHECK-NEXT: [[ONE:%.+]] = hir.constant_int 1
   %one = hir.constant_int 1 : %t
-  // CHECK-NEXT: [[CT:%.+]] = hir.choice_type
   // CHECK-NEXT: [[P:%.+]] = uir.phase -1 {
-  // CHECK-NEXT:   [[CH:%.+]] = uir.loop ([[K:%.+]] = [[ZERO]] : [[T]]) : [[CT]] {
+  // CHECK-NEXT:   [[LIST:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop ([[K:%.+]] = [[ZERO]] : [[T]]) {
   // CHECK-NEXT:     [[DONE:%.+]] = hir.geq [[K]], %n : [[T]]
-  // CHECK-NEXT:     uir.if [[DONE]] {
+  // CHECK-NEXT:     hir.choice_type
+  // The exit arm records a cf tag carrying the value's snapshot plus a
+  // NOT_REACHED link, then breaks with no value.
+  // CHECK-NEXT:     [[CF:%.+]] = uir.if [[DONE]] : %{{.+}} {
   // CHECK-NEXT:       [[C0:%.+]] = hir.choice 0([[K]])
-  // CHECK-NEXT:       uir.break [[C0]] : [[CT]]
+  // CHECK-NEXT:       [[NR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[RE:%.+]] = hir.opaque_pack([[C0]], [[NR]])
+  // CHECK-NEXT:       hir.opaque_list_push [[LIST]], [[RE]]
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.yield [[C1]]
   // CHECK-NEXT:     }
   // CHECK-NEXT:     [[NEXT:%.+]] = hir.add [[K]], [[ONE]] : [[T]]
+  // CHECK-NEXT:     [[REACH:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     [[RC:%.+]] = hir.opaque_pack([[CF]], [[REACH]])
+  // CHECK-NEXT:     hir.opaque_list_push [[LIST]], [[RC]]
   // CHECK-NEXT:     uir.continue [[NEXT]] : [[T]]
   // CHECK-NEXT:   }
-  // CHECK-NEXT:   uir.phase_return yield [[CH]]
+  // CHECK-NEXT:   uir.phase_return yield [[LIST]]
   // CHECK-NEXT: }
   %y = uir.expr pin -1 : %t {
     %r = uir.loop (%k = %zero : %t) : %t {
@@ -2755,19 +2674,35 @@ uir.func @BreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
     uir.yield %r : %t
   }
   // CHECK-NEXT: uir.phase 0 {
-  // CHECK-NEXT:   [[Y:%.+]] = hir.pick [[P]] : !hir.any [0 ([[SK:%.+]]): {
-  // CHECK-NEXT:     [[S:%.+]] = hir.add %x, [[SK]] : [[T]]
-  // CHECK-NEXT:     hir.yield [[S]] : !hir.any
-  // CHECK-NEXT:   }]
-  // CHECK-NEXT:   uir.phase_return [[Y]] : [[T]]
+  // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   hir.replicate ([[CFR:%.+]], [[LR:%.+]]) in [[P]] {
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 ([[SK:%.+]]): {
+  // CHECK-NEXT:       [[S:%.+]] = hir.add %x, [[SK]] : [[T]]
+  // CHECK-NEXT:       hir.write_var [[V]], [[S]] : [[T]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   [[RD:%.+]] = hir.read_var [[V]] : [[T]]
+  // CHECK-NEXT:   uir.phase_return [[RD]] : [[T]]
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.unreachable
   uir.return %y : %t
 }
 
 //===----------------------------------------------------------------------===//
-// Two break sites, each carrying a distinct dyn value: one choice, two tags,
-// two pick alternatives. Structurally unlike the single-break case.
+// Two break sites in two sequential divergences, each carrying a distinct dyn
+// value: two exit-carrying divergences, each recording a cf choice whose exit
+// arm snapshots that site's value. The receiving replicate's cf picks recompute
+// each value and write the single delivery variable; only the activation that
+// broke writes. Structurally unlike the single-break case.
 
 // CHECK-LABEL: uir.func @TwoBreakValues
 uir.func @TwoBreakValues(%n: -1, %x: 0) -> (result: 0) {
@@ -2777,13 +2712,23 @@ uir.func @TwoBreakValues(%n: -1, %x: 0) -> (result: 0) {
   %t = hir.int_type
   %zero = hir.constant_int 0 : %t
   %one = hir.constant_int 1 : %t
-  // CHECK: [[CH:%.+]] = uir.loop (
-  // CHECK:   hir.choice 0([[K0:%.+]])
-  // CHECK:   uir.break
-  // CHECK:   hir.choice 1([[K1:%.+]])
-  // CHECK:   uir.break
+  // CHECK: uir.loop (
+  // First divergence: exit arm snapshots %k for its break value, breaks.
+  // CHECK:   [[CFA:%.+]] = uir.if %{{.+}} : %{{.+}} {
+  // CHECK-NEXT:     hir.choice 0([[K0:%.+]])
+  // CHECK-NEXT:     hir.choice 0()
+  // CHECK:          uir.break
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     hir.choice 1()
+  // CHECK-NEXT:     uir.yield
+  // CHECK-NEXT:   }
+  // Second divergence: nested under the first's REACHED link.
+  // CHECK:   uir.if %{{.+}} : %{{.+}} {
+  // CHECK-NEXT:     hir.choice 0([[K1:%.+]])
+  // CHECK:          uir.break
+  // CHECK:   uir.continue
   // CHECK: }
-  // CHECK: uir.phase_return yield [[CH]]
+  // CHECK: uir.phase_return yield
   %y = uir.expr pin -1 : %t {
     %r = uir.loop (%k = %zero : %t) : %t {
       %done = hir.geq %k, %n : %t
@@ -2801,23 +2746,31 @@ uir.func @TwoBreakValues(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield %r : %t
   }
-  // CHECK: hir.pick %{{.+}} : !hir.any [0 ([[SK0:%.+]]): {
-  // CHECK-NEXT:   hir.add %x, [[SK0]]
+  // CHECK: [[V:%.+]] = hir.var
+  // CHECK-NEXT: hir.replicate
+  // First divergence's cf pick: exit arm recomputes %x + snapshot, writes.
+  // CHECK-NEXT: hir.pick %{{.+}} [0 ([[SK0:%.+]]): {
+  // CHECK-NEXT:   [[S:%.+]] = hir.add %x, [[SK0]]
+  // CHECK-NEXT:   hir.write_var [[V]], [[S]]
   // CHECK-NEXT:   hir.yield
-  // CHECK-NEXT: } 1 ([[SK1:%.+]]): {
-  // CHECK-NEXT:   hir.mul %x, [[SK1]]
+  // CHECK-NEXT: } 1 (): {
   // CHECK-NEXT:   hir.yield
   // CHECK-NEXT: }]
+  // The first divergence's reach pick; its REACHED alternative dispatches the
+  // second divergence's cf pick, whose exit arm writes the second value.
+  // CHECK: hir.mul %x, [[SK1:%.+]]
+  // CHECK-NEXT: hir.write_var [[V]]
+  // CHECK: hir.read_var [[V]]
   uir.return %y : %t
 }
 
 //===----------------------------------------------------------------------===//
 // Two break sites carrying the same dyn SSA value, defined outside the loop:
-// two providers are a selection regardless of the values' identity, so the
-// value choice-ifies exactly like distinct break values. With the value
-// defined outside, the loop body holds no later-phase content at all — the
-// later-phase result alone triggers the extraction, and the pick alternatives
-// reference the value directly.
+// two providers are a selection regardless of the values' identity, so the loop
+// result is delivered through a variable exactly like distinct break values.
+// With the value defined outside, the record cf tags carry no payload and the
+// write in each exit arm references the value directly. The write_var is the
+// later-phase content that forces each divergence to carry a cf choice.
 
 // CHECK-LABEL: uir.func @SameBreakValueChoice
 uir.func @SameBreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
@@ -2827,13 +2780,17 @@ uir.func @SameBreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
   %t = hir.int_type
   %zero = hir.constant_int 0 : %t
   %one = hir.constant_int 1 : %t
-  // CHECK: [[CH:%.+]] = uir.loop (
-  // CHECK:   hir.choice 0()
-  // CHECK:   uir.break
-  // CHECK:   hir.choice 1()
-  // CHECK:   uir.break
+  // CHECK: uir.loop (
+  // CHECK:   uir.if %{{.+}} : %{{.+}} {
+  // CHECK-NEXT:     hir.choice 0()
+  // CHECK-NEXT:     hir.choice 0()
+  // CHECK:          uir.break
+  // CHECK:   uir.if %{{.+}} : %{{.+}} {
+  // CHECK-NEXT:     hir.choice 0()
+  // CHECK:          uir.break
+  // CHECK:   uir.continue
   // CHECK: }
-  // CHECK: uir.phase_return yield [[CH]]
+  // CHECK: uir.phase_return yield
   %y = uir.expr pin -1 : %t {
     %r = uir.loop (%k = %zero : %t) : %t {
       %done = hir.geq %k, %n : %t
@@ -2849,19 +2806,25 @@ uir.func @SameBreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield %r : %t
   }
-  // CHECK: hir.pick %{{.+}} : !hir.any [0 (): {
-  // CHECK-NEXT:   hir.yield %x : !hir.any
+  // CHECK: [[V:%.+]] = hir.var
+  // CHECK-NEXT: hir.replicate
+  // CHECK-NEXT: hir.pick %{{.+}} [0 (): {
+  // CHECK-NEXT:   hir.write_var [[V]], %x
+  // CHECK-NEXT:   hir.yield
   // CHECK-NEXT: } 1 (): {
-  // CHECK-NEXT:   hir.yield %x : !hir.any
+  // CHECK-NEXT:   hir.yield
   // CHECK-NEXT: }]
+  // CHECK: hir.write_var [[V]], %x
+  // CHECK: hir.read_var [[V]]
   uir.return %y : %t
 }
 
 //===----------------------------------------------------------------------===//
 // Mixed kept and later results with the result-only trigger: result 0 is a
-// const value at the loop's own phase (kept on the rebuilt loop), result 1 a
-// dyn value defined outside the loop (choice-ified). The body holds no
-// later-phase content, so the later result alone triggers the extraction.
+// const value at the loop's own phase (kept on the rebuilt loop, carried by the
+// break), result 1 a dyn value defined outside the loop (delivered through a
+// variable). The body holds no other later-phase content, so the later result's
+// write is what triggers the record extraction.
 
 // CHECK-LABEL: uir.func @MixedKeptLater
 uir.func @MixedKeptLater(%n: -1, %x: 0) -> (rc: -1, rd: 0) {
@@ -2871,13 +2834,12 @@ uir.func @MixedKeptLater(%n: -1, %x: 0) -> (rc: -1, rd: 0) {
   %t = hir.int_type
   %zero = hir.constant_int 0 : %t
   %one = hir.constant_int 1 : %t
-  // CHECK: [[CH:%.+]]:2 = uir.loop (
-  // CHECK:   hir.choice 0()
-  // CHECK:   uir.break {{%.+}}, {{%.+}} :
-  // CHECK:   hir.choice 1()
-  // CHECK:   uir.break {{%.+}}, {{%.+}} :
+  // The rebuilt loop keeps only the phase -1 result; each break carries it.
+  // CHECK: [[CH:%.+]] = uir.loop (
+  // CHECK:   uir.break {{%.+}} :
+  // CHECK:   uir.break {{%.+}} :
   // CHECK: }
-  // CHECK: uir.phase_return [[CH]]#0 : {{%.+}} yield [[CH]]#1
+  // CHECK: uir.phase_return [[CH]] : {{%.+}} yield
   %a, %b = uir.expr pin -1 : %t, %t {
     %r0, %r1 = uir.loop (%k = %zero : %t) : %t, %t {
       %done = hir.geq %k, %n : %t
@@ -2893,12 +2855,70 @@ uir.func @MixedKeptLater(%n: -1, %x: 0) -> (rc: -1, rd: 0) {
     }
     uir.yield %r0, %r1 : %t, %t
   }
-  // CHECK: hir.pick %{{.+}} : !hir.any [0 (): {
-  // CHECK-NEXT:   hir.yield %x : !hir.any
-  // CHECK-NEXT: } 1 (): {
-  // CHECK-NEXT:   hir.yield %x : !hir.any
-  // CHECK-NEXT: }]
+  // CHECK: [[V:%.+]] = hir.var
+  // CHECK-NEXT: hir.replicate
+  // CHECK-NEXT: hir.pick %{{.+}} [0 (): {
+  // CHECK-NEXT:   hir.write_var [[V]], %x
+  // CHECK: hir.write_var [[V]], %x
+  // CHECK: hir.read_var [[V]]
   uir.return %a, %b : %t, %t
+}
+
+//===----------------------------------------------------------------------===//
+// Both arms of the exit divergence break with distinct later values: the
+// divergence has no fall-through, so it blocks the loop's spine — no back-edge
+// record is pushed, and each arm records only its own cf tag and a NOT_REACHED
+// link. The receiving cf pick writes the delivery variable per arm. Exercises
+// the all-exit spine-stop in `collectPushSites`.
+
+// CHECK-LABEL: uir.func @BothArmsBreakValues
+uir.func @BothArmsBreakValues(%c: 0, %x: 1, %y: 1) -> (r: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT:   [[LIST:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop {
+  // CHECK-NEXT:     hir.choice_type
+  // CHECK-NEXT:     uir.if %c {
+  // CHECK-NEXT:       hir.choice 0()
+  // CHECK-NEXT:       hir.choice 0()
+  // CHECK-NEXT:       hir.opaque_pack
+  // CHECK-NEXT:       hir.opaque_list_push
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       hir.choice 1()
+  // CHECK-NEXT:       hir.choice 0()
+  // CHECK-NEXT:       hir.opaque_pack
+  // CHECK-NEXT:       hir.opaque_list_push
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     }
+  // No back-edge record: the spine is blocked by the all-exit divergence.
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[LIST]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.var
+  // CHECK-NEXT:   hir.replicate ({{.+}}) in
+  // CHECK-NEXT:     hir.pick %{{.+}} [0 (): {
+  // CHECK-NEXT:       hir.write_var [[V]], %x
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.write_var [[V]], %y
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK:        hir.read_var [[V]]
+  %l = uir.loop : %t {
+    uir.if %c {
+      uir.break %x : %t
+    } else {
+      uir.break %y : %t
+    }
+    uir.continue
+  }
+  uir.return %l : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -2960,10 +2980,12 @@ uir.func @NestedResultOnly(%n: -1, %x: 0) -> (result: 0) {
 
 //===----------------------------------------------------------------------===//
 // Break value composed with separate record content: the loop both accumulates
-// a dyn var per iteration (record content) and breaks with a dyn value. The
-// break value choice-ifies while the record content extracts into a replicate;
-// the reconstructing pick runs after the replicate (all iterations first, then
-// the final break value). Structurally unlike @BreakValueChoice.
+// a dyn var per iteration (record content) and breaks with a dyn value. Both
+// ride the same records: the accumulator content replays in the first segment,
+// and the break value's write replays in the exit divergence's cf pick. The
+// iteration argument snapshot is packed once and shared by both. The result
+// combines the delivery variable with the accumulator. Structurally unlike
+// @BreakValueChoice.
 
 // CHECK-LABEL: uir.func @BreakValueWithRecords
 uir.func @BreakValueWithRecords(%n: -1, %x: 0) -> (result: 0) {
@@ -2974,26 +2996,31 @@ uir.func @BreakValueWithRecords(%n: -1, %x: 0) -> (result: 0) {
   %zero = hir.constant_int 0 : %t
   %one = hir.constant_int 1 : %t
   %acc = hir.var : %t
-  // The phase -1 op yields both the hit list and the break-value choice.
-  // CHECK: [[P:%.+]]:2 = uir.phase -1 {
+  // The phase -1 op yields only the hit list; the loop drops its result.
+  // CHECK: [[P:%.+]] = uir.phase -1 {
   // CHECK-NEXT:   [[LIST:%.+]] = hir.opaque_list_create
-  // CHECK-NEXT:   [[CH:%.+]] = uir.loop ([[K:%.+]] = %{{.+}} : [[T:%.+]]) : %{{.+}} {
+  // CHECK-NEXT:   uir.loop ([[K:%.+]] = %{{.+}} : [[T:%.+]]) {
   // CHECK-NEXT:     [[DONE:%.+]] = hir.geq [[K]], %n : [[T]]
-  // CHECK-NEXT:     uir.if [[DONE]] {
-  // The break site pushes both a break-value choice and an exit-path record.
-  // CHECK-NEXT:       [[BV:%.+]] = hir.choice 0([[K]])
+  // CHECK-NEXT:     hir.choice_type
+  // The exit divergence records the shared [[K]] snapshot, a cf tag, and a
+  // NOT_REACHED link, then breaks with no value.
+  // CHECK-NEXT:     [[CF:%.+]] = uir.if [[DONE]] : %{{.+}} {
+  // CHECK-NEXT:       [[C0:%.+]] = hir.choice 0()
   // CHECK-NEXT:       [[EX:%.+]] = hir.choice 0()
-  // CHECK-NEXT:       [[RE:%.+]] = hir.opaque_pack([[K]], [[EX]])
+  // CHECK-NEXT:       [[RE:%.+]] = hir.opaque_pack([[K]], [[C0]], [[EX]])
   // CHECK-NEXT:       hir.opaque_list_push [[LIST]], [[RE]]
-  // CHECK-NEXT:       uir.break [[BV]] :
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       hir.choice 1()
+  // CHECK-NEXT:       uir.yield
   // CHECK-NEXT:     }
   // CHECK-NEXT:     [[NEXT:%.+]] = hir.add [[K]], %{{.+}} : [[T]]
   // CHECK-NEXT:     [[CO:%.+]] = hir.choice 1()
-  // CHECK-NEXT:     [[RC:%.+]] = hir.opaque_pack([[K]], [[CO]])
+  // CHECK-NEXT:     [[RC:%.+]] = hir.opaque_pack([[K]], [[CF]], [[CO]])
   // CHECK-NEXT:     hir.opaque_list_push [[LIST]], [[RC]]
   // CHECK-NEXT:     uir.continue [[NEXT]] : [[T]]
   // CHECK-NEXT:   }
-  // CHECK-NEXT:   uir.phase_return yield [[LIST]], [[CH]]
+  // CHECK-NEXT:   uir.phase_return yield [[LIST]]
   // CHECK-NEXT: }
   %y = uir.expr pin -1 : %t {
     %r = uir.loop (%k = %zero : %t) : %t {
@@ -3013,26 +3040,132 @@ uir.func @BreakValueWithRecords(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield %r : %t
   }
-  // The replicate replays the record content; the pick reconstructs the break
-  // value afterwards, and the result combines both.
+  // The replicate replays the accumulator content first, then the exit
+  // divergence's cf pick recomputes the break value and writes its variable.
   // CHECK-NEXT: uir.phase 0 {
   // CHECK-NEXT:   [[ACC:%.+]] = hir.var : [[T]]
-  // CHECK-NEXT:   hir.replicate ([[SAMP:%.+]], [[CHAIN:%.+]]) in [[P]]#0 {
-  // CHECK:          hir.pick [[CHAIN]] [0 (): {
-  // CHECK:          } 1 (): {
+  // CHECK-NEXT:   [[BV:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   hir.replicate ([[SAMP:%.+]], [[CFR:%.+]], [[LR:%.+]]) in [[P]] {
+  // CHECK-NEXT:     hir.read_var [[ACC]]
+  // CHECK-NEXT:     hir.add %{{.+}}, [[SAMP]]
+  // CHECK-NEXT:     hir.write_var [[ACC]]
+  // CHECK-NEXT:     hir.pick [[CFR]] [0 (): {
+  // CHECK-NEXT:       [[S:%.+]] = hir.add %x, [[SAMP]] : [[T]]
+  // CHECK-NEXT:       hir.write_var [[BV]], [[S]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
   // CHECK:          }]
   // CHECK:        }
-  // CHECK:        [[BVR:%.+]] = hir.pick [[P]]#1 : !hir.any [0 ([[SK:%.+]]): {
-  // CHECK-NEXT:     hir.add %x, [[SK]] : [[T]]
-  // CHECK-NEXT:     hir.yield
-  // CHECK-NEXT:   }]
-  // CHECK:        [[RD:%.+]] = hir.read_var [[ACC]] : [[T]]
-  // CHECK-NEXT:   [[SUM:%.+]] = hir.add [[BVR]], [[RD]] : [[T]]
+  // CHECK-NEXT:   [[RBV:%.+]] = hir.read_var [[BV]] : [[T]]
+  // CHECK-NEXT:   [[RD:%.+]] = hir.read_var [[ACC]] : [[T]]
+  // CHECK-NEXT:   [[SUM:%.+]] = hir.add [[RBV]], [[RD]] : [[T]]
   // CHECK-NEXT:   uir.phase_return [[SUM]] : [[T]]
   // CHECK-NEXT: }
   %rd = hir.read_var %acc : %t
   %sum = hir.add %y, %rd : %t
   uir.return %sum : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A break value whose computation is itself effectful (a var read/write slice)
+// sorts as ordinary later-phase content on the exit arm's record path. Nothing
+// is sliced out or duplicated — the slice replays once in the exit arm's cf
+// pick and writes the delivery variable. Previously rejected as a shared
+// break-value slice.
+
+// CHECK-LABEL: uir.func @SharedBreakValueSlice
+uir.func @SharedBreakValueSlice(%n: 0, %x: 0) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // CHECK: uir.phase 0 {
+  // CHECK-NEXT:   hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop {
+  // CHECK-NEXT:     hir.geq %x, %n
+  // CHECK-NEXT:     hir.choice_type
+  // CHECK-NEXT:     uir.if %{{.+}} : %{{.+}} {
+  // CHECK-NEXT:       hir.choice 0()
+  // CHECK-NEXT:       hir.choice 0()
+  // CHECK:            uir.break
+  // CHECK:     uir.continue
+  // CHECK:   }
+  // CHECK: }
+  %r = uir.loop : %t {
+    %done = hir.geq %x, %n : %t
+    uir.if %done {
+      %v = uir.expr pin 1 : %t {
+        %vv = hir.var : %t
+        hir.write_var %vv, %x : %t
+        %rr = hir.read_var %vv : %t
+        uir.yield %rr : %t
+      }
+      uir.break %v : %t
+    }
+    uir.continue
+  }
+  // The exit arm's cf pick replays the whole slice, then writes the delivery var.
+  // CHECK: [[V:%.+]] = hir.var
+  // CHECK-NEXT: hir.replicate
+  // CHECK-NEXT:   hir.pick %{{.+}} [0 (): {
+  // CHECK-NEXT:     [[VV:%.+]] = hir.var
+  // CHECK-NEXT:     hir.write_var [[VV]], %x
+  // CHECK-NEXT:     [[RR:%.+]] = hir.read_var [[VV]]
+  // CHECK-NEXT:     hir.write_var [[V]], [[RR]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK:      hir.read_var [[V]]
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A break value shared between two break sites: the value is computed once in a
+// shared segment before both divergences and replays once; each exit arm's cf
+// pick reads that one value and writes the delivery variable. No duplication,
+// so what was formerly a shared-slice rejection now sorts cleanly.
+
+// CHECK-LABEL: uir.func @SharedAcrossBreaks
+uir.func @SharedAcrossBreaks(%n: -1, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  // The shared value %s is packed once per record as the %k snapshot.
+  // CHECK: uir.loop ([[K:%.+]] = %{{.+}} : %{{.+}}) {
+  // CHECK:     hir.opaque_pack([[K]],
+  // CHECK:     uir.break
+  // CHECK:     hir.opaque_pack([[K]],
+  // CHECK:     uir.break
+  %y = uir.expr pin -1 : %t {
+    %r = uir.loop (%k = %zero : %t) : %t {
+      %s = hir.add %x, %k : %t
+      %c1 = hir.geq %k, %n : %t
+      uir.if %c1 {
+        uir.break %s : %t
+      }
+      %c2 = hir.geq %k, %one : %t
+      uir.if %c2 {
+        uir.break %s : %t
+      }
+      %next = hir.add %k, %one : %t
+      uir.continue %next : %t
+    }
+    uir.yield %r : %t
+  }
+  // The shared value is recomputed once at the top of the replay; both exit
+  // arms write it to the one delivery variable.
+  // CHECK: [[V:%.+]] = hir.var
+  // CHECK-NEXT: hir.replicate ([[SK:%.+]], %{{.+}}, %{{.+}}) in
+  // CHECK-NEXT:   [[S:%.+]] = hir.add %x, [[SK]]
+  // CHECK-NEXT:   hir.pick %{{.+}} [0 (): {
+  // CHECK-NEXT:     hir.write_var [[V]], [[S]]
+  // CHECK: hir.write_var [[V]], [[S]]
+  // CHECK: hir.read_var [[V]]
+  uir.return %y : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -5434,8 +5567,9 @@ uir.func @ForwardResultLoop(%c: 0, %y: 1) -> (result: 1) {
 
 // Per-slot on one loop: result #0's break operand is the external value %y
 // (forwards), result #1's is an iteration-dependent value computed inside the
-// loop (choice-ifies with the loop var as its snapshot). The forwarding and the
-// break-value choice apply to different result slots of the same loop.
+// loop (delivered through a variable with the loop var as its snapshot). The
+// forwarding and the variable delivery apply to different result slots of the
+// same loop.
 
 // CHECK-LABEL: uir.func @PerSlotForward
 uir.func @PerSlotForward(%c: 0, %y: 1) -> (r0: 1, r1: 1) {
@@ -5445,15 +5579,17 @@ uir.func @PerSlotForward(%c: 0, %y: 1) -> (r0: 1, r1: 1) {
   %t = hir.int_type
   %zero = hir.constant_int 0 : %t
   %one = hir.constant_int 1 : %t
-  // The loop keeps only the choice result for slot #1; slot #0 forwards.
-  // CHECK: [[CH:%.+]] = uir.loop ([[K:%.+]] = %{{.+}} : {{.+}}) : {{.+}} {
+  // The loop drops both results: slot #0 forwards, slot #1 delivers by variable.
+  // CHECK: uir.loop ([[K:%.+]] = %{{.+}} : {{.+}}) {
   // CHECK:          hir.choice 0([[K]])
   // CHECK:          uir.break
   // CHECK: uir.phase 1 {
-  // CHECK-NEXT:   [[BVR:%.+]] = hir.pick {{.+}} [0 ([[SK:%.+]]): {
-  // CHECK-NEXT:     hir.add %y, [[SK]] :
-  // CHECK-NEXT:     hir.yield
-  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   [[V:%.+]] = hir.var
+  // CHECK-NEXT:   hir.replicate
+  // CHECK-NEXT:     hir.pick %{{.+}} [0 ([[SK:%.+]]): {
+  // CHECK-NEXT:       [[S:%.+]] = hir.add %y, [[SK]] :
+  // CHECK-NEXT:       hir.write_var [[V]], [[S]]
+  // CHECK:        [[BVR:%.+]] = hir.read_var [[V]]
   // CHECK-NEXT:   uir.phase_return %y, [[BVR]] :
   // CHECK-NEXT: }
   %l:2 = uir.loop (%k = %zero : %t) : %t, %t {
@@ -5468,10 +5604,11 @@ uir.func @PerSlotForward(%c: 0, %y: 1) -> (r0: 1, r1: 1) {
   uir.return %l#0, %l#1 : %t, %t
 }
 
-// Nested internal break values still choice-ify (the coverage @NestedResultOnly
-// dropped when its external break value became a forwarding cascade): the inner
-// loop breaks with an iteration-dependent value, its receiving pick becomes the
-// outer loop's break value slice, and both loops choice-ify with nested picks.
+// Nested internal break values compose (the coverage @NestedResultOnly dropped
+// when its external break value became a forwarding cascade): the inner loop
+// breaks with an iteration-dependent value delivered through its own variable,
+// which the outer loop's exit arm reads and writes into the outer delivery
+// variable — nested replicates, one delivery variable per loop.
 
 // CHECK-LABEL: uir.func @NestedBreakValueChoice
 uir.func @NestedBreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
@@ -5481,15 +5618,15 @@ uir.func @NestedBreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
   %t = hir.int_type
   %zero = hir.constant_int 0 : %t
   %one = hir.constant_int 1 : %t
-  // CHECK: [[OCH:%.+]] = uir.loop (
-  // CHECK:   [[ICH:%.+]] = uir.loop (
+  // Both loops drop their result; each records per activation.
+  // CHECK: uir.loop (
+  // CHECK:   uir.loop (
   // CHECK:     hir.choice 0(%{{.+}})
   // CHECK:     uir.break
   // CHECK:   }
-  // CHECK:   hir.choice 0([[ICH]])
   // CHECK:   uir.break
   // CHECK: }
-  // CHECK: uir.phase_return yield [[OCH]]
+  // CHECK: uir.phase_return yield
   %y = uir.expr pin -1 : %t {
     %o = uir.loop (%k = %zero : %t) : %t {
       %done = hir.geq %k, %n : %t
@@ -5510,13 +5647,21 @@ uir.func @NestedBreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
     }
     uir.yield %o : %t
   }
-  // CHECK: hir.pick %{{.+}} : !hir.any [0 ([[ARG:%.+]]): {
-  // CHECK-NEXT:   [[IV:%.+]] = hir.pick [[ARG]] : !hir.any [0 ([[SK:%.+]]): {
-  // CHECK-NEXT:     hir.add %x, [[SK]] : %{{.+}}
-  // CHECK-NEXT:     hir.yield
-  // CHECK-NEXT:   }]
-  // CHECK-NEXT:   hir.yield [[IV]] : !hir.any
-  // CHECK-NEXT: }]
+  // Outer replicate; the outer exit arm holds the inner replicate, reads the
+  // inner delivery variable and writes the outer one.
+  // CHECK: [[OV:%.+]] = hir.var
+  // CHECK-NEXT: hir.replicate
+  // CHECK-NEXT:   hir.pick %{{.+}} [0 ([[ARG:%.+]]): {
+  // CHECK-NEXT:     [[IV:%.+]] = hir.var
+  // CHECK-NEXT:     hir.replicate ({{.+}}) in [[ARG]] {
+  // CHECK-NEXT:       hir.pick %{{.+}} [0 ([[SK:%.+]]): {
+  // CHECK-NEXT:         [[S:%.+]] = hir.add %x, [[SK]] : %{{.+}}
+  // CHECK-NEXT:         hir.write_var [[IV]], [[S]]
+  // CHECK-NEXT:         hir.yield
+  // CHECK:          }
+  // CHECK:          [[RIV:%.+]] = hir.read_var [[IV]]
+  // CHECK-NEXT:     hir.write_var [[OV]], [[RIV]]
+  // CHECK:      hir.read_var [[OV]]
   uir.return %y : %t
 }
 

@@ -108,12 +108,12 @@ uir.func @LoopBreakFloatConst(%c: 0) -> (result: 0) {
 
 // -----
 
-// A wide receiving pick inside a replicate replay body: the inner loop's break
-// value is a genuine two-provider selection of phase-2 values, so break-value
-// extraction builds a receiving pick at phase 1 that still delivers at phase 2.
-// The outer loop record-extracts that pick into its replicate replay body,
-// where the joint extraction fixpoint does not descend, so the wide pick
-// survives to the delivery rejection awaiting next-boundary re-extraction.
+// A wide break value inside a replicate replay body: the inner loop's break
+// value is a genuine two-provider selection of phase-2 values, delivered through
+// a phase-2 variable. The outer loop record-extracts that variable and its store
+// into its replicate replay body (phase 1), where the joint extraction fixpoint
+// does not descend, so the phase-2 delivery variable survives as later-phase
+// content nested inside the phase-1 replay awaiting next-boundary re-extraction.
 uir.func @WideBreakPickInReplicate(%c: 0, %x: 2, %y: 2, %n: 0) -> () {
   %0 = hir.int_type
   uir.signature (%0, %0, %0, %0) -> ()
@@ -127,7 +127,7 @@ uir.func @WideBreakPickInReplicate(%c: 0, %x: 2, %y: 2, %n: 0) -> () {
     uir.if %odone {
       uir.break
     }
-    // expected-error @below {{delivers result #0 at phase 2 instead of its own phase 1; delivering this cross-phase result is not implemented in phase sorting yet (a single-provider float value awaiting float sinking, or a wide receiving pick inside a hir.replicate replay body, which extraction does not descend into for re-extraction at the next boundary)}}
+    // expected-error @below {{at phase 2 is nested inside earlier phase 1 content; extracting this later-phase content is not implemented in phase sorting yet}}
     %inner = uir.loop : %t {
       uir.if %c {
         uir.break %x : %t
@@ -179,61 +179,50 @@ uir.func @WideLoopRecordContent(%c: 0, %x: 2) -> () {
 
 // -----
 
-// A break value shared with other later-phase effects that stay behind cannot
-// be sliced out: the entangled content (here a var written and read for the
-// break value) would be duplicated into the receiving pick. Rejected.
-uir.func @SharedBreakValueSlice(%n: 0, %x: 0) -> (result: 1) {
+// A wide break value: a phase-0 loop whose break delivers a phase-2 value. The
+// value is delivered through a receiving-phase variable, but the store must run
+// at the value's own phase (2), one phase past the record replicate (phase 1),
+// so it lands as later-phase content the replicate does not re-extract — the
+// same single-boundary wall as wide loop-record content. The retiring per-site
+// break-value choice path re-tagged wide values phase by phase; the record path
+// is single-boundary, so wide break values are a clean scaffolding rejection
+// pending re-extraction into replicate replay bodies.
+uir.func @WideMultiBreak(%c: 0, %x: 2, %y: 2) -> (r: 2) {
   %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
+  uir.signature (%0, %0, %0) -> (%0)
 } {
   %t = hir.int_type
-  %r = uir.loop : %t {
-    %done = hir.geq %x, %n : %t
-    uir.if %done {
-      %v = uir.expr pin 1 : %t {
-        // expected-error @below {{is shared between a break value and other later-phase content; not implemented in phase sorting yet}}
-        %vv = hir.var : %t
-        hir.write_var %vv, %x : %t
-        %rr = hir.read_var %vv : %t
-        uir.yield %rr : %t
-      }
-      uir.break %v : %t
+  // expected-error @below {{at phase 2 is nested inside earlier phase 1 content; extracting this later-phase content is not implemented in phase sorting yet}}
+  %l = uir.loop : %t {
+    uir.if %c {
+      uir.break %x : %t
+    } else {
+      uir.break %y : %t
     }
     uir.continue
   }
-  uir.return %r : %t
+  uir.return %l : %t
 }
 
 // -----
 
-// Two break sites carrying the same value slice: from the first site the slice
-// is used by the second break, i.e. by content outside the first site, so it is
-// rejected as a shared break-value slice.
-uir.func @SharedAcrossBreaks(%n: -1, %x: 0) -> (result: 0) {
+// Three phases wide from a loop break hits the same single-boundary wall as the
+// two-phase case: the store lands two phases past the replicate.
+uir.func @ThreeWideMultiBreak(%c: 0, %x: 3, %y: 3) -> (r: 3) {
   %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
+  uir.signature (%0, %0, %0) -> (%0)
 } {
   %t = hir.int_type
-  %zero = hir.constant_int 0 : %t
-  %one = hir.constant_int 1 : %t
-  %y = uir.expr pin -1 : %t {
-    %r = uir.loop (%k = %zero : %t) : %t {
-      // expected-error @below {{is shared between a break value and other later-phase content; not implemented in phase sorting yet}}
-      %s = hir.add %x, %k : %t
-      %c1 = hir.geq %k, %n : %t
-      uir.if %c1 {
-        uir.break %s : %t
-      }
-      %c2 = hir.geq %k, %one : %t
-      uir.if %c2 {
-        uir.break %s : %t
-      }
-      %next = hir.add %k, %one : %t
-      uir.continue %next : %t
+  // expected-error @below {{is nested inside earlier phase 1 content; extracting this later-phase content is not implemented in phase sorting yet}}
+  %l = uir.loop : %t {
+    uir.if %c {
+      uir.break %x : %t
+    } else {
+      uir.break %y : %t
     }
-    uir.yield %r : %t
+    uir.continue
   }
-  uir.return %y : %t
+  uir.return %l : %t
 }
 
 // -----

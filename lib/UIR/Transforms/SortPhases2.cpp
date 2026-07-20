@@ -112,11 +112,15 @@
 //   divergence carries demanded later-phase results, the cf pick is valued:
 //   each alternative yields the arm's operand for the result, and the pick's
 //   results reconstruct the values for the following segments. The list
-//   crosses phases as an ordinary crossing. A loop delivering a later-phase
-//   result first has that break value choice-ified: each break site carries a
-//   `hir.choice` of the value's snapshots in place of the value, and a
-//   `hir.pick` at phase p+1 after the loop reconstructs it (composing with
-//   record extraction).
+//   crosses phases as an ordinary crossing. A later-phase loop result (a break
+//   value) is not its own delivery concept: before record extraction, each such
+//   result is lowered onto a receiving-phase `hir.var`, each break storing its
+//   later operand into the variable and dropping it, and a read after the loop
+//   feeds the result's uses. The store is ordinary later-phase content on the
+//   break's record path, so the record machinery replays it once per activation
+//   in the exit divergence's cf pick — value slice, effects, and nested-
+//   divergence reconstruction included — and no content is sliced or
+//   duplicated.
 //
 // A `never`-phased value (a control-flow result no path provides) is
 // non-viral: before extraction, every real-phase use of one is rewritten to a
@@ -128,29 +132,30 @@
 // provider's operand: when that operand is defined outside the op it forwards
 // directly to the result's uses and the result drops from the op, in either
 // direction (the operand may be earlier or later than the op). Forwarding runs
-// before extraction, so branch and break-value extraction only ever see genuine
-// selections — a multi-provider result, or a single provider defined inside the
-// op whose value varies per path or iteration and so needs choice-ification
-// even at a provider count of one.
+// before extraction, so branch extraction and break-value delivery only ever
+// see genuine selections — a multi-provider result, or a single provider
+// defined inside the op whose value varies per path or iteration and so needs
+// choice-ification even at a provider count of one.
 //
-// Branch, loop-record, and break-value extraction share one fixpoint: every
-// receiving `hir.pick` a rule emits — a branch's own re-tagged pick or a loop's
-// break-value pick — re-extracts at its next boundary exactly like a user
+// Branch and loop-record extraction share one fixpoint: every receiving
+// `hir.pick` a rule emits re-extracts at its next boundary exactly like a user
 // branch, with no per-origin distinction, so a multi-provider selection crosses
 // any number of phases whatever produced it. Extraction never descends into the
 // `hir.replicate` replay bodies it emits, since those are record-dispatch
 // replay output, not analyzed phase-crossing control flow.
 //
 // The pass covers straight-line content, multi-boundary branch extraction,
-// single-boundary loop-record extraction, multi-boundary break-value choices,
-// single-provider result forwarding, and hoisting of body content earlier than
-// its enclosing frame. Inputs that need the remaining sorting machinery are
-// rejected with explicit diagnostics instead of being sorted incorrectly: a
-// single-provider value the op holds at a float phase awaiting float sinking,
-// cross-phase content inside `hir.replicate` replay bodies that extraction
-// does not descend into (wide receiving picks and wide record content, both
-// awaiting re-extraction at the next boundary), and any phase mismatch inside
-// the signature region, which this pass does not hoist or extract.
+// single-boundary loop-record extraction, break values delivered through
+// receiving-phase variables, single-provider result forwarding, and hoisting of
+// body content earlier than its enclosing frame. Inputs that need the remaining
+// sorting machinery are rejected with explicit diagnostics instead of being
+// sorted incorrectly: a single-provider value the op holds at a float phase
+// awaiting float sinking, cross-phase content inside `hir.replicate` replay
+// bodies that extraction does not descend into (wide receiving picks and wide
+// record content — a break value delivered more than one phase past its loop
+// lands here too, its store one phase past the replicate — both awaiting
+// re-extraction at the next boundary), and any phase mismatch inside the
+// signature region, which this pass does not hoist or extract.
 //
 //===----------------------------------------------------------------------===//
 
@@ -290,7 +295,7 @@ private:
   LogicalResult extractFromBranch(Operation *op, int16_t p, bool &changed);
   LogicalResult extractLoops(bool &changed);
   LogicalResult extractFromLoop(LoopOp loopOp, int16_t p);
-  FailureOr<LoopOp> extractBreakValues(LoopOp loopOp, int16_t p);
+  FailureOr<LoopOp> deliverBreakValues(LoopOp loopOp, int16_t p);
   LogicalResult forwardSingleProviderResults(bool &changed);
   LogicalResult hoistEarlierContent(bool &changed);
   SmallVector<Value> collectResultProviders(Operation *op, unsigned idx);
@@ -997,13 +1002,13 @@ static bool insideReplicate(Operation *op) {
 /// phase p+1 — the branch crossed more than one phase — the same rule
 /// choice-ifies it again at the p+1-to-p+2 boundary. This single sweep handles
 /// one boundary of every chain; the caller re-runs it (alongside loop-record
-/// and break-value extraction) until nothing changes, so a result crosses any
-/// number of phases. Each step moves a result's delivery exactly one phase
-/// forward and strictly reduces its phase distance, bounding the fixpoint. A
-/// receiving pick a *sibling* rule emitted — a break-value pick after a loop, a
-/// re-tagged wide pick — is indistinguishable from a user pick here; all are
-/// picked up by the same walk with no provenance test. Only `hir.replicate`
-/// replay interiors are excluded, per `insideReplicate`.
+/// extraction) until nothing changes, so a result crosses any number of phases.
+/// Each step moves a result's delivery exactly one phase forward and strictly
+/// reduces its phase distance, bounding the fixpoint. A receiving pick a
+/// *sibling* rule emitted — a loop record's re-tagged wide pick — is
+/// indistinguishable from a user pick here; all are picked up by the same walk
+/// with no provenance test. Only `hir.replicate` replay interiors are excluded,
+/// per `insideReplicate`.
 LogicalResult PhaseSorter::extractBranches(bool &changed) {
   SmallVector<Operation *> branchOps;
   funcOp.getBody().walk<WalkOrder::PostOrder>([&](Operation *op) {
@@ -1417,8 +1422,9 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p,
 // valued-carrier mechanism, deepening by a level per nesting.
 //
 // Only single-boundary loop-record extraction is handled here (later-phase
-// loop results are choice-ified by break-value extraction first): content more
-// than one phase later (which needs the replicate re-extracted at the next
+// loop results are lowered onto receiving-phase variables by break-value
+// delivery first, so their stores become ordinary later-phase content): content
+// more than one phase later (which needs the replicate re-extracted at the next
 // boundary) is rejected by `rejectUnimplemented`.
 
 // NOLINTBEGIN(misc-no-recursion)
@@ -1682,6 +1688,15 @@ void PhaseSorter::appendTail(BodyPlan &plan, size_t seg,
 /// sites recursively, and the plan's own terminal when it is a break/continue
 /// (the loop body's back edge, or an exit-terminated arm whose interior
 /// divergences were all passed).
+///
+/// A cf-carrying divergence all of whose arms exit (a null `cfValue` — a
+/// rebuilt branch delivers its cf result on fall-through paths only) makes the
+/// entire remainder of its plan's spine dynamically unreachable: no
+/// fall-through path leaves it. Its own arms still hold the real exits, so they
+/// are collected, but every later divergence and the plan terminal are dead and
+/// must contribute no push site — otherwise their record path would walk
+/// through the blocking divergence as a passed divergence with no cf result for
+/// `appendTail`. So the scan stops right after such a divergence's arms.
 void PhaseSorter::collectPushSites(BodyPlan &plan,
                                    SmallVectorImpl<PathStep> &path,
                                    SmallVectorImpl<PushSite> &sites) {
@@ -1701,6 +1716,9 @@ void PhaseSorter::collectPushSites(BodyPlan &plan,
       collectPushSites(*arm.plan, path, sites);
       path.pop_back();
     }
+    // An all-exit divergence blocks the spine: nothing after it is reachable.
+    if (!divergence.cfValue)
+      return;
   }
   if (isa<BreakOp, ContinueOp>(plan.terminal))
     sites.push_back({plan.terminal, {path.begin(), path.end()}});
@@ -1913,31 +1931,45 @@ static void forEachLoopBreak(LoopOp loopOp,
 }
 
 //===----------------------------------------------------------------------===//
-// Break-Value Extraction
+// Break-Value Delivery
 //===----------------------------------------------------------------------===//
 //
-// # Extract Later-Phase Loop Results as Break-Value Choices
+// # Deliver Later-Phase Loop Results Through Receiving-Phase Variables
 //
 // A `uir.loop` at phase p whose break carries a later-phase value cannot
 // deliver that value at phase p: the value materializes once the loop has run
-// to completion, in a later phase (causality, sampling-model.md §7). Break-
-// value extraction replaces the value at each break site with a phase-p
-// `hir.choice` tagging the site and carrying, as its payload, the loop-local
-// values the value's computation samples. The loop is rebuilt with the choice
-// as an extra phase-p result, and one `hir.pick` at phase p+1 after the loop
-// reconstructs the value: each site's value slice moves into that site's
-// alternative, which recomputes the value from the choice payload.
+// to completion, in a later phase (causality, sampling-model.md §7). A later
+// break value is not its own delivery concept — it is a demanded later result
+// of the loop, delivered by the record/replicate machinery like any other
+// later-phase content. This step lowers each later loop result onto a
+// receiving-phase variable so the record machinery does the rest:
 //
-// The choice is an ordinary phase-p value; the cross rule yields it out of the
-// loop's phase and the pick consumes it in phase p+1 like any other crossing.
-// Only the plain shape is lifted: a value slice shared between multiple break
-// sites, or between a break value and other later-phase content, is rejected.
+// - One `hir.var` is created for each later result slot, at the result's phase.
+// - Right before each break, one `hir.write_var` per later slot stores the
+//   break's later operand into that slot's variable, at the result's phase.
+//   The break drops its later operands and the loop drops its later result
+//   slots, so the phase-p loop and its breaks hold only phase-p values.
+// - After the loop, one `hir.read_var` per later slot reads the final value and
+//   replaces the loop result's uses.
+//
+// The write is ordinary later-phase content on the break's record path: it
+// forces the exiting divergence to carry a cf choice, replays exactly once per
+// activation in that arm's receiving `hir.pick` alternative (built by record
+// extraction below), and its value operand's own computation replays there too
+// — including a value shared between several break sites (recorded once in the
+// shared segment) or a value produced by a nested divergence (reconstructed by
+// that divergence's own valued cf pick). Because the record machinery replays
+// each path once and the write dominates its read, the variable observes the
+// value the breaking activation produced. No content is sliced or duplicated,
+// so the former shared-break-value-slice rejections dissolve.
 
-/// Extract the later-phase results of a phase-p `uir.loop` as break-value
-/// choices. See the section header for the shape and invariants. Returns the
-/// rebuilt loop; the loop is returned unchanged when it has no later-phase
-/// result.
-FailureOr<LoopOp> PhaseSorter::extractBreakValues(LoopOp loopOp, int16_t p) {
+/// Lower the later-phase results of a phase-p `uir.loop` onto receiving-phase
+/// variables written on each break and read after the loop. See the section
+/// header. Returns the rebuilt loop; the loop is returned unchanged when it has
+/// no later-phase result. The receiving reads are placed immediately after the
+/// rebuilt loop, so record extraction's replicate (inserted right after the
+/// loop) slots in ahead of them and all activations run before the read.
+FailureOr<LoopOp> PhaseSorter::deliverBreakValues(LoopOp loopOp, int16_t p) {
   Operation *op = loopOp;
 
   SmallVector<unsigned> keptIdx, laterIdx;
@@ -1954,123 +1986,53 @@ FailureOr<LoopOp> PhaseSorter::extractBreakValues(LoopOp loopOp, int16_t p) {
   auto loc = op->getLoc();
   auto anyTy = hir::AnyType::get(op->getContext());
 
-  // Collect this loop's break sites, not descending into nested loops (whose
-  // breaks target the inner loop).
-  SmallVector<BreakOp> breaks;
-  forEachLoopBreak(loopOp, [&](BreakOp breakOp) { breaks.push_back(breakOp); });
-
-  // Per break site: the later-phase values it provides, the transitive later-
-  // phase ops computing them (the value slice, which moves into the pick
-  // alternative), and the crossing values that become the choice payload.
-  struct SiteInfo {
-    SmallVector<Value> laterValues;
-    SmallVector<Operation *> slice;
-    llvm::SetVector<Value> fields;
-  };
-  SmallVector<SiteInfo> sites;
-  DenseSet<Operation *> allSliceOps;
-  for (auto breakOp : breaks) {
-    SiteInfo info;
-    // A break carries one operand per loop result (verifier-enforced), so
-    // every later result (reconstructed by the pick) and kept result (rebuilt
-    // onto the new break) below indexes in range.
-    assert(breakOp.getValues().size() == op->getNumResults() &&
-           "break under-provides the loop's results");
-    for (auto idx : laterIdx)
-      info.laterValues.push_back(breakOp.getValues()[idx]);
-
-    // Backward closure over later-phase ops inside the loop feeding the value.
-    DenseSet<Operation *> sliceSet;
-    SmallVector<Value> worklist(info.laterValues);
-    while (!worklist.empty()) {
-      auto *defOp = worklist.pop_back_val().getDefiningOp();
-      if (!defOp || !op->isProperAncestor(defOp))
-        continue;
-      if (auto ph = realPhaseOf(defOp); !ph || *ph <= p)
-        continue;
-      if (!sliceSet.insert(defOp).second)
-        continue;
-      // A slice op shared with another break site is rejected by the shared-
-      // content check below on the earlier site (the op's value feeds that
-      // other exit, which is content outside this site's slice), so this site
-      // never reaches an op already claimed by an earlier one.
-      bool fresh = allSliceOps.insert(defOp).second;
-      assert(fresh && "shared break-value slice escaped the shared-content "
-                      "check on an earlier break site");
-      (void)fresh;
-      defOp->walk([&](Operation *inner) {
-        for (auto operand : inner->getOperands())
-          worklist.push_back(operand);
-      });
-    }
-
-    // Slice ops in program order, outermost units only; reject slices
-    // entangled with content that stays behind.
-    loopOp.getBody().walk<WalkOrder::PreOrder>([&](Operation *walked) {
-      if (sliceSet.contains(walked)) {
-        info.slice.push_back(walked);
-        return WalkResult::skip();
-      }
-      return WalkResult::advance();
-    });
-    for (auto *sliceOp : info.slice)
-      for (auto *user : sliceOp->getUsers())
-        if (user != breakOp && !sliceSet.contains(user) &&
-            llvm::none_of(sliceSet,
-                          [&](Operation *s) { return s->isAncestor(user); })) {
-          sliceOp->emitOpError()
-              << "is shared between a break value and other later-phase "
-                 "content; not implemented in phase sorting yet";
-          return failure();
-        }
-
-    info.fields = collectCrossingValues(op, p, info.slice, info.slice);
-    for (auto value : info.laterValues) {
-      auto *defOp = value.getDefiningOp();
-      if (defOp && op->isProperAncestor(defOp) && !sliceSet.contains(defOp) &&
-          isRealPhase(analysis.opPhases.at(defOp)))
-        info.fields.insert(value);
-      if (auto blockArg = dyn_cast<BlockArgument>(value)) {
-        auto *owner = blockArg.getOwner()->getParentOp();
-        if (owner == op || op->isProperAncestor(owner))
-          info.fields.insert(value);
-      }
-    }
-    sites.push_back(std::move(info));
+  // One receiving-phase variable per later result slot, at the result's phase.
+  // The slot's type operand doubles as the variable's value type and the type
+  // operand of every write and the read.
+  OpBuilder builder(op);
+  SmallVector<Value> vars;
+  SmallVector<Value> varTypes;
+  SmallVector<int16_t> varPhases;
+  for (auto idx : laterIdx) {
+    int16_t resultPhase = analysis.actualPhase.at(op->getResult(idx));
+    Value varType = loopOp.getResultTypes()[idx];
+    auto varOp = hir::VarOp::create(builder, loc, anyTy, varType);
+    setPhase(varOp, resultPhase);
+    vars.push_back(varOp.getResult());
+    varTypes.push_back(varType);
+    varPhases.push_back(resultPhase);
   }
 
-  // Construct the per-site choice and rewrite each break to carry it in place
-  // of the later-phase values.
-  OpBuilder builder(op);
-  auto choiceTypeOp = hir::ChoiceTypeOp::create(builder, loc);
-  setPhase(choiceTypeOp, PhaseAnalysis::kFloatPhase);
-  Value choiceType = choiceTypeOp.getResult();
-
-  for (auto [tag, breakOp] : llvm::enumerate(breaks)) {
+  // Rewrite each break: store its later operands into the variables and drop
+  // them from the break, keeping only the phase-p results. Break arity matches
+  // the loop's results (verifier-enforced), so every slot indexes in range.
+  SmallVector<BreakOp> breaks;
+  forEachLoopBreak(loopOp, [&](BreakOp breakOp) { breaks.push_back(breakOp); });
+  for (auto breakOp : breaks) {
+    assert(breakOp.getValues().size() == op->getNumResults() &&
+           "break under-provides the loop's results");
     OpBuilder breakBuilder(breakOp);
-    auto choice = hir::ChoiceOp::create(breakBuilder, loc, anyTy,
-                                        static_cast<uint32_t>(tag),
-                                        sites[tag].fields.getArrayRef());
-    setPhase(choice, p);
+    for (auto [i, idx] : llvm::enumerate(laterIdx)) {
+      auto write = hir::WriteVarOp::create(
+          breakBuilder, loc, vars[i], breakOp.getValues()[idx], varTypes[i]);
+      setPhase(write, varPhases[i]);
+    }
     SmallVector<Value> values, typeOfValues;
     for (auto idx : keptIdx) {
       values.push_back(breakOp.getValues()[idx]);
       typeOfValues.push_back(breakOp.getTypeOfValues()[idx]);
     }
-    values.push_back(choice.getResult());
-    typeOfValues.push_back(choiceType);
     auto newBreak = BreakOp::create(breakBuilder, loc, values, typeOfValues);
     setPhase(newBreak, p);
     forget(breakOp);
     breakOp.erase();
   }
 
-  // Rebuild the loop with the kept results plus the choice result.
-  SmallVector<Type> newResultTypes(keptIdx.size() + 1, anyTy);
+  // Rebuild the loop with the kept results only.
+  SmallVector<Type> newResultTypes(keptIdx.size(), anyTy);
   SmallVector<Value> newTypeOperands;
   for (auto idx : keptIdx)
     newTypeOperands.push_back(loopOp.getResultTypes()[idx]);
-  newTypeOperands.push_back(choiceType);
   auto newLoop = LoopOp::create(builder, loc, newResultTypes, loopOp.getInits(),
                                 loopOp.getInitTypes(), newTypeOperands);
   newLoop.getBody().takeBody(loopOp.getBody());
@@ -2080,34 +2042,14 @@ FailureOr<LoopOp> PhaseSorter::extractBreakValues(LoopOp loopOp, int16_t p) {
         analysis.actualPhase.at(op->getResult(idx));
     op->getResult(idx).replaceAllUsesWith(newLoop.getResult(i));
   }
-  Value choiceResult = newLoop.getResult(keptIdx.size());
-  analysis.actualPhase[choiceResult] = p;
 
-  // Create the receiving pick right after the loop. Record extraction (in
-  // extractFromLoop below) inserts its replicate between the loop and the
-  // pick, so the break values are reconstructed after all records.
+  // Read each variable right after the loop and forward the loop result's uses.
   builder.setInsertionPointAfter(newLoop);
-  SmallVector<Type> pickResultTypes(laterIdx.size(), anyTy);
-  auto pick = hir::PickOp::create(builder, loc, pickResultTypes, choiceResult,
-                                  sites.size());
-  analysis.opPhases[pick] = p + 1;
   for (auto [i, idx] : llvm::enumerate(laterIdx)) {
-    analysis.actualPhase[pick.getResult(i)] =
-        analysis.actualPhase.at(op->getResult(idx));
-    op->getResult(idx).replaceAllUsesWith(pick.getResult(i));
-  }
-
-  for (auto [tag, site] : llvm::enumerate(sites)) {
-    auto &altBlock = pick.getAlternatives()[tag].emplaceBlock();
-    for (unsigned i = 0; i < site.fields.size(); ++i)
-      altBlock.addArgument(anyTy, loc);
-    for (auto *sliceOp : site.slice)
-      sliceOp->moveBefore(&altBlock, altBlock.end());
-    OpBuilder altBuilder(&altBlock, altBlock.end());
-    auto altYield = hir::YieldOp::create(altBuilder, loc, site.laterValues);
-    analysis.opPhases[altYield] = p + 1;
-    remapFields(altBlock, site.fields);
-    cloneFloatingUses(newLoop, altBlock);
+    auto read =
+        hir::ReadVarOp::create(builder, loc, anyTy, vars[i], varTypes[i]);
+    setPhase(read, varPhases[i]);
+    op->getResult(idx).replaceAllUsesWith(read.getResult());
   }
 
   forget(op);
@@ -2125,19 +2067,21 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
   auto loc = loopOp.getLoc();
   auto anyTy = hir::AnyType::get(loopOp.getContext());
 
-  // Later-phase loop results are break-value choices: replace each break site's
-  // later value with a phase-p choice and reconstruct it in a receiving pick
-  // after the loop. Extract these first, so their value slices are out of the
-  // way of the record analysis below; the loop is rebuilt in the process.
-  auto rebuilt = extractBreakValues(loopOp, p);
+  // Later-phase loop results are delivered through receiving-phase variables:
+  // each break stores its later operand into a variable (ordinary later-phase
+  // content on the break's record path) and a read after the loop feeds the
+  // result's uses. Lower these first, so the writes are in place as ordinary
+  // record content the analysis below picks up; the loop is rebuilt in the
+  // process.
+  auto rebuilt = deliverBreakValues(loopOp, p);
   if (failed(rebuilt))
     return failure();
   loopOp = *rebuilt;
   Operation *op = loopOp;
 
-  // Break-value extraction may have consumed the only later-phase content (the
-  // whole later part was the break value); then nothing remains to record-
-  // extract.
+  // A loop with a later result always gains write content from break-value
+  // delivery, but a kept-only loop reached here for its record content may have
+  // none left; nothing then remains to record-extract.
   if (!hasLaterContent(op, p))
     return success();
 
@@ -2368,12 +2312,12 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
 
 /// Extract later-phase content out of every phase-p `uir.loop` whose interior
 /// or results demand it, innermost first so a nested loop becomes ordinary
-/// later-phase content of its enclosing loop's records. A later-phase result
-/// is an extraction obligation on its own: its break values need not be
-/// computed inside the loop body. Sets `changed` when it rewrites any loop, so
-/// the caller's joint extraction fixpoint re-runs the receiving picks the
-/// break-value path emits through branch extraction. Replicate-interior loops
-/// are replay output and excluded, per `insideReplicate`.
+/// later-phase content of its enclosing loop's records. A later-phase result is
+/// an extraction obligation on its own: break-value delivery turns it into a
+/// receiving-phase variable store, which is later-phase content the record
+/// extraction then picks up. Sets `changed` when it rewrites any loop, so the
+/// caller's joint extraction fixpoint re-runs. Replicate-interior loops are
+/// replay output and excluded, per `insideReplicate`.
 LogicalResult PhaseSorter::extractLoops(bool &changed) {
   SmallVector<LoopOp> loops;
   funcOp.getBody().walk<WalkOrder::PostOrder>([&](LoopOp op) {
@@ -2419,16 +2363,17 @@ LogicalResult PhaseSorter::extractLoops(bool &changed) {
 // The externality of the provider, not its count, is the boundary between
 // forwarding and selection. Only a single-provider result whose operand is
 // defined outside the op forwards; everything else is a genuine selection left
-// to branch and break-value extraction, which run *after* this step. Running
-// forwarding first means extraction only ever sees selections: a multi-provider
-// result (choice-ified regardless of distance), or a single provider defined
-// *inside* the op — later-phase arm content or an iteration-snapshotted break
-// value, where the interior value genuinely varies per path or iteration and so
-// needs choice-ification even at a provider count of one. A multi-provider
-// result is skipped here without inspecting its operands. Never results were
-// already severed by never-forwarding. A single provider defined inside the op
-// at an earlier phase (backward interior content) or a non-real float phase
-// needs hoisting or float sinking and is left for the corresponding rejection.
+// to branch extraction and break-value delivery, which run *after* this step.
+// Running forwarding first means those steps only ever see selections: a
+// multi-provider result (delivered regardless of distance), or a single
+// provider defined *inside* the op — later-phase arm content or an
+// iteration-snapshotted break value, where the interior value genuinely varies
+// per path or iteration and so cannot forward even at a provider count of one.
+// A multi-provider result is skipped here without inspecting its operands.
+// Never results were already severed by never-forwarding. A single provider
+// defined inside the op at an earlier phase (backward interior content) or a
+// non-real float phase needs hoisting or float sinking and is left for the
+// corresponding rejection.
 
 /// The terminator operands delivering result `idx` of a control-flow op from
 /// its reachable carriers: the yield operands of a branch's reachable,
@@ -2605,8 +2550,8 @@ LogicalResult PhaseSorter::forwardSingleProviderResults(bool &changed) {
       if (vph == p || vph == PhaseAnalysis::kNeverPhase)
         continue;
       // Only a single-provider result is a transparent forwarding; a
-      // multi-provider selection is left for branch/break-value extraction to
-      // choice-ify, and its provider operands are irrelevant here.
+      // multi-provider selection is left for branch extraction or break-value
+      // delivery, and its provider operands are irrelevant here.
       auto providers = collectResultProviders(op, idx);
       if (providers.size() != 1)
         continue;
@@ -2748,11 +2693,13 @@ static std::string phaseName(int16_t phase) {
 ///
 /// - Ops delivering a result at a phase different from their own phase. Single-
 ///   provider results whose operand is defined outside the op were forwarded
-///   above, and choice-ification obligations (a result provided by more than
-///   one terminator, or a single provider defined inside the op at a later real
-///   phase) were lifted into a choice plus a receiving pick by branch and
-///   break-value extraction; never-produced results are skipped here (their
-///   consumers are already `uir.unreachable_value`, so the result is unused).
+///   above, branch selection obligations (a result provided by more than one
+///   terminator, or a single provider defined inside the op at a later real
+///   phase) were lifted into a choice plus a receiving pick by branch
+///   extraction, and later-phase loop results were lowered onto receiving-phase
+///   variables by break-value delivery; never-produced results are skipped here
+///   (their consumers are already `uir.unreachable_value`, so the result is
+///   unused).
 ///   Two residuals remain: a single-provider value the op holds at a non-real
 ///   float phase, which neither forwards (its provider is defined inside the
 ///   op, not iteration-invariant external content) nor choice-ifies (a float
@@ -3084,15 +3031,14 @@ LogicalResult PhaseSorter::run() {
     if (!changed)
       break;
   }
-  // Branch, loop-record, and break-value extraction share one fixpoint. Each
-  // rule emits receiving `hir.pick`s (and `hir.replicate`s) that may themselves
-  // deliver a later-phase result, and every such pick re-extracts at its next
-  // boundary exactly like a user branch, regardless of which rule emitted it —
-  // a break-value pick a loop leaves behind is fed back through branch
-  // extraction just like a wide branch's own receiving pick. A single sweep of
-  // each rule moves every result's delivery one phase forward, strictly
-  // reducing its phase distance, so alternating the sweeps until neither
-  // changes terminates in at most the maximum result-phase distance rounds.
+  // Branch and loop-record extraction share one fixpoint. Each rule emits
+  // receiving `hir.pick`s (and `hir.replicate`s) that may themselves deliver a
+  // later-phase result, and every such pick re-extracts at its next boundary
+  // exactly like a user branch, regardless of which rule emitted it. A single
+  // sweep of each rule moves every result's delivery one phase forward,
+  // strictly reducing its phase distance, so alternating the sweeps until
+  // neither changes terminates in at most the maximum result-phase distance
+  // rounds.
   while (true) {
     bool changed = false;
     if (failed(extractBranches(changed)))
