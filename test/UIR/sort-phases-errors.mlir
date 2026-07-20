@@ -98,7 +98,7 @@ uir.func @LoopBreakFloatConst(%c: 0) -> (result: 0) {
   uir.signature (%0) -> (%0)
 } {
   %t = hir.int_type
-  // expected-error @below {{delivers result #0 at phase float instead of its own phase 0; delivering this cross-phase result is not implemented in phase sorting yet (a multi-provider selection from loop or break-value extraction whose receiving pick crosses more than one phase, or a single-provider float value that neither forwards nor choice-ifies)}}
+  // expected-error @below {{delivers result #0 at phase float instead of its own phase 0; delivering this cross-phase result is not implemented in phase sorting yet (a single-provider float value awaiting float sinking, or a wide receiving pick inside a hir.replicate replay body, which extraction does not descend into for re-extraction at the next boundary)}}
   %l = uir.loop : %t {
     %five = hir.constant_int 5 : %t
     uir.break %five : %t
@@ -108,27 +108,73 @@ uir.func @LoopBreakFloatConst(%c: 0) -> (result: 0) {
 
 // -----
 
-// A genuine multi-provider wide break value: a phase-0 loop with two break
-// sites delivering distinct phase-2 values. Break-value extraction choice-ifies
-// them into a receiving `hir.pick` after the loop, but that pick still delivers
-// its result two phases wide. Branch extraction's re-extraction fixpoint runs
-// before break-value extraction, so this pick is never fed back through it and
-// the wide delivery is rejected instead of mis-sorted.
-uir.func @WideMultiBreak(%c: 0, %x: 2, %y: 2) -> (r: 2) {
+// A wide receiving pick inside a replicate replay body: the inner loop's break
+// value is a genuine two-provider selection of phase-2 values, so break-value
+// extraction builds a receiving pick at phase 1 that still delivers at phase 2.
+// The outer loop record-extracts that pick into its replicate replay body,
+// where the joint extraction fixpoint does not descend, so the wide pick
+// survives to the delivery rejection awaiting next-boundary re-extraction.
+uir.func @WideBreakPickInReplicate(%c: 0, %x: 2, %y: 2, %n: 0) -> () {
   %0 = hir.int_type
-  uir.signature (%0, %0, %0) -> (%0)
+  uir.signature (%0, %0, %0, %0) -> ()
 } {
   %t = hir.int_type
-  // expected-error @below {{delivers result #0 at phase 2 instead of its own phase 1; delivering this cross-phase result is not implemented in phase sorting yet (a multi-provider selection from loop or break-value extraction whose receiving pick crosses more than one phase, or a single-provider float value that neither forwards nor choice-ifies)}}
-  %l = uir.loop : %t {
-    uir.if %c {
-      uir.break %x : %t
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  uir.loop (%j = %zero : %t) {
+    %odone = hir.geq %j, %n : %t
+    uir.if %odone {
+      uir.break
+    }
+    // expected-error @below {{delivers result #0 at phase 2 instead of its own phase 1; delivering this cross-phase result is not implemented in phase sorting yet (a single-provider float value awaiting float sinking, or a wide receiving pick inside a hir.replicate replay body, which extraction does not descend into for re-extraction at the next boundary)}}
+    %inner = uir.loop : %t {
+      uir.if %c {
+        uir.break %x : %t
+      } else {
+        uir.break %y : %t
+      }
+      uir.continue
+    }
+    uir.expr pin 2 {
+      hir.write_var %acc, %inner : %t
+      uir.yield
+    }
+    %next = hir.add %j, %one : %t
+    uir.continue %next : %t
+  }
+  uir.return
+}
+
+// -----
+
+// Wide loop-record content: a phase-0 loop whose if-divergence yields a phase-2
+// value consumed by phase-2 content after it. Record extraction builds a
+// replicate at phase 1 whose reach/cf picks hold that phase-2 content in an
+// arm — content two phases past the loop that the replicate would have to
+// re-extract. Extraction does not descend into replicate replay bodies, so the
+// wide content stays a clean rejection at its own location instead of being
+// mis-spliced into the replay.
+uir.func @WideLoopRecordContent(%c: 0, %x: 2) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  %t = hir.int_type
+  %acc = hir.var : %t
+  uir.loop {
+    %r = uir.if %c : %t {
+      uir.break
     } else {
-      uir.break %y : %t
+      uir.yield %x : %t
+    }
+    uir.expr pin 2 {
+      // expected-error @below {{at phase 2 is nested inside earlier phase 1 content; extracting this later-phase content is not implemented in phase sorting yet}}
+      hir.write_var %acc, %r : %t
+      uir.yield
     }
     uir.continue
   }
-  uir.return %l : %t
+  uir.return
 }
 
 // -----

@@ -2336,6 +2336,125 @@ uir.func @WideReceiverContent(%c: 0, %x: 1, %z: 2, %w: 2) -> (r: 2) {
 }
 
 //===----------------------------------------------------------------------===//
+// A wide break value: a phase-0 loop with two break sites delivering distinct
+// phase-2 values. Break-value extraction choice-ifies them into a receiving
+// `hir.pick` after the loop, but that pick still delivers its result two phases
+// wide. The joint extraction fixpoint feeds it back through branch extraction —
+// exactly like a branch's own wide receiving pick — so it re-tags through phase
+// 1 before the value is selected at phase 2 (the loop analog of @WideReceiver).
+
+// CHECK-LABEL: uir.func @WideMultiBreak
+uir.func @WideMultiBreak(%c: 0, %x: 2, %y: 2) -> (r: 2) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // The loop delivers a per-site break-value choice at phase 0.
+  // CHECK-NEXT: [[P0:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[L:%.+]] = uir.loop : [[CT:%.+]] {
+  // CHECK-NEXT:     uir.if %c {
+  // CHECK-NEXT:       [[B0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       uir.break [[B0]] : [[CT]]
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[B1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.break [[B1]] : [[CT]]
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L]]
+  // CHECK-NEXT: }
+  // Phase 1 re-tags the wide receiving pick one boundary forward.
+  // CHECK-NEXT: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[CH1:%.+]] = hir.pick [[P0]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C10:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C10]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[C11:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C11]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[CH1]]
+  // CHECK-NEXT: }
+  // Phase 2 selects the break value.
+  // CHECK-NEXT: uir.phase 2 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P1]] : !hir.any [0 (): {
+  // CHECK-NEXT:     hir.yield %x : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield %y : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %l = uir.loop : %t {
+    uir.if %c {
+      uir.break %x : %t
+    } else {
+      uir.break %y : %t
+    }
+    uir.continue
+  }
+  uir.return %l : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Three phases wide from a loop break: the same joint fixpoint chains a re-tag
+// pick through every intermediate phase (1 and 2) before the value is selected
+// at phase 3, with no distinction from the branch-sourced @ThreeWideReceiver.
+
+// CHECK-LABEL: uir.func @ThreeWideMultiBreak
+uir.func @ThreeWideMultiBreak(%c: 0, %x: 3, %y: 3) -> (r: 3) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // CHECK-NEXT: [[P0:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   uir.loop
+  // CHECK: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[CH1:%.+]] = hir.pick [[P0]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C10:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C10]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[C11:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C11]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[CH1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P2:%.+]] = uir.phase 2 {
+  // CHECK-NEXT:   [[CH2:%.+]] = hir.pick [[P1]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C20:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C20]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[C21:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C21]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[CH2]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 3 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P2]] : !hir.any [0 (): {
+  // CHECK-NEXT:     hir.yield %x : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield %y : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %l = uir.loop : %t {
+    uir.if %c {
+      uir.break %x : %t
+    } else {
+      uir.break %y : %t
+    }
+    uir.continue
+  }
+  uir.return %l : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Loop records: a const loop with dyn content pushes one record per activation
 // onto a hit list. The loop's break check is an exit-carrying divergence, so
 // each record ends in an exit-path choice: the break path an empty exited()

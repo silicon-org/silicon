@@ -133,19 +133,24 @@
 // op whose value varies per path or iteration and so needs choice-ification
 // even at a provider count of one.
 //
-// The pass covers straight-line content, branch extraction (single-boundary
-// and, by re-extracting each receiving pick to a fixpoint, multi-boundary),
-// single-boundary loop-record extraction, break-value choices, single-provider
-// result forwarding, and hoisting of body content earlier than its enclosing
-// frame. Inputs that need the remaining sorting machinery are rejected with
-// explicit diagnostics instead of being sorted incorrectly: a cross-phase
-// result whose delivery this pass cannot complete (a receiving pick that
-// loop-record or break-value extraction emits more than one phase wide, since
-// those run after the branch fixpoint and are not fed back through it, or a
-// single-provider value the op holds at a float phase awaiting float sinking),
-// later-phase content more than one phase away from its control flow, and any
-// phase mismatch inside the signature region, which this pass does not hoist or
-// extract.
+// Branch, loop-record, and break-value extraction share one fixpoint: every
+// receiving `hir.pick` a rule emits — a branch's own re-tagged pick or a loop's
+// break-value pick — re-extracts at its next boundary exactly like a user
+// branch, with no per-origin distinction, so a multi-provider selection crosses
+// any number of phases whatever produced it. Extraction never descends into the
+// `hir.replicate` replay bodies it emits, since those are record-dispatch
+// replay output, not analyzed phase-crossing control flow.
+//
+// The pass covers straight-line content, multi-boundary branch extraction,
+// single-boundary loop-record extraction, multi-boundary break-value choices,
+// single-provider result forwarding, and hoisting of body content earlier than
+// its enclosing frame. Inputs that need the remaining sorting machinery are
+// rejected with explicit diagnostics instead of being sorted incorrectly: a
+// single-provider value the op holds at a float phase awaiting float sinking,
+// cross-phase content inside `hir.replicate` replay bodies that extraction
+// does not descend into (wide receiving picks and wide record content, both
+// awaiting re-extraction at the next boundary), and any phase mismatch inside
+// the signature region, which this pass does not hoist or extract.
 //
 //===----------------------------------------------------------------------===//
 
@@ -281,9 +286,9 @@ private:
   LogicalResult decomposeCalls();
   LogicalResult decomposeCall(CallOp callOp);
   LogicalResult forwardNeverValues();
-  LogicalResult extractBranches();
+  LogicalResult extractBranches(bool &changed);
   LogicalResult extractFromBranch(Operation *op, int16_t p, bool &changed);
-  LogicalResult extractLoops();
+  LogicalResult extractLoops(bool &changed);
   LogicalResult extractFromLoop(LoopOp loopOp, int16_t p);
   FailureOr<LoopOp> extractBreakValues(LoopOp loopOp, int16_t p);
   LogicalResult forwardSingleProviderResults(bool &changed);
@@ -955,10 +960,26 @@ unsigned PhaseSorter::countResultProviders(Operation *op, unsigned idx) {
   return count;
 }
 
+/// Whether `op` sits inside a `hir.replicate` body. A replicate body is
+/// loop-record replay output — record-dispatch cf/reach picks, not the analyzed
+/// phase-crossing selection control flow extraction models — so extraction does
+/// not descend into it, exactly as the coverage check treats replicate
+/// interiors as non-analyzed input. Single-boundary replays deliver at their
+/// own phase and extraction would ignore them anyway; skipping keeps a wide
+/// loop-record replay a clean rejection rather than a mis-spliced choice.
+static bool insideReplicate(Operation *op) {
+  for (auto *parent = op->getParentOp(); parent; parent = parent->getParentOp())
+    if (isa<hir::ReplicateOp>(parent))
+      return true;
+  return false;
+}
+
 /// Extract later-phase content out of every phase-p branch (`uir.if` or
 /// `hir.pick`) whose interior or results demand it, innermost first — in one
 /// walk across both op kinds — so a nested branch becomes ordinary
-/// later-phase content of its enclosing branch regardless of kind.
+/// later-phase content of its enclosing branch regardless of kind. Sets
+/// `changed` when it rewrites any branch, so the caller's joint extraction
+/// fixpoint can re-run it.
 ///
 /// A branch is extracted only when every one of its results is deliverable at
 /// its own phase after extraction: results already at phase p stay, and
@@ -974,61 +995,59 @@ unsigned PhaseSorter::countResultProviders(Operation *op, unsigned idx) {
 /// Extraction applies to its own output: a receiving `hir.pick` is an ordinary
 /// divergence, so if its reconstructed result still lives later than its own
 /// phase p+1 — the branch crossed more than one phase — the same rule
-/// choice-ifies it again at the p+1-to-p+2 boundary. The walk therefore runs to
-/// a fixpoint: each step moves a result's delivery exactly one phase forward
-/// and strictly reduces its phase distance, so re-walking until no branch
-/// extracts terminates in at most the maximum result-phase distance rounds. A
-/// synthesized receiving pick is indistinguishable from a user pick here; both
-/// are picked up by the same walk with no provenance test.
-LogicalResult PhaseSorter::extractBranches() {
-  while (true) {
-    SmallVector<Operation *> branchOps;
-    funcOp.getBody().walk<WalkOrder::PostOrder>([&](Operation *op) {
-      if (isa<IfOp, hir::PickOp>(op) && realPhaseOf(op))
-        branchOps.push_back(op);
-    });
+/// choice-ifies it again at the p+1-to-p+2 boundary. This single sweep handles
+/// one boundary of every chain; the caller re-runs it (alongside loop-record
+/// and break-value extraction) until nothing changes, so a result crosses any
+/// number of phases. Each step moves a result's delivery exactly one phase
+/// forward and strictly reduces its phase distance, bounding the fixpoint. A
+/// receiving pick a *sibling* rule emitted — a break-value pick after a loop, a
+/// re-tagged wide pick — is indistinguishable from a user pick here; all are
+/// picked up by the same walk with no provenance test. Only `hir.replicate`
+/// replay interiors are excluded, per `insideReplicate`.
+LogicalResult PhaseSorter::extractBranches(bool &changed) {
+  SmallVector<Operation *> branchOps;
+  funcOp.getBody().walk<WalkOrder::PostOrder>([&](Operation *op) {
+    if (isa<IfOp, hir::PickOp>(op) && realPhaseOf(op) && !insideReplicate(op))
+      branchOps.push_back(op);
+  });
 
-    bool changed = false;
-    for (auto *op : branchOps) {
-      int16_t p = *realPhaseOf(op);
+  for (auto *op : branchOps) {
+    int16_t p = *realPhaseOf(op);
 
-      // Classify the results. Extraction is viable only if none diverge except
-      // by choice-ification.
-      bool extractable = true;
-      bool hasChoiceResult = false;
-      for (auto result : op->getResults()) {
-        int16_t vph = analysis.actualPhase.at(result);
-        if (vph == p)
-          continue; // Kept at the op's phase.
-        if (isRealPhase(vph) && vph > p) {
-          // A later-phase result choice-ifies whenever a reaching arm provides
-          // it. The whole op is non-diverging (a real later phase implies some
-          // arm rejoins), so the provider count is at least one: greater than
-          // one for a genuine selection, exactly one when a single reaching arm
-          // delivers the result while every other arm provably diverges. Both
-          // reconstruct in the receiving pick, so both extract; the diverging
-          // arms become dead receiving alternatives the choice never selects.
-          assert(countResultProviders(op, result.getResultNumber()) >= 1 &&
-                 "a later-phase result must have a reaching provider");
-          hasChoiceResult = true;
-          continue;
-        }
-        // A never result (zero reaching providers; the whole op diverges) is
-        // left unused after never-forwarding, its consumers already
-        // `uir.unreachable_value`, so the op is not extracted.
-        extractable = false;
-        break;
-      }
-      if (!extractable)
+    // Classify the results. Extraction is viable only if none diverge except
+    // by choice-ification.
+    bool extractable = true;
+    bool hasChoiceResult = false;
+    for (auto result : op->getResults()) {
+      int16_t vph = analysis.actualPhase.at(result);
+      if (vph == p)
+        continue; // Kept at the op's phase.
+      if (isRealPhase(vph) && vph > p) {
+        // A later-phase result choice-ifies whenever a reaching arm provides
+        // it. The whole op is non-diverging (a real later phase implies some
+        // arm rejoins), so the provider count is at least one: greater than
+        // one for a genuine selection, exactly one when a single reaching arm
+        // delivers the result while every other arm provably diverges. Both
+        // reconstruct in the receiving pick, so both extract; the diverging
+        // arms become dead receiving alternatives the choice never selects.
+        assert(countResultProviders(op, result.getResultNumber()) >= 1 &&
+               "a later-phase result must have a reaching provider");
+        hasChoiceResult = true;
         continue;
-      if (!hasChoiceResult && !hasLaterContent(op, p))
-        continue; // Nothing to extract; wraps wholesale.
-
-      if (failed(extractFromBranch(op, p, changed)))
-        return failure();
-    }
-    if (!changed)
+      }
+      // A never result (zero reaching providers; the whole op diverges) is
+      // left unused after never-forwarding, its consumers already
+      // `uir.unreachable_value`, so the op is not extracted.
+      extractable = false;
       break;
+    }
+    if (!extractable)
+      continue;
+    if (!hasChoiceResult && !hasLaterContent(op, p))
+      continue; // Nothing to extract; wraps wholesale.
+
+    if (failed(extractFromBranch(op, p, changed)))
+      return failure();
   }
   return success();
 }
@@ -2351,11 +2370,14 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
 /// or results demand it, innermost first so a nested loop becomes ordinary
 /// later-phase content of its enclosing loop's records. A later-phase result
 /// is an extraction obligation on its own: its break values need not be
-/// computed inside the loop body.
-LogicalResult PhaseSorter::extractLoops() {
+/// computed inside the loop body. Sets `changed` when it rewrites any loop, so
+/// the caller's joint extraction fixpoint re-runs the receiving picks the
+/// break-value path emits through branch extraction. Replicate-interior loops
+/// are replay output and excluded, per `insideReplicate`.
+LogicalResult PhaseSorter::extractLoops(bool &changed) {
   SmallVector<LoopOp> loops;
   funcOp.getBody().walk<WalkOrder::PostOrder>([&](LoopOp op) {
-    if (realPhaseOf(op))
+    if (realPhaseOf(op) && !insideReplicate(op))
       loops.push_back(op);
   });
 
@@ -2367,6 +2389,7 @@ LogicalResult PhaseSorter::extractLoops() {
     });
     if (!hasLaterResult && !hasLaterContent(loopOp, p))
       continue;
+    changed = true;
     if (failed(extractFromLoop(loopOp, p)))
       return failure();
   }
@@ -2730,15 +2753,15 @@ static std::string phaseName(int16_t phase) {
 ///   phase) were lifted into a choice plus a receiving pick by branch and
 ///   break-value extraction; never-produced results are skipped here (their
 ///   consumers are already `uir.unreachable_value`, so the result is unused).
-///   Two residuals remain. Branch extraction re-extracts its own receiving
-///   picks to a fixpoint, so a branch-sourced multi-provider selection crosses
-///   any number of phases; but loop-record and break-value extraction run after
-///   that fixpoint, so a multi-provider selection whose receiving pick they
-///   emit at more than one phase wide is not fed back through extraction and
-///   surfaces here. And a single-provider value the op holds at a non-real
+///   Two residuals remain: a single-provider value the op holds at a non-real
 ///   float phase, which neither forwards (its provider is defined inside the
 ///   op, not iteration-invariant external content) nor choice-ifies (a float
-///   phase is not a later real phase), and so awaits float sinking.
+///   phase is not a later real phase), and so awaits float sinking; and a wide
+///   receiving pick nested inside a `hir.replicate` replay body — the joint
+///   extraction fixpoint feeds every multi-provider selection outside replay
+///   bodies back through extraction, but it does not descend into replicates,
+///   so a wide pick emitted there awaits the same next-boundary re-extraction
+///   as wide replicate content in the parent-phase check below.
 /// - Anchored content whose phase differs from its parent frame's phase. In the
 ///   body, hoisting already lifted every op earlier than its frame out, so a
 ///   residual is strictly later than its frame: branch content is handled by
@@ -2778,11 +2801,10 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
               << phaseName(valueIt->second) << " instead of its own phase "
               << phaseName(opPhase)
               << "; delivering this cross-phase result is not implemented in "
-                 "phase sorting yet (a multi-provider selection from loop or "
-                 "break-value extraction whose receiving pick crosses more "
-                 "than "
-                 "one phase, or a single-provider float value that neither "
-                 "forwards nor choice-ifies)";
+                 "phase sorting yet (a single-provider float value awaiting "
+                 "float sinking, or a wide receiving pick inside a "
+                 "hir.replicate replay body, which extraction does not "
+                 "descend into for re-extraction at the next boundary)";
           return WalkResult::interrupt();
         }
       }
@@ -3062,10 +3084,24 @@ LogicalResult PhaseSorter::run() {
     if (!changed)
       break;
   }
-  if (failed(extractBranches()))
-    return failure();
-  if (failed(extractLoops()))
-    return failure();
+  // Branch, loop-record, and break-value extraction share one fixpoint. Each
+  // rule emits receiving `hir.pick`s (and `hir.replicate`s) that may themselves
+  // deliver a later-phase result, and every such pick re-extracts at its next
+  // boundary exactly like a user branch, regardless of which rule emitted it —
+  // a break-value pick a loop leaves behind is fed back through branch
+  // extraction just like a wide branch's own receiving pick. A single sweep of
+  // each rule moves every result's delivery one phase forward, strictly
+  // reducing its phase distance, so alternating the sweeps until neither
+  // changes terminates in at most the maximum result-phase distance rounds.
+  while (true) {
+    bool changed = false;
+    if (failed(extractBranches(changed)))
+      return failure();
+    if (failed(extractLoops(changed)))
+      return failure();
+    if (!changed)
+      break;
+  }
   if (failed(rejectUnimplemented()))
     return failure();
   if (failed(sortRegion(funcOp.getSignature())))
