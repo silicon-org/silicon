@@ -98,7 +98,7 @@ uir.func @LoopBreakFloatConst(%c: 0) -> (result: 0) {
   uir.signature (%0) -> (%0)
 } {
   %t = hir.int_type
-  // expected-error @below {{delivers result #0 at phase float instead of its own phase 0; delivering this cross-phase result is not implemented in phase sorting yet (a single-provider float value awaiting float sinking, or a wide receiving pick inside a hir.replicate replay body, which extraction does not descend into for re-extraction at the next boundary)}}
+  // expected-error @below {{delivers result #0 at phase float instead of its own phase 0; delivering this cross-phase result is not implemented in phase sorting yet (a single-provider float value awaiting float sinking)}}
   %l = uir.loop : %t {
     %five = hir.constant_int 5 : %t
     uir.break %five : %t
@@ -108,121 +108,28 @@ uir.func @LoopBreakFloatConst(%c: 0) -> (result: 0) {
 
 // -----
 
-// A wide break value inside a replicate replay body: the inner loop's break
-// value is a genuine two-provider selection of phase-2 values, delivered through
-// a phase-2 variable. The outer loop record-extracts that variable and its store
-// into its replicate replay body (phase 1), where the joint extraction fixpoint
-// does not descend, so the phase-2 delivery variable survives as later-phase
-// content nested inside the phase-1 replay awaiting next-boundary re-extraction.
-uir.func @WideBreakPickInReplicate(%c: 0, %x: 2, %y: 2, %n: 0) -> () {
-  %0 = hir.int_type
-  uir.signature (%0, %0, %0, %0) -> ()
-} {
-  %t = hir.int_type
-  %zero = hir.constant_int 0 : %t
-  %one = hir.constant_int 1 : %t
-  %acc = hir.var : %t
-  uir.loop (%j = %zero : %t) {
-    %odone = hir.geq %j, %n : %t
-    uir.if %odone {
-      uir.break
-    }
-    // expected-error @below {{at phase 2 is nested inside earlier phase 1 content; extracting this later-phase content is not implemented in phase sorting yet}}
-    %inner = uir.loop : %t {
-      uir.if %c {
-        uir.break %x : %t
-      } else {
-        uir.break %y : %t
-      }
-      uir.continue
-    }
-    uir.expr pin 2 {
-      hir.write_var %acc, %inner : %t
-      uir.yield
-    }
-    %next = hir.add %j, %one : %t
-    uir.continue %next : %t
-  }
-  uir.return
-}
-
-// -----
-
-// Wide loop-record content: a phase-0 loop whose if-divergence yields a phase-2
-// value consumed by phase-2 content after it. Record extraction builds a
-// replicate at phase 1 whose reach/cf picks hold that phase-2 content in an
-// arm — content two phases past the loop that the replicate would have to
-// re-extract. Extraction does not descend into replicate replay bodies, so the
-// wide content stays a clean rejection at its own location instead of being
-// mis-spliced into the replay.
-uir.func @WideLoopRecordContent(%c: 0, %x: 2) -> () {
+// Later-phase content in a provably diverging branch arm (a breakless loop
+// before the yield) has no reaching arm to extract into: branch extraction
+// leaves the branch untouched, and the content surfaces as a nested-content
+// rejection once the extraction fixpoint settles.
+uir.func @DivergingArmLaterContent(%c: 0, %x: 1) -> () {
   %0 = hir.int_type
   uir.signature (%0, %0) -> ()
 } {
   %t = hir.int_type
-  %acc = hir.var : %t
-  uir.loop {
-    %r = uir.if %c : %t {
-      uir.break
-    } else {
-      uir.yield %x : %t
+  %v = hir.var : %t
+  uir.if %c {
+    uir.loop {
+      uir.continue
     }
-    uir.expr pin 2 {
-      // expected-error @below {{at phase 2 is nested inside earlier phase 1 content; extracting this later-phase content is not implemented in phase sorting yet}}
-      hir.write_var %acc, %r : %t
+    uir.expr pin 1 {
+      // expected-error @below {{at phase 1 is nested inside earlier phase 0 content; extracting this later-phase content is not implemented in phase sorting yet}}
+      hir.write_var %v, %x : %t
       uir.yield
     }
-    uir.continue
+    uir.yield
   }
   uir.return
-}
-
-// -----
-
-// A wide break value: a phase-0 loop whose break delivers a phase-2 value. The
-// value is delivered through a receiving-phase variable, but the store must run
-// at the value's own phase (2), one phase past the record replicate (phase 1),
-// so it lands as later-phase content the replicate does not re-extract — the
-// same single-boundary wall as wide loop-record content. The retiring per-site
-// break-value choice path re-tagged wide values phase by phase; the record path
-// is single-boundary, so wide break values are a clean scaffolding rejection
-// pending re-extraction into replicate replay bodies.
-uir.func @WideMultiBreak(%c: 0, %x: 2, %y: 2) -> (r: 2) {
-  %0 = hir.int_type
-  uir.signature (%0, %0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  // expected-error @below {{at phase 2 is nested inside earlier phase 1 content; extracting this later-phase content is not implemented in phase sorting yet}}
-  %l = uir.loop : %t {
-    uir.if %c {
-      uir.break %x : %t
-    } else {
-      uir.break %y : %t
-    }
-    uir.continue
-  }
-  uir.return %l : %t
-}
-
-// -----
-
-// Three phases wide from a loop break hits the same single-boundary wall as the
-// two-phase case: the store lands two phases past the replicate.
-uir.func @ThreeWideMultiBreak(%c: 0, %x: 3, %y: 3) -> (r: 3) {
-  %0 = hir.int_type
-  uir.signature (%0, %0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  // expected-error @below {{is nested inside earlier phase 1 content; extracting this later-phase content is not implemented in phase sorting yet}}
-  %l = uir.loop : %t {
-    uir.if %c {
-      uir.break %x : %t
-    } else {
-      uir.break %y : %t
-    }
-    uir.continue
-  }
-  uir.return %l : %t
 }
 
 // -----

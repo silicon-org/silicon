@@ -55,8 +55,9 @@
 // branch — a `uir.if` or an `hir.pick` — with later-phase content or a
 // choice-ified result is decomposed
 // into a choice-yielding branch plus a receiving `hir.pick`; and every
-// earlier-phase `uir.loop` with later-phase content is decomposed into a hit
-// list of per-activation records plus a receiving `hir.replicate`:
+// earlier-phase producing frame — a `uir.loop` or a `hir.replicate` — with
+// later-phase content is decomposed into a hit list of per-activation records
+// plus a receiving `hir.replicate`:
 //
 // - **Decompose**: a call is replaced by one `uir.phase_call` per phase in
 //   the callee's declaration-derived external phase set (its declared arg
@@ -91,36 +92,38 @@
 //   diverges) are not lifted; their consumers are already
 //   `uir.unreachable_value` from never-forwarding.
 //
-// - **Extract loops**: a `uir.loop` at phase p whose body holds later-phase
-//   content, or whose result is at a later phase, is rebuilt at phase p
-//   pushing one record per activation onto a hit list, and the later-phase
-//   content moves into a `hir.replicate` at phase p+1 that replays the
-//   records. The body decomposes into content segments separated by
-//   exit-carrying divergences, and a record carries up to two slots per
-//   divergence: a cf choice tagging which arm ran (present when the
-//   divergence holds later-phase content or a demanded later result; its
-//   payload nests the arm's own record body, so nested divergences deepen it
-//   recursively), and a reach link gating the following segment (REACHED with
-//   the segment's snapshots and the next divergence's slots, or an empty
-//   NOT_REACHED ending the record). Every activation-ending terminator pushes
-//   its record in place: passed divergences contribute their rebuilt branch's
-//   cf result and a REACHED link, and the exiting divergence a cf built at
-//   the site and a NOT_REACHED link. The receiving replicate replays by data
-//   alone — per level a cf pick (arm dispatch, recursing into the arm's own
-//   levels) and a reach pick (segment gate) — so no content is cloned across
-//   record variants and no exit terminators appear in the replay. When a
-//   divergence carries demanded later-phase results, the cf pick is valued:
-//   each alternative yields the arm's operand for the result, and the pick's
-//   results reconstruct the values for the following segments. The list
-//   crosses phases as an ordinary crossing. A later-phase loop result (a break
-//   value) is not its own delivery concept: before record extraction, each such
-//   result is lowered onto a receiving-phase `hir.var`, each break storing its
-//   later operand into the variable and dropping it, and a read after the loop
-//   feeds the result's uses. The store is ordinary later-phase content on the
-//   break's record path, so the record machinery replays it once per activation
-//   in the exit divergence's cf pick — value slice, effects, and nested-
-//   divergence reconstruction included — and no content is sliced or
-//   duplicated.
+// - **Extract records**: a producing frame — a `uir.loop` at phase p, or a
+//   `hir.replicate` at phase p replaying an earlier extraction's records —
+//   whose body holds later-phase content, or whose result is at a later phase,
+//   is rebuilt at phase p pushing one record per activation onto a hit list,
+//   and the later-phase content moves into a `hir.replicate` at phase p+1 that
+//   replays the records. A replicate frame's activations are its replays, one
+//   per incoming record, ending at its body's terminal yield. The body
+//   decomposes into content segments separated by exit-carrying divergences,
+//   and a record carries up to two slots per divergence: a cf choice tagging
+//   which arm ran (present when the divergence holds later-phase content or a
+//   demanded later result; its payload nests the arm's own record body, so
+//   nested divergences deepen it recursively), and a reach link gating the
+//   following segment (REACHED with the segment's snapshots and the next
+//   divergence's slots, or an empty NOT_REACHED ending the record). Every
+//   activation-ending terminator pushes its record in place: passed divergences
+//   contribute their rebuilt branch's cf result and a REACHED link, and the
+//   exiting divergence a cf built at the site and a NOT_REACHED link. The
+//   receiving replicate replays by data alone — per level a cf pick (arm
+//   dispatch, recursing into the arm's own levels) and a reach pick (segment
+//   gate) — so no content is cloned across record variants and no exit
+//   terminators appear in the replay. When a divergence carries demanded
+//   later-phase results, the cf pick is valued: each alternative yields the
+//   arm's operand for the result, and the pick's results reconstruct the values
+//   for the following segments. The list crosses phases as an ordinary
+//   crossing. A later-phase loop result (a break value) is not its own delivery
+//   concept: before record extraction, each such result is lowered onto a
+//   receiving-phase `hir.var`, each break storing its later operand into the
+//   variable and dropping it, and a read after the loop feeds the result's
+//   uses. The store is ordinary later-phase content on the break's record path,
+//   so the record machinery replays it once per activation in the exit
+//   divergence's cf pick — value slice, effects, and nested- divergence
+//   reconstruction included — and no content is sliced or duplicated.
 //
 // A `never`-phased value (a control-flow result no path provides) is
 // non-viral: before extraction, every real-phase use of one is rewritten to a
@@ -137,25 +140,34 @@
 // defined inside the op whose value varies per path or iteration and so needs
 // choice-ification even at a provider count of one.
 //
-// Branch and loop-record extraction share one fixpoint: every receiving
-// `hir.pick` a rule emits re-extracts at its next boundary exactly like a user
-// branch, with no per-origin distinction, so a multi-provider selection crosses
-// any number of phases whatever produced it. Extraction never descends into the
-// `hir.replicate` replay bodies it emits, since those are record-dispatch
-// replay output, not analyzed phase-crossing control flow.
+// Branch and record extraction share one fixpoint: every receiving `hir.pick`
+// and `hir.replicate` a rule emits is ordinary phase-crossing control flow
+// that re-extracts at its next boundary exactly like user-written CF, with no
+// per-origin distinction. A `hir.replicate` at phase p is a producing frame
+// like a `uir.loop`: content later than p inside its replay body re-records
+// onto a fresh hit list, pushed once per replayed record, and moves into a
+// receiving replicate at p+1. Per-record values the later content consumes
+// ferry hop by hop — a phase-p replay unpacks them from the incoming record
+// (block arguments, pick reconstructions) and re-packs them as fields of the
+// outgoing one — while iteration-invariant values keep crossing directly.
+// Each extraction step moves content exactly one boundary forward, so the
+// fixpoint carries it any number of phases; a phase with no content of its
+// own then merely transcodes one hit list into the next, which is the general
+// rule's output, not a special case. A rule only lifts later-phase content
+// that already sits at the top level of the blocks it owns: content still
+// buried inside a same- or earlier-phase region op — deposited there by a
+// nested frame's extraction mid-sweep — defers to the sweep after the owning
+// rule has lifted it, keeping every move in program order.
 //
-// The pass covers straight-line content, multi-boundary branch extraction,
-// single-boundary loop-record extraction, break values delivered through
-// receiving-phase variables, single-provider result forwarding, and hoisting of
-// body content earlier than its enclosing frame. Inputs that need the remaining
-// sorting machinery are rejected with explicit diagnostics instead of being
-// sorted incorrectly: a single-provider value the op holds at a float phase
-// awaiting float sinking, cross-phase content inside `hir.replicate` replay
-// bodies that extraction does not descend into (wide receiving picks and wide
-// record content — a break value delivered more than one phase past its loop
-// lands here too, its store one phase past the replicate — both awaiting
-// re-extraction at the next boundary), and any phase mismatch inside the
-// signature region, which this pass does not hoist or extract.
+// The pass covers straight-line content, multi-boundary branch and record
+// extraction, break values delivered through receiving-phase variables,
+// single-provider result forwarding, and hoisting of body content earlier than
+// its enclosing frame. Inputs that need the remaining sorting machinery are
+// rejected with explicit diagnostics instead of being sorted incorrectly: a
+// single-provider value the op holds at a float phase awaiting float sinking,
+// later-phase content trapped in a provably diverging branch arm that no
+// extraction rule owns, and any phase mismatch inside the signature region,
+// which this pass does not hoist or extract.
 //
 //===----------------------------------------------------------------------===//
 
@@ -293,16 +305,16 @@ private:
   LogicalResult forwardNeverValues();
   LogicalResult extractBranches(bool &changed);
   LogicalResult extractFromBranch(Operation *op, int16_t p, bool &changed);
-  LogicalResult extractLoops(bool &changed);
-  LogicalResult extractFromLoop(LoopOp loopOp, int16_t p);
+  LogicalResult extractFrames(bool &changed);
+  LogicalResult extractFromFrame(Operation *frameOp, int16_t p, bool &changed);
   FailureOr<LoopOp> deliverBreakValues(LoopOp loopOp, int16_t p);
   LogicalResult forwardSingleProviderResults(bool &changed);
   LogicalResult hoistEarlierContent(bool &changed);
   SmallVector<Value> collectResultProviders(Operation *op, unsigned idx);
   void forwardResults(Operation *op, ArrayRef<Value> forwardTo, int16_t p);
-  LogicalResult scanBlock(Operation *loopOp, Block &block, int16_t p,
-                          BodyPlan &plan);
-  void collectPlanFields(Operation *loopOp, int16_t p, BodyPlan &plan,
+  LogicalResult scanBlock(Block &block, int16_t p, BodyPlan &plan,
+                          bool &deferred);
+  void collectPlanFields(Operation *frameOp, int16_t p, BodyPlan &plan,
                          ArrayRef<Operation *> allMoved,
                          llvm::SetVector<Value> visible);
   static void collectPlanContent(BodyPlan &plan,
@@ -964,20 +976,6 @@ unsigned PhaseSorter::countResultProviders(Operation *op, unsigned idx) {
   return count;
 }
 
-/// Whether `op` sits inside a `hir.replicate` body. A replicate body is
-/// loop-record replay output — record-dispatch cf/reach picks, not the analyzed
-/// phase-crossing selection control flow extraction models — so extraction does
-/// not descend into it, exactly as the coverage check treats replicate
-/// interiors as non-analyzed input. Single-boundary replays deliver at their
-/// own phase and extraction would ignore them anyway; skipping keeps a wide
-/// loop-record replay a clean rejection rather than a mis-spliced choice.
-static bool insideReplicate(Operation *op) {
-  for (auto *parent = op->getParentOp(); parent; parent = parent->getParentOp())
-    if (isa<hir::ReplicateOp>(parent))
-      return true;
-  return false;
-}
-
 /// Extract later-phase content out of every phase-p branch (`uir.if` or
 /// `hir.pick`) whose interior or results demand it, innermost first — in one
 /// walk across both op kinds — so a nested branch becomes ordinary
@@ -1004,14 +1002,14 @@ static bool insideReplicate(Operation *op) {
 /// extraction) until nothing changes, so a result crosses any number of phases.
 /// Each step moves a result's delivery exactly one phase forward and strictly
 /// reduces its phase distance, bounding the fixpoint. A receiving pick a
-/// *sibling* rule emitted — a loop record's re-tagged wide pick — is
+/// *sibling* rule emitted — a record replay's cf or reach pick inside a
+/// `hir.replicate`, stamped by the sorter as it was built — is
 /// indistinguishable from a user pick here; all are picked up by the same walk
-/// with no provenance test. Only `hir.replicate` replay interiors are excluded,
-/// per `insideReplicate`.
+/// with no provenance test.
 LogicalResult PhaseSorter::extractBranches(bool &changed) {
   SmallVector<Operation *> branchOps;
   funcOp.getBody().walk<WalkOrder::PostOrder>([&](Operation *op) {
-    if (isa<IfOp, hir::PickOp>(op) && realPhaseOf(op) && !insideReplicate(op))
+    if (isa<IfOp, hir::PickOp>(op) && realPhaseOf(op))
       branchOps.push_back(op);
   });
 
@@ -1089,10 +1087,27 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p,
   // too. Otherwise the later phase running at all implies a reaching arm ran,
   // so the reaching arms' content extracts and the diverging arms drop out as
   // dead receiving alternatives.
+  //
+  // Later-phase content buried inside a same- or earlier-phase region op at an
+  // arm's top level (a nested frame's record content, or a nested branch that
+  // itself deferred) is not this branch's to lift: the owning rule lifts it to
+  // the arm's top level first — a frame deposits its receiving replicate right
+  // after itself — and moving the arm's other later ops around it now would
+  // tear the content's program order across sweeps and break dominance. Defer
+  // the whole branch (without setting `changed`) until every later op in the
+  // arm is a top-level, liftable one; content no rule ever lifts is rejected
+  // once the fixpoint settles.
   bool anyReaches = false;
   for (auto *arm : branchArms(op)) {
     if (findExitTerminator(*arm, p))
       return success();
+    if (!arm->empty())
+      for (auto &blockOp : arm->front().without_terminator()) {
+        if (auto ph = realPhaseOf(&blockOp); ph && *ph > p)
+          continue;
+        if (blockOp.getNumRegions() != 0 && hasLaterContent(&blockOp, p))
+          return success();
+      }
     if (armReaches(arm))
       anyReaches = true;
     else if (!arm->empty() && !collectLaterContent(arm->front(), p).empty())
@@ -1342,26 +1357,36 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p,
 }
 
 //===----------------------------------------------------------------------===//
-// Loop-Record Extraction
+// Record Extraction
 //===----------------------------------------------------------------------===//
 //
-// # Extract Later-Phase Content Out of Earlier-Phase Loops
+// # Extract Later-Phase Content Out of Earlier-Phase Producing Frames
 //
-// A `uir.loop` at phase p whose body holds later-phase content cannot wrap
-// wholesale into phase p: the later-phase content runs once per activation of
-// the loop, so the phase-p execution must tell phase p+1 *how often* it is
-// instantiated, and with which per-iteration snapshots. Loop-record extraction
-// rewrites such a loop into two cooperating constructs the wrap and cross
-// rules then place:
+// A producing frame at phase p — a `uir.loop`, or a `hir.replicate` replaying
+// an earlier extraction's records — whose body holds later-phase content
+// cannot wrap wholesale into phase p: the later-phase content runs once per
+// activation of the frame, so the phase-p execution must tell phase p+1 *how
+// often* it is instantiated, and with which per-iteration snapshots. Record
+// extraction rewrites such a frame into two cooperating constructs the wrap
+// and cross rules then place:
 //
 // - A hit list (`hir.opaque_list_create`) is created at phase p, right before
-//   the loop. Every activation packs a record of the crossing values it
+//   the frame. Every activation packs a record of the crossing values it
 //   samples and pushes it onto the list; the record is built in place at the
 //   terminator that ends the activation. The list is an ordinary phase-p value
 //   that crosses to phase p+1 like any other crossing.
-// - One `hir.replicate` at phase p+1 replays the records, holding the loop's
+// - One `hir.replicate` at phase p+1 replays the records, holding the frame's
 //   later-phase content. It reconstructs the per-iteration snapshots from the
 //   record fields.
+//
+// A replicate frame is the degenerate case of the same rule: its activations
+// are its replays, one per incoming record, each ending at the body's terminal
+// `hir.yield`, and it has no exits, so every record is a single segment. Its
+// later-phase content samples the replay's per-record values — the replicate's
+// unpacked block arguments and its picks' reconstructions — so a chain of
+// extractions ferries per-iteration values hop by hop, each phase unpacking
+// the previous list and re-packing what the next phase consumes, while
+// path-dependent values ride along inside the re-recorded choices.
 //
 // Loop bodies with loop-phase early exits (`break`/`continue` inside branch
 // arms) diverge in how much later-phase content each activation runs. The body
@@ -1420,11 +1445,12 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p,
 // and threads up identically — the reconstruction is one recursion of the same
 // valued-carrier mechanism, deepening by a level per nesting.
 //
-// Only single-boundary loop-record extraction is handled here (later-phase
-// loop results are lowered onto receiving-phase variables by break-value
-// delivery first, so their stores become ordinary later-phase content): content
-// more than one phase later (which needs the replicate re-extracted at the next
-// boundary) is rejected by `rejectUnimplemented`.
+// One extraction moves content one boundary forward. Later-phase loop results
+// are lowered onto receiving-phase variables by break-value delivery first, so
+// their stores become ordinary later-phase content, and content more than one
+// phase later than its frame simply remains later-phase content of the
+// receiving replicate, which the joint fixpoint re-extracts at the next
+// boundary until every phase holds only its own content.
 
 // NOLINTBEGIN(misc-no-recursion)
 
@@ -1440,8 +1466,16 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p,
 /// content and no demanded later result needs no cf and no arm scan: its
 /// activation-ending terminators are collected directly, no matter how deeply
 /// nested; only cf-carrying divergences must be branches and recurse.
-LogicalResult PhaseSorter::scanBlock(Operation *loopOp, Block &block, int16_t p,
-                                     BodyPlan &plan) {
+///
+/// Later-phase content nested inside non-exit CF at phase <= p is not this
+/// frame's to record: branch extraction owns lifting it to the frame's levels,
+/// and a nested frame's extraction may deposit fresh later content (its
+/// receiving replicate) inside such CF after this sweep's branch extraction
+/// already ran. The scan then sets `deferred` and the frame waits for the next
+/// sweep of the joint fixpoint to lift the deposit; content no rule ever lifts
+/// is rejected after the fixpoint settles.
+LogicalResult PhaseSorter::scanBlock(Block &block, int16_t p, BodyPlan &plan,
+                                     bool &deferred) {
   plan.terminal = block.getTerminator();
   plan.segments.emplace_back();
   for (auto &blockOp : block) {
@@ -1458,12 +1492,10 @@ LogicalResult PhaseSorter::scanBlock(Operation *loopOp, Block &block, int16_t p,
     for (auto &region : blockOp.getRegions())
       collectExitTerminators(region, p, exitTerms);
     if (exitTerms.empty()) {
-      // Non-exit CF at phase p was extracted by the innermost-first walk
-      // already; leftover later-phase content here is a compiler bug.
+      // Later-phase content inside non-exit CF belongs to branch extraction;
+      // defer this frame until a later sweep has lifted it to this level.
       if (hasLaterContent(&blockOp, p))
-        return blockOp.emitOpError()
-               << "contains later-phase content that inner extraction did "
-                  "not consume";
+        deferred = true;
       continue;
     }
 
@@ -1499,7 +1531,7 @@ LogicalResult PhaseSorter::scanBlock(Operation *loopOp, Block &block, int16_t p,
           arm.region = &region;
           auto &armBlock = region.front();
           arm.plan = std::make_unique<BodyPlan>();
-          if (failed(scanBlock(loopOp, armBlock, p, *arm.plan)))
+          if (failed(scanBlock(armBlock, p, *arm.plan, deferred)))
             return failure();
           auto *armTerm = armBlock.getTerminator();
           arm.reachesYield =
@@ -1535,13 +1567,13 @@ void PhaseSorter::collectPlanContent(BodyPlan &plan,
 /// already bind; the spine extends it segment by segment, and each arm
 /// receives a copy so its own extension stays local to its subtree (sibling
 /// arms and the following segments never see an arm's interior fields).
-void PhaseSorter::collectPlanFields(Operation *loopOp, int16_t p,
+void PhaseSorter::collectPlanFields(Operation *frameOp, int16_t p,
                                     BodyPlan &plan,
                                     ArrayRef<Operation *> allMoved,
                                     llvm::SetVector<Value> visible) {
   plan.segFields.assign(plan.segments.size(), {});
   for (auto [k, segment] : llvm::enumerate(plan.segments)) {
-    plan.segFields[k] = collectCrossingValues(loopOp, p, segment, allMoved);
+    plan.segFields[k] = collectCrossingValues(frameOp, p, segment, allMoved);
     plan.segFields[k].set_subtract(visible);
     visible.set_union(plan.segFields[k]);
     // The arms of this level's divergence replay nested under the levels up
@@ -1550,7 +1582,7 @@ void PhaseSorter::collectPlanFields(Operation *loopOp, int16_t p,
     if (k < plan.divergences.size())
       for (auto &arm : plan.divergences[k].arms)
         if (arm.plan)
-          collectPlanFields(loopOp, p, *arm.plan, allMoved, visible);
+          collectPlanFields(frameOp, p, *arm.plan, allMoved, visible);
   }
 }
 
@@ -1665,9 +1697,13 @@ void PhaseSorter::appendTail(BodyPlan &plan, size_t seg,
 
 /// Collect every activation-ending push site of `plan`, depth-first in
 /// program order: each content-free divergence's exit terminators, each arm's
-/// sites recursively, and the plan's own terminal when it is a break/continue
-/// (the loop body's back edge, or an exit-terminated arm whose interior
-/// divergences were all passed).
+/// sites recursively, and the plan's own terminal when it ends an activation.
+/// A break/continue always does (the loop body's back edge, or an
+/// exit-terminated arm whose interior divergences were all passed), and so
+/// does a terminal `hir.yield`, which only ever appears as a replicate frame's
+/// replay-body terminator and completes one replay; a `uir.yield` arm terminal
+/// falls through to the enclosing level, and a `uir.unreachable` never
+/// completes an activation.
 ///
 /// A cf-carrying divergence all of whose arms exit (a null `cfValue` — a
 /// rebuilt branch delivers its cf result on fall-through paths only) makes the
@@ -1700,7 +1736,7 @@ void PhaseSorter::collectPushSites(BodyPlan &plan,
     if (!divergence.cfValue)
       return;
   }
-  if (isa<BreakOp, ContinueOp>(plan.terminal))
+  if (isa<BreakOp, ContinueOp, hir::YieldOp>(plan.terminal))
     sites.push_back({plan.terminal, {path.begin(), path.end()}});
 }
 
@@ -1869,11 +1905,17 @@ LogicalResult PhaseSorter::rebuildDivergenceIf(Divergence &divergence,
     ifOp.getResult(idx).replaceAllUsesWith(newIf.getResult(i));
   }
   // The dropped later results have no phase-p producer to point at yet; stand
-  // them up with placeholders the cf pick build replaces and erases.
+  // them up with placeholders the cf pick build replaces and erases. The
+  // placeholder value keeps the original result's phase: the cf pick that
+  // replaces it inherits the phase, so a result wider than one boundary is
+  // delivered by a pick whose result is later than its own phase and
+  // re-extracts at the next boundary like any other wide receiving pick.
   for (auto idx : laterIdx) {
     auto placeholder =
         hir::OpaquePackOp::create(builder, loc, anyTy, ValueRange{});
     setPhase(placeholder, static_cast<int16_t>(p + 1));
+    analysis.actualPhase[placeholder.getResult()] =
+        analysis.actualPhase.at(ifOp.getResult(idx));
     ifOp.getResult(idx).replaceAllUsesWith(placeholder.getResult());
     divergence.laterResults.push_back(placeholder.getResult());
   }
@@ -2037,27 +2079,36 @@ FailureOr<LoopOp> PhaseSorter::deliverBreakValues(LoopOp loopOp, int16_t p) {
   return newLoop;
 }
 
-/// Extract the later-phase content of a phase-p `uir.loop` into a hit list and
-/// a receiving `hir.replicate` at phase p+1. See the section header for the
-/// shape and invariants. Every activation pushes exactly one record, built in
-/// place at the terminator that ends it: the record chains a `continued` link
-/// per divergence the activation fell past and ends in the taken exit path's
-/// choice, whose payload is empty when that path ran no later-phase content.
-LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
-  auto loc = loopOp.getLoc();
-  auto anyTy = hir::AnyType::get(loopOp.getContext());
+/// Extract the later-phase content of a phase-p producing frame — a `uir.loop`
+/// or a `hir.replicate` — into a hit list and a receiving `hir.replicate` at
+/// phase p+1. See the section header for the shape and invariants. Every
+/// activation pushes exactly one record, built in place at the terminator that
+/// ends it: the record chains a `continued` link per divergence the activation
+/// fell past and ends in the taken exit path's choice, whose payload is empty
+/// when that path ran no later-phase content. Sets `changed` when it rewrites
+/// anything; a deferred scan (later content still nested inside non-exit CF
+/// awaiting branch extraction) leaves the frame untouched for the next sweep.
+LogicalResult PhaseSorter::extractFromFrame(Operation *frameOp, int16_t p,
+                                            bool &changed) {
+  auto loc = frameOp->getLoc();
+  auto anyTy = hir::AnyType::get(frameOp->getContext());
 
   // Later-phase loop results are delivered through receiving-phase variables:
   // each break stores its later operand into a variable (ordinary later-phase
   // content on the break's record path) and a read after the loop feeds the
   // result's uses. Lower these first, so the writes are in place as ordinary
   // record content the analysis below picks up; the loop is rebuilt in the
-  // process.
-  auto rebuilt = deliverBreakValues(loopOp, p);
-  if (failed(rebuilt))
-    return failure();
-  loopOp = *rebuilt;
-  Operation *op = loopOp;
+  // process. A replicate frame has no results and no breaks, so there is
+  // nothing to deliver.
+  if (auto loopOp = dyn_cast<LoopOp>(frameOp)) {
+    auto rebuilt = deliverBreakValues(loopOp, p);
+    if (failed(rebuilt))
+      return failure();
+    if (*rebuilt != loopOp)
+      changed = true;
+    frameOp = *rebuilt;
+  }
+  Operation *op = frameOp;
 
   // A loop with a later result always gains write content from break-value
   // delivery, but a kept-only loop reached here for its record content may have
@@ -2065,18 +2116,28 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
   if (!hasLaterContent(op, p))
     return success();
 
-  auto *bodyTerm = loopOp.getBody().front().getTerminator();
-  if (!isa<BreakOp, ContinueOp, UnreachableOp>(bodyTerm))
+  // Both frame kinds hold one body region. A loop body ends in the back-edge
+  // continue, a break, or unreachable; a replicate replay body ends in the
+  // empty `hir.yield` that completes one replay.
+  auto &bodyBlock = op->getRegion(0).front();
+  auto *bodyTerm = bodyBlock.getTerminator();
+  if (!isa<BreakOp, ContinueOp, UnreachableOp, hir::YieldOp>(bodyTerm))
     return bodyTerm->emitOpError()
-           << "unsupported loop body terminator for record extraction";
+           << "unsupported frame body terminator for record extraction";
 
-  // Decompose the loop body into the recursive plan of content segments and
+  // Decompose the frame body into the recursive plan of content segments and
   // exit-carrying divergences, then collect the crossing values every segment
   // and arm sub-plan samples. Everything the plan moves counts as moved for
-  // the crossing analysis.
+  // the crossing analysis. A deferred scan found later content still nested
+  // inside non-exit CF; leave the frame for the next sweep, after branch
+  // extraction has lifted it to this frame's levels.
   BodyPlan plan;
-  if (failed(scanBlock(op, loopOp.getBody().front(), p, plan)))
+  bool deferred = false;
+  if (failed(scanBlock(bodyBlock, p, plan, deferred)))
     return failure();
+  if (deferred)
+    return success();
+  changed = true;
 
   SmallVector<Operation *> allMoved;
   collectPlanContent(plan, allMoved);
@@ -2157,12 +2218,18 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
         // this level (or dominating the root, index 0) is available directly.
         SmallVector<bool> deeperMask(yield.size(), false);
         SmallVector<Value> deeperValues;
+        // The phase of each deeper value, captured now: a deeper value may be
+        // a nested divergence's placeholder that the recursive level build
+        // erases, after which only the reach pick result carrying its phase
+        // remains.
+        SmallVector<int16_t> deeperPhases;
         for (auto [i, value] : llvm::enumerate(yield)) {
           auto pos = spinePosition(pl, value);
           assert(pos && "off-spine later operand should have been rejected");
           if (*pos > seg) {
             deeperMask[i] = true;
             deeperValues.push_back(value);
+            deeperPhases.push_back(analysis.actualPhase.at(value));
           }
         }
 
@@ -2206,11 +2273,13 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
             // divergence (a nested divergence whose result the enclosing arm
             // provides), so re-point the yield copy to the fresh cf pick result
             // before the placeholder is erased.
+            // The pick result inherits the placeholder's phase (the original
+            // result's), so a value wider than one boundary re-extracts.
             for (auto [j, placeholder] :
                  llvm::enumerate(divergence.laterResults)) {
               Operation *placeholderOp = placeholder.getDefiningOp();
               analysis.actualPhase[cfPick.getResult(j)] =
-                  static_cast<int16_t>(p + 1);
+                  analysis.actualPhase.at(placeholder);
               for (auto &y : yield)
                 if (y == placeholder)
                   y = cfPick.getResult(j);
@@ -2244,8 +2313,12 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
           analysis.opPhases[nrYield] = p + 1;
           auto &rBlock = reachPick.getAlternatives()[1].emplaceBlock();
           buildLevel(pl, seg + 1, &rBlock, deeperValues);
-          for (auto result : reachPick.getResults()) {
-            analysis.actualPhase[result] = static_cast<int16_t>(p + 1);
+          // Each reach pick result stands in for its threaded value and keeps
+          // that value's phase, so a wide value stays wide at every level and
+          // re-extracts at the next boundary.
+          for (auto [result, phase] :
+               llvm::zip(reachPick.getResults(), deeperPhases)) {
+            analysis.actualPhase[result] = phase;
             reachResults.push_back(result);
           }
         } else {
@@ -2290,31 +2363,34 @@ LogicalResult PhaseSorter::extractFromLoop(LoopOp loopOp, int16_t p) {
   return success();
 }
 
-/// Extract later-phase content out of every phase-p `uir.loop` whose interior
-/// or results demand it, innermost first so a nested loop becomes ordinary
-/// later-phase content of its enclosing loop's records. A later-phase result is
-/// an extraction obligation on its own: break-value delivery turns it into a
-/// receiving-phase variable store, which is later-phase content the record
-/// extraction then picks up. Sets `changed` when it rewrites any loop, so the
-/// caller's joint extraction fixpoint re-runs. Replicate-interior loops are
-/// replay output and excluded, per `insideReplicate`.
-LogicalResult PhaseSorter::extractLoops(bool &changed) {
-  SmallVector<LoopOp> loops;
-  funcOp.getBody().walk<WalkOrder::PostOrder>([&](LoopOp op) {
-    if (realPhaseOf(op) && !insideReplicate(op))
-      loops.push_back(op);
+/// Extract later-phase content out of every phase-p producing frame — a
+/// `uir.loop` or a `hir.replicate` — whose interior or results demand it,
+/// innermost first so a nested frame becomes ordinary later-phase content of
+/// its enclosing frame's records. A later-phase loop result is an extraction
+/// obligation on its own: break-value delivery turns it into a receiving-phase
+/// variable store, which is later-phase content the record extraction then
+/// picks up. A replicate is the producing frame of its own phase: its replay
+/// runs once per record, so later-phase content inside it re-records onto a
+/// fresh hit list — sampling the replicate's unpacked block arguments and pick
+/// reconstructions like any other per-iteration value — and each sweep moves
+/// the content exactly one boundary forward, the caller's joint fixpoint
+/// driving multi-boundary chains. Sets `changed` when it rewrites any frame.
+LogicalResult PhaseSorter::extractFrames(bool &changed) {
+  SmallVector<Operation *> frames;
+  funcOp.getBody().walk<WalkOrder::PostOrder>([&](Operation *op) {
+    if (isa<LoopOp, hir::ReplicateOp>(op) && realPhaseOf(op))
+      frames.push_back(op);
   });
 
-  for (auto loopOp : loops) {
-    int16_t p = *realPhaseOf(loopOp);
-    bool hasLaterResult = llvm::any_of(loopOp->getResults(), [&](Value r) {
+  for (auto *frameOp : frames) {
+    int16_t p = *realPhaseOf(frameOp);
+    bool hasLaterResult = llvm::any_of(frameOp->getResults(), [&](Value r) {
       int16_t vph = analysis.actualPhase.at(r);
       return isRealPhase(vph) && vph > p;
     });
-    if (!hasLaterResult && !hasLaterContent(loopOp, p))
+    if (!hasLaterResult && !hasLaterContent(frameOp, p))
       continue;
-    changed = true;
-    if (failed(extractFromLoop(loopOp, p)))
+    if (failed(extractFromFrame(frameOp, p, changed)))
       return failure();
   }
   return success();
@@ -2680,23 +2756,18 @@ static std::string phaseName(int16_t phase) {
 ///   variables by break-value delivery; never-produced results are skipped here
 ///   (their consumers are already `uir.unreachable_value`, so the result is
 ///   unused).
-///   Two residuals remain: a single-provider value the op holds at a non-real
+///   One residual remains: a single-provider value the op holds at a non-real
 ///   float phase, which neither forwards (its provider is defined inside the
 ///   op, not iteration-invariant external content) nor choice-ifies (a float
-///   phase is not a later real phase), and so awaits float sinking; and a wide
-///   receiving pick nested inside a `hir.replicate` replay body — the joint
-///   extraction fixpoint feeds every multi-provider selection outside replay
-///   bodies back through extraction, but it does not descend into replicates,
-///   so a wide pick emitted there awaits the same next-boundary re-extraction
-///   as wide replicate content in the parent-phase check below.
+///   phase is not a later real phase), and so awaits float sinking.
 /// - Anchored content whose phase differs from its parent frame's phase. In the
-///   body, hoisting already lifted every op earlier than its frame out, so a
-///   residual is strictly later than its frame: branch content is handled by
-///   branch extraction and single-boundary loop content by loop-record
-///   extraction above, leaving content more than one phase later than its loop
-///   for the next-boundary re-extraction that this pass does not do. Hoisting
-///   and extraction run on the body only, so a phase mismatch in either
-///   direction inside the signature region surfaces here too.
+///   body, hoisting already lifted every op earlier than its frame out, and the
+///   joint extraction fixpoint carries later-phase content across any number of
+///   boundaries, so a residual is later-phase content the fixpoint settled
+///   without lifting: content trapped in a provably diverging branch arm, which
+///   no extraction rule owns. Hoisting and extraction run on the body only, so
+///   a phase mismatch in either direction inside the signature region surfaces
+///   here too.
 ///
 /// Together these establish that every op and every value inside anchored
 /// content is at that content's phase, which is what makes the wrap and
@@ -2729,9 +2800,7 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
               << phaseName(opPhase)
               << "; delivering this cross-phase result is not implemented in "
                  "phase sorting yet (a single-provider float value awaiting "
-                 "float sinking, or a wide receiving pick inside a "
-                 "hir.replicate replay body, which extraction does not "
-                 "descend into for re-extraction at the next boundary)";
+                 "float sinking)";
           return WalkResult::interrupt();
         }
       }
@@ -2741,10 +2810,9 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
     // hoisting nor extraction lifted. Every frame ends with a real phase, so a
     // parent — always a region-bearing frame — is never floating. The two
     // directions have distinct missing machinery, and both survive here only
-    // where that machinery does not run: extraction is not implemented for
-    // later-phase content more than one phase past its control flow (the
-    // receiving pick or replicate would need re-extraction at the next
-    // boundary), and hoisting and extraction both run on the body only, so any
+    // where that machinery does not run: later-phase content survives only
+    // where no extraction rule owns it (trapped in a provably diverging branch
+    // arm), and hoisting and extraction both run on the body only, so any
     // phase mismatch inside the signature region — which this pass does not
     // hoist or extract — surfaces here as well.
     if (auto *parent = op->getParentOp(); parent != funcOp) {
@@ -3011,19 +3079,24 @@ LogicalResult PhaseSorter::run() {
     if (!changed)
       break;
   }
-  // Branch and loop-record extraction share one fixpoint. Each rule emits
-  // receiving `hir.pick`s (and `hir.replicate`s) that may themselves deliver a
-  // later-phase result, and every such pick re-extracts at its next boundary
-  // exactly like a user branch, regardless of which rule emitted it. A single
-  // sweep of each rule moves every result's delivery one phase forward,
-  // strictly reducing its phase distance, so alternating the sweeps until
-  // neither changes terminates in at most the maximum result-phase distance
-  // rounds.
+  // Branch and record extraction share one fixpoint. Each rule emits receiving
+  // `hir.pick`s and `hir.replicate`s that may themselves hold or deliver
+  // later-phase content, and every such op re-extracts at its next boundary
+  // exactly like user-written CF, regardless of which rule emitted it: a wide
+  // receiving pick choice-ifies again, and a replicate still holding content
+  // later than its own phase re-records it onto a fresh hit list. A single
+  // sweep of each rule moves every result's delivery and every frame's later
+  // content one phase forward, strictly reducing its phase distance, so
+  // alternating the sweeps until neither changes terminates. A frame whose
+  // later content still sits inside same-phase non-exit CF (deposited there by
+  // a nested frame's extraction mid-sweep) defers without setting `changed`;
+  // the next sweep's branch extraction lifts the deposit, and anything no rule
+  // ever lifts is rejected below once the fixpoint settles.
   while (true) {
     bool changed = false;
     if (failed(extractBranches(changed)))
       return failure();
-    if (failed(extractLoops(changed)))
+    if (failed(extractFrames(changed)))
       return failure();
     if (!changed)
       break;

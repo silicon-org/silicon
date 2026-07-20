@@ -5785,3 +5785,854 @@ uir.func @HoistTwoLevelFloat(%a: -1, %c: 0) -> (r: 0) {
   }
   uir.return %l : %t
 }
+
+//===----------------------------------------------------------------------===//
+// A wide break value: a phase-0 loop whose break delivers a phase-2 value.
+// Break-value delivery stores it into a phase-2 variable on each break, so the
+// store is record content two phases past the loop. The phase-1 receiving
+// replicate then still holds phase-2 content and is itself a producing frame:
+// its cf pick choice-ifies, and the replicate re-records the fresh choice onto
+// a second hit list. Phase 1 has no content of its own and becomes a pure
+// transcoder from the first list to the second; phase 2 replays the second
+// list to dispatch the variable writes and reads the result out.
+
+// CHECK-LABEL: uir.func @WideMultiBreak
+uir.func @WideMultiBreak(%c: 0, %x: 2, %y: 2) -> (r: 2) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[P0:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[L0:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop {
+  // CHECK-NEXT:     hir.choice_type
+  // CHECK-NEXT:     uir.if %c {
+  // CHECK-NEXT:       [[CF0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[NR0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[R0:%.+]] = hir.opaque_pack([[CF0]], [[NR0]])
+  // CHECK-NEXT:       hir.opaque_list_push [[L0]], [[R0]]
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       [[NR1:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[R1:%.+]] = hir.opaque_pack([[CF1]], [[NR1]])
+  // CHECK-NEXT:       hir.opaque_list_push [[L0]], [[R1]]
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[L1:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   hir.replicate ([[CFA:%.+]], [[NRA:%.+]]) in [[P0]] {
+  // CHECK-NEXT:     [[C:%.+]] = hir.pick [[CFA]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[T0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.yield [[T0]] : !hir.any
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       [[T1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       hir.yield [[T1]] : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[NRA]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     [[R2:%.+]] = hir.opaque_pack([[C]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L1]], [[R2]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 2 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   hir.replicate ([[CB:%.+]]) in [[P1]] {
+  // CHECK-NEXT:     hir.pick [[CB]] [0 (): {
+  // CHECK-NEXT:       hir.write_var [[V]], %x : [[T]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.write_var [[V]], %y : [[T]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   [[RD:%.+]] = hir.read_var [[V]] : [[T]]
+  // CHECK-NEXT:   uir.phase_return [[RD]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %l = uir.loop : %t {
+    uir.if %c {
+      uir.break %x : %t
+    } else {
+      uir.break %y : %t
+    }
+    uir.continue
+  }
+  uir.return %l : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Three phases wide from a loop break: the same shape as @WideMultiBreak with
+// the values one phase further out. The fixpoint re-records twice, producing
+// two consecutive transcoder phases (1 and 2) that each re-pack the arm choice
+// onto the next hit list before phase 3 dispatches the writes.
+
+// CHECK-LABEL: uir.func @ThreeWideMultiBreak
+uir.func @ThreeWideMultiBreak(%c: 0, %x: 3, %y: 3) -> (r: 3) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[P0:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[L0:%.+]] = hir.opaque_list_create
+  // CHECK:        uir.phase_return yield [[L0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[L1:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   hir.replicate ({{%.+}}, {{%.+}}) in [[P0]] {
+  // CHECK:          [[R1:%.+]] = hir.opaque_pack({{%.+}})
+  // CHECK-NEXT:     hir.opaque_list_push [[L1]], [[R1]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P2:%.+]] = uir.phase 2 {
+  // CHECK-NEXT:   [[L2:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   hir.replicate ([[CA:%.+]]) in [[P1]] {
+  // CHECK-NEXT:     [[C:%.+]] = hir.pick [[CA]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[T0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.yield [[T0]] : !hir.any
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       [[T1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       hir.yield [[T1]] : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     [[R2:%.+]] = hir.opaque_pack([[C]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L2]], [[R2]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L2]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 3 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   hir.replicate ([[CB:%.+]]) in [[P2]] {
+  // CHECK-NEXT:     hir.pick [[CB]] [0 (): {
+  // CHECK-NEXT:       hir.write_var [[V]], %x : [[T]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.write_var [[V]], %y : [[T]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   [[RD:%.+]] = hir.read_var [[V]] : [[T]]
+  // CHECK-NEXT:   uir.phase_return [[RD]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %l = uir.loop : %t {
+    uir.if %c {
+      uir.break %x : %t
+    } else {
+      uir.break %y : %t
+    }
+    uir.continue
+  }
+  uir.return %l : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Wide loop-record content: a phase-0 loop whose if-divergence forwards a
+// phase-2 value (single external provider %x) consumed by phase-2 content
+// after it. The divergence is content-free, so the records carry only the
+// reach link; the phase-1 replicate transcodes it into a fresh choice on a
+// second hit list, and phase 2 replays that list, writing only on activations
+// that fell past the divergence.
+
+// CHECK-LABEL: uir.func @WideLoopRecordContent
+uir.func @WideLoopRecordContent(%c: 0, %x: 2) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  %acc = hir.var : %t
+  // CHECK-NEXT: [[P0:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[ACC:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   [[L0:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop {
+  // CHECK-NEXT:     uir.if %c {
+  // CHECK-NEXT:       [[NR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[R0:%.+]] = hir.opaque_pack([[NR]])
+  // CHECK-NEXT:       hir.opaque_list_push [[L0]], [[R0]]
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       uir.yield
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[RE:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     [[R1:%.+]] = hir.opaque_pack([[RE]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L0]], [[R1]]
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[ACC]], [[L0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[L1:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   hir.replicate ([[RA:%.+]]) in [[P0]]#1 {
+  // CHECK-NEXT:     [[C:%.+]] = hir.pick [[RA]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[T0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.yield [[T0]] : !hir.any
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       [[T1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       hir.yield [[T1]] : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     [[R2:%.+]] = hir.opaque_pack([[C]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L1]], [[R2]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 2 {
+  // CHECK-NEXT:   hir.replicate ([[CB:%.+]]) in [[P1]] {
+  // CHECK-NEXT:     hir.pick [[CB]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.write_var [[P0]]#0, %x : [[T]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.loop {
+    %r = uir.if %c : %t {
+      uir.break
+    } else {
+      uir.yield %x : %t
+    }
+    uir.expr pin 2 {
+      hir.write_var %acc, %r : %t
+      uir.yield
+    }
+    uir.continue
+  }
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// A wide break value inside a replicate: the inner loop's two-provider phase-2
+// break value is delivered through a per-outer-iteration phase-2 variable, and
+// the whole delivery chain — variable, inner replay, read, accumulator write —
+// rides the outer loop's records. The inner hit list ferries through the outer
+// reach choice's payload at every hop, and the phase-2 content moves as one
+// block, preserving program order around the nested replay.
+
+// CHECK-LABEL: uir.func @WideBreakPickInReplicate
+uir.func @WideBreakPickInReplicate(%c: 0, %x: 2, %y: 2, %n: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0, %0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: [[P0:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[ACC:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   [[L0:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop ([[J:%.+]] = %{{.+}} : %{{.+}}) {
+  // CHECK-NEXT:     [[DONE:%.+]] = hir.geq [[J]], %n : [[T]]
+  // CHECK-NEXT:     uir.if [[DONE]] {
+  // CHECK-NEXT:       [[NR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[R0:%.+]] = hir.opaque_pack([[NR]])
+  // CHECK-NEXT:       hir.opaque_list_push [[L0]], [[R0]]
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[LI:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:     uir.loop {
+  // CHECK:            uir.if %c {
+  // CHECK-NEXT:         [[ICF0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         [[INR0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         [[IR0:%.+]] = hir.opaque_pack([[ICF0]], [[INR0]])
+  // CHECK-NEXT:         hir.opaque_list_push [[LI]], [[IR0]]
+  // CHECK-NEXT:         uir.break
+  // CHECK-NEXT:       } else {
+  // CHECK-NEXT:         [[ICF1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:         [[INR1:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         [[IR1:%.+]] = hir.opaque_pack([[ICF1]], [[INR1]])
+  // CHECK-NEXT:         hir.opaque_list_push [[LI]], [[IR1]]
+  // CHECK-NEXT:         uir.break
+  // CHECK-NEXT:       }
+  // CHECK-NEXT:       uir.continue
+  // CHECK-NEXT:     }
+  // CHECK:          [[RE:%.+]] = hir.choice 1([[LI]])
+  // CHECK-NEXT:     [[R1:%.+]] = hir.opaque_pack([[RE]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L0]], [[R1]]
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[ACC]], [[L0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[L1:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   hir.replicate ([[RA:%.+]]) in [[P0]]#1 {
+  // CHECK-NEXT:     [[C:%.+]] = hir.pick [[RA]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[T0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.yield [[T0]] : !hir.any
+  // CHECK-NEXT:     } 1 ([[LIA:%.+]]): {
+  // CHECK-NEXT:       [[LI1:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:       hir.replicate ([[ICA:%.+]], [[INA:%.+]]) in [[LIA]] {
+  // CHECK-NEXT:         [[IC:%.+]] = hir.pick [[ICA]] : !hir.any [0 (): {
+  // CHECK-NEXT:           [[IT0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:           hir.yield [[IT0]] : !hir.any
+  // CHECK-NEXT:         } 1 (): {
+  // CHECK-NEXT:           [[IT1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:           hir.yield [[IT1]] : !hir.any
+  // CHECK-NEXT:         }]
+  // CHECK-NEXT:         hir.pick [[INA]] [0 (): {
+  // CHECK-NEXT:           hir.yield
+  // CHECK-NEXT:         } 1 (): {
+  // CHECK-NEXT:           hir.yield
+  // CHECK-NEXT:         }]
+  // CHECK-NEXT:         [[IR2:%.+]] = hir.opaque_pack([[IC]])
+  // CHECK-NEXT:         hir.opaque_list_push [[LI1]], [[IR2]]
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       }
+  // CHECK-NEXT:       [[T1:%.+]] = hir.choice 1([[LI1]])
+  // CHECK-NEXT:       hir.yield [[T1]] : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     [[R2:%.+]] = hir.opaque_pack([[C]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L1]], [[R2]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 2 {
+  // CHECK-NEXT:   hir.replicate ([[CB:%.+]]) in [[P1]] {
+  // CHECK-NEXT:     hir.pick [[CB]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[LIB:%.+]]): {
+  // CHECK-NEXT:       [[V:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:       hir.replicate ([[ICB:%.+]]) in [[LIB]] {
+  // CHECK-NEXT:         hir.pick [[ICB]] [0 (): {
+  // CHECK-NEXT:           hir.write_var [[V]], %x : [[T]]
+  // CHECK-NEXT:           hir.yield
+  // CHECK-NEXT:         } 1 (): {
+  // CHECK-NEXT:           hir.write_var [[V]], %y : [[T]]
+  // CHECK-NEXT:           hir.yield
+  // CHECK-NEXT:         }]
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       }
+  // CHECK-NEXT:       [[RD:%.+]] = hir.read_var [[V]] : [[T]]
+  // CHECK-NEXT:       hir.write_var [[P0]]#0, [[RD]] : [[T]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.loop (%j = %zero : %t) {
+    %odone = hir.geq %j, %n : %t
+    uir.if %odone {
+      uir.break
+    }
+    %inner = uir.loop : %t {
+      uir.if %c {
+        uir.break %x : %t
+      } else {
+        uir.break %y : %t
+      }
+      uir.continue
+    }
+    uir.expr pin 2 {
+      hir.write_var %acc, %inner : %t
+      uir.yield
+    }
+    %next = hir.add %j, %one : %t
+    uir.continue %next : %t
+  }
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Sample ferrying: phase-2 content consumes the per-iteration phase-0
+// iteration argument. The phase-0 records sample it into the continue path's
+// reach choice; the phase-1 replay unpacks it from the incoming payload and
+// re-packs it into the outgoing choice — with no phase-1 content of its own —
+// and phase 2 unpacks it once more to run the accumulation.
+
+// CHECK-LABEL: uir.func @WideRecordSampleFerry
+uir.func @WideRecordSampleFerry(%n: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: [[P0:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[ACC:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   [[L0:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop ([[I:%.+]] = %{{.+}} : %{{.+}}) {
+  // CHECK-NEXT:     [[DONE:%.+]] = hir.geq [[I]], %n : [[T]]
+  // CHECK-NEXT:     uir.if [[DONE]] {
+  // CHECK-NEXT:       [[NR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[R0:%.+]] = hir.opaque_pack([[NR]])
+  // CHECK-NEXT:       hir.opaque_list_push [[L0]], [[R0]]
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[NEXT:%.+]] = hir.add [[I]], %{{.+}} : [[T]]
+  // CHECK-NEXT:     [[RE:%.+]] = hir.choice 1([[I]])
+  // CHECK-NEXT:     [[R1:%.+]] = hir.opaque_pack([[RE]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L0]], [[R1]]
+  // CHECK-NEXT:     uir.continue [[NEXT]] : [[T]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[ACC]], [[L0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[L1:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   hir.replicate ([[RA:%.+]]) in [[P0]]#1 {
+  // CHECK-NEXT:     [[C:%.+]] = hir.pick [[RA]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[T0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.yield [[T0]] : !hir.any
+  // CHECK-NEXT:     } 1 ([[SI:%.+]]): {
+  // CHECK-NEXT:       [[T1:%.+]] = hir.choice 1([[SI]])
+  // CHECK-NEXT:       hir.yield [[T1]] : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     [[R2:%.+]] = hir.opaque_pack([[C]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L1]], [[R2]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 2 {
+  // CHECK-NEXT:   hir.replicate ([[CB:%.+]]) in [[P1]] {
+  // CHECK-NEXT:     hir.pick [[CB]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[SJ:%.+]]): {
+  // CHECK-NEXT:       [[CUR:%.+]] = hir.read_var [[P0]]#0 : [[T]]
+  // CHECK-NEXT:       [[NEW:%.+]] = hir.add [[CUR]], [[SJ]] : [[T]]
+  // CHECK-NEXT:       hir.write_var [[P0]]#0, [[NEW]] : [[T]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.loop (%i = %zero : %t) {
+    %done = hir.geq %i, %n : %t
+    uir.if %done {
+      uir.break
+    }
+    uir.expr pin 2 {
+      %cur = hir.read_var %acc : %t
+      %new = hir.add %cur, %i : %t
+      hir.write_var %acc, %new : %t
+      uir.yield
+    }
+    %next = hir.add %i, %one : %t
+    uir.continue %next : %t
+  }
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Phase-1 control flow layered on the replay: a phase-1 if whose condition is
+// computed from a ferried phase-0 sample and a phase-1 argument gates phase-2
+// content inside a phase-0 loop. The phase-1 replay computes the condition,
+// executes the branch, and records its choice onto the second hit list, so the
+// phase-2 dispatch is gated by a decision made during the phase-1 replay.
+
+// CHECK-LABEL: uir.func @LaterBranchOnReplay
+uir.func @LaterBranchOnReplay(%n: 0, %m: 1, %x: 2) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: [[P0:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[ACC:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   [[L0:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop ([[I:%.+]] = %{{.+}} : %{{.+}}) {
+  // CHECK:          [[RE:%.+]] = hir.choice 1([[I]])
+  // CHECK-NEXT:     [[R1:%.+]] = hir.opaque_pack([[RE]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L0]], [[R1]]
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[ACC]], [[L0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[L1:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   hir.replicate ([[RA:%.+]]) in [[P0]]#1 {
+  // CHECK-NEXT:     [[C:%.+]] = hir.pick [[RA]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[T0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.yield [[T0]] : !hir.any
+  // CHECK-NEXT:     } 1 ([[SI:%.+]]): {
+  // CHECK-NEXT:       [[BIG:%.+]] = hir.geq [[SI]], %m : [[T]]
+  // CHECK-NEXT:       hir.choice_type
+  // CHECK-NEXT:       [[GC:%.+]] = uir.if [[BIG]] : %{{.+}} {
+  // CHECK-NEXT:         [[GT0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:         hir.choice_type
+  // CHECK-NEXT:         uir.yield [[GT0]] : %{{.+}}
+  // CHECK-NEXT:       } else {
+  // CHECK-NEXT:         [[GT1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:         hir.choice_type
+  // CHECK-NEXT:         uir.yield [[GT1]] : %{{.+}}
+  // CHECK-NEXT:       }
+  // CHECK-NEXT:       [[T1:%.+]] = hir.choice 1([[GC]])
+  // CHECK-NEXT:       hir.yield [[T1]] : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     [[R2:%.+]] = hir.opaque_pack([[C]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L1]], [[R2]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 2 {
+  // CHECK-NEXT:   hir.replicate ([[CB:%.+]]) in [[P1]] {
+  // CHECK-NEXT:     hir.pick [[CB]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[GB:%.+]]): {
+  // CHECK-NEXT:       hir.pick [[GB]] [0 (): {
+  // CHECK-NEXT:         hir.write_var [[P0]]#0, %x : [[T]]
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       } 1 (): {
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       }]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.loop (%i = %zero : %t) {
+    %done = hir.geq %i, %n : %t
+    uir.if %done {
+      uir.break
+    }
+    uir.expr pin 1 {
+      %big = hir.geq %i, %m : %t
+      uir.if %big {
+        uir.expr pin 1 {
+          hir.write_var %acc, %x : %t
+          uir.yield
+        }
+        uir.yield
+      }
+      uir.yield
+    }
+    %next = hir.add %i, %one : %t
+    uir.continue %next : %t
+  }
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// A degenerate transcoder phase: phase-0 loop CF with two distinct phase-2
+// content sites (one on the exit path, one on the continue path) and no
+// phase-1 content at all. The general rule still produces a phase-1 replicate,
+// which holds nothing but the re-recording of the cf and reach slots onto the
+// second hit list — a pure pass-through phase, correct output by construction
+// (collapsing it is a later peephole).
+
+// CHECK-LABEL: uir.func @TranscoderPhase
+uir.func @TranscoderPhase(%n: 0, %x: 2, %y: 2) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: [[P0:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[ACC:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   [[L0:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop ([[I:%.+]] = %{{.+}} : %{{.+}}) {
+  // CHECK-NEXT:     [[DONE:%.+]] = hir.geq [[I]], %n : [[T]]
+  // CHECK-NEXT:     hir.choice_type
+  // CHECK-NEXT:     [[CF:%.+]] = uir.if [[DONE]] : %{{.+}} {
+  // CHECK-NEXT:       [[CF0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[NR0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[R0:%.+]] = hir.opaque_pack([[CF0]], [[NR0]])
+  // CHECK-NEXT:       hir.opaque_list_push [[L0]], [[R0]]
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[CF1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.yield [[CF1]] : %{{.+}}
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[NEXT:%.+]] = hir.add [[I]], %{{.+}} : [[T]]
+  // CHECK-NEXT:     [[RE:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     [[R1:%.+]] = hir.opaque_pack([[CF]], [[RE]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L0]], [[R1]]
+  // CHECK-NEXT:     uir.continue [[NEXT]] : [[T]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[ACC]], [[L0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[L1:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   hir.replicate ([[CFA:%.+]], [[REA:%.+]]) in [[P0]]#1 {
+  // CHECK-NEXT:     [[C1:%.+]] = hir.pick [[CFA]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[T0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.yield [[T0]] : !hir.any
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       [[T1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       hir.yield [[T1]] : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     [[C2:%.+]] = hir.pick [[REA]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[U0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.yield [[U0]] : !hir.any
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       [[U1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       hir.yield [[U1]] : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     [[R2:%.+]] = hir.opaque_pack([[C1]], [[C2]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L1]], [[R2]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 2 {
+  // CHECK-NEXT:   hir.replicate ([[CFB:%.+]], [[REB:%.+]]) in [[P1]] {
+  // CHECK-NEXT:     hir.pick [[CFB]] [0 (): {
+  // CHECK-NEXT:       hir.write_var [[P0]]#0, %x : [[T]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.pick [[REB]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.write_var [[P0]]#0, %y : [[T]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.loop (%i = %zero : %t) {
+    %done = hir.geq %i, %n : %t
+    uir.if %done {
+      uir.expr pin 2 {
+        hir.write_var %acc, %x : %t
+        uir.yield
+      }
+      uir.break
+    }
+    uir.expr pin 2 {
+      hir.write_var %acc, %y : %t
+      uir.yield
+    }
+    %next = hir.add %i, %one : %t
+    uir.continue %next : %t
+  }
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Three phases of record content with a ferried sample: the phase-3 content
+// consumes the phase-0 iteration argument, so the fixpoint re-records twice
+// and the sample ferries across both intermediate replays before phase 3
+// consumes it.
+
+// CHECK-LABEL: uir.func @ThreeWideRecordContent
+uir.func @ThreeWideRecordContent(%n: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: [[P0:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[ACC:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   [[L0:%.+]] = hir.opaque_list_create
+  // CHECK:          [[RE:%.+]] = hir.choice 1([[I:%.+]])
+  // CHECK-NEXT:     [[R1:%.+]] = hir.opaque_pack([[RE]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L0]], [[R1]]
+  // CHECK-NEXT:     uir.continue
+  // CHECK:        uir.phase_return yield [[ACC]], [[L0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[L1:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   hir.replicate ([[RA:%.+]]) in [[P0]]#1 {
+  // CHECK-NEXT:     [[C1:%.+]] = hir.pick [[RA]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[T0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.yield [[T0]] : !hir.any
+  // CHECK-NEXT:     } 1 ([[S1:%.+]]): {
+  // CHECK-NEXT:       [[T1:%.+]] = hir.choice 1([[S1]])
+  // CHECK-NEXT:       hir.yield [[T1]] : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     [[R2:%.+]] = hir.opaque_pack([[C1]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L1]], [[R2]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P2:%.+]] = uir.phase 2 {
+  // CHECK-NEXT:   [[L2:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   hir.replicate ([[CA:%.+]]) in [[P1]] {
+  // CHECK-NEXT:     [[C2:%.+]] = hir.pick [[CA]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[U0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.yield [[U0]] : !hir.any
+  // CHECK-NEXT:     } 1 ([[S2:%.+]]): {
+  // CHECK-NEXT:       [[U1:%.+]] = hir.choice 1([[S2]])
+  // CHECK-NEXT:       hir.yield [[U1]] : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     [[R3:%.+]] = hir.opaque_pack([[C2]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L2]], [[R3]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L2]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 3 {
+  // CHECK-NEXT:   hir.replicate ([[CB:%.+]]) in [[P2]] {
+  // CHECK-NEXT:     hir.pick [[CB]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[S3:%.+]]): {
+  // CHECK-NEXT:       [[CUR:%.+]] = hir.read_var [[P0]]#0 : [[T]]
+  // CHECK-NEXT:       [[NEW:%.+]] = hir.add [[CUR]], [[S3]] : [[T]]
+  // CHECK-NEXT:       hir.write_var [[P0]]#0, [[NEW]] : [[T]]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.loop (%i = %zero : %t) {
+    %done = hir.geq %i, %n : %t
+    uir.if %done {
+      uir.break
+    }
+    uir.expr pin 3 {
+      %cur = hir.read_var %acc : %t
+      %new = hir.add %cur, %i : %t
+      hir.write_var %acc, %new : %t
+      uir.yield
+    }
+    %next = hir.add %i, %one : %t
+    uir.continue %next : %t
+  }
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Mid-sweep deposit deferral: the inner loop's extraction deposits its
+// receiving replicate inside the phase-0 if after the sweep's branch
+// extraction already ran, so the outer loop's scan finds later content buried
+// in non-exit CF and defers to the next sweep, where branch extraction lifts
+// the deposit into the if's choice payload and the outer records pick it up in
+// program order.
+
+// CHECK-LABEL: uir.func @InnerFrameUnderIf
+uir.func @InnerFrameUnderIf(%c: 0, %d: 0, %x: 1, %n: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0, %0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  %v = hir.var : %t
+  // CHECK-NEXT: [[P0:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   [[L0:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop {
+  // CHECK-NEXT:     uir.if %d {
+  // CHECK-NEXT:       [[NR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[R0:%.+]] = hir.opaque_pack([[NR]])
+  // CHECK-NEXT:       hir.opaque_list_push [[L0]], [[R0]]
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     hir.choice_type
+  // CHECK-NEXT:     [[GC:%.+]] = uir.if %c : %{{.+}} {
+  // CHECK-NEXT:       [[LI:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:       uir.loop {
+  // CHECK-NEXT:         uir.if %d {
+  // CHECK-NEXT:           [[INR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:           [[IR0:%.+]] = hir.opaque_pack([[INR]])
+  // CHECK-NEXT:           hir.opaque_list_push [[LI]], [[IR0]]
+  // CHECK-NEXT:           uir.break
+  // CHECK-NEXT:         }
+  // CHECK-NEXT:         [[IRE:%.+]] = hir.choice 1()
+  // CHECK-NEXT:         [[IR1:%.+]] = hir.opaque_pack([[IRE]])
+  // CHECK-NEXT:         hir.opaque_list_push [[LI]], [[IR1]]
+  // CHECK-NEXT:         uir.continue
+  // CHECK-NEXT:       }
+  // CHECK-NEXT:       [[GT0:%.+]] = hir.choice 0([[LI]])
+  // CHECK-NEXT:       uir.yield [[GT0]] : %{{.+}}
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[GT1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.yield [[GT1]] : %{{.+}}
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[RE:%.+]] = hir.choice 1([[GC]])
+  // CHECK-NEXT:     [[R1:%.+]] = hir.opaque_pack([[RE]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L0]], [[R1]]
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[V]], [[L0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   hir.replicate ([[RB:%.+]]) in [[P0]]#1 {
+  // CHECK-NEXT:     hir.pick [[RB]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 ([[GB:%.+]]): {
+  // CHECK-NEXT:       hir.pick [[GB]] [0 ([[LIB:%.+]]): {
+  // CHECK-NEXT:         hir.replicate ([[IRB:%.+]]) in [[LIB]] {
+  // CHECK-NEXT:           hir.pick [[IRB]] [0 (): {
+  // CHECK-NEXT:             hir.yield
+  // CHECK-NEXT:           } 1 (): {
+  // CHECK-NEXT:             hir.write_var [[P0]]#0, %x : [[T]]
+  // CHECK-NEXT:             hir.yield
+  // CHECK-NEXT:           }]
+  // CHECK-NEXT:           hir.yield
+  // CHECK-NEXT:         }
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       } 1 (): {
+  // CHECK-NEXT:         hir.yield
+  // CHECK-NEXT:       }]
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  uir.loop {
+    uir.if %d {
+      uir.break
+    }
+    uir.if %c {
+      uir.loop {
+        uir.if %d {
+          uir.break
+        }
+        uir.expr pin 1 {
+          hir.write_var %v, %x : %t
+          uir.yield
+        }
+        uir.continue
+      }
+      uir.yield
+    }
+    uir.continue
+  }
+  uir.return
+}
