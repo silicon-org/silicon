@@ -130,14 +130,16 @@
 // even at a provider count of one.
 //
 // The pass covers straight-line content, single-boundary branch extraction,
-// single-boundary loop-record extraction, break-value choices, and single-
-// provider result forwarding. Inputs that need the remaining sorting machinery
-// are rejected with explicit diagnostics instead of being sorted incorrectly:
-// a cross-phase result whose delivery this pass cannot complete (the receiving
-// pick of a multi-provider selection crossing more than one phase wide, or a
-// single-provider value the op holds at a float phase awaiting float sinking),
-// hoisting and content more than one phase away from its control flow, and
-// backward uses from floating content nested under earlier-phase control flow.
+// single-boundary loop-record extraction, break-value choices, single-provider
+// result forwarding, and hoisting of body content earlier than its enclosing
+// frame. Inputs that need the remaining sorting machinery are rejected with
+// explicit diagnostics instead of being sorted incorrectly: a cross-phase
+// result whose delivery this pass cannot complete (the receiving pick of a
+// multi-provider selection crossing more than one phase wide, or a single-
+// provider value the op holds at a float phase awaiting float sinking), later-
+// phase content more than one phase away from its control flow, and any phase
+// mismatch inside the signature region, which this pass does not hoist or
+// extract.
 //
 //===----------------------------------------------------------------------===//
 
@@ -278,7 +280,8 @@ private:
   LogicalResult extractLoops();
   LogicalResult extractFromLoop(LoopOp loopOp, int16_t p);
   FailureOr<LoopOp> extractBreakValues(LoopOp loopOp, int16_t p);
-  LogicalResult forwardSingleProviderResults();
+  LogicalResult forwardSingleProviderResults(bool &changed);
+  LogicalResult hoistEarlierContent(bool &changed);
   SmallVector<Value> collectResultProviders(Operation *op, unsigned idx);
   void forwardResults(Operation *op, ArrayRef<Value> forwardTo, int16_t p);
   LogicalResult scanBlock(Operation *loopOp, Block &block, int16_t p,
@@ -2451,8 +2454,9 @@ void PhaseSorter::forwardResults(Operation *op, ArrayRef<Value> forwardTo,
 }
 
 /// Forward every single-provider control-flow result whose provider operand is
-/// defined outside its op. See the section header for the rule and invariant.
-LogicalResult PhaseSorter::forwardSingleProviderResults() {
+/// defined outside its op. Sets `changed` when it forwards any result. See the
+/// section header for the rule and invariant.
+LogicalResult PhaseSorter::forwardSingleProviderResults(bool &changed) {
   // Innermost first, so a forwarded inner result is already an ordinary
   // external operand of its enclosing op when that op is considered (forwarding
   // chains).
@@ -2483,8 +2487,113 @@ LogicalResult PhaseSorter::forwardSingleProviderResults() {
         anyForward = true;
       }
     }
-    if (anyForward)
+    if (anyForward) {
       forwardResults(op, forwardTo, p);
+      changed = true;
+    }
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Hoist Earlier-Phase Content Out of Later-Phase Frames
+//===----------------------------------------------------------------------===//
+//
+// # Hoist Content Earlier Than Its Enclosing Frame
+//
+// An op whose derived phase is earlier than the phase of a region-bearing frame
+// enclosing it does not belong inside that frame: a later-phase frame's branch
+// and iteration decisions are made in a later phase and so cannot gate
+// earlier-phase execution, which therefore runs unconditionally, exactly once.
+// Hoisting moves every such op out to immediately before the frame, in program
+// order; its results then dominate the frame and flow back into the interior as
+// ordinary SSA uses.
+//
+// Frames nest, so an op moves out past every enclosing frame that is later than
+// it, landing before the outermost such frame — the op then sits at its own
+// phase, or is later-phase content of an earlier frame, an extraction residual
+// left to the rejection below. A hoisted op that still references a floating
+// value defined inside that frame (a constant or region-free pure tree, which
+// does not cross as a phase result) has that value's tree cloned in front of
+// it; every other interior reference would be a causality violation the
+// analysis rejects, and a co-hoisted earlier-phase definition precedes its user
+// in program order, so it has already left the frame when the user is cloned.
+//
+// Hoisting composes with single-provider forwarding in both directions, so the
+// two run together to a fixpoint before extraction: forwarding turns an
+// interior provider into an external operand and exposes the earlier-phase
+// content that consumes it (an earlier value feeding a divergent branch), while
+// hoisting an interior provider out of its op turns it into an external
+// provider whose result then forwards (a loop whose sole break carries an
+// earlier-phase computation). Running the fixpoint before extraction also keeps
+// earlier-phase ops from being pulled into a replicate body and replayed once
+// per activation.
+
+/// Hoist every op earlier than an enclosing frame out to before that frame.
+/// Sets `changed` when it moves any op. See the section header.
+LogicalResult PhaseSorter::hoistEarlierContent(bool &changed) {
+  // Collect every op strictly earlier than its immediate enclosing frame, in
+  // program order, then move each before the outermost enclosing frame that is
+  // later than it. Program order preserves the relative order of co-hoisted
+  // siblings, so their mutual SSA dependencies stay dominated; a single move to
+  // the outermost frame avoids re-cloning a floating value once per level.
+  SmallVector<Operation *> hoist;
+  funcOp.getBody().walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (op == funcOp)
+      return;
+    auto *parent = op->getParentOp();
+    if (parent == funcOp)
+      return;
+    auto opPhase = realPhaseOf(op);
+    if (!opPhase)
+      return;
+    // A real-phase op's parent is a region-bearing frame, which the analysis
+    // always stamps with a real phase.
+    int16_t parentPhase = analysis.opPhases.at(parent);
+    assert(isRealPhase(parentPhase) && "frame parent is never floating");
+    if (*opPhase < parentPhase)
+      hoist.push_back(op);
+  });
+  if (hoist.empty())
+    return success();
+  changed = true;
+
+  for (auto *op : hoist) {
+    int16_t opPhase = analysis.opPhases.at(op);
+    // The outermost enclosing frame that is later than the op: walk up while
+    // each next-outer frame is still strictly later.
+    Operation *frame = op->getParentOp();
+    while (auto *outer = frame->getParentOp()) {
+      if (outer == funcOp || analysis.opPhases.at(outer) <= opPhase)
+        break;
+      frame = outer;
+    }
+    op->moveBefore(frame);
+
+    // A floating value the op still references from inside the frame is no
+    // longer visible now that the op sits outside; clone its tree in front of
+    // the op. A co-hoisted earlier-phase definition already left the frame.
+    OpBuilder builder(op);
+    op->walk([&](Operation *user) {
+      for (auto &use : user->getOpOperands()) {
+        auto *defOp = use.get().getDefiningOp();
+        if (!defOp || !frame->isProperAncestor(defOp))
+          continue;
+        assert(!isRealPhase(analysis.opPhases.at(defOp)) &&
+               hir::isEffectivelyPure(defOp) && defOp->getNumRegions() == 0 &&
+               "hoisted op uses non-floating value from later-phase frame");
+        builder.setInsertionPoint(op);
+        IRMapping mapping;
+        SmallVector<Operation *> clonedOps;
+        auto clone =
+            cloneFloatingTree(frame, use.get(), builder, mapping, clonedOps);
+        for (auto *clonedOp : clonedOps)
+          clonedOp->walk([&](Operation *cloned) {
+            setPhase(cloned, PhaseAnalysis::kFloatPhase);
+          });
+        use.set(clone);
+      }
+    });
   }
   return success();
 }
@@ -2521,11 +2630,14 @@ static std::string phaseName(int16_t phase) {
 ///   float phase, which neither forwards (its provider is defined inside the
 ///   op, not iteration-invariant external content) nor choice-ifies (a float
 ///   phase is not a later real phase), and so awaits float sinking.
-/// - Anchored content whose phase differs from its parent op's phase, which
-///   needs hoisting across the phase boundary (branch content is handled by
+/// - Anchored content whose phase differs from its parent frame's phase. In the
+///   body, hoisting already lifted every op earlier than its frame out, so a
+///   residual is strictly later than its frame: branch content is handled by
 ///   branch extraction and single-boundary loop content by loop-record
-///   extraction above; content more than one phase later than its loop is
-///   left here for the next-boundary re-extraction that this pass does not do).
+///   extraction above, leaving content more than one phase later than its loop
+///   for the next-boundary re-extraction that this pass does not do. Hoisting
+///   and extraction run on the body only, so a phase mismatch in either
+///   direction inside the signature region surfaces here too.
 ///
 /// Together these establish that every op and every value inside anchored
 /// content is at that content's phase, which is what makes the wrap and
@@ -2566,22 +2678,34 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
       }
     }
 
-    // Reject anchored content nested inside differently-phased content.
-    // Every frame now ends with a real phase, so a parent — always a
-    // region-bearing frame — is never floating: content whose phase differs
-    // from its parent's needs hoisting or extraction across the boundary,
-    // which this pass does not implement.
+    // Reject content nested inside a differently-phased frame that neither
+    // hoisting nor extraction lifted. Every frame ends with a real phase, so a
+    // parent — always a region-bearing frame — is never floating. The two
+    // directions have distinct missing machinery, and both survive here only
+    // where that machinery does not run: extraction is not implemented for a
+    // later-phase single-provider interior value, a dead-path arm, or a
+    // diverging-arm residual that does not choice-ify, and hoisting and
+    // extraction both run on the body only, so any phase mismatch inside the
+    // signature region — which this pass does not hoist or extract — surfaces
+    // here as well.
     if (auto *parent = op->getParentOp(); parent != funcOp) {
       auto parentIt = analysis.opPhases.find(parent);
       assert(parentIt != analysis.opPhases.end() && "op phase not computed");
       assert(isRealPhase(parentIt->second) &&
              "a region-bearing parent is never floating");
       if (isRealPhase(opPhase) && opPhase != parentIt->second) {
-        op->emitOpError()
-            << "at phase " << opPhase << " is nested inside phase "
-            << parentIt->second
-            << " content; hoisting and extraction across phase "
-               "boundaries are not implemented in phase sorting yet";
+        if (opPhase < parentIt->second)
+          op->emitOpError()
+              << "at phase " << opPhase << " is nested inside later phase "
+              << parentIt->second
+              << " content; hoisting it out is not implemented in phase "
+                 "sorting yet";
+        else
+          op->emitOpError()
+              << "at phase " << opPhase << " is nested inside earlier phase "
+              << parentIt->second
+              << " content; extracting this later-phase content is not "
+                 "implemented in phase sorting yet";
         return WalkResult::interrupt();
       }
     }
@@ -2815,8 +2939,19 @@ LogicalResult PhaseSorter::run() {
     return failure();
   if (failed(forwardNeverValues()))
     return failure();
-  if (failed(forwardSingleProviderResults()))
-    return failure();
+  // Single-provider forwarding and hoisting expose each other, so run them to a
+  // fixpoint before extraction: forwarding an interior provider away lets an
+  // earlier-phase consumer hoist, and hoisting an interior provider out lets
+  // its op's result forward.
+  while (true) {
+    bool changed = false;
+    if (failed(forwardSingleProviderResults(changed)))
+      return failure();
+    if (failed(hoistEarlierContent(changed)))
+      return failure();
+    if (!changed)
+      break;
+  }
   if (failed(extractBranches()))
     return failure();
   if (failed(extractLoops()))

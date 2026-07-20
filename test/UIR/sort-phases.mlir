@@ -4778,3 +4778,124 @@ uir.func @NestedBreakValueChoice(%n: -1, %x: 0) -> (result: 0) {
   // CHECK-NEXT: }]
   uir.return %y : %t
 }
+
+//===----------------------------------------------------------------------===//
+// Hoisting: an op earlier than a frame it is nested in moves out to before the
+// frame, since later-phase control flow cannot gate earlier-phase execution.
+// Hoisting composes with single-provider forwarding in both directions, run to
+// a fixpoint before extraction.
+//===----------------------------------------------------------------------===//
+
+// Forwarding exposes hoisting: the inner if forwards its single-provider result
+// to %a, so the phase -1 `hir.mul` that consumes it now takes only external
+// operands and hoists out of the phase-0 loop into its own phase -1, crossing
+// forward as the loop's break value. The loop keeps a genuine two-break
+// selection at its own phase 0.
+
+// CHECK-LABEL: uir.func @HoistBackwardComputation
+uir.func @HoistBackwardComputation(%a: -1, %c: 0) -> (r: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[S:%.+]] = hir.mul %a, %a : [[T]]
+  // CHECK-NEXT:   uir.phase_return yield [[S]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[L:%.+]] = uir.loop : [[T]] {
+  // CHECK-NEXT:     uir.if %c {
+  // CHECK-NEXT:       uir.break %a : [[T]]
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       uir.yield
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     uir.break [[P]] : [[T]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return [[L]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %l = uir.loop : %t {
+    %r = uir.if %c : %t {
+      uir.break %a : %t
+    } else {
+      uir.yield %a : %t
+    }
+    %s = hir.mul %r, %r : %t
+    uir.break %s : %t
+  }
+  uir.return %l : %t
+}
+
+// Hoisting exposes forwarding: the loop's sole break carries an interior
+// earlier-phase chain, so the result is single-provider but not external until
+// the chain hoists out. After hoisting the whole chain to phase -1 the now-
+// external result forwards, leaving the loop resultless; the fixpoint of
+// forwarding and hoisting reaches this in a second round.
+
+// CHECK-LABEL: uir.func @HoistExposesForward
+uir.func @HoistExposesForward(%a: -1, %c: 0) -> (r: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[M:%.+]] = hir.mul %a, %a : [[T]]
+  // CHECK-NEXT:   [[N:%.+]] = hir.add [[M]], %a : [[T]]
+  // CHECK-NEXT:   uir.phase_return yield [[N]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   uir.loop {
+  // CHECK-NEXT:     uir.break
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return [[P]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %l = uir.loop : %t {
+    %m = hir.mul %a, %a : %t
+    %n = hir.add %m, %a : %t
+    uir.break %n : %t
+  }
+  uir.return %l : %t
+}
+
+// Two-level hoisting with a floating constant cloned across the boundary: the
+// phase -1 `hir.mul` sits two frames deep (inside the phase-0 if inside the
+// phase-0 loop) and moves out past both to before the loop. Its floating
+// operand `%five`, defined inside the if, is not visible from the new location,
+// so its tree is cloned in front of the hoisted op; the original stays behind,
+// dead. The crossing value feeds the phase-0 var write inside the loop.
+
+// CHECK-LABEL: uir.func @HoistTwoLevelFloat
+uir.func @HoistTwoLevelFloat(%a: -1, %c: 0) -> (r: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[FIVE:%.+]] = hir.constant_int 5 : [[T]]
+  // CHECK-NEXT: [[P:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[S:%.+]] = hir.mul %a, [[FIVE]] : [[T]]
+  // CHECK-NEXT:   uir.phase_return yield [[S]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   uir.loop {
+  // CHECK:          uir.if %c {
+  // CHECK:            hir.write_var [[V]], [[P]] : [[T]]
+  %vv = hir.var : %t
+  %l = uir.loop : %t {
+    uir.if %c {
+      %five = hir.constant_int 5 : %t
+      %s = hir.mul %a, %five : %t
+      hir.write_var %vv, %s : %t
+      uir.yield
+    }
+    uir.break %a : %t
+  }
+  uir.return %l : %t
+}

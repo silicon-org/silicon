@@ -89,31 +89,6 @@ uir.func @PhaseCallInInput(%x: 0) -> () {
 
 // -----
 
-// A single-provider backward result forwards to its provider operand (%a), but
-// the value it feeds is an earlier-phase computation nested inside the loop:
-// once the if is dissolved, the phase -1 `hir.mul` still sits inside the
-// phase-0 loop and must be hoisted out. Forwarding composes with hoisting,
-// which is not implemented, so the residual mul is rejected.
-uir.func @SingleProviderBackward(%a: -1, %c: 0) -> (r: 0) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %l = uir.loop : %t {
-    %r = uir.if %c : %t {
-      uir.break %a : %t
-    } else {
-      uir.yield %a : %t
-    }
-    // expected-error @below {{at phase -1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
-    %s = hir.mul %r, %r : %t
-    uir.break %s : %t
-  }
-  uir.return %l : %t
-}
-
-// -----
-
 // A multi-provider result demanded more than one phase past its if: both arms
 // yield an external phase-2 value, so branch extraction choice-ifies it into a
 // pick at phase 1, but the reconstructed value materializes at phase 2. The
@@ -164,7 +139,7 @@ uir.func @SingleProviderInternalIf(%c: 0, %y: 1) -> (result: 1) {
 } {
   %t = hir.int_type
   %v = uir.if %c : %t {
-    // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
+    // expected-error @below {{at phase 1 is nested inside earlier phase 0 content; extracting this later-phase content is not implemented in phase sorting yet}}
     %w = hir.add %y, %y : %t
     uir.yield %w : %t
   } else {
@@ -188,7 +163,7 @@ uir.func @UnreachableArmLaterResult(%c: 0, %y: 1) -> (result: 1) {
 } {
   %t = hir.int_type
   %v = uir.if %c : %t {
-    // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
+    // expected-error @below {{at phase 1 is nested inside earlier phase 0 content; extracting this later-phase content is not implemented in phase sorting yet}}
     %a = hir.add %y, %y : %t
     uir.yield %a : %t
   } else {
@@ -211,7 +186,7 @@ uir.func @UnreachableArmIf(%c: 0, %x: 0) -> () {
   %va = hir.var : %t
   uir.if %c {
     uir.expr pin 1 {
-      // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
+      // expected-error @below {{at phase 1 is nested inside earlier phase 0 content; extracting this later-phase content is not implemented in phase sorting yet}}
       hir.write_var %va, %x : %t
       uir.yield
     }
@@ -237,7 +212,7 @@ uir.func @UnreachableAltPick(%c: 0, %x: 0) -> () {
   hir.pick %ch [
     0 (): {
       uir.expr pin 1 {
-        // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
+        // expected-error @below {{at phase 1 is nested inside earlier phase 0 content; extracting this later-phase content is not implemented in phase sorting yet}}
         hir.write_var %va, %x : %t
         uir.yield
       }
@@ -266,7 +241,7 @@ uir.func @SingleProviderInternalPick(%c: 0, %y: 1) -> (result: 1) {
   %ch = hir.choice 0 ()
   %v = hir.pick %ch : !hir.any [
     0 (): {
-      // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
+      // expected-error @below {{at phase 1 is nested inside earlier phase 0 content; extracting this later-phase content is not implemented in phase sorting yet}}
       %w = hir.add %y, %y : %t
       hir.yield %w : !hir.any
     }
@@ -353,9 +328,32 @@ uir.func @DivergingArmSingleProvider(%c: 0, %a: 1) -> (result: 1) {
     %loop = uir.loop : %t { uir.continue }
     uir.yield %loop : %t
   } else {
-    // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
+    // expected-error @below {{at phase 1 is nested inside earlier phase 0 content; extracting this later-phase content is not implemented in phase sorting yet}}
     %w = hir.mul %a, %a : %t
     uir.yield %w : %t
   }
+  uir.return %r : %t
+}
+
+// -----
+
+// Hoisting, forwarding, and extraction all run on the body only, so an
+// earlier-phase op nested inside a later-phase frame in the signature region is
+// not hoisted out and surfaces as a nested-content rejection instead. Here a
+// phase -1 `hir.uint_type` sits inside a phase-0 `uir.if` frame that computes
+// the argument type conditionally.
+uir.func @SignatureFrameHoist(%N: -1, %c: 0) -> (result: 0) {
+  %int = hir.int_type
+  %ty = uir.if %c : %int {
+    // expected-error @below {{at phase -1 is nested inside later phase 0 content; hoisting it out is not implemented in phase sorting yet}}
+    %w = hir.uint_type %N
+    uir.yield %int : %int
+  } else {
+    uir.yield %int : %int
+  }
+  uir.signature (%int, %int) -> (%int)
+} {
+  %t = hir.int_type
+  %r = hir.add %c, %c : %t
   uir.return %r : %t
 }
