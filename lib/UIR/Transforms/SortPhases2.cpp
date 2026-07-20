@@ -82,10 +82,14 @@
 //   producing CF — differing from an if only in its dispatch operand
 //   (selector instead of condition), its payload-carrying arm block
 //   arguments (ordinary arm-local phase-p values that cross as choice
-//   payload), and its lack of result type operands. Only multi-provider
-//   results are lifted this way; single-provider divergent
-//   results stay rejected below, and never-produced results are handled by
-//   never-forwarding (their consumers are already `uir.unreachable_value`).
+//   payload), and its lack of result type operands. A later-phase result
+//   choice-ifies whenever a reaching arm provides it, whether several arms do
+//   (a genuine selection) or a single arm does while the others provably
+//   diverge (an unreachable terminator or a breakless loop) — the diverging
+//   arms yield `uir.unreachable_value` in every slot and become dead receiving
+//   alternatives the choice never selects. Never-produced results (the whole op
+//   diverges) are not lifted; their consumers are already
+//   `uir.unreachable_value` from never-forwarding.
 //
 // - **Extract loops**: a `uir.loop` at phase p whose body holds later-phase
 //   content, or whose result is at a later phase, is rebuilt at phase p
@@ -680,14 +684,17 @@ LogicalResult PhaseSorter::forwardNeverValues() {
 // The choice is an ordinary phase-p value; the cross rule yields it out of
 // phase p and the pick consumes it in phase p+1 like any other crossing. The
 // distinction between an obligation to choice-ify and the neighbouring
-// divergent-result cases is local: a later-phase result is choice-ified only
-// when more than one arm yield provides it — the values' identity is
-// irrelevant. A single-provider result (the other arm exits) is not extracted;
-// the residual branch still delivers it divergently, so the rejection below
-// reports it. A never-produced result is not extracted either, but its
-// consumers were already rewritten to `uir.unreachable_value` by
-// never-forwarding, so it is simply left unused. Extraction thus lifts
-// exactly the choice-ification case.
+// divergent-result cases is local: a later-phase result choice-ifies whenever a
+// reaching arm provides it — the values' identity is irrelevant, and whether
+// several arms provide it (a genuine selection) or a single reaching arm does
+// while every other arm provably diverges (an unreachable terminator or a
+// breakless loop). External single-provider results were already forwarded
+// away, so the remaining single-provider case is an interior value that varies
+// per path and must choice-ify. The diverging arms yield
+// `uir.unreachable_value` in every slot and become dead receiving alternatives
+// the choice never selects. A never-produced result (the whole op diverges) is
+// not extracted; its consumers were already rewritten to
+// `uir.unreachable_value` by never-forwarding, so it is simply left unused.
 
 /// Whether any op transitively inside `root` sits at a real phase later than
 /// p. A sentinel-phase op is a floating region-free pure value (a constant or
@@ -928,11 +935,12 @@ static std::optional<ValueRange> armProvidedValues(Operation *terminator) {
 /// An arm terminated by an exit or a dead `uir.unreachable` is not a carrier
 /// and provides nothing; provider-ness is otherwise a control-flow property, so
 /// a reachable arm provides its slot whatever it yields — a
-/// `uir.unreachable_value` poison included. A result provided by more than one
-/// arm is a selection and a choice-ification obligation when it is later-phase;
-/// a single-provider result (every other arm exits or is unreachable) is not
-/// choice-ified but, if its provider is defined inside the op, left for the
-/// cross-phase-result rejection.
+/// `uir.unreachable_value` poison included. A later-phase result is a
+/// choice-ification obligation whenever a reaching arm provides it, whether
+/// more than one arm does (a genuine selection) or a single reaching arm does
+/// while every other arm provably diverges; both reconstruct in the receiving
+/// pick. Zero providers is a never result — the whole op diverges — and is not
+/// choice-ified.
 unsigned PhaseSorter::countResultProviders(Operation *op, unsigned idx) {
   unsigned count = 0;
   for (auto *region : branchArms(op)) {
@@ -952,14 +960,14 @@ unsigned PhaseSorter::countResultProviders(Operation *op, unsigned idx) {
 ///
 /// A branch is extracted only when every one of its results is deliverable at
 /// its own phase after extraction: results already at phase p stay, and
-/// results at a later phase are removed and reconstructed by the pick — but
-/// only if they choice-ify (provided by more than one arm yield). A result
-/// diverging from the op's phase in any other way (a single provider defined
-/// inside the op, whose external single providers were already forwarded away,
-/// or a never-produced result whose short-yielding arms would break the
-/// kept-result rebuild) is not extracted; the residual branch is left for the
-/// divergence rejection, except a never result, whose consumers
-/// never-forwarding already rewrote, so it is simply left unused.
+/// results at a later phase are removed and reconstructed by the pick whenever
+/// a reaching arm provides them. External single-provider results were
+/// forwarded away before extraction, so a surviving later-phase result
+/// choice-ifies whether several arms provide it (a genuine selection) or a
+/// single reaching arm provides it while the others provably diverge (a single
+/// interior provider). A never-produced result is not extracted — the whole op
+/// diverges, its consumers were already rewritten to `uir.unreachable_value`,
+/// so it is simply left unused.
 LogicalResult PhaseSorter::extractBranches() {
   SmallVector<Operation *> branchOps;
   funcOp.getBody().walk<WalkOrder::PostOrder>([&](Operation *op) {
@@ -978,14 +986,22 @@ LogicalResult PhaseSorter::extractBranches() {
       int16_t vph = analysis.actualPhase.at(result);
       if (vph == p)
         continue; // Kept at the op's phase.
-      if (isRealPhase(vph) && vph > p &&
-          countResultProviders(op, result.getResultNumber()) > 1) {
+      if (isRealPhase(vph) && vph > p) {
+        // A later-phase result choice-ifies whenever a reaching arm provides
+        // it. The whole op is non-diverging (a real later phase implies some
+        // arm rejoins), so the provider count is at least one: greater than one
+        // for a genuine selection, exactly one when a single reaching arm
+        // delivers the result while every other arm provably diverges. Both
+        // reconstruct in the receiving pick, so both extract; the diverging
+        // arms become dead receiving alternatives the choice never selects.
+        assert(countResultProviders(op, result.getResultNumber()) >= 1 &&
+               "a later-phase result must have a reaching provider");
         hasChoiceResult = true;
-        continue; // Choice-ification obligation.
+        continue;
       }
-      // Single-provider divergence, or a never result (no arm delivers a
-      // materializing value; unused after never-forwarding but still not a
-      // choice-ification obligation).
+      // A never result (zero reaching providers; the whole op diverges) is left
+      // unused after never-forwarding, its consumers already
+      // `uir.unreachable_value`, so the op is not extracted.
       extractable = false;
       break;
     }
@@ -1008,19 +1024,38 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p) {
   auto loc = op->getLoc();
   auto anyTy = hir::AnyType::get(op->getContext());
 
-  // Arms that exit instead of yielding (a break/continue targeting the
-  // enclosing loop) belong to that loop's records, and an arm whose own
-  // terminator is `uir.unreachable` is a dead path with no continuation yield
-  // to rebuild; neither is branch extraction's concern. Leave the branch for
-  // the corresponding rejection.
-  for (auto *arm : branchArms(op)) {
+  // Whether an arm's continuation yield is reachable — a control-flow property:
+  // the terminator is a yield/hir.yield and control provably reaches it. A
+  // non-reaching arm provably diverges at phase p (a `uir.unreachable`
+  // terminator, or a breakless loop before its yield), so its choice tag is
+  // never produced and its receiving alternative is dead. An absent else region
+  // falls through, hence reaches.
+  auto armReaches = [&](Region *arm) {
     if (arm->empty())
-      continue;
+      return true;
+    auto *term = arm->front().getTerminator();
+    return armProvidedValues(term).has_value() && analysis.reaches(term, op);
+  };
+
+  // An arm that exits to an enclosing loop belongs to that loop's records, and
+  // a non-reaching arm holding its own later-phase content is the
+  // all-paths-diverge-with-content family that needs machinery this pass does
+  // not have; both leave the branch for the rejection. A branch with no
+  // reaching arm never rejoins, so there is no choice to dispatch on — leave it
+  // too. Otherwise the later phase running at all implies a reaching arm ran,
+  // so the reaching arms' content extracts and the diverging arms drop out as
+  // dead receiving alternatives.
+  bool anyReaches = false;
+  for (auto *arm : branchArms(op)) {
     if (findExitTerminator(*arm, p))
       return success();
-    if (!armProvidedValues(arm->front().getTerminator()))
+    if (armReaches(arm))
+      anyReaches = true;
+    else if (!arm->empty() && !collectLaterContent(arm->front(), p).empty())
       return success();
   }
+  if (!anyReaches)
+    return success();
 
   // Materialize an else region for an else-less if so the not-taken tag has a
   // constructor; pick alternatives always exist.
@@ -1054,6 +1089,18 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p) {
     ArmInfo info;
     info.moved = collectLaterContent(arm->front(), p);
     info.fields = collectCrossingValues(op, p, info.moved);
+
+    if (!armReaches(arm)) {
+      // A non-reaching arm provably diverges; it provides nothing, so its
+      // receiving alternative yields `uir.unreachable_value` for every later
+      // result. The bail above guarantees it holds no later-phase content, so
+      // nothing crosses.
+      assert(info.moved.empty() &&
+             "non-reaching arm with later content should have bailed");
+      info.laterYieldOperands.assign(laterIdx.size(), Value());
+      armInfos.push_back(std::move(info));
+      continue;
+    }
 
     auto providedValues = *armProvidedValues(arm->front().getTerminator());
     // A later result provided by more than one arm is a selection the receiving
@@ -1106,6 +1153,42 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p) {
   for (auto [tag, arm] : llvm::enumerate(arms)) {
     auto *terminator = arm->front().getTerminator();
     OpBuilder termBuilder(terminator);
+
+    // A non-reaching arm's choice tag is never produced, so build no real
+    // choice for it. A `uir.unreachable` terminator has no yield to rebuild; a
+    // yield-terminated diverging arm (a breakless loop before it) keeps exact
+    // result arity, so rebuild its yield with `uir.unreachable_value` in every
+    // kept slot and the choice slot.
+    if (!armReaches(arm)) {
+      auto poison = [&]() {
+        auto uv = UnreachableValueOp::create(termBuilder, loc, anyTy);
+        setPhase(uv, p);
+        return uv.getResult();
+      };
+      if (auto yieldOp = dyn_cast<YieldOp>(terminator)) {
+        SmallVector<Value> values, typeOfValues;
+        for (auto idx : keptIdx) {
+          values.push_back(poison());
+          typeOfValues.push_back(ifOp.getResultTypes()[idx]);
+        }
+        values.push_back(poison());
+        typeOfValues.push_back(choiceType);
+        auto newYield = YieldOp::create(termBuilder, loc, values, typeOfValues);
+        setPhase(newYield, p);
+        forget(yieldOp);
+        yieldOp.erase();
+      } else if (auto hirYieldOp = dyn_cast<hir::YieldOp>(terminator)) {
+        SmallVector<Value> values(keptIdx.size() + 1);
+        for (auto &value : values)
+          value = poison();
+        auto newYield = hir::YieldOp::create(termBuilder, loc, values);
+        setPhase(newYield, p);
+        forget(hirYieldOp);
+        hirYieldOp.erase();
+      }
+      continue;
+    }
+
     auto choice = hir::ChoiceOp::create(termBuilder, loc, anyTy,
                                         static_cast<uint32_t>(tag),
                                         armInfos[tag].fields.getArrayRef());
@@ -2682,12 +2765,12 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
     // hoisting nor extraction lifted. Every frame ends with a real phase, so a
     // parent — always a region-bearing frame — is never floating. The two
     // directions have distinct missing machinery, and both survive here only
-    // where that machinery does not run: extraction is not implemented for a
-    // later-phase single-provider interior value, a dead-path arm, or a
-    // diverging-arm residual that does not choice-ify, and hoisting and
-    // extraction both run on the body only, so any phase mismatch inside the
-    // signature region — which this pass does not hoist or extract — surfaces
-    // here as well.
+    // where that machinery does not run: extraction is not implemented for
+    // later-phase content more than one phase past its control flow (the
+    // receiving pick or replicate would need re-extraction at the next
+    // boundary), and hoisting and extraction both run on the body only, so any
+    // phase mismatch inside the signature region — which this pass does not
+    // hoist or extract — surfaces here as well.
     if (auto *parent = op->getParentOp(); parent != funcOp) {
       auto parentIt = analysis.opPhases.find(parent);
       assert(parentIt != analysis.opPhases.end() && "op phase not computed");

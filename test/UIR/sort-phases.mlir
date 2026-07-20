@@ -1714,6 +1714,469 @@ uir.func @IfInPickChoice(%c: 0, %d: 0, %x: 0) -> () {
 }
 
 //===----------------------------------------------------------------------===//
+// Single reaching arm, later result (breakless loop diverges): the else arm's
+// breakless loop provably diverges, so the if is single-provider on the then
+// arm at a later phase. Every other arm diverging means the later phase running
+// implies the then arm ran, so the result choice-ifies like a selection: the
+// then arm yields a real choice, the diverging arm yields poison in every slot,
+// and the receiving pick reconstructs the value on the then alternative while
+// the diverging alternative is dead.
+
+// CHECK-LABEL: uir.func @SingleProviderInternalIf
+uir.func @SingleProviderInternalIf(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[CH:%.+]] = uir.if %c : [[CT:%.+]] {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     uir.yield [[C0]] : [[CT]]
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     uir.loop : [[T]] {
+  // CHECK-NEXT:       uir.continue
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     uir.unreachable_value
+  // CHECK-NEXT:     [[POISON:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     uir.yield [[POISON]] : [[CT]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[CH]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[W:%.+]] = hir.add %y, %y : [[T]]
+  // CHECK-NEXT:     hir.yield [[W]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     hir.yield [[UV]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %v = uir.if %c : %t {
+    %w = hir.add %y, %y : %t
+    uir.yield %w : %t
+  } else {
+    %loop = uir.loop : %t { uir.continue }
+    uir.yield %loop : %t
+  }
+  uir.return %v : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Single reaching arm, later result (unreachable arm): the else arm is a dead
+// path terminated by `uir.unreachable`, which has no yield to rebuild, so it is
+// left in place. The then arm choice-ifies exactly as above.
+
+// CHECK-LABEL: uir.func @UnreachableArmLaterResult
+uir.func @UnreachableArmLaterResult(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[CH:%.+]] = uir.if %c : [[CT:%.+]] {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     uir.yield [[C0]] : [[CT]]
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     uir.unreachable
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[CH]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[W:%.+]] = hir.add %y, %y : [[T]]
+  // CHECK-NEXT:     hir.yield [[W]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     hir.yield [[UV]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %v = uir.if %c : %t {
+    %a = hir.add %y, %y : %t
+    uir.yield %a : %t
+  } else {
+    uir.unreachable
+  }
+  uir.return %v : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Reaching arm is the else: the then arm's breakless loop diverges, so the
+// single provider is the else arm (region index 1). The choice tags the else
+// arm and the receiving pick reconstructs the value on its second alternative,
+// confirming the reaching arm need not be arm 0.
+
+// CHECK-LABEL: uir.func @DivergingArmSingleProvider
+uir.func @DivergingArmSingleProvider(%c: 0, %a: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[CH:%.+]] = uir.if %c : [[CT:%.+]] {
+  // CHECK-NEXT:     uir.loop : [[T]] {
+  // CHECK-NEXT:       uir.continue
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     uir.unreachable_value
+  // CHECK-NEXT:     [[POISON:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     uir.yield [[POISON]] : [[CT]]
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     uir.yield [[C1]] : [[CT]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[CH]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     hir.yield [[UV]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[W:%.+]] = hir.mul %a, %a : [[T]]
+  // CHECK-NEXT:     hir.yield [[W]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %r = uir.if %c : %t {
+    %loop = uir.loop : %t { uir.continue }
+    uir.yield %loop : %t
+  } else {
+    %w = hir.mul %a, %a : %t
+    uir.yield %w : %t
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Single reaching alternative of a pick, later result: the second alternative
+// is `uir.unreachable`, so the pick is single-provider on the first, which
+// choice-ifies like the if case.
+
+// CHECK-LABEL: uir.func @SingleProviderInternalPick
+uir.func @SingleProviderInternalPick(%c: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%1)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[SEL:%.+]] = hir.choice 0()
+  %ch = hir.choice 0 ()
+  // CHECK-NEXT: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[CH:%.+]] = hir.pick [[SEL]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C0]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     uir.unreachable
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[CH]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[W:%.+]] = hir.add %y, %y : [[T]]
+  // CHECK-NEXT:     hir.yield [[W]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     hir.yield [[UV]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %v = hir.pick %ch : !hir.any [
+    0 (): {
+      %w = hir.add %y, %y : %t
+      hir.yield %w : !hir.any
+    }
+    1 (): {
+      uir.unreachable
+    }
+  ]
+  uir.return %v : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Result-less if with a later effect in the reaching arm and an unreachable
+// else: the reaching arm's write moves to the receiving pick and the choice
+// carries which arm ran; the dead alternative yields nothing.
+
+// CHECK-LABEL: uir.func @UnreachableArmIf
+uir.func @UnreachableArmIf(%c: 0, %x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // CHECK-NEXT: [[P:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[VA:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   [[CH:%.+]] = uir.if %c : [[CT:%.+]] {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     uir.yield [[C0]] : [[CT]]
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     uir.unreachable
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[VA]], [[CH]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   hir.pick [[P]]#1 [0 (): {
+  // CHECK-NEXT:     hir.write_var [[P]]#0, %x : [[T]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %va = hir.var : %t
+  uir.if %c {
+    uir.expr pin 1 {
+      hir.write_var %va, %x : %t
+      uir.yield
+    }
+    uir.yield
+  } else {
+    uir.unreachable
+  }
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Result-less pick analogue: an alternative terminated by `uir.unreachable`
+// leaves the other alternative single-provider; its later effect extracts.
+
+// CHECK-LABEL: uir.func @UnreachableAltPick
+uir.func @UnreachableAltPick(%c: 0, %x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[SEL:%.+]] = hir.choice 0()
+  %ch = hir.choice 0 ()
+  // CHECK-NEXT: [[P:%.+]]:2 = uir.phase 0 {
+  // CHECK-NEXT:   [[VA:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   [[CH:%.+]] = hir.pick [[SEL]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C0]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     uir.unreachable
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[VA]], [[CH]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   hir.pick [[P]]#1 [0 (): {
+  // CHECK-NEXT:     hir.write_var [[P]]#0, %x : [[T]]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %va = hir.var : %t
+  hir.pick %ch [
+    0 (): {
+      uir.expr pin 1 {
+        hir.write_var %va, %x : %t
+        uir.yield
+      }
+      hir.yield
+    }
+    1 (): {
+      uir.unreachable
+    }
+  ]
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// Interior crossing: the reaching arm's later value consumes a phase-0 value
+// defined *inside* the arm. That interior value crosses the phase boundary as
+// the choice payload, and the receiving alternative reconstructs it from a
+// block argument — the single-reaching-arm case carrying arm-interior state,
+// not just exterior values.
+
+// CHECK-LABEL: uir.func @InternalCrossing
+uir.func @InternalCrossing(%c: 0, %y0: 0, %y1: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[CH:%.+]] = uir.if %c : [[CT:%.+]] {
+  // CHECK-NEXT:     [[M:%.+]] = hir.add %y0, %y0 : [[T]]
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0([[M]])
+  // CHECK-NEXT:     uir.yield [[C0]] : [[CT]]
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     uir.unreachable
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[CH]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P]] : !hir.any [0 ([[ARG:%.+]]): {
+  // CHECK-NEXT:     [[W:%.+]] = hir.add [[ARG]], %y1 : [[T]]
+  // CHECK-NEXT:     hir.yield [[W]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     hir.yield [[UV]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %v = uir.if %c : %t {
+    %m = hir.add %y0, %y0 : %t
+    %w = hir.add %m, %y1 : %t
+    uir.yield %w : %t
+  } else {
+    uir.unreachable
+  }
+  uir.return %v : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Three-alternative pick whose two non-reaching alternatives diverge
+// differently — one `uir.unreachable`, one breakless loop. The one reaching
+// alternative choice-ifies; both diverging alternatives become dead receiving
+// alternatives yielding poison.
+
+// CHECK-LABEL: uir.func @ThreeAltPick
+uir.func @ThreeAltPick(%ch: 0, %y: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[CH:%.+]] = hir.pick %ch : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C0]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     uir.unreachable
+  // CHECK-NEXT:   } 2 (): {
+  // CHECK-NEXT:     uir.loop : [[T]] {
+  // CHECK-NEXT:       uir.continue
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     uir.unreachable_value
+  // CHECK-NEXT:     [[POISON:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     hir.yield [[POISON]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[CH]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[W:%.+]] = hir.add %y, %y : [[T]]
+  // CHECK-NEXT:     hir.yield [[W]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[UV1:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     hir.yield [[UV1]] : !hir.any
+  // CHECK-NEXT:   } 2 (): {
+  // CHECK-NEXT:     [[UV2:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     hir.yield [[UV2]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %v = hir.pick %ch : !hir.any [
+    0 (): {
+      %w = hir.add %y, %y : %t
+      hir.yield %w : !hir.any
+    }
+    1 (): {
+      uir.unreachable
+    }
+    2 (): {
+      %l = uir.loop : %t { uir.continue }
+      hir.yield %l : !hir.any
+    }
+  ]
+  uir.return %v : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Nested genuine selection inside the single reaching arm: the reaching arm of
+// the outer if holds an ordinary two-provider inner if. Extraction runs
+// innermost first, so the inner if choice-ifies and its choice rides the outer
+// arm's choice payload; the receiving pick nests a pick per level, exactly as a
+// nested selection in a multi-provider arm would.
+
+// CHECK-LABEL: uir.func @NestedSelectionInProvider
+uir.func @NestedSelectionInProvider(%c: 0, %d: 0, %x: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // CHECK-NEXT: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[CH:%.+]] = uir.if %c : [[CT:%.+]] {
+  // CHECK-NEXT:     [[ICT:%.+]] = hir.choice_type
+  // CHECK-NEXT:     [[INNER:%.+]] = uir.if %d : [[ICT]] {
+  // CHECK-NEXT:       [[IC0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       uir.yield [[IC0]] : [[ICT]]
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[IC1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.yield [[IC1]] : [[ICT]]
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0([[INNER]])
+  // CHECK-NEXT:     uir.yield [[C0]] : [[CT]]
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     uir.unreachable
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[CH]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P]] : !hir.any [0 ([[ARG:%.+]]): {
+  // CHECK-NEXT:     [[IV:%.+]] = hir.pick [[ARG]] : !hir.any [0 (): {
+  // CHECK-NEXT:       [[A:%.+]] = hir.add %x, %x : [[T]]
+  // CHECK-NEXT:       hir.yield [[A]] : !hir.any
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       [[M:%.+]] = hir.mul %x, %x : [[T]]
+  // CHECK-NEXT:       hir.yield [[M]] : !hir.any
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield [[IV]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     hir.yield [[UV]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %v = uir.if %c : %t {
+    %inner = uir.if %d : %t {
+      %a = hir.add %x, %x : %t
+      uir.yield %a : %t
+    } else {
+      %b = hir.mul %x, %x : %t
+      uir.yield %b : %t
+    }
+    uir.yield %inner : %t
+  } else {
+    uir.unreachable
+  }
+  uir.return %v : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Loop records: a const loop with dyn content pushes one record per activation
 // onto a hit list. The loop's break check is an exit-carrying divergence, so
 // each record ends in an exit-path choice: the break path an empty exited()
