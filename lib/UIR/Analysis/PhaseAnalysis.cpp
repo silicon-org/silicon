@@ -760,12 +760,15 @@ void PhaseAnalysis::eachCarrier(
 /// Whether `value` can take on a concrete value on some execution path.
 ///
 /// See the header for the full contract. A `uir.unreachable_value` never
-/// materializes; a control-flow result materializes iff some terminator
-/// delivers a materializing value into its slot; every other value
-/// materializes. The recursion bottoms out on the use-def DAG — a slot's
-/// carriers precede the result — and the memo makes one query linear even when
-/// arms share a nested result. The predicate uses no phase numbers and holds
-/// before phases are derived.
+/// materializes, and a control-flow result whose every carrier delivers a
+/// non-materializing value is always poison too; every other value
+/// materializes. This is a value property — "is this operand a concrete value
+/// or poison to re-materialize when it crosses a phase boundary" — and is
+/// distinct from provider-ness (`reaches`), which is a control-flow property.
+/// The recursion bottoms out on the use-def DAG — a slot's carriers precede the
+/// result — and the memo makes one query linear even when arms share a nested
+/// result. The predicate uses no phase numbers and holds before phases are
+/// derived.
 bool PhaseAnalysis::materializes(Value value) {
   DenseMap<Value, bool> memo;
   return materializesMemo(value, memo);
@@ -796,18 +799,97 @@ bool PhaseAnalysis::materializesMemo(Value value, DenseMap<Value, bool> &memo) {
   return m;
 }
 
+// NOLINTBEGIN(misc-no-recursion)
+
+/// Collect the `uir.break` ops targeting a `uir.loop` whose body is `region` —
+/// breaks directly in the body, not ones nested in an inner loop, which target
+/// that inner loop instead. This reads the current IR rather than the analysis-
+/// time `loopBreaks` map, so it stays correct after the sorter rebuilds loops.
+static void collectOwnBreaks(Region &region,
+                             SmallVectorImpl<Operation *> &breaks) {
+  for (auto &block : region)
+    for (auto &op : block) {
+      if (isa<BreakOp>(op)) {
+        breaks.push_back(&op);
+        continue;
+      }
+      if (isa<LoopOp>(op))
+        continue;
+      for (auto &inner : op.getRegions())
+        collectOwnBreaks(inner, breaks);
+    }
+}
+
+/// Whether op `op` provably diverges — control never passes it on to its next
+/// sibling. Provable divergence is the only thing that makes a following
+/// terminator unreachable; anything not proven to diverge is assumed to fall
+/// through, since non-provision must be structural. Only a modeled region op
+/// can diverge: a `uir.loop` diverges iff none of its breaks is reachable (a
+/// loop with no reachable exit never terminates), and a branch/expr diverges
+/// iff none of its arms falls through to a yield (every arm exits, is
+/// unreachable, or itself diverges). Both use the same `reaches` notion, so a
+/// loop whose only break sits behind a diverging body op is exactly as
+/// non-terminating as a loop with no break at all. Every other op — pure,
+/// call, effect, `uir.unreachable_value` — passes control on.
+bool PhaseAnalysis::diverges(Operation *op) {
+  if (!isModeledRegionOp(op))
+    return false;
+  if (auto loopOp = dyn_cast<LoopOp>(op)) {
+    SmallVector<Operation *> breaks;
+    collectOwnBreaks(loopOp.getBody(), breaks);
+    return !llvm::any_of(breaks,
+                         [&](Operation *b) { return reaches(b, loopOp); });
+  }
+  // A branch/expr arm falls through iff its block ends in a yield that control
+  // reaches; an absent (empty) arm region continues past the op.
+  auto armFallsThrough = [&](Region &region) {
+    if (region.empty())
+      return true;
+    auto &block = region.front();
+    auto *term = block.getTerminator();
+    return isa<YieldOp, hir::YieldOp>(term) && reaches(term, op);
+  };
+  for (auto &region : op->getRegions())
+    if (armFallsThrough(region))
+      return false;
+  return true;
+}
+
+/// Whether control structurally reaches `op`, given its enclosing modeled
+/// region op `regionRoot` is entered. Reachability fails only when an earlier
+/// op in `op`'s block — or in any enclosing block up to `regionRoot` — provably
+/// diverges (`diverges`). This is provider-ness for a carrier terminator: a
+/// yield/break is a provider of its slot iff control reaches it.
+bool PhaseAnalysis::reaches(Operation *op, Operation *regionRoot) {
+  Block *block = op->getBlock();
+  for (auto &sibling : *block) {
+    if (&sibling == op)
+      break;
+    if (diverges(&sibling))
+      return false;
+  }
+  auto *parentOp = block->getParentOp();
+  if (parentOp == regionRoot)
+    return true;
+  return reaches(parentOp, regionRoot);
+}
+
+// NOLINTEND(misc-no-recursion)
+
 /// Collect the (value, terminator) pairs that provide a given result of a
-/// region-bearing op: the carriers whose operand for the slot materializes. A
-/// carrier whose operand does not materialize (a `uir.unreachable_value`, or a
-/// nested control-flow result no path provides) marks a path that does not
-/// deliver that result and is not a provider. One memo spans the whole query so
-/// shared nested results are evaluated once.
+/// region-bearing op: the carriers (yields for exprs/ifs/picks, breaks for
+/// loops) whose terminator is structurally reachable. Provider-ness is a
+/// control-flow property, not a value property: a reachable carrier is a
+/// provider whatever it delivers, `uir.unreachable_value` poison included. A
+/// carrier is a non-provider only when it is unreachable — an arm that exits or
+/// is `uir.unreachable`-terminated is not a carrier at all, and a reachable
+/// carrier sitting behind a breakless loop or an all-diverging branch is
+/// severed by `reaches`.
 SmallVector<std::pair<Value, Operation *>, 2>
 PhaseAnalysis::resultProviders(Operation *regionOp, unsigned resultIdx) {
-  DenseMap<Value, bool> memo;
   SmallVector<std::pair<Value, Operation *>, 2> providers;
   eachCarrier(regionOp, resultIdx, [&](Value value, Operation *term) {
-    if (materializesMemo(value, memo))
+    if (reaches(term, regionOp))
       providers.push_back({value, term});
   });
   return providers;

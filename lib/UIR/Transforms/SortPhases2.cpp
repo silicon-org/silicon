@@ -920,23 +920,23 @@ static std::optional<ValueRange> armProvidedValues(Operation *terminator) {
   return std::nullopt;
 }
 
-/// The number of arm terminators providing result `idx` of a branch-shaped
-/// op (`uir.if` or `hir.pick`). An arm terminated by an exit or a dead path
-/// rather than a yield does not provide the result, nor does an arm whose
-/// yield operand for the slot does not `materialize` (a
-/// `uir.unreachable_value`, or a nested control-flow result no path
-/// provides). A result provided by more than one yield is a selection and a
-/// choice-ification obligation when it is later-phase; a single-provider
-/// result (the other arm exits or does not provide) is not choice-ified but,
-/// if its provider is defined inside the op, left for the cross-phase-result
-/// rejection.
+/// The number of arms providing result `idx` of a branch-shaped op (`uir.if`
+/// or `hir.pick`): the arms whose continuation yield is structurally reachable.
+/// An arm terminated by an exit or a dead `uir.unreachable` is not a carrier
+/// and provides nothing; provider-ness is otherwise a control-flow property, so
+/// a reachable arm provides its slot whatever it yields — a
+/// `uir.unreachable_value` poison included. A result provided by more than one
+/// arm is a selection and a choice-ification obligation when it is later-phase;
+/// a single-provider result (every other arm exits or is unreachable) is not
+/// choice-ified but, if its provider is defined inside the op, left for the
+/// cross-phase-result rejection.
 unsigned PhaseSorter::countResultProviders(Operation *op, unsigned idx) {
   unsigned count = 0;
   for (auto *region : branchArms(op)) {
     if (region->empty())
       continue;
-    auto values = armProvidedValues(region->front().getTerminator());
-    if (values && analysis.materializes((*values)[idx]))
+    auto *term = region->front().getTerminator();
+    if (armProvidedValues(term) && analysis.reaches(term, op))
       ++count;
   }
   return count;
@@ -2297,29 +2297,29 @@ LogicalResult PhaseSorter::extractLoops() {
 // at an earlier phase (backward interior content) or a non-real float phase
 // needs hoisting or float sinking and is left for the corresponding rejection.
 
-/// The materializing terminator operands delivering result `idx` of a
-/// control-flow op: the yield operands of a branch's non-exiting arms
-/// (`uir.if` or `hir.pick`), or the break operands of a `loop`. A
-/// non-materializing operand (a `uir.unreachable_value` or a never result)
-/// delivers nothing and is not a provider, so a single entry marks a
+/// The terminator operands delivering result `idx` of a control-flow op from
+/// its reachable carriers: the yield operands of a branch's reachable,
+/// non-exiting arms (`uir.if` or `hir.pick`), or the break operands of a
+/// reachable break of a `loop`. Provider-ness is a control-flow property
+/// (`reaches`), so a reachable carrier is a provider whatever it delivers — a
+/// `uir.unreachable_value` poison operand included — and a single entry marks a
 /// single-provider result.
 SmallVector<Value> PhaseSorter::collectResultProviders(Operation *op,
                                                        unsigned idx) {
   SmallVector<Value> providers;
-  auto keepMaterializing = [&](Value operand) {
-    if (analysis.materializes(operand))
-      providers.push_back(operand);
-  };
   if (isa<IfOp, hir::PickOp>(op)) {
     for (auto *region : branchArms(op)) {
       if (region->empty())
         continue;
-      if (auto values = armProvidedValues(region->front().getTerminator()))
-        keepMaterializing((*values)[idx]);
+      auto *term = region->front().getTerminator();
+      if (auto values = armProvidedValues(term))
+        if (analysis.reaches(term, op))
+          providers.push_back((*values)[idx]);
     }
   } else {
     forEachLoopBreak(cast<LoopOp>(op), [&](BreakOp breakOp) {
-      keepMaterializing(breakOp.getValues()[idx]);
+      if (analysis.reaches(breakOp, op))
+        providers.push_back(breakOp.getValues()[idx]);
     });
   }
   return providers;

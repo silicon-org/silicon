@@ -599,22 +599,26 @@ def PhaseCallOp : UIROp<"phase_call", [
 }
 
 def UnreachableValueOp : UIROp<"unreachable_value", []> {
-  let summary = "value a control-flow path proved never materializes";
+  let summary = "poison value that traps if it is ever evaluated";
   let description = [{
-    A stand-in for a value that phase analysis proved is never actually
-    produced: the control flow that would deliver it (a loop without
-    breaks, an `if` whose providing paths all exit) reaches the bottom
-    phase `never`, so at runtime the value never exists and every consumer
-    is unreachable.
+    A poison value that stands in a result slot no execution path is meant
+    to deliver a concrete value into. Provider-ness of a slot is a
+    control-flow property, not a value property: an arm that reaches its
+    yield is a genuine provider of the slot even when it yields this poison,
+    so a slot fed by a reachable `uir.unreachable_value` participates in
+    selection and choice-ification like any other value. Non-provision is
+    spelled with this op per the exact-arity yield/break invariant (a path
+    that delivers nothing writes it rather than omitting the operand), but
+    the sorter and analysis read the control flow, not this operand, to
+    decide whether the slot is provided.
 
-    Phase sorting materializes this op wherever a real-phase consumer used
-    such a `never` value, at the consumer's own phase, so that the wrap and
-    crossing rules never see a `never`-phased operand. The `never` result
-    stays on its producer, now unused by real-phase content.
-
-    Executing one is a compiler-detected impossibility: an evaluator that
-    reaches it is running a path proved unreachable, and must trap with an
-    internal error rather than produce a value.
+    Evaluating one is a compiler-detected impossibility: an evaluator that
+    reaches it is running a path that was proved never to select this value,
+    and must trap with an internal error rather than produce a value. Phase
+    sorting also materializes this op wherever a real-phase consumer used a
+    `never`-phased value (a genuine never producer such as a breakless
+    loop), at the consumer's own phase, so the wrap and crossing rules never
+    see a `never`-phased operand.
 
     Like `uir.pin` and `hir.inferrable`, this op is deliberately not `Pure`.
     Distinct unreachable values are placed at specific phases; CSE must not

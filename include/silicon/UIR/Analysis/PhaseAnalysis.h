@@ -115,18 +115,28 @@ struct PhaseAnalysis {
 
   /// Whether `value` can take on a concrete value on some execution path.
   ///
-  /// A `uir.unreachable_value` never materializes. A control-flow result
-  /// (if/loop/pick/expr result) materializes iff some terminator delivers a
-  /// materializing value into its slot — so a breakless loop's results and an
-  /// if whose arms all fail to deliver never materialize. Every other value —
-  /// block argument, pure op, call, pin, constant — materializes.
+  /// A `uir.unreachable_value` never materializes, and a control-flow result
+  /// all of whose carriers deliver non-materializing values is always poison
+  /// too. Every other value — block argument, pure op, call, pin, constant, or
+  /// a control-flow result some carrier delivers a concrete value into —
+  /// materializes.
   ///
-  /// The predicate is purely structural (IR shape only, no phase numbers): it
-  /// is well-defined before any phase is derived, and it is what decides
-  /// whether a yield/break operand provides a result slot. Never-value
-  /// forwarding only ever rewrites a non-materializing value into a
-  /// `uir.unreachable_value`, so the answer is invariant under sorting.
+  /// This is a *value* property, distinct from provider-ness (`reaches`): it
+  /// answers whether a yield/break operand is a concrete value that crosses a
+  /// phase boundary, or poison the receiving phase must re-materialize. The
+  /// predicate is purely structural (IR shape only, no phase numbers), so it is
+  /// well-defined before any phase is derived and invariant under sorting.
   bool materializes(Value value);
+
+  /// Whether control structurally reaches `op`, given its enclosing modeled
+  /// region op `regionRoot` is entered. Reachability fails only when an earlier
+  /// op provably diverges (`diverges`) somewhere between `op` and `regionRoot`.
+  ///
+  /// This is provider-ness for a carrier terminator: a yield/break provides its
+  /// result slot iff control reaches it — a control-flow property that does not
+  /// depend on the value delivered, so a reachable arm yielding
+  /// `uir.unreachable_value` poison is a genuine provider.
+  bool reaches(Operation *op, Operation *regionRoot);
 
   /// Annotate every op in the function with its resolved phase (`pa.phase`)
   /// and the phases of its operands and results (`pa.operands`,
@@ -180,12 +190,17 @@ private:
                                       int16_t latest);
 
   /// Collect the (value, terminator) pairs providing a given result of a
-  /// region-bearing op: yields for exprs/ifs/picks, breaks for loops. A
-  /// terminator whose operand for the slot does not `materialize` (a
-  /// `uir.unreachable_value` or a nested never result) is not a provider and
-  /// is omitted.
+  /// region-bearing op: yields for exprs/ifs/picks, breaks for loops. A carrier
+  /// whose terminator is not structurally reachable (`reaches`) — behind a
+  /// breakless loop or an all-diverging branch — is not a provider and is
+  /// omitted; the value it delivers is irrelevant.
   SmallVector<std::pair<Value, Operation *>, 2>
   resultProviders(Operation *regionOp, unsigned resultIdx);
+
+  /// Whether op `op` provably diverges, so a following terminator is
+  /// unreachable: a breakless `uir.loop`, or a branch/expr no arm of which
+  /// falls through to a yield. Every other op falls through.
+  bool diverges(Operation *op);
 
   /// Invoke `fn(value, term)` for each terminator operand feeding result slot
   /// `resultIdx` of a region-bearing op: yield operands for exprs/ifs/picks,

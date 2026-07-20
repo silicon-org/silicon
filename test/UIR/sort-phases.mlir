@@ -4121,17 +4121,23 @@ uir.func @ShortYieldKeptResult(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// Never-value forwarding: a control-flow result no path provides gets the
-// bottom phase `never`. Every real-phase use of it is rewritten to a fresh
-// `uir.unreachable_value` at the consuming phase, and the `never` result is
-// left unused on its producer. `never` is non-viral, so the consumer keeps its
-// own real phase.
+// Poison providers vs. genuine `never`: provider-ness is a control-flow
+// property. An arm that reaches a yield provides its slot whatever it yields,
+// so a poison yield still provides. A slot is `never` only when no carrier is
+// reachable — a breakless loop, whose exit no control flow reaches. A real-
+// phase use of a `never` value is rewritten to a fresh `uir.unreachable_value`
+// at the consuming phase; `never` is non-viral, so the consumer keeps its own
+// real phase.
 
-// A never `uir.if` result (neither arm provides it) consumed by a same-phase
-// op: the unreachable value and the consumer wrap into the consumer's phase,
-// and the never-producing if wraps into its own phase with an unused result.
-// CHECK-LABEL: uir.func @NeverConsumedSamePhase
-uir.func @NeverConsumedSamePhase(%c: 0, %x: 0) -> (out: 0) {
+// A reachable arm that yields `uir.unreachable_value` poison is a genuine
+// provider of its slot: provider-ness is a control-flow property, not a value
+// one. An if whose both arms reach a yield is thus a two-provider selection,
+// not a `never` result, even when both yields are poison. Kept at the op's own
+// phase 0, it wraps whole and a same-phase consumer uses its result directly
+// (the value only traps if evaluated). Each arm carries its own dead poison
+// plus the poison never-forwarding places for the yield.
+// CHECK-LABEL: uir.func @PoisonArmsSelectionSamePhase
+uir.func @PoisonArmsSelectionSamePhase(%c: 0, %x: 0) -> (out: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
@@ -4139,9 +4145,11 @@ uir.func @NeverConsumedSamePhase(%c: 0, %x: 0) -> (out: 0) {
   %t = hir.int_type
   // CHECK: uir.phase 0 {
   // CHECK-NEXT: [[IF:%.+]] = uir.if %c : [[T]] {
+  // CHECK-NEXT:   uir.unreachable_value
   // CHECK-NEXT:   [[A:%.+]] = uir.unreachable_value
   // CHECK-NEXT:   uir.yield [[A]] : [[T]]
   // CHECK-NEXT: } else {
+  // CHECK-NEXT:   uir.unreachable_value
   // CHECK-NEXT:   [[B:%.+]] = uir.unreachable_value
   // CHECK-NEXT:   uir.yield [[B]] : [[T]]
   // CHECK-NEXT: }
@@ -4152,33 +4160,33 @@ uir.func @NeverConsumedSamePhase(%c: 0, %x: 0) -> (out: 0) {
     %uv1 = uir.unreachable_value
     uir.yield %uv1 : %t
   }
-  // CHECK-NEXT: [[UV:%.+]] = uir.unreachable_value
-  // CHECK-NEXT: [[U:%.+]] = hir.add %x, [[UV]] : [[T]]
+  // CHECK-NEXT: [[U:%.+]] = hir.add %x, [[IF]] : [[T]]
   %u = hir.add %x, %r : %t
   // CHECK-NEXT: uir.phase_return [[U]] : [[T]]
   // CHECK-NEXT: }
   uir.return %u : %t
 }
 
-// The same never `uir.if` result consumed one phase later: the unreachable
-// value materializes in the consumer's phase (1), while the never-producing
-// if wraps into phase 0 with a contentless phase return.
-// CHECK-LABEL: uir.func @NeverConsumedLater
-uir.func @NeverConsumedLater(%c: 0, %x: 1) -> (out: 1) {
+// The same poison-arm selection consumed one phase later: the phase-0 if keeps
+// its result and yields it as a crossing, and the phase-1 consumer uses it.
+// CHECK-LABEL: uir.func @PoisonArmsSelectionLater
+uir.func @PoisonArmsSelectionLater(%c: 0, %x: 1) -> (out: 1) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
   // CHECK: [[T:%.+]] = hir.int_type
   %t = hir.int_type
-  // CHECK: uir.phase 0 {
-  // CHECK-NEXT: uir.if %c : [[T]] {
+  // CHECK: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT: [[IF:%.+]] = uir.if %c : [[T]] {
+  // CHECK-NEXT:   uir.unreachable_value
   // CHECK-NEXT:   [[A:%.+]] = uir.unreachable_value
   // CHECK-NEXT:   uir.yield [[A]] : [[T]]
   // CHECK-NEXT: } else {
+  // CHECK-NEXT:   uir.unreachable_value
   // CHECK-NEXT:   [[B:%.+]] = uir.unreachable_value
   // CHECK-NEXT:   uir.yield [[B]] : [[T]]
   // CHECK-NEXT: }
-  // CHECK-NEXT: uir.phase_return{{$}}
+  // CHECK-NEXT: uir.phase_return yield [[IF]]
   // CHECK-NEXT: }
   %r = uir.if %c : %t {
     %uv0 = uir.unreachable_value
@@ -4188,47 +4196,11 @@ uir.func @NeverConsumedLater(%c: 0, %x: 1) -> (out: 1) {
     uir.yield %uv1 : %t
   }
   // CHECK: uir.phase 1 {
-  // CHECK-NEXT: [[UV:%.+]] = uir.unreachable_value
-  // CHECK-NEXT: [[U:%.+]] = hir.add %x, [[UV]] : [[T]]
+  // CHECK-NEXT: [[U:%.+]] = hir.add %x, [[P]] : [[T]]
   // CHECK-NEXT: uir.phase_return [[U]] : [[T]]
   // CHECK-NEXT: }
   %u = hir.add %x, %r : %t
   uir.return %u : %t
-}
-
-// A never value consumed by the function return at a const (phase -1) result
-// slot: the unreachable value materializes at the result's declared phase, not
-// the return op's own phase (always 0). This exercises the return's
-// per-result-slot use attribution.
-// CHECK-LABEL: uir.func @NeverReturnedConst
-uir.func @NeverReturnedConst(%c: 0) -> (out: -1) {
-  %0 = hir.int_type
-  uir.signature (%0) -> (%0)
-} {
-  // CHECK: [[T:%.+]] = hir.int_type
-  %t = hir.int_type
-  // CHECK: uir.phase -1 {
-  // CHECK-NEXT: [[UV:%.+]] = uir.unreachable_value
-  // CHECK-NEXT: uir.phase_return [[UV]] : [[T]]
-  // CHECK-NEXT: }
-  %r = uir.if %c : %t {
-    %uv0 = uir.unreachable_value
-    uir.yield %uv0 : %t
-  } else {
-    %uv1 = uir.unreachable_value
-    uir.yield %uv1 : %t
-  }
-  // CHECK: uir.phase 0 {
-  // CHECK-NEXT: uir.if %c : [[T]] {
-  // CHECK-NEXT:   [[A:%.+]] = uir.unreachable_value
-  // CHECK-NEXT:   uir.yield [[A]] : [[T]]
-  // CHECK-NEXT: } else {
-  // CHECK-NEXT:   [[B:%.+]] = uir.unreachable_value
-  // CHECK-NEXT:   uir.yield [[B]] : [[T]]
-  // CHECK-NEXT: }
-  // CHECK-NEXT: uir.phase_return{{$}}
-  // CHECK-NEXT: }
-  uir.return %r : %t
 }
 
 // A never `uir.loop` result (no breaks) consumed by a const op: forwarding
@@ -4282,41 +4254,6 @@ uir.func @DeadFloatNeverConsumer(%x: 0) -> () {
   }
   %d = hir.add %r, %r : %t
   uir.return
-}
-
-// A never loop nested in a floating frame inside an earlier-phase branch: the
-// frame's later-phase interior (the dead multiply) derives a real phase from
-// its live sibling operand, so its never operand is forwarded to an
-// unreachable value that lands in the receiving pick. The never loop wraps into
-// the phase-0 branch arm, unused. (Formerly a hard-error input.)
-// CHECK-LABEL: uir.func @FloatingFrameNeverInterior
-uir.func @FloatingFrameNeverInterior(%c: 0, %a: 1) -> (result: 1) {
-  %0 = hir.int_type
-  uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  // CHECK: uir.phase 0 {
-  // CHECK: uir.if %c
-  // CHECK: uir.loop
-  // CHECK: uir.phase 1 {
-  // CHECK: hir.pick
-  // CHECK: [[UV:%.+]] = uir.unreachable_value
-  // CHECK-NEXT: hir.mul [[UV]], %a : {{.*}}
-  %r = uir.if %c : %t {
-    %fl = uir.expr : %t {
-      %s = uir.loop : %t {
-        uir.continue
-      }
-      uir.yield %s : %t
-    }
-    %dead = hir.mul %fl, %a : %t
-    %live = hir.add %a, %a : %t
-    uir.yield %live : %t
-  } else {
-    %w = hir.mul %a, %a : %t
-    uir.yield %w : %t
-  }
-  uir.return %r : %t
 }
 
 // An if whose else arm yields a breakless loop's (never) result: that arm does
@@ -4502,12 +4439,13 @@ uir.func @PickSingleProviderForward(%c: 0, %y: 1) -> (result: 1) {
   uir.return %r : %t
 }
 
-// Forward delivery through an N-ary pick whose two non-provider alternatives
-// yield `uir.unreachable_value` (a real `hir.yield` with a non-materializing
-// operand) rather than a dead `uir.unreachable` terminator. Only the external
-// provider %y is counted, so result #0 is a single-provider forward to %y and
-// the pick becomes resultless; the non-provider yields drop their slot. This
-// is the arity-3 counterpart of the dead-terminator forward above.
+// Selection through an N-ary pick whose two `uir.unreachable_value` alternatives
+// are reachable yields: provider-ness is control-flow, so all three alternatives
+// provide result #0, making it a three-provider selection that choice-ifies. The
+// external provider %y crosses into its receiving alternative directly; each
+// poison provider re-materializes as a fresh `uir.unreachable_value` in its
+// alternative. This is the arity-3 counterpart of @PickPartialChoiceResult, with
+// the sole concrete provider defined outside the pick.
 
 // CHECK-LABEL: uir.func @PickPartialForward
 // CHECK: uir.signature
@@ -4519,18 +4457,30 @@ uir.func @PickPartialForward(%c: 0, %y: 1) -> (result: 1) {
   // CHECK: [[T:%.+]] = hir.int_type
   %t = hir.int_type
   // CHECK-NEXT: [[CH:%.+]] = hir.choice 0()
-  // CHECK-NEXT: uir.phase 0 {
-  // CHECK-NEXT:   hir.pick [[CH]] [0 (): {
-  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT: [[P:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[CF:%.+]] = hir.pick [[CH]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C0]]
   // CHECK-NEXT:   } 1 (): {
-  // CHECK:          hir.yield
+  // CHECK:          [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C1]]
   // CHECK-NEXT:   } 2 (): {
-  // CHECK:          hir.yield
+  // CHECK:          [[C2:%.+]] = hir.choice 2()
+  // CHECK-NEXT:     hir.yield [[C2]]
   // CHECK-NEXT:   }]
-  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT:   uir.phase_return yield [[CF]]
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.phase 1 {
-  // CHECK-NEXT:   uir.phase_return %y : [[T]]
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P]] : !hir.any [0 (): {
+  // CHECK-NEXT:     hir.yield %y : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[U1:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     hir.yield [[U1]]
+  // CHECK-NEXT:   } 2 (): {
+  // CHECK-NEXT:     [[U2:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:     hir.yield [[U2]]
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.unreachable
   %ch = hir.choice 0 ()
@@ -4677,12 +4627,14 @@ uir.func @ForwardChain(%c: 0, %d: 0, %y: 1) -> (r: 1) {
   uir.return %v : %t
 }
 
-// Per-result mechanism split on one `if`: result #0 forwards to the external
-// value %a while result #1 is a genuine multi-provider selection (both arms
-// yield a distinct external phase-1 value) that choice-ifies into a phase-1
-// pick. Forwarding runs before branch extraction, so the single-provider result
-// is gone by the time extraction lifts the multi-provider one — the per-op
-// all-or-nothing bail never triggers.
+// All slots of a merging op share one provider set: a full-arity yield provides
+// every slot when its arm is reached and none when the arm diverges, so the arm
+// disposition — provider or not — is per-arm, never per-slot. Here the else arm
+// diverges on a breakless loop, so it provides no result; both results are
+// single-provider on the then arm and forward to the external phase-1 values,
+// dropping the else operands. (A single op can no longer mix a forwarded slot
+// with a choice-ified one — that needs distinct provider counts, which
+// full-arity provision precludes.)
 
 // CHECK-LABEL: uir.func @MixedProviders
 uir.func @MixedProviders(%c: 0, %a: 1, %b1: 1, %b2: 1) -> (r0: 1, r1: 1) {
@@ -4690,19 +4642,16 @@ uir.func @MixedProviders(%c: 0, %a: 1, %b1: 1, %b2: 1) -> (r0: 1, r1: 1) {
   uir.signature (%0, %0, %0, %0) -> (%0, %0)
 } {
   // CHECK: uir.phase 0 {
-  // CHECK-NEXT:   [[IF:%.+]] = uir.if %c
-  // CHECK-NEXT:     hir.choice 0()
-  // CHECK:        } else {
-  // CHECK:          hir.choice 1()
-  // CHECK:        uir.phase_return yield [[IF]]
+  // CHECK-NEXT:   uir.if %c {
+  // CHECK-NEXT:     uir.yield
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     uir.loop
+  // CHECK:          uir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.phase 1 {
-  // CHECK-NEXT:   [[PICK:%.+]] = hir.pick {{.+}} [0 (): {
-  // CHECK-NEXT:     hir.yield %b1 : !hir.any
-  // CHECK-NEXT:   } 1 (): {
-  // CHECK-NEXT:     hir.yield %b2 : !hir.any
-  // CHECK-NEXT:   }]
-  // CHECK-NEXT:   uir.phase_return %a, [[PICK]] : %0, %0
+  // CHECK-NEXT:   uir.phase_return %a, %b1 : %0, %0
   // CHECK-NEXT: }
   %t = hir.int_type
   %v:2 = uir.if %c : %t, %t {

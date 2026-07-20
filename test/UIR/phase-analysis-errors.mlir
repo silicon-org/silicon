@@ -1339,6 +1339,34 @@ uir.func @IfDistinctYieldFloorError(%sel: -1, %a: -1, %b: -1) -> (result: -1) {
 // -----
 
 //===----------------------------------------------------------------------===//
+// Both arms of a phase-0 if yield `uir.unreachable_value` poison. Provider-ness
+// is a control-flow property, so both reachable arms provide the slot: it is a
+// two-provider selection at phase 0, not a `never` result, and cannot deliver
+// the const (phase -1) function result. The floor error fires exactly as for
+// concrete values.
+
+uir.func @PoisonArmsConstFloorError(%c: 0) -> (result: -1) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  // expected-error @below {{result at phase -1 is selected by control flow at phase 0; result phase must be >= 0}}
+  %r = uir.if %c : %t {
+    %uv0 = uir.unreachable_value
+    // expected-note @below {{value provided here}}
+    uir.yield %uv0 : %t
+  } else {
+    %uv1 = uir.unreachable_value
+    // expected-note @below {{value provided here}}
+    uir.yield %uv1 : %t
+  }
+  // expected-remark @below {{required by return value at phase -1}}
+  uir.return %r : %t
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
 // Nested if: both branches yield distinct const values at phase -1. Since the
 // if is at phase 0 (function body), this is an error.
 

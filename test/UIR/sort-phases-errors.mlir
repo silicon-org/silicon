@@ -335,3 +335,27 @@ uir.func @SharedAcrossBreaks(%n: -1, %x: 0) -> (result: 0) {
   }
   uir.return %y : %t
 }
+
+// -----
+
+// A breakless loop in the then arm makes it provably diverge — its yield is
+// unreachable, so it provides no result. The if is thus single-provider on the
+// else arm, whose provider %w is defined inside the op at a later phase.
+// Single-provider interior content is not choice-ified, so the later-phase %w
+// hits the nested-content rejection. This is the narrowed residual: an interior
+// single provider now arises only when every other arm provably diverges.
+uir.func @DivergingArmSingleProvider(%c: 0, %a: 1) -> (result: 1) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %r = uir.if %c : %t {
+    %loop = uir.loop : %t { uir.continue }
+    uir.yield %loop : %t
+  } else {
+    // expected-error @below {{at phase 1 is nested inside phase 0 content; hoisting and extraction across phase boundaries are not implemented in phase sorting yet}}
+    %w = hir.mul %a, %a : %t
+    uir.yield %w : %t
+  }
+  uir.return %r : %t
+}

@@ -5404,3 +5404,34 @@ uir.func @NormalizedLaterExit(%e: 0, %x: 0) -> (result: 1) {
   // CHECK-SAME: pa.operands = ["1", "float"]
   uir.return %r : %st
 }
+
+//===----------------------------------------------------------------------===//
+// A loop whose only break is unreachable — it sits after a breakless inner loop
+// that never terminates — provably diverges exactly like a breakless loop:
+// divergence keys on break *reachability*, not break *existence*. Its result is
+// `never`, and an enclosing if with such a diverging else arm is single-provider
+// on the then arm, so a const (phase -1) result is delivered there rather than
+// scored as a selection.
+
+// CHECK-LABEL: uir.func @UnreachableBreakLoop
+uir.func @UnreachableBreakLoop(%c: 0, %x: -1) -> (result: -1) {
+  %0 = hir.bool_type
+  %1 = hir.int_type
+  uir.signature (%0, %1) -> (%1)
+} {
+  %t = hir.int_type
+  // CHECK: uir.if %c
+  // CHECK-SAME: pa.results = ["-1"]
+  %r = uir.if %c : %t {
+    uir.yield %x : %t
+  } else {
+    // CHECK: uir.loop
+    // CHECK-SAME: pa.results = ["never"]
+    %outer = uir.loop : %t {
+      %inner = uir.loop : %t { uir.continue }
+      uir.break %inner : %t
+    }
+    uir.yield %outer : %t
+  }
+  uir.return %r : %t
+}
