@@ -197,8 +197,8 @@ struct Arm {
   Region *region = nullptr;
   std::unique_ptr<BodyPlan> plan;
   /// Whether the arm's terminal yield is reachable: the terminal is a yield
-  /// and no interior divergence ends the activation on every path. Only such
-  /// arms rebuild their yield to deliver the divergence's cf choice.
+  /// and control reaches it (`PhaseAnalysis::reaches`). Only such arms
+  /// rebuild their yield to deliver the divergence's cf choice.
   bool reachesYield = false;
   /// The arm's yield operands for the divergence's demanded later-phase
   /// results, in `laterResults` order; a null entry marks a result the arm
@@ -302,7 +302,6 @@ private:
   void forwardResults(Operation *op, ArrayRef<Value> forwardTo, int16_t p);
   LogicalResult scanBlock(Operation *loopOp, Block &block, int16_t p,
                           BodyPlan &plan);
-  bool blockAllExits(Block &block, int16_t p);
   void collectPlanFields(Operation *loopOp, int16_t p, BodyPlan &plan,
                          ArrayRef<Operation *> allMoved,
                          llvm::SetVector<Value> visible);
@@ -1429,26 +1428,6 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p,
 
 // NOLINTBEGIN(misc-no-recursion)
 
-/// Whether every path through `block` ends the activation with a phase-<=p exit
-/// (a `break`/`continue`) rather than reaching the block's yield terminal. A
-/// block all-exits when it holds a top-level exit or an `if` whose both arms
-/// all-exit; nested loops are not descended into (their exits target the inner
-/// loop). Such a block's yield is unreachable, so an arm that all-exits
-/// contributes no fall-through even though its terminal is a yield.
-bool PhaseSorter::blockAllExits(Block &block, int16_t p) {
-  for (auto &op : block) {
-    if (auto ph = realPhaseOf(&op);
-        ph && *ph <= p && isa<BreakOp, ContinueOp>(op))
-      return true;
-    if (auto ifOp = dyn_cast<IfOp>(&op))
-      if (!ifOp.getThenRegion().empty() && !ifOp.getElseRegion().empty() &&
-          blockAllExits(ifOp.getThenRegion().front(), p) &&
-          blockAllExits(ifOp.getElseRegion().front(), p))
-        return true;
-  }
-  return false;
-}
-
 /// Decompose a block — a loop body or a divergence arm — into content
 /// segments separated by exit-carrying divergences. `plan.segments` holds the
 /// later-phase ops between consecutive divergences in program order (one more
@@ -1522,8 +1501,9 @@ LogicalResult PhaseSorter::scanBlock(Operation *loopOp, Block &block, int16_t p,
           arm.plan = std::make_unique<BodyPlan>();
           if (failed(scanBlock(loopOp, armBlock, p, *arm.plan)))
             return failure();
-          arm.reachesYield = isa<YieldOp>(armBlock.getTerminator()) &&
-                             !blockAllExits(armBlock, p);
+          auto *armTerm = armBlock.getTerminator();
+          arm.reachesYield =
+              isa<YieldOp>(armTerm) && analysis.reaches(armTerm, ifOp);
         }
         divergence.arms.push_back(std::move(arm));
       }
