@@ -2177,6 +2177,165 @@ uir.func @NestedSelectionInProvider(%c: 0, %d: 0, %x: 1) -> (result: 1) {
 }
 
 //===----------------------------------------------------------------------===//
+// Branch extraction re-extracts its own receiving pick: a phase-0 if selecting
+// between two phase-2 values delivers a result two phases wide. The first
+// extraction choice-ifies at phase 0 with a receiving pick at phase 1, but that
+// pick still delivers its result at phase 2. Re-extraction treats the pick as an
+// ordinary divergence and choice-ifies it again at phase 1, so the choice tag
+// threads phase 0 -> 1 -> 2 and the value materializes at the last boundary.
+
+// CHECK-LABEL: uir.func @WideReceiver
+uir.func @WideReceiver(%c: 0, %x: 2, %y: 2) -> (r: 2) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // CHECK-NEXT: [[P0:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[CH0:%.+]] = uir.if %c : [[CT:%.+]] {
+  // CHECK-NEXT:     [[C00:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     uir.yield [[C00]] : [[CT]]
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     [[C01:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     uir.yield [[C01]] : [[CT]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[CH0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[CH1:%.+]] = hir.pick [[P0]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C10:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C10]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[C11:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C11]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[CH1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 2 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P1]] : !hir.any [0 (): {
+  // CHECK-NEXT:     hir.yield %x : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield %y : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %v = uir.if %c : %t {
+    uir.yield %x : %t
+  } else {
+    uir.yield %y : %t
+  }
+  uir.return %v : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Three phases wide: the same re-extraction runs to a fixpoint, chaining a
+// re-tag pick through every intermediate phase (1 and 2) before the value is
+// selected at phase 3.
+
+// CHECK-LABEL: uir.func @ThreeWideReceiver
+uir.func @ThreeWideReceiver(%c: 0, %x: 3, %y: 3) -> (r: 3) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // CHECK-NEXT: [[P0:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   uir.if %c
+  // CHECK: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[CH1:%.+]] = hir.pick [[P0]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C10:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C10]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[C11:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C11]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[CH1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P2:%.+]] = uir.phase 2 {
+  // CHECK-NEXT:   [[CH2:%.+]] = hir.pick [[P1]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[C20:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     hir.yield [[C20]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[C21:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C21]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[CH2]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 3 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P2]] : !hir.any [0 (): {
+  // CHECK-NEXT:     hir.yield %x : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield %y : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %v = uir.if %c : %t {
+    uir.yield %x : %t
+  } else {
+    uir.yield %y : %t
+  }
+  uir.return %v : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A wide crossing whose intermediate pick is non-empty: the then arm holds
+// genuine phase-1 content (`hir.add %x, %x`) feeding a phase-2 result. The first
+// extraction keeps the phase-1 content in the phase-1 pick and packs it into the
+// choice payload; the re-extracted phase-2 pick reconstructs it from a block
+// argument and computes the phase-2 result there.
+
+// CHECK-LABEL: uir.func @WideReceiverContent
+uir.func @WideReceiverContent(%c: 0, %x: 1, %z: 2, %w: 2) -> (r: 2) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: hir.choice_type
+  // CHECK-NEXT: [[P0:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   uir.if %c
+  // CHECK: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[CH1:%.+]] = hir.pick [[P0]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[S:%.+]] = hir.add %x, %x : [[T]]
+  // CHECK-NEXT:     [[C10:%.+]] = hir.choice 0([[S]])
+  // CHECK-NEXT:     hir.yield [[C10]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     [[C11:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     hir.yield [[C11]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[CH1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 2 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.pick [[P1]] : !hir.any [0 ([[ARG:%.+]]): {
+  // CHECK-NEXT:     [[R2:%.+]] = hir.add [[ARG]], %z : [[T]]
+  // CHECK-NEXT:     hir.yield [[R2]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield %w : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return [[V]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %v = uir.if %c : %t {
+    %a = uir.expr pin 1 : %t {
+      %s = hir.add %x, %x : %t
+      uir.yield %s : %t
+    }
+    %r2 = hir.add %a, %z : %t
+    uir.yield %r2 : %t
+  } else {
+    uir.yield %w : %t
+  }
+  uir.return %v : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Loop records: a const loop with dyn content pushes one record per activation
 // onto a hit list. The loop's break check is an exit-carrying divergence, so
 // each record ends in an exit-path choice: the break path an empty exited()

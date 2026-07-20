@@ -133,16 +133,18 @@
 // op whose value varies per path or iteration and so needs choice-ification
 // even at a provider count of one.
 //
-// The pass covers straight-line content, single-boundary branch extraction,
+// The pass covers straight-line content, branch extraction (single-boundary
+// and, by re-extracting each receiving pick to a fixpoint, multi-boundary),
 // single-boundary loop-record extraction, break-value choices, single-provider
 // result forwarding, and hoisting of body content earlier than its enclosing
 // frame. Inputs that need the remaining sorting machinery are rejected with
 // explicit diagnostics instead of being sorted incorrectly: a cross-phase
-// result whose delivery this pass cannot complete (the receiving pick of a
-// multi-provider selection crossing more than one phase wide, or a single-
-// provider value the op holds at a float phase awaiting float sinking), later-
-// phase content more than one phase away from its control flow, and any phase
-// mismatch inside the signature region, which this pass does not hoist or
+// result whose delivery this pass cannot complete (a receiving pick that
+// loop-record or break-value extraction emits more than one phase wide, since
+// those run after the branch fixpoint and are not fed back through it, or a
+// single-provider value the op holds at a float phase awaiting float sinking),
+// later-phase content more than one phase away from its control flow, and any
+// phase mismatch inside the signature region, which this pass does not hoist or
 // extract.
 //
 //===----------------------------------------------------------------------===//
@@ -280,7 +282,7 @@ private:
   LogicalResult decomposeCall(CallOp callOp);
   LogicalResult forwardNeverValues();
   LogicalResult extractBranches();
-  LogicalResult extractFromBranch(Operation *op, int16_t p);
+  LogicalResult extractFromBranch(Operation *op, int16_t p, bool &changed);
   LogicalResult extractLoops();
   LogicalResult extractFromLoop(LoopOp loopOp, int16_t p);
   FailureOr<LoopOp> extractBreakValues(LoopOp loopOp, int16_t p);
@@ -968,58 +970,77 @@ unsigned PhaseSorter::countResultProviders(Operation *op, unsigned idx) {
 /// interior provider). A never-produced result is not extracted — the whole op
 /// diverges, its consumers were already rewritten to `uir.unreachable_value`,
 /// so it is simply left unused.
+///
+/// Extraction applies to its own output: a receiving `hir.pick` is an ordinary
+/// divergence, so if its reconstructed result still lives later than its own
+/// phase p+1 — the branch crossed more than one phase — the same rule
+/// choice-ifies it again at the p+1-to-p+2 boundary. The walk therefore runs to
+/// a fixpoint: each step moves a result's delivery exactly one phase forward
+/// and strictly reduces its phase distance, so re-walking until no branch
+/// extracts terminates in at most the maximum result-phase distance rounds. A
+/// synthesized receiving pick is indistinguishable from a user pick here; both
+/// are picked up by the same walk with no provenance test.
 LogicalResult PhaseSorter::extractBranches() {
-  SmallVector<Operation *> branchOps;
-  funcOp.getBody().walk<WalkOrder::PostOrder>([&](Operation *op) {
-    if (isa<IfOp, hir::PickOp>(op) && realPhaseOf(op))
-      branchOps.push_back(op);
-  });
+  while (true) {
+    SmallVector<Operation *> branchOps;
+    funcOp.getBody().walk<WalkOrder::PostOrder>([&](Operation *op) {
+      if (isa<IfOp, hir::PickOp>(op) && realPhaseOf(op))
+        branchOps.push_back(op);
+    });
 
-  for (auto *op : branchOps) {
-    int16_t p = *realPhaseOf(op);
+    bool changed = false;
+    for (auto *op : branchOps) {
+      int16_t p = *realPhaseOf(op);
 
-    // Classify the results. Extraction is viable only if none diverge except
-    // by choice-ification.
-    bool extractable = true;
-    bool hasChoiceResult = false;
-    for (auto result : op->getResults()) {
-      int16_t vph = analysis.actualPhase.at(result);
-      if (vph == p)
-        continue; // Kept at the op's phase.
-      if (isRealPhase(vph) && vph > p) {
-        // A later-phase result choice-ifies whenever a reaching arm provides
-        // it. The whole op is non-diverging (a real later phase implies some
-        // arm rejoins), so the provider count is at least one: greater than one
-        // for a genuine selection, exactly one when a single reaching arm
-        // delivers the result while every other arm provably diverges. Both
-        // reconstruct in the receiving pick, so both extract; the diverging
-        // arms become dead receiving alternatives the choice never selects.
-        assert(countResultProviders(op, result.getResultNumber()) >= 1 &&
-               "a later-phase result must have a reaching provider");
-        hasChoiceResult = true;
-        continue;
+      // Classify the results. Extraction is viable only if none diverge except
+      // by choice-ification.
+      bool extractable = true;
+      bool hasChoiceResult = false;
+      for (auto result : op->getResults()) {
+        int16_t vph = analysis.actualPhase.at(result);
+        if (vph == p)
+          continue; // Kept at the op's phase.
+        if (isRealPhase(vph) && vph > p) {
+          // A later-phase result choice-ifies whenever a reaching arm provides
+          // it. The whole op is non-diverging (a real later phase implies some
+          // arm rejoins), so the provider count is at least one: greater than
+          // one for a genuine selection, exactly one when a single reaching arm
+          // delivers the result while every other arm provably diverges. Both
+          // reconstruct in the receiving pick, so both extract; the diverging
+          // arms become dead receiving alternatives the choice never selects.
+          assert(countResultProviders(op, result.getResultNumber()) >= 1 &&
+                 "a later-phase result must have a reaching provider");
+          hasChoiceResult = true;
+          continue;
+        }
+        // A never result (zero reaching providers; the whole op diverges) is
+        // left unused after never-forwarding, its consumers already
+        // `uir.unreachable_value`, so the op is not extracted.
+        extractable = false;
+        break;
       }
-      // A never result (zero reaching providers; the whole op diverges) is left
-      // unused after never-forwarding, its consumers already
-      // `uir.unreachable_value`, so the op is not extracted.
-      extractable = false;
-      break;
-    }
-    if (!extractable)
-      continue;
-    if (!hasChoiceResult && !hasLaterContent(op, p))
-      continue; // Nothing to extract; wraps wholesale.
+      if (!extractable)
+        continue;
+      if (!hasChoiceResult && !hasLaterContent(op, p))
+        continue; // Nothing to extract; wraps wholesale.
 
-    if (failed(extractFromBranch(op, p)))
-      return failure();
+      if (failed(extractFromBranch(op, p, changed)))
+        return failure();
+    }
+    if (!changed)
+      break;
   }
   return success();
 }
 
 /// Rewrite one phase-p branch (`uir.if` or `hir.pick`) into a choice-yielding
 /// branch plus a receiving `hir.pick` at phase p+1. See the section header
-/// for the shape and the invariant.
-LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p) {
+/// for the shape and the invariant. Sets `changed` when it rewrites the branch;
+/// the bail cases (an arm exiting to an enclosing loop, a non-reaching arm with
+/// its own later content, or no reaching arm at all) leave the branch untouched
+/// and do not set it, so the caller's fixpoint terminates.
+LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p,
+                                             bool &changed) {
   auto ifOp = dyn_cast<IfOp>(op);
   auto loc = op->getLoc();
   auto anyTy = hir::AnyType::get(op->getContext());
@@ -1056,6 +1077,9 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p) {
   }
   if (!anyReaches)
     return success();
+
+  // Past every bail: the branch is rewritten below.
+  changed = true;
 
   // Materialize an else region for an else-less if so the not-taken tag has a
   // constructor; pick alternatives always exist.
@@ -2706,10 +2730,12 @@ static std::string phaseName(int16_t phase) {
 ///   phase) were lifted into a choice plus a receiving pick by branch and
 ///   break-value extraction; never-produced results are skipped here (their
 ///   consumers are already `uir.unreachable_value`, so the result is unused).
-///   Two residuals remain. A multi-provider selection whose receiving pick
-///   crosses more than one phase (its reconstructed value materializes two or
-///   more phases past the op, so the pick itself needs re-extraction at the
-///   next boundary). And a single-provider value the op holds at a non-real
+///   Two residuals remain. Branch extraction re-extracts its own receiving
+///   picks to a fixpoint, so a branch-sourced multi-provider selection crosses
+///   any number of phases; but loop-record and break-value extraction run after
+///   that fixpoint, so a multi-provider selection whose receiving pick they
+///   emit at more than one phase wide is not fed back through extraction and
+///   surfaces here. And a single-provider value the op holds at a non-real
 ///   float phase, which neither forwards (its provider is defined inside the
 ///   op, not iteration-invariant external content) nor choice-ifies (a float
 ///   phase is not a later real phase), and so awaits float sinking.
@@ -2752,10 +2778,11 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
               << phaseName(valueIt->second) << " instead of its own phase "
               << phaseName(opPhase)
               << "; delivering this cross-phase result is not implemented in "
-                 "phase sorting yet (a multi-provider selection whose "
-                 "receiving pick would cross more than one phase, or a "
-                 "single-provider float value that neither forwards nor "
-                 "choice-ifies)";
+                 "phase sorting yet (a multi-provider selection from loop or "
+                 "break-value extraction whose receiving pick crosses more "
+                 "than "
+                 "one phase, or a single-provider float value that neither "
+                 "forwards nor choice-ifies)";
           return WalkResult::interrupt();
         }
       }

@@ -89,27 +89,6 @@ uir.func @PhaseCallInInput(%x: 0) -> () {
 
 // -----
 
-// A multi-provider result demanded more than one phase past its if: both arms
-// yield an external phase-2 value, so branch extraction choice-ifies it into a
-// pick at phase 1, but the reconstructed value materializes at phase 2. The
-// pick is a receiver of a crossing more than one phase wide and would itself
-// need re-extraction at the phase-1-to-2 boundary.
-uir.func @WideReceiver(%c: 0, %x: 2, %y: 2) -> (r: 2) {
-  %0 = hir.int_type
-  uir.signature (%0, %0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  // expected-error @below {{delivers result #0 at phase 2 instead of its own phase 1; delivering this cross-phase result is not implemented in phase sorting yet (a multi-provider selection whose receiving pick would cross more than one phase, or a single-provider float value that neither forwards nor choice-ifies)}}
-  %v = uir.if %c : %t {
-    uir.yield %x : %t
-  } else {
-    uir.yield %y : %t
-  }
-  uir.return %v : %t
-}
-
-// -----
-
 // A single-provider loop result whose provider is defined inside the loop at a
 // float phase (a constant): it does not forward (not external, iteration-
 // invariant content) and does not choice-ify (a float phase is not a later real
@@ -119,10 +98,35 @@ uir.func @LoopBreakFloatConst(%c: 0) -> (result: 0) {
   uir.signature (%0) -> (%0)
 } {
   %t = hir.int_type
-  // expected-error @below {{delivers result #0 at phase float instead of its own phase 0; delivering this cross-phase result is not implemented in phase sorting yet (a multi-provider selection whose receiving pick would cross more than one phase, or a single-provider float value that neither forwards nor choice-ifies)}}
+  // expected-error @below {{delivers result #0 at phase float instead of its own phase 0; delivering this cross-phase result is not implemented in phase sorting yet (a multi-provider selection from loop or break-value extraction whose receiving pick crosses more than one phase, or a single-provider float value that neither forwards nor choice-ifies)}}
   %l = uir.loop : %t {
     %five = hir.constant_int 5 : %t
     uir.break %five : %t
+  }
+  uir.return %l : %t
+}
+
+// -----
+
+// A genuine multi-provider wide break value: a phase-0 loop with two break
+// sites delivering distinct phase-2 values. Break-value extraction choice-ifies
+// them into a receiving `hir.pick` after the loop, but that pick still delivers
+// its result two phases wide. Branch extraction's re-extraction fixpoint runs
+// before break-value extraction, so this pick is never fed back through it and
+// the wide delivery is rejected instead of mis-sorted.
+uir.func @WideMultiBreak(%c: 0, %x: 2, %y: 2) -> (r: 2) {
+  %0 = hir.int_type
+  uir.signature (%0, %0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  // expected-error @below {{delivers result #0 at phase 2 instead of its own phase 1; delivering this cross-phase result is not implemented in phase sorting yet (a multi-provider selection from loop or break-value extraction whose receiving pick crosses more than one phase, or a single-provider float value that neither forwards nor choice-ifies)}}
+  %l = uir.loop : %t {
+    uir.if %c {
+      uir.break %x : %t
+    } else {
+      uir.break %y : %t
+    }
+    uir.continue
   }
   uir.return %l : %t
 }
