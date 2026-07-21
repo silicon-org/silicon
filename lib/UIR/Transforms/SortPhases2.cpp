@@ -90,7 +90,11 @@
 //   (a genuine selection) or a single arm does while the others provably
 //   diverge (an unreachable terminator or a breakless loop) — the diverging
 //   arms yield `uir.unreachable_value` in every slot and become dead receiving
-//   alternatives the choice never selects. Never-produced results (the whole op
+//   alternatives the choice never selects. A diverging arm's own later-phase
+//   content extracts exactly like any other arm's, into its dead receiving
+//   alternative: reachability never gates what is sorted, and an execution
+//   entering the arm hangs at phase p, so the content's phase never runs.
+//   Never-produced results (the whole op
 //   diverges) are not lifted; their consumers are already
 //   `uir.unreachable_value` from never-forwarding.
 //
@@ -170,7 +174,8 @@
 // than its enclosing frame, in both function regions alike. Inputs that need
 // the remaining sorting machinery are rejected with explicit diagnostics
 // instead of being sorted incorrectly: later-phase content trapped in a
-// provably diverging branch arm, which no extraction rule owns.
+// branch none of whose arms rejoins (there is no reaching arm to dispatch a
+// choice on), which no extraction rule owns.
 //
 //===----------------------------------------------------------------------===//
 
@@ -720,9 +725,13 @@ LogicalResult PhaseSorter::forwardNeverValues() {
 // away, so the remaining single-provider case is an interior value that varies
 // per path and must choice-ify. The diverging arms yield
 // `uir.unreachable_value` in every slot and become dead receiving alternatives
-// the choice never selects. A never-produced result (the whole op diverges) is
-// not extracted; its consumers were already rewritten to
-// `uir.unreachable_value` by never-forwarding, so it is simply left unused.
+// the choice never selects; their own later-phase content moves into those
+// alternatives all the same — reachability never gates what is sorted, and the
+// content can never run (entering the arm hangs the branch's phase, so later
+// phases never start), so the alternative is harmless dead code. A
+// never-produced result (the whole op diverges) is not extracted; its
+// consumers were already rewritten to `uir.unreachable_value` by
+// never-forwarding, so it is simply left unused.
 
 /// Whether any op transitively inside `root` sits at a real phase later than
 /// p. A sentinel-phase op is a floating region-free pure value (a constant or
@@ -1067,9 +1076,9 @@ LogicalResult PhaseSorter::extractBranches(bool &changed) {
 /// Rewrite one phase-p branch (`uir.if` or `hir.pick`) into a choice-yielding
 /// branch plus a receiving `hir.pick` at phase p+1. See the section header
 /// for the shape and the invariant. Sets `changed` when it rewrites the branch;
-/// the bail cases (an arm exiting to an enclosing loop, a non-reaching arm with
-/// its own later content, or no reaching arm at all) leave the branch untouched
-/// and do not set it, so the caller's fixpoint terminates.
+/// the bail cases (an arm exiting to an enclosing loop, or no reaching arm at
+/// all) leave the branch untouched and do not set it, so the caller's fixpoint
+/// terminates.
 LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p,
                                              bool &changed) {
   auto ifOp = dyn_cast<IfOp>(op);
@@ -1089,14 +1098,16 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p,
     return armProvidedValues(term).has_value() && analysis.reaches(term, op);
   };
 
-  // An arm that exits to an enclosing loop belongs to that loop's records, and
-  // a non-reaching arm holding its own later-phase content is the
-  // all-paths-diverge-with-content family that needs machinery this pass does
-  // not have; both leave the branch for the rejection. A branch with no
-  // reaching arm never rejoins, so there is no choice to dispatch on — leave it
-  // too. Otherwise the later phase running at all implies a reaching arm ran,
-  // so the reaching arms' content extracts and the diverging arms drop out as
-  // dead receiving alternatives.
+  // An arm that exits to an enclosing loop belongs to that loop's records, so
+  // it leaves the branch for that machinery. A branch with no reaching arm
+  // never rejoins, so there is no choice to dispatch on; it is left for the
+  // nested-content rejection. Otherwise the branch extracts: reachability
+  // never gates what is sorted, so a diverging arm's later-phase content
+  // extracts exactly like any other arm's — its receiving alternative is
+  // simply dead at runtime, because the arm's tag is never delivered and an
+  // execution entering the arm hangs at phase p, so the later phase never
+  // runs at all. Harmless dead code, no miscompile — and divergence cannot
+  // change how the code around it compiles.
   //
   // Later-phase content buried inside a same- or earlier-phase region op at an
   // arm's top level (a nested frame's record content, or a nested branch that
@@ -1120,8 +1131,6 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p,
       }
     if (armReaches(arm))
       anyReaches = true;
-    else if (!arm->empty() && !collectLaterContent(arm->front(), p).empty())
-      return success();
   }
   if (!anyReaches)
     return success();
@@ -1165,10 +1174,9 @@ LogicalResult PhaseSorter::extractFromBranch(Operation *op, int16_t p,
     if (!armReaches(arm)) {
       // A non-reaching arm provably diverges; it provides nothing, so its
       // receiving alternative yields `uir.unreachable_value` for every later
-      // result. The bail above guarantees it holds no later-phase content, so
-      // nothing crosses.
-      assert(info.moved.empty() &&
-             "non-reaching arm with later content should have bailed");
+      // result. Its own later-phase content still moves into that alternative
+      // like any other arm's, and the crossings it samples ride the payload
+      // fields — all dead at runtime, since the arm's tag is never delivered.
       info.laterYieldOperands.assign(laterIdx.size(), Value());
       armInfos.push_back(std::move(info));
       continue;
@@ -2779,9 +2787,11 @@ LogicalResult PhaseSorter::hoistEarlierContent(bool &changed) {
 /// - Anchored content whose phase differs from its parent frame's phase.
 ///   Hoisting already lifted every op earlier than its frame out, and the
 ///   joint extraction fixpoint carries later-phase content across any number of
-///   boundaries, in both function regions alike, so a residual is later-phase
-///   content the fixpoint settled without lifting: content trapped in a
-///   provably diverging branch arm, which no extraction rule owns.
+///   boundaries, in both function regions alike — a diverging arm's content
+///   included — so a residual is later-phase content the fixpoint settled
+///   without lifting: content trapped in a branch none of whose arms rejoins,
+///   which no extraction rule owns (there is no reaching arm to dispatch a
+///   choice on).
 ///
 /// Cross-phase result delivery, by contrast, is fully covered and asserted
 /// rather than rejected: single-provider results were forwarded (externally
@@ -2823,8 +2833,8 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
     // hoisting nor extraction lifted. Every frame ends with a real phase, so a
     // parent — always a region-bearing frame — is never floating. Hoisting and
     // extraction run on both function regions, so a residual survives here
-    // only where no rule owns it: later-phase content trapped in a provably
-    // diverging branch arm.
+    // only where no rule owns it: later-phase content trapped in a branch
+    // none of whose arms rejoins.
     if (auto *parent = op->getParentOp(); parent != funcOp) {
       auto parentIt = analysis.opPhases.find(parent);
       assert(parentIt != analysis.opPhases.end() && "op phase not computed");

@@ -89,11 +89,12 @@ uir.func @PhaseCallInInput(%x: 0) -> () {
 
 // -----
 
-// Later-phase content in a provably diverging branch arm (a breakless loop
-// before the yield) has no reaching arm to extract into: branch extraction
-// leaves the branch untouched, and the content surfaces as a nested-content
-// rejection once the extraction fixpoint settles.
-uir.func @DivergingArmLaterContent(%c: 0, %x: 1) -> () {
+// Later-phase content in a branch none of whose arms rejoins: there is no
+// reaching arm to dispatch a choice on, so no extraction rule owns the
+// content, branch extraction leaves the op untouched, and the content
+// surfaces as a nested-content rejection once the extraction fixpoint
+// settles.
+uir.func @AllArmsDivergeLaterContent(%c: 0, %x: 1) -> () {
   %0 = hir.int_type
   uir.signature (%0, %0) -> ()
 } {
@@ -109,6 +110,8 @@ uir.func @DivergingArmLaterContent(%c: 0, %x: 1) -> () {
       uir.yield
     }
     uir.yield
+  } else {
+    uir.unreachable
   }
   uir.return
 }
