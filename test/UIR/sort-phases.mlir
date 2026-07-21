@@ -4852,6 +4852,62 @@ uir.func @BothArmsBreakContent(%n: -1, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Content-free all-exit divergence: both arms exit and the branch holds no
+// later-phase content and no demanded later result, so it records no cf slot —
+// but it still cuts the spine. Each exit pushes its own record (samples plus
+// an empty NOT_REACHED reach link), and the structurally unreachable trailing
+// back edge pushes nothing.
+
+// CHECK-LABEL: uir.func @ContentFreeAllExit
+uir.func @ContentFreeAllExit(%n: -1, %x: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> ()
+} {
+  %t = hir.int_type
+  %zero = hir.constant_int 0 : %t
+  %one = hir.constant_int 1 : %t
+  %acc = hir.var : %t
+  // CHECK: uir.phase -1 {
+  // CHECK:          uir.if %{{.+}} {
+  // CHECK-NEXT:       [[NRB:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.opaque_pack([[I:%.+]], [[NRB]])
+  // CHECK:            uir.break
+  // CHECK-NEXT:     } else {
+  // CHECK-NEXT:       [[NRC:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       hir.opaque_pack([[I]], [[NRC]])
+  // CHECK:            uir.continue
+  // No record push before the dead back edge: the all-exit divergence cuts
+  // the spine even without a cf slot.
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     uir.continue [[I]]
+  uir.expr pin -1 {
+    uir.loop (%i = %zero : %t) {
+      uir.expr pin 1 {
+        hir.write_var %acc, %i : %t
+        uir.yield
+      }
+      %c = hir.geq %i, %n : %t
+      %next = hir.add %i, %one : %t
+      uir.if %c {
+        uir.break
+      } else {
+        uir.continue %next : %t
+      }
+      uir.continue %i : %t
+    }
+    uir.yield
+  }
+  // CHECK: hir.replicate ([[IREC:%.+]], [[LR:%.+]]) in %{{.+}} {
+  // CHECK-NEXT:     hir.write_var [[ACC:%.+]], [[IREC]]
+  // CHECK-NEXT:     hir.pick [[LR]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
 // Shared arm prefix: later-phase content before a nested exit inside a
 // rejoining arm runs on both the exit path and the fall-through. Its replay
 // lives once in the cf pick's arm alternative, ahead of the arm's reach pick,

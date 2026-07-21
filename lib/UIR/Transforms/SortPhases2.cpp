@@ -246,6 +246,11 @@ struct Divergence {
   SmallVector<Arm> arms;
   /// The activation-ending terminators of a content-free divergence.
   SmallVector<Operation *> exitTerminators;
+  /// Whether some path through the divergence falls through to the op's next
+  /// sibling (`!PhaseAnalysis::diverges`). A divergence with no fall-through
+  /// cuts its plan's spine: everything after it is structurally unreachable
+  /// and contributes no push site.
+  bool fallsThrough = true;
   /// The cf choice the rebuilt `if` delivers as its last result on
   /// fall-through paths; exit paths build their own cf value in place.
   mlir::Value cfValue;
@@ -1527,6 +1532,7 @@ LogicalResult PhaseSorter::scanBlock(Block &block, int16_t p, BodyPlan &plan,
     });
 
     Divergence divergence;
+    divergence.fallsThrough = !analysis.diverges(&blockOp);
     if (!hasLaterContent(&blockOp, p) && !laterResults) {
       // Content-free divergence: no cf slot; every activation-ending
       // terminator pushes a record whose reach link is NOT_REACHED, no matter
@@ -1723,14 +1729,15 @@ void PhaseSorter::appendTail(BodyPlan &plan, size_t seg,
 /// falls through to the enclosing level, and a `uir.unreachable` never
 /// completes an activation.
 ///
-/// A cf-carrying divergence all of whose arms exit (a null `cfValue` — a
-/// rebuilt branch delivers its cf result on fall-through paths only) makes the
-/// entire remainder of its plan's spine dynamically unreachable: no
-/// fall-through path leaves it. Its own arms still hold the real exits, so they
-/// are collected, but every later divergence and the plan terminal are dead and
-/// must contribute no push site — otherwise their record path would walk
-/// through the blocking divergence as a passed divergence with no cf result for
-/// `appendTail`. So the scan stops right after such a divergence's arms.
+/// A divergence with no fall-through (`Divergence::fallsThrough`) makes the
+/// entire remainder of its plan's spine structurally unreachable: no path
+/// leaves it toward the next sibling. Its own arms (or exit terminators) still
+/// hold the real exits, so they are collected, but every later divergence and
+/// the plan terminal are dead and must contribute no push site — a record path
+/// walking through it as a passed divergence would describe a path that cannot
+/// execute (and, for a cf-carrying divergence, would find no cf result for
+/// `appendTail`). So the scan stops right after such a divergence's sites,
+/// independent of whether the divergence carries a cf slot.
 void PhaseSorter::collectPushSites(BodyPlan &plan,
                                    SmallVectorImpl<PathStep> &path,
                                    SmallVectorImpl<PushSite> &sites) {
@@ -1741,17 +1748,18 @@ void PhaseSorter::collectPushSites(BodyPlan &plan,
         site.path.push_back({k, 0});
         sites.push_back(std::move(site));
       }
-      continue;
+    } else {
+      for (auto [j, arm] : llvm::enumerate(divergence.arms)) {
+        if (!arm.plan)
+          continue;
+        path.push_back({k, j});
+        collectPushSites(*arm.plan, path, sites);
+        path.pop_back();
+      }
     }
-    for (auto [j, arm] : llvm::enumerate(divergence.arms)) {
-      if (!arm.plan)
-        continue;
-      path.push_back({k, j});
-      collectPushSites(*arm.plan, path, sites);
-      path.pop_back();
-    }
-    // An all-exit divergence blocks the spine: nothing after it is reachable.
-    if (!divergence.cfValue)
+    // A divergence with no fall-through cuts the spine: nothing after it is
+    // structurally reachable.
+    if (!divergence.fallsThrough)
       return;
   }
   if (isa<BreakOp, ContinueOp, hir::YieldOp>(plan.terminal))

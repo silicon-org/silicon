@@ -138,6 +138,11 @@ struct PhaseAnalysis {
   /// `uir.unreachable_value` poison is a genuine provider.
   bool reaches(Operation *op, Operation *regionRoot);
 
+  /// Whether op `op` provably diverges, so a following terminator is
+  /// unreachable: a breakless `uir.loop`, or a branch/expr no arm of which
+  /// falls through to a yield. Every other op falls through.
+  bool diverges(Operation *op);
+
   /// Annotate every op in the function with its resolved phase (`pa.phase`)
   /// and the phases of its operands and results (`pa.operands`,
   /// `pa.results`), for lit testing. Sentinel phases print as "float" and
@@ -196,11 +201,6 @@ private:
   /// omitted; the value it delivers is irrelevant.
   SmallVector<std::pair<Value, Operation *>, 2>
   resultProviders(Operation *regionOp, unsigned resultIdx);
-
-  /// Whether op `op` provably diverges, so a following terminator is
-  /// unreachable: a breakless `uir.loop`, or a branch/expr no arm of which
-  /// falls through to a yield. Every other op falls through.
-  bool diverges(Operation *op);
 
   /// Invoke `fn(value, term)` for each terminator operand feeding result slot
   /// `resultIdx` of a region-bearing op: yield operands for exprs/ifs/picks,
