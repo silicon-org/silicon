@@ -196,6 +196,97 @@ func.func @IntLiteralWithUnitTypeInLoop() {
 
 func.func private @use_type(%arg0: !hir.any)
 
+// Two same-kind type constructors are not a provable mismatch: their width
+// operands may still unify. InferTypes decomposes such pairs; a genuine width
+// mismatch surfaces as a constant-level unify instead.
+func.func @SameKindUIntNoError(%w1: !hir.any, %w2: !hir.any) {
+  %0 = hir.uint_type %w1
+  %1 = hir.uint_type %w2
+  %2 = hir.unify %0, %1
+  call @use_type(%2) : (!hir.any) -> ()
+  return
+}
+
+// -----
+
+func.func private @use_type(%arg0: !hir.any)
+
+// A unify of two same-kind constants with different values is a provable
+// mismatch. This is the shape InferTypes produces when decomposing
+// `unify(uint<8>, uint<4>)` into `uint<unify(8, 4)>`.
+func.func @ConstWidthMismatch() {
+  %int = hir.int_type
+  %a = hir.constant_int 8 : %int
+  %b = hir.constant_int 4 : %int
+  // expected-error @below {{type mismatch: constant `8` is not compatible with constant `4`}}
+  %u = hir.unify %a, %b
+  call @use_type(%u) : (!hir.any) -> ()
+  return
+}
+
+// -----
+
+func.func private @use_type(%arg0: !hir.any)
+
+// The same leaf rule applies to mir_constant values.
+func.func @MirConstantMismatch() {
+  %a = hir.mir_constant #si.int<8>
+  %b = hir.mir_constant #si.int<4>
+  // expected-error @below {{type mismatch: constant `8` is not compatible with constant `4`}}
+  %u = hir.unify %a, %b
+  call @use_type(%u) : (!hir.any) -> ()
+  return
+}
+
+// -----
+
+func.func private @use_type(%arg0: !hir.any)
+
+// Constants of different op kinds may denote the same value, so they are not
+// a provable mismatch even with different spellings.
+func.func @CrossKindConstNoError() {
+  %int = hir.int_type
+  %a = hir.mir_constant #si.int<8>
+  %b = hir.constant_int 8 : %int
+  %u = hir.unify %a, %b
+  call @use_type(%u) : (!hir.any) -> ()
+  return
+}
+
+// -----
+
+func.func private @use_type(%arg0: !hir.any)
+
+// Mismatched constant booleans are provably unequal.
+func.func @ConstantBoolMismatch() {
+  %a = hir.constant_bool <true>
+  %b = hir.constant_bool <false>
+  // expected-error @below {{type mismatch: constant `true` is not compatible with constant `false`}}
+  %u = hir.unify %a, %b
+  call @use_type(%u) : (!hir.any) -> ()
+  return
+}
+
+// -----
+
+func.func private @use_type(%arg0: !hir.any)
+
+// Two func_type ops with different arities are structurally incompatible:
+// same kind, but differing operand-segment attributes.
+func.func @FuncTypeArityMismatch() {
+  %int = hir.int_type
+  %0 = hir.func_type (%int) -> (%int)
+  %1 = hir.func_type (%int, %int) -> (%int)
+  // expected-error @below {{type mismatch: a function type is not compatible with a function type}}
+  %2 = hir.unify %0, %1
+  call @use_type(%2) : (!hir.any) -> ()
+  return
+}
+
+// -----
+
+func.func private @use_type(%arg0: !hir.any)
+
 // An unresolved unify with an inferrable operand inside an arm produces no
 // error; later pipeline stages may still resolve it.
 func.func @InferrableInsideArmNoError(%c: !hir.any) {

@@ -93,10 +93,19 @@ def CheckTypesPass : Pass<"check-types"> {
   let summary = "Check for unresolved type mismatches after inference";
   let description = [{
     Runs after type inference and checks for remaining `hir.unify` ops
-    whose operands are both concrete but different types. These indicate
-    type mismatches in the source program (e.g., a function body
-    returning `()` when the declared return type is `int`). Emits
-    user-facing error diagnostics for each such mismatch.
+    whose operands are provably unequal. These indicate type mismatches
+    in the source program (e.g., a function body returning `()` when
+    the declared return type is `int`). Emits user-facing error
+    diagnostics for each such mismatch.
+
+    A mismatch is only reported when it is provable: two concrete type
+    constructors of different kinds (or of the same kind with different
+    attributes, such as function types of differing arity), or two
+    constant ops of the same kind with different value attributes (e.g.
+    mismatched `uint` widths after InferTypes has decomposed the type
+    unification down to the width operands). Unify ops involving
+    inferrables or other unresolved values are left alone, since later
+    pipeline stages may still resolve them.
   }];
 }
 

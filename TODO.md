@@ -1,12 +1,8 @@
 # TODO
 
-- cross-ex4.si, cross-ex8.si: `mir.return` type mismatch (`!si.uint<N>` vs `!si.opaque`) when a function calls another dependent-type function.
-  The return type in the MIR func doesn't match because the opaque signature types aren't properly resolved after specialization.
 - cross-ex5.si: `hir.unify` survives to HIRToMIR with different operands.
   The `const { 4 + 4 }` expression creates a unify between the computed type and the expected type that InferTypes can't resolve.
   We can't symbolically prove equivalence, but we want the canonicalizer to be able to at least resolve constant expressions down to simple constants that will then unify.
-- Type unification can't prove structural equivalence of `uint` types with different width operands.
-  Need to teach InferTypes/CheckTypes to structurally compare `uint_type` ops by unifying their widths.
 - The `in_range` example in `docs/examples/basics/operators.md` fails with `mir.return` type mismatch (`!hir.any` vs `!si.bool`).
   Tagged `silicon-todo` to skip doc testing.
   Root cause: the `&&` short-circuit produces a value typed `!hir.any` that doesn't get coerced to `!si.bool` before the MIR return.
