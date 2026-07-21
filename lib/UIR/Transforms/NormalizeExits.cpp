@@ -8,11 +8,13 @@
 //
 // # Normalize Early Function Exits into Single-Exit Value Form
 //
-// This pass rewrites every `uir.return` that is not a function body's
-// terminator into value form, bottom-up per region, leaving one `uir.return`
-// as the body terminator. It is phase-blind — no phase information is
-// consulted — and runs before phase analysis, so analysis and sorting never
-// see an early exit.
+// A `uir.func` has two regions that follow one set of rules: the body, whose
+// return-like exit is `uir.return`, and the signature, whose return-like
+// exit is `uir.signature`. This pass rewrites every exit op that is not its
+// region's terminator into value form, bottom-up per region, leaving one
+// exit op as the region terminator. It is phase-blind — no phase information
+// is consulted — and runs before phase analysis, so analysis and sorting
+// never see an early exit.
 //
 // The encoding keeps every SSA value at a single phase: the exit *decision*
 // and the exit *values* have different phases in general, so they travel as
@@ -30,9 +32,11 @@
 //   and exprs the slots and tag ride the yield; on loops they ride
 //   `uir.break` (existing breaks gain the tag-1 slots, and exit paths become
 //   breaks). The value slots' result types are one shared `hir.inferrable`
-//   per function result, created once at the body top: every exit site's own
-//   type operands unify into it, and being floating it satisfies the type
-//   operand rule's one-phase-earlier demand at any phase.
+//   per exit slot, created once at the region top: every exit site's own
+//   type operands unify into it (a `uir.signature` site carries none, so its
+//   unify set is empty and the slots use the shared inferrables directly),
+//   and being floating it satisfies the type operand rule's one-phase-
+//   earlier demand at any phase.
 //
 // - **Dispatch**: right after the rebuilt op, an `hir.pick` on its tag
 //   branches between the exit and the continuation: the tag-0 alternative
@@ -43,9 +47,11 @@
 //   ever duplicated.
 //
 // How an exit is encoded depends only on the block's parent op — its
-// `ExitPlan`. The function body threads the exit values through valued picks
-// into the single trailing `uir.return`, whose type operands are the shared
-// result-type inferrables. If/expr regions yield their original slots, the
+// `ExitPlan`. The root region block threads the exit values through valued
+// picks into the single trailing exit op: for the body a `uir.return` whose
+// type operands are the shared slot-type inferrables, for the signature a
+// `uir.signature` whose operands are the delivered arg- and result-type
+// slots. If/expr regions yield their original slots, the
 // exit-value slots, and the tag. Loop bodies break out of the loop directly,
 // with a resultless dispatch pick and `uir.unreachable` after it, since
 // break/continue are ordinary loop-real control flow. Dead code after
@@ -84,9 +90,10 @@ namespace {
 /// by the block's parent op.
 struct ExitPlan {
   enum Kind {
-    /// The function body block: exit values thread through valued dispatch
-    /// picks and feed the single trailing `uir.return`.
-    FuncBody,
+    /// The root region block (function body or signature): exit values
+    /// thread through valued dispatch picks and feed the single trailing
+    /// exit op (`uir.return` or `uir.signature`).
+    Root,
     /// A region block of an exit-carrying `uir.if` or `uir.expr`: exit
     /// values and the tag ride the block's yield as trailing slots.
     Arm,
@@ -113,13 +120,25 @@ struct RebuiltExit {
   Value tag() const { return op->getResults().back(); }
 };
 
-/// Rewrites all early `uir.return` ops out of one `uir.func`.
+/// Rewrites all early exit ops out of one region of a `uir.func`: the body
+/// (exit op `uir.return`) or the signature (exit op `uir.signature`). Both
+/// regions follow one set of rules; only what an exit site delivers and how
+/// the final root terminator is spelled differ.
 class ExitNormalizer {
 public:
-  ExitNormalizer(FuncOp funcOp) : funcOp(funcOp) {}
+  ExitNormalizer(FuncOp funcOp, Region &region)
+      : funcOp(funcOp), region(region) {}
   LogicalResult run();
 
 private:
+  bool isSignature() { return &region == &funcOp.getSignature(); }
+  bool isExit(Operation *op) {
+    return isSignature() ? isa<SignatureOp>(op) : isa<ReturnOp>(op);
+  }
+  bool containsExit(Operation *op);
+  SmallVector<Value> exitSiteValues(Operation *op);
+  SmallVector<Value> exitSiteTypes(Operation *op);
+  void buildRootTerminator(OpBuilder &builder, Location loc, ValueRange values);
   LogicalResult normalizeBlock(Block &block, const ExitPlan &plan,
                                bool threading);
   LogicalResult finishEnd(Block &block, const ExitPlan &plan, bool threading);
@@ -132,25 +151,65 @@ private:
                          bool terminatorFlavor);
 
   FuncOp funcOp;
-  /// The one `hir.choice_type` shared by all encodings in this function.
+  /// The region being normalized: the function's body or signature.
+  Region &region;
+  /// The one `hir.choice_type` shared by all encodings in this region.
   Value choiceType;
-  /// One shared `hir.inferrable` per function result, created at the body
-  /// top: the exit-value slot type of every rebuilt op, the unification
-  /// target of every exit site's type operands, and the final return's type
-  /// operands. Floating, so it satisfies the type operand rule's
-  /// one-phase-earlier demand at any phase.
+  /// One shared `hir.inferrable` per exit slot, created at the region top:
+  /// the exit-value slot type of every rebuilt op, the unification target of
+  /// every exit site's type operands, and the final return's type operands.
+  /// Floating, so it satisfies the type operand rule's one-phase-earlier
+  /// demand at any phase.
   SmallVector<Value> resultTypeVars;
-  /// The function's declared result arity; every exit path provides this
-  /// many values.
+  /// The number of exit slots every exit path provides: the function's
+  /// declared result arity for the body, its argument plus result arity for
+  /// the signature (one type value per argument and per result).
   unsigned numResults = 0;
   Type anyTy;
 };
 } // namespace
 
-/// Whether `op` transitively contains a function exit.
-static bool containsReturn(Operation *op) {
-  return op->walk([](ReturnOp) { return WalkResult::interrupt(); })
+/// Whether `op` transitively contains this region's exit op.
+bool ExitNormalizer::containsExit(Operation *op) {
+  return op
+      ->walk([&](Operation *inner) {
+        return isExit(inner) ? WalkResult::interrupt() : WalkResult::advance();
+      })
       .wasInterrupted();
+}
+
+/// The values an exit site delivers, one per exit slot: a `uir.return`'s
+/// return values, or a `uir.signature`'s argument and result type values.
+SmallVector<Value> ExitNormalizer::exitSiteValues(Operation *op) {
+  if (auto sigOp = dyn_cast<SignatureOp>(op)) {
+    SmallVector<Value> values(sigOp.getTypeOfArgs());
+    llvm::append_range(values, sigOp.getTypeOfResults());
+    return values;
+  }
+  return SmallVector<Value>(cast<ReturnOp>(op).getValues());
+}
+
+/// The per-slot type operands an exit site carries: a `uir.return`'s type
+/// operands, which unify into the shared slot-type inferrables. A
+/// `uir.signature` delivers type values and carries no type operands of its
+/// own, so its slots are typed by the shared inferrables directly and the
+/// unify set is empty.
+SmallVector<Value> ExitNormalizer::exitSiteTypes(Operation *op) {
+  if (isa<SignatureOp>(op))
+    return resultTypeVars;
+  return SmallVector<Value>(cast<ReturnOp>(op).getTypeOfValues());
+}
+
+/// Build the region's single trailing exit op from the threaded slot values.
+void ExitNormalizer::buildRootTerminator(OpBuilder &builder, Location loc,
+                                         ValueRange values) {
+  if (isSignature()) {
+    unsigned numArgs = funcOp.getArgPhases().size();
+    SignatureOp::create(builder, loc, values.take_front(numArgs),
+                        values.drop_front(numArgs));
+  } else {
+    ReturnOp::create(builder, loc, values, resultTypeVars);
+  }
 }
 
 /// The nearest enclosing `uir.loop` of `op`, or null.
@@ -162,26 +221,27 @@ static LoopOp enclosingLoop(Operation *op) {
 }
 
 LogicalResult ExitNormalizer::run() {
-  // The FuncOp verifier keeps signature regions free of `uir.return`, so
-  // only the body region can hold exits. Nothing to do unless some return
-  // is not the body terminator.
-  auto &body = funcOp.getBody().front();
-  auto *bodyTerminator = body.getTerminator();
-  auto walkResult = funcOp.getBody().walk([&](ReturnOp op) {
-    return op == bodyTerminator ? WalkResult::advance()
-                                : WalkResult::interrupt();
+  // Nothing to do unless some exit op is not the region terminator. The
+  // verifier keeps each region free of the other region's exit kind.
+  auto &block = region.front();
+  auto *terminator = block.getTerminator();
+  auto walkResult = region.walk([&](Operation *op) {
+    return isExit(op) && op != terminator ? WalkResult::interrupt()
+                                          : WalkResult::advance();
   });
   if (!walkResult.wasInterrupted())
     return success();
 
   numResults = funcOp.getResultPhases().size();
+  if (isSignature())
+    numResults += funcOp.getArgPhases().size();
   anyTy = hir::AnyType::get(funcOp.getContext());
-  OpBuilder builder(&body, body.begin());
+  OpBuilder builder(&block, block.begin());
   choiceType = hir::ChoiceTypeOp::create(builder, funcOp.getLoc()).getResult();
   for (unsigned i = 0; i < numResults; ++i)
     resultTypeVars.push_back(
         hir::InferrableOp::create(builder, funcOp.getLoc()).getResult());
-  return normalizeBlock(body, ExitPlan{ExitPlan::FuncBody, {}},
+  return normalizeBlock(block, ExitPlan{ExitPlan::Root, {}},
                         /*threading=*/false);
 }
 
@@ -192,8 +252,8 @@ LogicalResult ExitNormalizer::run() {
 /// payload-free tag-0 choice. With `terminatorFlavor` the encoding ends in
 /// the enclosing region's real terminator (`uir.yield` with type operands);
 /// without, it ends in the `hir.yield` that threads through a dispatch pick.
-/// Loop bodies always break — their dispatch never threads. The function
-/// body threads the bare values.
+/// Loop bodies always break — their dispatch never threads. The root region
+/// block threads the bare values.
 void ExitNormalizer::buildExitEndpoint(OpBuilder &builder, Location loc,
                                        const ExitPlan &plan, ValueRange values,
                                        ValueRange typeOfValues,
@@ -202,8 +262,8 @@ void ExitNormalizer::buildExitEndpoint(OpBuilder &builder, Location loc,
     if (slotType != valueType)
       builder.createOrFold<hir::UnifyOp>(loc, anyTy, slotType, valueType);
 
-  if (plan.kind == ExitPlan::FuncBody) {
-    assert(!terminatorFlavor && "the function body's exits always thread");
+  if (plan.kind == ExitPlan::Root) {
+    assert(!terminatorFlavor && "the root region block's exits always thread");
     hir::YieldOp::create(builder, loc, values);
     return;
   }
@@ -238,7 +298,7 @@ LogicalResult ExitNormalizer::normalizeBlock(Block &block, const ExitPlan &plan,
                                              bool threading) {
   Operation *exitOp = nullptr;
   for (auto &op : block.without_terminator())
-    if (containsReturn(&op)) {
+    if (containsExit(&op)) {
       exitOp = &op;
       break;
     }
@@ -254,7 +314,7 @@ LogicalResult ExitNormalizer::normalizeBlock(Block &block, const ExitPlan &plan,
   OpBuilder builder(&block, std::next(Block::iterator(rebuilt->op)));
   unsigned numPickResults;
   switch (plan.kind) {
-  case ExitPlan::FuncBody:
+  case ExitPlan::Root:
     numPickResults = numResults;
     break;
   case ExitPlan::Arm:
@@ -288,11 +348,11 @@ LogicalResult ExitNormalizer::normalizeBlock(Block &block, const ExitPlan &plan,
   // Re-terminate the block after the dispatch pick.
   OpBuilder endBuilder(&block, block.end());
   switch (plan.kind) {
-  case ExitPlan::FuncBody:
+  case ExitPlan::Root:
     if (threading) {
       hir::YieldOp::create(endBuilder, loc, pick.getResults());
     } else {
-      ReturnOp::create(endBuilder, loc, pick.getResults(), resultTypeVars);
+      buildRootTerminator(endBuilder, loc, pick.getResults());
     }
     break;
   case ExitPlan::Arm:
@@ -313,22 +373,23 @@ LogicalResult ExitNormalizer::normalizeBlock(Block &block, const ExitPlan &plan,
 }
 
 /// Rewrite the terminator of an exit-free block per the block's plan: a
-/// terminating return becomes the exit encoding, a yield of a rebuilt
+/// terminating exit op becomes the exit encoding, a yield of a rebuilt
 /// if/expr gains the unreachable exit slots and the tag-1 choice, and loop
 /// terminators, unreachables, and loop exits passing through an arm stay
 /// untouched.
 LogicalResult ExitNormalizer::finishEnd(Block &block, const ExitPlan &plan,
                                         bool threading) {
   auto *terminator = block.getTerminator();
-  if (auto returnOp = dyn_cast<ReturnOp>(terminator)) {
-    // The single trailing return of the function body is the normal form.
-    if (plan.kind == ExitPlan::FuncBody && !threading)
+  if (isExit(terminator)) {
+    // The single trailing exit op of the root region block is the normal
+    // form.
+    if (plan.kind == ExitPlan::Root && !threading)
       return success();
-    OpBuilder builder(returnOp);
-    buildExitEndpoint(builder, returnOp.getLoc(), plan, returnOp.getValues(),
-                      returnOp.getTypeOfValues(),
+    OpBuilder builder(terminator);
+    buildExitEndpoint(builder, terminator->getLoc(), plan,
+                      exitSiteValues(terminator), exitSiteTypes(terminator),
                       /*terminatorFlavor=*/!threading);
-    returnOp.erase();
+    terminator->erase();
     return success();
   }
   if (auto yieldOp = dyn_cast<YieldOp>(terminator);
@@ -484,9 +545,12 @@ namespace {
 struct NormalizeExitsPass
     : public uir::impl::NormalizeExitsPassBase<NormalizeExitsPass> {
   void runOnOperation() override {
-    for (auto funcOp : getOperation().getOps<FuncOp>())
-      if (failed(ExitNormalizer(funcOp).run()))
+    for (auto funcOp : getOperation().getOps<FuncOp>()) {
+      if (failed(ExitNormalizer(funcOp, funcOp.getSignature()).run()))
         return signalPassFailure();
+      if (failed(ExitNormalizer(funcOp, funcOp.getBody()).run()))
+        return signalPassFailure();
+    }
   }
 };
 } // namespace

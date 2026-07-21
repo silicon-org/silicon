@@ -35,13 +35,15 @@ def FlattenCFPass : Pass<"flatten-cf", "mlir::ModuleOp"> {
 }
 
 def NormalizeExitsPass : Pass<"normalize-exits", "mlir::ModuleOp"> {
-  let summary = "Rewrite early uir.return exits into single-exit value form";
+  let summary = "Rewrite early function exits into single-exit value form";
   let description = [{
-    Rewrites every `uir.return` that is not a function body's terminator into
-    choice/pick value form, leaving exactly one `uir.return` as the body
-    terminator. The pass is phase-blind: it consults no phase information and
-    runs before phase analysis, so analysis and sorting input is always
-    single-exit.
+    Rewrites every function exit op that is not its region's terminator into
+    choice/pick value form, leaving exactly one exit op as the region
+    terminator. A `uir.func` has two regions that follow one set of rules:
+    the body, whose return-like exit is `uir.return`, and the signature,
+    whose return-like exit is `uir.signature`. The pass is phase-blind: it
+    consults no phase information and runs before phase analysis, so
+    analysis and sorting input is always single-exit.
 
     The encoding keeps every SSA value at a single phase: the exit decision
     and the exit values have different phases in general, so they travel as
@@ -56,18 +58,22 @@ def NormalizeExitsPass : Pass<"normalize-exits", "mlir::ModuleOp"> {
     with `uir.unreachable_value`, never omitted. On `uir.if` and `uir.expr`
     the slots and tag ride the yield; on `uir.loop` they ride `uir.break`
     (existing breaks gain the tag-1 slots, and exits become breaks), so
-    returns under loops become break-carried tags. The value slots' result
-    types are one shared `hir.inferrable` per function result, created at
-    the body top; every exit site's own type operands unify into them.
+    exits under loops become break-carried tags. The value slots' result
+    types are one shared `hir.inferrable` per exit slot (one per function
+    result for the body; one per argument and result type value for the
+    signature), created at the region top; every exit site's own type
+    operands unify into them (a `uir.signature` site carries none, so its
+    slots are typed by the shared inferrables directly).
 
     After each rebuilt op, an `hir.pick` on the tag dispatches: the tag-0
     alternative consumes the op's exit-value slots directly (alternatives
     carry no block arguments), and the tag-1 alternative receives the
     remainder of the block. Nested exits produce a linear chain of binary
-    picks, so continuations are never duplicated. At the function body's top
-    level the picks thread the exit values to the single trailing
-    `uir.return`, typed by the shared inferrables (floating, they satisfy
-    the type operand rule's one-phase-earlier demand at any phase); dead
+    picks, so continuations are never duplicated. At the region's top level
+    the picks thread the exit values to the single trailing exit op — for
+    the body a `uir.return` typed by the shared inferrables (floating, they
+    satisfy the type operand rule's one-phase-earlier demand at any phase),
+    for the signature a `uir.signature` consuming the delivered slots; dead
     code after exhaustive exits lands in tag-1 alternatives terminated by
     `uir.unreachable`.
 

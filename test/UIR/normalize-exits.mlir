@@ -426,3 +426,143 @@ uir.func @VoidExit(%c: 0, %x: 0) -> () {
   hir.write_var %va, %x : %t
   uir.return
 }
+
+//===----------------------------------------------------------------------===//
+// The signature region follows the same rules as the body, with
+// uir.signature as its return-like exit: an early signature under an if is
+// rebuilt into exit slots (one per argument and result type value) plus a
+// payload-free tag, and the dispatch pick threads the slots into the single
+// trailing uir.signature. A uir.signature site carries no type operands of
+// its own, so the slots are typed by the shared inferrables directly and no
+// unify is emitted.
+
+// CHECK-LABEL: uir.func @SignatureExitUnderIf
+uir.func @SignatureExitUnderIf(%c: 0, %x: 0) -> (result: 0) {
+  // CHECK: [[CT:%.+]] = hir.choice_type
+  // CHECK-NEXT: [[S0:%.+]] = hir.inferrable
+  // CHECK-NEXT: [[S1:%.+]] = hir.inferrable
+  // CHECK-NEXT: [[S2:%.+]] = hir.inferrable
+  // CHECK-NEXT: [[B:%.+]] = hir.bool_type
+  // CHECK-NEXT: [[T:%.+]] = hir.int_type
+  // CHECK-NEXT: [[IF:%.+]]:4 = uir.if %c : [[S0]], [[S1]], [[S2]], [[CT]] {
+  // CHECK-NEXT:   [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:   uir.yield [[B]], [[T]], [[T]], [[C0]] : [[S0]], [[S1]], [[S2]], [[CT]]
+  // CHECK-NEXT: } else {
+  // CHECK-NEXT:   [[U0:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:   [[U1:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:   [[U2:%.+]] = uir.unreachable_value
+  // CHECK-NEXT:   [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:   uir.yield [[U0]], [[U1]], [[U2]], [[C1]] : [[S0]], [[S1]], [[S2]], [[CT]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P:%.+]]:3 = hir.pick [[IF]]#3 : !hir.any, !hir.any, !hir.any [0 (): {
+  // CHECK-NEXT:   hir.yield [[IF]]#0, [[IF]]#1, [[IF]]#2 : !hir.any, !hir.any, !hir.any
+  // CHECK-NEXT: } 1 (): {
+  // CHECK-NEXT:   [[W:%.+]] = hir.int_type
+  // CHECK-NEXT:   hir.yield [[B]], [[W]], [[W]] : !hir.any, !hir.any, !hir.any
+  // CHECK-NEXT: }]
+  // CHECK-NEXT: uir.signature ([[P]]#0, [[P]]#1) -> ([[P]]#2)
+  %b = hir.bool_type
+  %int = hir.int_type
+  uir.if %c {
+    uir.signature (%b, %int) -> (%int)
+  }
+  %w = hir.int_type
+  uir.signature (%b, %w) -> (%w)
+} {
+  %t = hir.int_type
+  uir.return %x : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A signature exit under a loop becomes a break-carried tag, exactly like a
+// return under a loop in the body: exit paths break out with the slots and
+// tag 0, existing breaks gain unreachable slots and tag 1, and the post-loop
+// pick dispatches into the trailing uir.signature.
+
+// CHECK-LABEL: uir.func @SignatureExitUnderLoop
+uir.func @SignatureExitUnderLoop(%c: 0, %d: 0, %x: 0) -> (result: 0) {
+  // CHECK: [[CT:%.+]] = hir.choice_type
+  // CHECK-NEXT: [[S0:%.+]] = hir.inferrable
+  // CHECK-NEXT: [[S1:%.+]] = hir.inferrable
+  // CHECK-NEXT: [[S2:%.+]] = hir.inferrable
+  // CHECK-NEXT: [[S3:%.+]] = hir.inferrable
+  // CHECK-NEXT: [[B:%.+]] = hir.bool_type
+  // CHECK-NEXT: [[T:%.+]] = hir.int_type
+  // CHECK-NEXT: [[L:%.+]]:5 = uir.loop : [[S0]], [[S1]], [[S2]], [[S3]], [[CT]] {
+  // CHECK-NEXT:   [[IF:%.+]]:5 = uir.if %c : [[S0]], [[S1]], [[S2]], [[S3]], [[CT]] {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     uir.yield [[B]], [[B]], [[T]], [[T]], [[C0]] : [[S0]], [[S1]], [[S2]], [[S3]], [[CT]]
+  // CHECK-NEXT:   } else {
+  // CHECK:          uir.yield {{.*}} : [[S0]], [[S1]], [[S2]], [[S3]], [[CT]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   hir.pick [[IF]]#4 [0 (): {
+  // CHECK-NEXT:     [[BC0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     uir.break [[IF]]#0, [[IF]]#1, [[IF]]#2, [[IF]]#3, [[BC0]] : [[S0]], [[S1]], [[S2]], [[S3]], [[CT]]
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     uir.if %d {
+  // CHECK:            [[BC1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:       uir.break {{.*}}, [[BC1]] : [[S0]], [[S1]], [[S2]], [[S3]], [[CT]]
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.unreachable
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P:%.+]]:4 = hir.pick [[L]]#4 : !hir.any, !hir.any, !hir.any, !hir.any [0 (): {
+  // CHECK-NEXT:   hir.yield [[L]]#0, [[L]]#1, [[L]]#2, [[L]]#3 : !hir.any, !hir.any, !hir.any, !hir.any
+  // CHECK-NEXT: } 1 (): {
+  // CHECK-NEXT:   [[W:%.+]] = hir.int_type
+  // CHECK-NEXT:   hir.yield [[B]], [[B]], [[W]], [[W]] : !hir.any, !hir.any, !hir.any, !hir.any
+  // CHECK-NEXT: }]
+  // CHECK-NEXT: uir.signature ([[P]]#0, [[P]]#1, [[P]]#2) -> ([[P]]#3)
+  %b = hir.bool_type
+  %int = hir.int_type
+  uir.loop {
+    uir.if %c {
+      uir.signature (%b, %b, %int) -> (%int)
+    }
+    uir.if %d {
+      uir.break
+    }
+    uir.continue
+  }
+  %w = hir.int_type
+  uir.signature (%b, %b, %w) -> (%w)
+} {
+  %t = hir.int_type
+  uir.return %x : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A signature exit terminating a pinned expr in the signature region: the
+// expr is rebuilt with the slots and tag as extra results, and the dead tail
+// after the exhaustive exit stays in the tag-1 alternative behind an
+// unreachable.
+
+// CHECK-LABEL: uir.func @SignatureExitInExpr
+uir.func @SignatureExitInExpr(%c: 0, %x: 0) -> (result: 0) {
+  // CHECK: [[CT:%.+]] = hir.choice_type
+  // CHECK-NEXT: [[S0:%.+]] = hir.inferrable
+  // CHECK-NEXT: [[S1:%.+]] = hir.inferrable
+  // CHECK-NEXT: [[S2:%.+]] = hir.inferrable
+  // CHECK-NEXT: [[B:%.+]] = hir.bool_type
+  // CHECK-NEXT: [[T:%.+]] = hir.int_type
+  // CHECK-NEXT: [[E:%.+]]:4 = uir.expr pin -1 : [[S0]], [[S1]], [[S2]], [[CT]] {
+  // CHECK-NEXT:   [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:   uir.yield [[B]], [[T]], [[T]], [[C0]] : [[S0]], [[S1]], [[S2]], [[CT]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P:%.+]]:3 = hir.pick [[E]]#3 : !hir.any, !hir.any, !hir.any [0 (): {
+  // CHECK-NEXT:   hir.yield [[E]]#0, [[E]]#1, [[E]]#2 : !hir.any, !hir.any, !hir.any
+  // CHECK-NEXT: } 1 (): {
+  // CHECK-NEXT:   uir.unreachable
+  // CHECK-NEXT: }]
+  // CHECK-NEXT: uir.signature ([[P]]#0, [[P]]#1) -> ([[P]]#2)
+  %b = hir.bool_type
+  %int = hir.int_type
+  uir.expr pin -1 {
+    uir.signature (%b, %int) -> (%int)
+  }
+  uir.unreachable
+} {
+  %t = hir.int_type
+  uir.return %x : %t
+}
