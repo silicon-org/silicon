@@ -412,6 +412,106 @@ func.func @ConstantIntFallbackInRegion(%c: !hir.any) {
   return
 }
 
+// CHECK-LABEL: func @UnifyEqualConstWidths
+func.func @UnifyEqualConstWidths() {
+  // Two uint_type ops with distinct-but-equal constant widths unify
+  // structurally: the width operands merge because they are constants with
+  // identical value attributes.
+  // CHECK: [[INT:%.+]] = hir.int_type
+  // CHECK-NEXT: [[W:%.+]] = hir.constant_int 4 : [[INT]]
+  // CHECK-NEXT: hir.uint_type [[W]]
+  // CHECK-NEXT: hir.uint_type [[W]]
+  // CHECK-NEXT: [[U:%.+]] = hir.uint_type [[W]]
+  // CHECK-NEXT: call @use_type([[U]])
+  // CHECK-NOT: hir.unify
+  %int = hir.int_type
+  %a = hir.constant_int 4 : %int
+  %ua = hir.uint_type %a
+  %b = hir.constant_int 4 : %int
+  %ub = hir.uint_type %b
+  %u = hir.unify %ua, %ub
+  call @use_type(%u) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @UnifyEqualMirConstantWidths
+func.func @UnifyEqualMirConstantWidths() {
+  // The same leaf rule applies to mir_constant widths with equal values.
+  // CHECK: [[W:%.+]] = hir.mir_constant #si.int<8>
+  // CHECK-NEXT: hir.uint_type [[W]]
+  // CHECK-NEXT: hir.uint_type [[W]]
+  // CHECK-NEXT: [[U:%.+]] = hir.uint_type [[W]]
+  // CHECK-NEXT: call @use_type([[U]])
+  // CHECK-NOT: hir.unify
+  %a = hir.mir_constant #si.int<8>
+  %ua = hir.uint_type %a
+  %b = hir.mir_constant #si.int<8>
+  %ub = hir.uint_type %b
+  %u = hir.unify %ua, %ub
+  call @use_type(%u) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @UnifyDistinctArgWidths
+func.func @UnifyDistinctArgWidths(%w1: !hir.any, %w2: !hir.any) {
+  // Two uint_type ops whose widths arrive as distinct function arguments must
+  // not be equated; the unification decomposes to the width level and stays
+  // unresolved there for later stages to resolve or diagnose.
+  // CHECK: [[W:%.+]] = hir.unify %arg0, %arg1
+  // CHECK: [[U:%.+]] = hir.uint_type [[W]]
+  // CHECK: call @use_type([[U]])
+  %ua = hir.uint_type %w1
+  %ub = hir.uint_type %w2
+  %u = hir.unify %ua, %ub
+  call @use_type(%u) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @UnifyDifferentConstWidths
+func.func @UnifyDifferentConstWidths() {
+  // Two uint_type ops with provably different constant widths decompose into
+  // a width-level unify that survives; CheckTypes reports it as a mismatch.
+  // CHECK: [[A:%.+]] = hir.constant_int 4
+  // CHECK: [[B:%.+]] = hir.constant_int 8
+  // CHECK: [[W:%.+]] = hir.unify [[A]], [[B]]
+  // CHECK: [[U:%.+]] = hir.uint_type [[W]]
+  // CHECK: call @use_type([[U]])
+  %int = hir.int_type
+  %a = hir.constant_int 4 : %int
+  %ua = hir.uint_type %a
+  %b = hir.constant_int 8 : %int
+  %ub = hir.uint_type %b
+  %u = hir.unify %ua, %ub
+  call @use_type(%u) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @ReprocessSkippedUnify
+func.func @ReprocessSkippedUnify() {
+  // The first unify is skipped initially: its concrete side's tree hangs off
+  // a later-defined inferrable and cannot be materialized at %t. The second
+  // unify then resolves %t to a concrete uint_type. The skipped unify must be
+  // reprocessed with its now-concrete operand and unify structurally.
+  // CHECK: [[INT:%.+]] = hir.int_type
+  // CHECK: hir.uint_type
+  // CHECK: hir.uint_type
+  // CHECK: [[W:%.+]] = hir.constant_int 8 : [[INT]]
+  // CHECK-NEXT: [[U:%.+]] = hir.uint_type [[W]]
+  // CHECK-NEXT: call @use_type([[U]])
+  // CHECK-NOT: hir.unify
+  %int = hir.int_type
+  %w8 = hir.constant_int 8 : %int
+  %u8 = hir.uint_type %w8
+  %t = hir.inferrable
+  %ti = hir.inferrable
+  %w4 = hir.constant_int 8 : %ti
+  %u4 = hir.uint_type %w4
+  %a = hir.unify %t, %u4
+  %b = hir.unify %t, %u8
+  call @use_type(%a) : (!hir.any) -> ()
+  return
+}
+
 // CHECK-LABEL: func @HoistTreeSameBlock
 func.func @HoistTreeSameBlock() {
   // Tree materialization is position-based, not region-based: a multi-level

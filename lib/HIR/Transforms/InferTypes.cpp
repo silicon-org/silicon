@@ -81,156 +81,178 @@ static Value materializeAtPoint(Value value, Operation *point,
 }
 
 void InferTypesPass::runOnOperation() {
-  SmallVector<UnifyOp> worklist;
-  getOperation()->walk([&](UnifyOp op) { worklist.push_back(op); });
-  std::reverse(worklist.begin(), worklist.end());
-  LLVM_DEBUG(llvm::dbgs() << "Starting with " << worklist.size()
-                          << " initial unify ops\n");
-
   auto &domInfo = getAnalysis<DominanceInfo>();
 
-  while (!worklist.empty()) {
-    auto unifyOp = worklist.pop_back_val();
-    LLVM_DEBUG(llvm::dbgs() << "Processing " << unifyOp << "\n");
+  // # Iterate Unification to a Fixpoint
+  //
+  // A unify op may be skipped because it is not resolvable yet: its operands
+  // may still be defined by ops of different kinds, or its concrete side may
+  // not be materializable at the inferrable. Resolving *other* unify ops can
+  // change that, since resolution replaces operands throughout the IR (e.g. an
+  // inferrable operand becomes a concrete type constructor). Rerun the
+  // worklist over all remaining unify ops until a full round makes no
+  // progress, so that no unify op is left unresolved merely because of the
+  // order in which the ops were processed.
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    SmallVector<UnifyOp> worklist;
+    getOperation()->walk([&](UnifyOp op) { worklist.push_back(op); });
+    std::reverse(worklist.begin(), worklist.end());
+    LLVM_DEBUG(llvm::dbgs()
+               << "Starting round with " << worklist.size() << " unify ops\n");
 
-    // If both operands are the same value, the unify is trivially resolved.
-    if (unifyOp.getLhs() == unifyOp.getRhs()) {
-      unifyOp.replaceAllUsesWith(unifyOp.getLhs());
-      unifyOp.erase();
-      continue;
-    }
+    while (!worklist.empty()) {
+      auto unifyOp = worklist.pop_back_val();
+      LLVM_DEBUG(llvm::dbgs() << "Processing " << unifyOp << "\n");
 
-    auto inferrableLhs = unifyOp.getLhs().getDefiningOp<InferrableOp>();
-    auto inferrableRhs = unifyOp.getRhs().getDefiningOp<InferrableOp>();
-
-    // In case both operands are inferrable, we pick the earlier one in the IR
-    // and replace all uses of the later one.
-    if (inferrableLhs && inferrableRhs) {
-      auto keepOp = inferrableLhs;
-      auto eraseOp = inferrableRhs;
-      if (domInfo.properlyDominates(eraseOp.getOperation(), keepOp)) {
-        keepOp = inferrableRhs;
-        eraseOp = inferrableLhs;
-      }
-      LLVM_DEBUG(llvm::dbgs()
-                 << "Keeping " << keepOp << ", erasing " << eraseOp << "\n");
-      eraseOp.replaceAllUsesWith(keepOp.getResult());
-      eraseOp.erase();
-      unifyOp.replaceAllUsesWith(keepOp.getResult());
-      unifyOp.erase();
-      continue;
-    }
-
-    // In case one of the operands is inferrable, try to replace all uses of it
-    // with the other operand.
-    if (inferrableLhs || inferrableRhs) {
-      auto inferrable = inferrableLhs ? inferrableLhs : inferrableRhs;
-      auto concrete = inferrableLhs ? unifyOp.getRhs() : unifyOp.getLhs();
-      if (domInfo.properlyDominates(concrete, inferrable)) {
-        LLVM_DEBUG(llvm::dbgs() << "Replacing " << inferrable << " with "
-                                << concrete << "\n");
-        inferrable.replaceAllUsesWith(concrete);
-        inferrable.erase();
-        unifyOp.replaceAllUsesWith(concrete);
+      // If both operands are the same value, the unify is trivially resolved.
+      if (unifyOp.getLhs() == unifyOp.getRhs()) {
+        unifyOp.replaceAllUsesWith(unifyOp.getLhs());
         unifyOp.erase();
+        changed = true;
         continue;
       }
 
-      // If the concrete doesn't dominate the inferrable, try to materialize
-      // its defining tree at the inferrable's location. This handles the
-      // pattern where type constructors after the inferrable or inside nested
-      // regions (branch arms, loop bodies, expression blocks) constrain an
-      // inferrable in a dominating position.
-      if (auto cloned = materializeAtPoint(concrete, inferrable, domInfo)) {
-        LLVM_DEBUG(llvm::dbgs() << "Materialized " << cloned << " to resolve "
-                                << inferrable << "\n");
-        inferrable.replaceAllUsesWith(cloned);
-        inferrable.erase();
-        unifyOp.replaceAllUsesWith(cloned);
+      auto inferrableLhs = unifyOp.getLhs().getDefiningOp<InferrableOp>();
+      auto inferrableRhs = unifyOp.getRhs().getDefiningOp<InferrableOp>();
+
+      // In case both operands are inferrable, we pick the earlier one in the
+      // IR and replace all uses of the later one.
+      if (inferrableLhs && inferrableRhs) {
+        auto keepOp = inferrableLhs;
+        auto eraseOp = inferrableRhs;
+        if (domInfo.properlyDominates(eraseOp.getOperation(), keepOp)) {
+          keepOp = inferrableRhs;
+          eraseOp = inferrableLhs;
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "Keeping " << keepOp << ", erasing " << eraseOp << "\n");
+        eraseOp.replaceAllUsesWith(keepOp.getResult());
+        eraseOp.erase();
+        unifyOp.replaceAllUsesWith(keepOp.getResult());
         unifyOp.erase();
+        changed = true;
         continue;
       }
 
-      LLVM_DEBUG(llvm::dbgs() << "Skipping " << inferrable
-                              << " (appears before " << concrete << ")\n");
-      continue;
-    }
-
-    // If both operands are defined by the same kind of operation, replace the
-    // later with the earlier one and unify their operands.
-    auto *lhsOp = unifyOp.getLhs().getDefiningOp();
-    auto *rhsOp = unifyOp.getRhs().getDefiningOp();
-    if (!lhsOp || !rhsOp)
-      continue;
-    if (lhsOp->getNumRegions() != 0 || lhsOp->getNumSuccessors() != 0 ||
-        lhsOp->getNumResults() != 1)
-      continue;
-    if (!isMemoryEffectFree(lhsOp))
-      continue;
-    if (!OperationEquivalence::isEquivalentTo(
-            lhsOp, rhsOp, OperationEquivalence::ignoreValueEquivalence, nullptr,
-            OperationEquivalence::IgnoreLocations))
-      continue;
-
-    // Pick which one of the ops to keep.
-    auto *keepOp = lhsOp;
-    auto *eraseOp = rhsOp;
-    if (domInfo.properlyDominates(eraseOp, keepOp))
-      std::swap(keepOp, eraseOp);
-
-    // If all operands of the erased op dominate the op we keep, we can merge
-    // the two ops in place: insert operand unifications before the kept op,
-    // replace the erased op with the kept one.
-    if (llvm::all_of(eraseOp->getOperands(), [&](auto value) {
-          return domInfo.properlyDominates(value, keepOp);
-        })) {
-      LLVM_DEBUG(llvm::dbgs() << "Unifying " << *keepOp << " (kept) and "
-                              << *eraseOp << " (erased)\n");
-
-      OpBuilder builder(keepOp);
-      for (auto [keepArg, eraseArg] :
-           llvm::zip(keepOp->getOpOperands(), eraseOp->getOperands())) {
-        if (keepArg.get() == eraseArg)
+      // In case one of the operands is inferrable, try to replace all uses of
+      // it with the other operand.
+      if (inferrableLhs || inferrableRhs) {
+        auto inferrable = inferrableLhs ? inferrableLhs : inferrableRhs;
+        auto concrete = inferrableLhs ? unifyOp.getRhs() : unifyOp.getLhs();
+        if (domInfo.properlyDominates(concrete, inferrable)) {
+          LLVM_DEBUG(llvm::dbgs() << "Replacing " << inferrable << " with "
+                                  << concrete << "\n");
+          inferrable.replaceAllUsesWith(concrete);
+          inferrable.erase();
+          unifyOp.replaceAllUsesWith(concrete);
+          unifyOp.erase();
+          changed = true;
           continue;
-        auto unified =
-            UnifyOp::create(builder, unifyOp.getLoc(), eraseArg.getType(),
-                            keepArg.get(), eraseArg);
-        keepArg.set(unified);
+        }
+
+        // If the concrete doesn't dominate the inferrable, try to materialize
+        // its defining tree at the inferrable's location. This handles the
+        // pattern where type constructors after the inferrable or inside
+        // nested regions (branch arms, loop bodies, expression blocks)
+        // constrain an inferrable in a dominating position.
+        if (auto cloned = materializeAtPoint(concrete, inferrable, domInfo)) {
+          LLVM_DEBUG(llvm::dbgs() << "Materialized " << cloned << " to resolve "
+                                  << inferrable << "\n");
+          inferrable.replaceAllUsesWith(cloned);
+          inferrable.erase();
+          unifyOp.replaceAllUsesWith(cloned);
+          unifyOp.erase();
+          changed = true;
+          continue;
+        }
+
+        LLVM_DEBUG(llvm::dbgs() << "Skipping " << inferrable
+                                << " (appears before " << concrete << ")\n");
+        continue;
+      }
+
+      // If both operands are defined by the same kind of operation, replace
+      // the later with the earlier one and unify their operands.
+      auto *lhsOp = unifyOp.getLhs().getDefiningOp();
+      auto *rhsOp = unifyOp.getRhs().getDefiningOp();
+      if (!lhsOp || !rhsOp)
+        continue;
+      if (lhsOp->getNumRegions() != 0 || lhsOp->getNumSuccessors() != 0 ||
+          lhsOp->getNumResults() != 1)
+        continue;
+      if (!isMemoryEffectFree(lhsOp))
+        continue;
+      if (!OperationEquivalence::isEquivalentTo(
+              lhsOp, rhsOp, OperationEquivalence::ignoreValueEquivalence,
+              nullptr, OperationEquivalence::IgnoreLocations))
+        continue;
+
+      // Pick which one of the ops to keep.
+      auto *keepOp = lhsOp;
+      auto *eraseOp = rhsOp;
+      if (domInfo.properlyDominates(eraseOp, keepOp))
+        std::swap(keepOp, eraseOp);
+
+      // If all operands of the erased op dominate the op we keep, we can merge
+      // the two ops in place: insert operand unifications before the kept op,
+      // replace the erased op with the kept one.
+      if (llvm::all_of(eraseOp->getOperands(), [&](auto value) {
+            return domInfo.properlyDominates(value, keepOp);
+          })) {
+        LLVM_DEBUG(llvm::dbgs() << "Unifying " << *keepOp << " (kept) and "
+                                << *eraseOp << " (erased)\n");
+
+        OpBuilder builder(keepOp);
+        for (auto [keepArg, eraseArg] :
+             llvm::zip(keepOp->getOpOperands(), eraseOp->getOperands())) {
+          if (keepArg.get() == eraseArg)
+            continue;
+          auto unified =
+              UnifyOp::create(builder, unifyOp.getLoc(), eraseArg.getType(),
+                              keepArg.get(), eraseArg);
+          keepArg.set(unified);
+          worklist.push_back(unified);
+        }
+        eraseOp->replaceAllUsesWith(keepOp);
+        eraseOp->erase();
+        unifyOp.replaceAllUsesWith(keepOp);
+        unifyOp.erase();
+        changed = true;
+        continue;
+      }
+
+      // Otherwise, the erased op's operands are defined after the kept op
+      // (e.g., a const block computation feeding a uint_type). We can't merge
+      // in place, but we can decompose the type-level unification into
+      // operand-level unifications at the unify op's location, where both
+      // ops' operands are available. This turns `unify(T<a>, T<b>)` into
+      // `T<unify(a, b)>`.
+      LLVM_DEBUG(llvm::dbgs() << "Decomposing " << unifyOp
+                              << " into operand unifications\n");
+
+      OpBuilder builder(unifyOp);
+      SmallVector<Value> newOperands;
+      for (auto [keepArg, eraseArg] :
+           llvm::zip(keepOp->getOperands(), eraseOp->getOperands())) {
+        if (keepArg == eraseArg) {
+          newOperands.push_back(keepArg);
+          continue;
+        }
+        auto unified = UnifyOp::create(builder, unifyOp.getLoc(),
+                                       keepArg.getType(), keepArg, eraseArg);
+        newOperands.push_back(unified);
         worklist.push_back(unified);
       }
-      eraseOp->replaceAllUsesWith(keepOp);
-      eraseOp->erase();
-      unifyOp.replaceAllUsesWith(keepOp);
+      auto *newOp = builder.clone(*keepOp);
+      for (auto [newArg, newVal] :
+           llvm::zip(newOp->getOpOperands(), newOperands))
+        newArg.set(newVal);
+      unifyOp.replaceAllUsesWith(newOp->getResult(0));
       unifyOp.erase();
-      continue;
+      changed = true;
     }
-
-    // Otherwise, the erased op's operands are defined after the kept op (e.g.,
-    // a const block computation feeding a uint_type). We can't merge in place,
-    // but we can decompose the type-level unification into operand-level
-    // unifications at the unify op's location, where both ops' operands are
-    // available. This turns `unify(T<a>, T<b>)` into `T<unify(a, b)>`.
-    LLVM_DEBUG(llvm::dbgs()
-               << "Decomposing " << unifyOp << " into operand unifications\n");
-
-    OpBuilder builder(unifyOp);
-    SmallVector<Value> newOperands;
-    for (auto [keepArg, eraseArg] :
-         llvm::zip(keepOp->getOperands(), eraseOp->getOperands())) {
-      if (keepArg == eraseArg) {
-        newOperands.push_back(keepArg);
-        continue;
-      }
-      auto unified = UnifyOp::create(builder, unifyOp.getLoc(),
-                                     keepArg.getType(), keepArg, eraseArg);
-      newOperands.push_back(unified);
-      worklist.push_back(unified);
-    }
-    auto *newOp = builder.clone(*keepOp);
-    for (auto [newArg, newVal] : llvm::zip(newOp->getOpOperands(), newOperands))
-      newArg.set(newVal);
-    unifyOp.replaceAllUsesWith(newOp->getResult(0));
-    unifyOp.erase();
   }
 
   // Fall back to int_type for any constant_int ops whose type operand is still
