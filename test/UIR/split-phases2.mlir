@@ -11,7 +11,7 @@ func.func private @dummyB()
 // CHECK:         hir.signature () -> ()
 // CHECK:       } {
 // CHECK:         func.call @dummyA
-// CHECK:         hir.return -> ()
+// CHECK:         hir.return
 
 // CHECK-NOT: uir.func
 // CHECK-LABEL: uir.split_func @SinglePhase() -> ()

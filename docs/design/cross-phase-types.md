@@ -37,7 +37,7 @@ hir.unified_func private @id(%N: -1, %x: 0) -> (result: 0) {
   hir.signature (%0, %1) -> (%2)
 } {
   %0 = hir.type_of %x
-  hir.return %x -> (%0)
+  hir.return %x : %0
 }
 ```
 
@@ -158,7 +158,7 @@ hir.unified_func @foo(%N: -2, %x: -1, %y: 0) -> (result: 0) {
 } {
   %T = hir.uint_type %N
   %sum = hir.add %x, %y : %T
-  hir.return %sum -> (%T)
+  hir.return %sum : %T
 }
 
 hir.unified_func @main() -> (result: 0) {
@@ -175,12 +175,12 @@ hir.unified_func @main() -> (result: 0) {
   %c100 = hir.constant_int 100 : %t2
   %r = hir.unified_call @foo(%c8, %c42, %c100) : (%t0, %t1, %t2) -> (%t3) (!hir.any, !hir.any, !hir.any) -> !hir.any [-2, -1, 0] -> [0]
   %tr = hir.type_of %r
-  hir.return %r -> (%tr)
+  hir.return %r : %tr
 }
 ```
 
 The unified form passes check-types (the earlier `uint_type(coerce_type(%N))` issue has been fixed).
-However, the `type_of %r` / `hir.return %r -> (%tr)` pattern in the hand-written main is not what the codegen produces — `getOrCreateTypeOf` resolves `type_of(unified_call_result)` to the call's type-of-results operand directly, so no `type_of` op is created.
+However, the `type_of %r` / `hir.return %r : %tr` pattern in the hand-written main is not what the codegen produces — `getOrCreateTypeOf` resolves `type_of(unified_call_result)` to the call's type-of-results operand directly, so no `type_of` op is created.
 ### Pre-split form (bypassing CheckCalls)
 
 To test the PhaseEvalLoop, we provide pre-split IR that represents what check-calls, infer-types, and split-phases would produce.

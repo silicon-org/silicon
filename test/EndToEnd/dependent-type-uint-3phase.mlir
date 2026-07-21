@@ -29,7 +29,7 @@ hir.func private @foo.0(%N) -> (ctx) {
   %1 = hir.coerce_type %N, %0
   %2 = hir.opaque_pack(%1)
   %3 = hir.opaque_type
-  hir.return %2 -> (%3)
+  hir.return %2 : %3
 }
 
 // foo phase -1: receives x, unpacks N, computes uint<N>, coerces x. Packs
@@ -45,7 +45,7 @@ hir.func private @foo.1(%x, %ctx) -> (ctx) {
   %x_coerced = hir.coerce_type %x, %T
   %packed = hir.opaque_pack(%N, %x_coerced)
   %0 = hir.opaque_type
-  hir.return %packed -> (%0)
+  hir.return %packed : %0
 }
 
 // foo phase 0: receives y, unpacks N and x from context, adds x + y.
@@ -59,7 +59,7 @@ hir.func private @foo.2(%y, %ctx) -> (result) {
   %T = hir.uint_type %N
   %y_coerced = hir.coerce_type %y, %T
   %sum = hir.add %x, %y_coerced : %T
-  hir.return %sum -> (%T)
+  hir.return %sum : %T
 }
 
 hir.split_func private @foo(%N: -2, %x: -1, %y: 0) -> (result: 0) {
@@ -87,7 +87,7 @@ hir.func private @main.0a() -> (ctx) {
   %3 = hir.call @foo.0(%1) : (%0) -> (%2)
   %4 = hir.opaque_pack(%3)
   %5 = hir.opaque_type
-  hir.return %4 -> (%5)
+  hir.return %4 : %5
 }
 
 // main phase 0b: calls foo.1(42, ctx). The literal 42 is typed as uint<N>
@@ -107,7 +107,7 @@ hir.func private @main.0b(%ctx) -> (ctx) {
   %foo1_result = hir.call @foo.1(%c42, %foo_ctx) : (%T, %0) -> (%1)
   %packed = hir.opaque_pack(%N, %foo1_result)
   %2 = hir.opaque_type
-  hir.return %packed -> (%2)
+  hir.return %packed : %2
 }
 
 // main phase 0c: calls foo.2(100, ctx). Unpacks N from context to construct
@@ -124,7 +124,7 @@ hir.func private @main.0c(%ctx) -> (result) {
   %c100 = hir.constant_int 100 : %T
   %0 = hir.opaque_type
   %result = hir.call @foo.2(%c100, %foo1_ctx) : (%T, %0) -> (%T)
-  hir.return %result -> (%T)
+  hir.return %result : %T
 }
 
 hir.split_func @main() -> (result: 0) {

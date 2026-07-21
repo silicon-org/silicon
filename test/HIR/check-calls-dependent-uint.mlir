@@ -17,7 +17,7 @@ hir.unified_func private @id(%N: -1, %x: 0) -> (result: 0) {
   hir.signature (%0, %1) -> (%2)
 } {
   %0 = hir.type_of %x
-  hir.return %x -> (%0)
+  hir.return %x : %0
 }
 
 // Two args sharing the same dependent type.
@@ -35,5 +35,5 @@ hir.unified_func private @typed_add(%N: -1, %a: 0, %b: 0) -> (result: 0) {
   %1 = hir.type_of %b
   %2 = hir.add %a, %b : %0
   %3 = hir.type_of %2
-  hir.return %2 -> (%3)
+  hir.return %2 : %3
 }

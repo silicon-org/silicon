@@ -353,7 +353,7 @@ hir.func @if_both_return(%cond, %a, %ty) -> (result) {
 // CHECK:       ^[[MERGE]](%[[R:.*]]: !hir.any):
 // CHECK-NEXT:    cf.br ^[[CONT:.*]]
 // CHECK:       ^[[CONT]]:
-// CHECK-NEXT:    hir.return %[[R]] -> (%{{.*}})
+// CHECK-NEXT:    hir.return %[[R]] : %{{.*}}
 hir.func @if_one_return_one_yield(%cond, %a, %b, %ty) -> (result) {
   hir.signature (%cond, %a, %b, %ty) -> (%ty)
 } {
@@ -362,7 +362,7 @@ hir.func @if_one_return_one_yield(%cond, %a, %b, %ty) -> (result) {
   } else {
     uir.yield %b : %ty
   }
-  hir.return %r -> (%ty)
+  hir.return %r : %ty
 }
 
 // CHECK-LABEL: hir.func @return_in_loop
@@ -382,7 +382,7 @@ hir.func @return_in_loop(%cond, %val, %ty) -> (result) {
     }
     uir.continue
   }
-  hir.return %val -> (%ty)
+  hir.return %val : %ty
 }
 
 //===----------------------------------------------------------------------===//

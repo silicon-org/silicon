@@ -555,8 +555,7 @@ def ReturnOp : HIROp<"return", [
     Variadic<HIRAnyType>:$typeOfValues
   );
   let assemblyFormat = [{
-    ($values^)?
-    `->` `(` $typeOfValues `)`
+    ($values^ `:` $typeOfValues)?
     attr-dict
   }];
   let hasVerifier = 1;

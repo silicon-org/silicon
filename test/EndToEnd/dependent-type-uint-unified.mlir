@@ -18,7 +18,7 @@ hir.unified_func private @id(%N: -1, %x: 0) -> (result: 0) {
 } {
   %0 = hir.uint_type %N
   %1 = hir.coerce_type %x, %0
-  hir.return %1 -> (%0)
+  hir.return %1 : %0
 }
 
 // main calls id(8, 42).
@@ -37,5 +37,5 @@ hir.unified_func @main() -> (result: 0) {
   %t2 = hir.inferrable
   %r = hir.unified_call @id(%N, %x) : (%t0, %t1) -> (%t2) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
   %tr = hir.type_of %r
-  hir.return %r -> (%tr)
+  hir.return %r : %tr
 }

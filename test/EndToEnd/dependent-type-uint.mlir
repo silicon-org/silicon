@@ -23,7 +23,7 @@ hir.func private @id.0(%N) -> (ctx) {
   %1 = hir.coerce_type %N, %0
   %2 = hir.opaque_pack(%1)
   %3 = hir.opaque_type
-  hir.return %2 -> (%3)
+  hir.return %2 : %3
 }
 
 // id phase 0: unpacks N, computes uint<N>, coerces x, returns it.
@@ -36,7 +36,7 @@ hir.func private @id.1(%x, %ctx) -> (result) {
   %0 = hir.opaque_unpack %ctx : !hir.any
   %1 = hir.uint_type %0
   %2 = hir.coerce_type %x, %1
-  hir.return %2 -> (%1)
+  hir.return %2 : %1
 }
 
 hir.split_func private @id(%N: -1, %x: 0) -> (result: 0) {
@@ -59,7 +59,7 @@ hir.func private @main_ex1.0a() -> (ctx) {
   %3 = hir.call @id.0(%1) : (%0) -> (%2)
   %4 = hir.opaque_pack(%3)
   %5 = hir.opaque_type
-  hir.return %4 -> (%5)
+  hir.return %4 : %5
 }
 
 hir.func private @main_ex1.0b(%ctx) -> (result) {
@@ -76,7 +76,7 @@ hir.func private @main_ex1.0b(%ctx) -> (result) {
   %4 = hir.constant_int 42 : %3
   %5 = hir.opaque_type
   %6 = hir.call @id.1(%4, %0) : (%3, %5) -> (%3)
-  hir.return %6 -> (%3)
+  hir.return %6 : %3
 }
 
 hir.split_func @main_ex1() -> (result: 0) {
@@ -109,7 +109,7 @@ hir.func private @typed_add.0(%N) -> (ctx) {
   %1 = hir.coerce_type %N, %0
   %2 = hir.opaque_pack(%1)
   %3 = hir.opaque_type
-  hir.return %2 -> (%3)
+  hir.return %2 : %3
 }
 
 // typed_add phase 0: unpacks N, computes uint<N>, coerces a and b, adds them.
@@ -126,7 +126,7 @@ hir.func private @typed_add.1(%a, %b, %ctx) -> (result) {
   %3 = hir.coerce_type %b, %1
   %4 = hir.add %2, %3 : %1
   %5 = hir.coerce_type %4, %1
-  hir.return %5 -> (%1)
+  hir.return %5 : %1
 }
 
 hir.split_func private @typed_add(%N: -1, %a: 0, %b: 0) -> (result: 0) {
@@ -149,7 +149,7 @@ hir.func private @main_ex8.0a() -> (ctx) {
   %3 = hir.call @typed_add.0(%1) : (%0) -> (%2)
   %4 = hir.opaque_pack(%3)
   %5 = hir.opaque_type
-  hir.return %4 -> (%5)
+  hir.return %4 : %5
 }
 
 hir.func private @main_ex8.0b(%ctx) -> (result) {
@@ -167,7 +167,7 @@ hir.func private @main_ex8.0b(%ctx) -> (result) {
   %5 = hir.constant_int 20 : %3
   %6 = hir.opaque_type
   %7 = hir.call @typed_add.1(%4, %5, %0) : (%3, %3, %6) -> (%3)
-  hir.return %7 -> (%3)
+  hir.return %7 : %3
 }
 
 hir.split_func @main_ex8() -> (result: 0) {

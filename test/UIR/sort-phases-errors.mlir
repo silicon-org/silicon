@@ -41,7 +41,7 @@ uir.func @BreakCarrier(%n: 0, %x: 0) -> (result: 0) {
 hir.func @NotUnified() -> () {
   hir.signature () -> ()
 } {
-  hir.return -> ()
+  hir.return
 }
 
 uir.func @CallsNonFunc(%x: 0) -> () {

@@ -15,7 +15,7 @@ func.func private @dummyB()
 // CHECK:      hir.signature
 // CHECK:      } {
 // CHECK:      hir.opaque_pack()
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @Identity.1(%x, %ctx) -> (result)
 // CHECK:      hir.opaque_type
@@ -24,7 +24,7 @@ func.func private @dummyB()
 // CHECK:      hir.signature
 // CHECK:      } {
 // CHECK:      hir.opaque_unpack %ctx
-// CHECK:      hir.return %x -> ({{.*}})
+// CHECK:      hir.return %x : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @Identity(%T: -1, %x: 0) -> (result: 0)
@@ -35,7 +35,7 @@ hir.unified_func @Identity(%T: -1, %x: 0) -> (result: 0) {
   %type_type = hir.type_type
   hir.signature (%type_type, %T) -> (%T)
 } {
-  hir.return %x -> (%T)
+  hir.return %x : %T
 }
 
 //===----------------------------------------------------------------------===//
@@ -43,7 +43,7 @@ hir.unified_func @Identity(%T: -1, %x: 0) -> (result: 0) {
 // CHECK-LABEL: hir.func private @SinglePhase.0() -> ()
 // CHECK:      hir.signature () -> ()
 // CHECK:      func.call @dummyA
-// CHECK-NEXT: hir.return -> ()
+// CHECK-NEXT: hir.return
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @SinglePhase() -> ()
@@ -53,7 +53,7 @@ hir.unified_func @SinglePhase() -> () {
   hir.signature () -> ()
 } {
   func.call @dummyA() : () -> ()
-  hir.return -> ()
+  hir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -63,12 +63,12 @@ hir.unified_func @SinglePhase() -> () {
 // CHECK-LABEL: hir.func private @TwoUnrelatedPhases.0a() -> (ctx)
 // CHECK:      func.call @dummyA
 // CHECK:      hir.opaque_pack()
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @TwoUnrelatedPhases.0b(%ctx) -> ()
 // CHECK:      hir.opaque_unpack %ctx
 // CHECK:      func.call @dummyB
-// CHECK:      hir.return -> ()
+// CHECK:      hir.return
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @TwoUnrelatedPhases() -> ()
@@ -85,7 +85,7 @@ hir.unified_func @TwoUnrelatedPhases() -> () {
     func.call @dummyA() : () -> ()
     hir.yield
   }
-  hir.return -> ()
+  hir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -97,11 +97,11 @@ hir.unified_func @TwoUnrelatedPhases() -> () {
 // CHECK: [[TMP:%.+]] = hir.constant_int 1337 :
 // CHECK: hir.add [[C42]], [[TMP]] :
 // CHECK: hir.opaque_pack()
-// CHECK: hir.return {{.*}} -> ({{.*}})
+// CHECK: hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @ValueUseAcrossPhases.0b(%ctx) -> ()
 // CHECK: hir.opaque_unpack %ctx
-// CHECK: hir.return -> ()
+// CHECK: hir.return
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @ValueUseAcrossPhases() -> ()
@@ -124,7 +124,7 @@ hir.unified_func @ValueUseAcrossPhases() -> () {
   %t1 = hir.type_of %1
   %t = hir.unify %t0, %t1
   %2 = hir.add %0, %1 : %t
-  hir.return -> ()
+  hir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -139,7 +139,7 @@ hir.unified_func @ValueUseAcrossPhases() -> () {
 // CHECK:      } {
 // CHECK:      hir.type_of %a
 // CHECK:      hir.opaque_pack({{.*}}, %a)
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @ConstArg.1(%b, %ctx) -> (result)
 // CHECK:      hir.int_type
@@ -149,7 +149,7 @@ hir.unified_func @ValueUseAcrossPhases() -> () {
 // CHECK:      } {
 // CHECK:      [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
 // CHECK:      hir.add {{.*}}, %b :
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @ConstArg(%a: -1, %b: 0) -> (result: 0)
@@ -167,7 +167,7 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
   %t = hir.unify %ta, %tb
   %0 = hir.add %a, %b : %t
   %t0 = hir.type_of %0
-  hir.return %0 -> (%t0)
+  hir.return %0 : %t0
 }
 
 //===----------------------------------------------------------------------===//
@@ -181,11 +181,11 @@ hir.unified_func @ConstArg(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      } {
 // CHECK:      hir.type_of %a
 // CHECK:      hir.opaque_pack({{.*}}, %a)
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @ConstArgPassThrough.1(%b, %ctx) -> (result)
 // CHECK:      [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0)
@@ -200,7 +200,7 @@ hir.unified_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0) {
   %t = hir.unify %ta, %tb
   %0 = hir.add %a, %b : %t
   %t0 = hir.type_of %0
-  hir.return %0 -> (%t0)
+  hir.return %0 : %t0
 }
 
 //===----------------------------------------------------------------------===//
@@ -215,7 +215,7 @@ hir.unified_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      } {
 // CHECK:      hir.type_of %a
 // CHECK:      hir.opaque_pack({{.*}}, %a)
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @ThreePhase.1(%b, %ctx) -> (ctx)
 // CHECK:      hir.int_type
@@ -226,7 +226,7 @@ hir.unified_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
 // CHECK:      hir.add
 // CHECK:      hir.opaque_pack(
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @ThreePhase.2(%c, %ctx) -> (result)
 // CHECK:      hir.int_type
@@ -235,7 +235,7 @@ hir.unified_func @ConstArgPassThrough(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:      } {
 // CHECK:      [[UNPACK:%.+]]:2 = hir.opaque_unpack %ctx
 // CHECK:      hir.add
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0)
@@ -257,7 +257,7 @@ hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
   %t1 = hir.unify %t0b, %tc
   %1 = hir.add %0, %c : %t1
   %t1b = hir.type_of %1
-  hir.return %1 -> (%t1b)
+  hir.return %1 : %t1b
 }
 
 //===----------------------------------------------------------------------===//
@@ -268,18 +268,18 @@ hir.unified_func @ThreePhase(%a: -2, %b: -1, %c: 0) -> (result: 0) {
 // CHECK-LABEL: hir.func private @ThreePhaseCaller.0a
 // CHECK: hir.call @ThreePhase.0(
 // CHECK: hir.opaque_pack(
-// CHECK: hir.return {{.*}} -> ({{.*}})
+// CHECK: hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @ThreePhaseCaller.0b
 // CHECK: hir.opaque_unpack
 // CHECK: hir.call @ThreePhase.1(
 // CHECK: hir.opaque_pack(
-// CHECK: hir.return {{.*}} -> ({{.*}})
+// CHECK: hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @ThreePhaseCaller.0c
 // CHECK: hir.opaque_unpack
 // CHECK: hir.call @ThreePhase.2(
-// CHECK: hir.return {{.*}} -> ({{.*}})
+// CHECK: hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @ThreePhaseCaller(%z: 0) -> (result: 0)
@@ -303,7 +303,7 @@ hir.unified_func @ThreePhaseCaller(%z: 0) -> (result: 0) {
   %t3 = hir.inferrable
   %r = hir.unified_call @ThreePhase(%a, %b, %z) : (%t0, %t1, %t2) -> (%t3) (!hir.any, !hir.any, !hir.any) -> !hir.any [-2, -1, 0] -> [0]
   %tr = hir.type_of %r
-  hir.return %r -> (%tr)
+  hir.return %r : %tr
 }
 
 //===----------------------------------------------------------------------===//
@@ -314,11 +314,11 @@ hir.unified_func @ThreePhaseCaller(%z: 0) -> (result: 0) {
 
 // CHECK-LABEL: hir.func private @InternalPhase.0a() -> (ctx)
 // CHECK: hir.call @ConstArg.0(
-// CHECK: hir.return {{.*}} -> ({{.*}})
+// CHECK: hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @InternalPhase.0b(%y, %ctx) -> (result)
 // CHECK: hir.call @ConstArg.1(
-// CHECK: hir.return {{.*}} -> ({{.*}})
+// CHECK: hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @InternalPhase(%y: 0) -> (result: 0)
@@ -338,7 +338,7 @@ hir.unified_func @InternalPhase(%y: 0) -> (result: 0) {
   %t2 = hir.inferrable
   %r = hir.unified_call @ConstArg(%a, %y) : (%t0, %t1) -> (%t2) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
   %tr = hir.type_of %r
-  hir.return %r -> (%tr)
+  hir.return %r : %tr
 }
 
 //===----------------------------------------------------------------------===//
@@ -353,16 +353,16 @@ hir.unified_func @InternalPhase(%y: 0) -> (result: 0) {
 // CHECK:      } {
 // CHECK:      hir.type_of %a
 // CHECK:      hir.opaque_pack(
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @LeadingExternal.1a(%ctx) -> (ctx)
 // CHECK:      hir.opaque_unpack %ctx
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @LeadingExternal.1b(%c, %ctx) -> (result)
 // CHECK:      hir.opaque_unpack %ctx
 // CHECK:      hir.add
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @LeadingExternal(%a: -2, %c: 0) -> (result: 0)
@@ -383,7 +383,7 @@ hir.unified_func @LeadingExternal(%a: -2, %c: 0) -> (result: 0) {
   }
   %0 = hir.add %a, %c : %t
   %t0 = hir.type_of %0
-  hir.return %0 -> (%t0)
+  hir.return %0 : %t0
 }
 
 //===----------------------------------------------------------------------===//
@@ -395,7 +395,7 @@ hir.unified_func @LeadingExternal(%a: -2, %c: 0) -> (result: 0) {
 // CHECK:         hir.int_type
 // CHECK:         hir.coerce_type %a
 // CHECK:         hir.opaque_pack
-// CHECK:         hir.return {{.*}} -> ({{.*}})
+// CHECK:         hir.return {{.*}} : {{.*}}
 hir.func private @PreSplit.0(%a) -> (ctx) {
   %t0 = hir.int_type
   %t1 = hir.opaque_type
@@ -406,14 +406,14 @@ hir.func private @PreSplit.0(%a) -> (ctx) {
   %2 = hir.type_of %1
   %3 = hir.opaque_pack(%1)
   %4 = hir.opaque_type
-  hir.return %3 -> (%4)
+  hir.return %3 : %4
 }
 // CHECK-LABEL: hir.func private @PreSplit.1(%b, %ctx) -> (result)
 // CHECK:         hir.opaque_unpack %ctx
 // CHECK:         hir.int_type
 // CHECK:         hir.coerce_type %b
 // CHECK:         hir.add
-// CHECK:         hir.return {{.*}} -> ({{.*}})
+// CHECK:         hir.return {{.*}} : {{.*}}
 hir.func private @PreSplit.1(%b, %ctx) -> (result) {
   %t0 = hir.int_type
   %t1 = hir.opaque_type
@@ -425,7 +425,7 @@ hir.func private @PreSplit.1(%b, %ctx) -> (result) {
   %2 = hir.coerce_type %b, %1
   %3 = hir.add %0, %2 : %1
   %4 = hir.opaque_type
-  hir.return %3 -> (%1)
+  hir.return %3 : %1
 }
 // CHECK-LABEL: hir.split_func @PreSplit(%a: -1, %b: 0) -> (result: 0)
 // CHECK:         hir.int_type
@@ -446,11 +446,11 @@ hir.split_func @PreSplit(%a: -1, %b: 0) -> (result: 0) {
 
 // CHECK-LABEL: hir.func private @PublicVis.0a() -> (ctx)
 // CHECK: hir.opaque_pack()
-// CHECK: hir.return {{.*}} -> ({{.*}})
+// CHECK: hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @PublicVis.0b(%ctx) -> ()
 // CHECK: hir.opaque_unpack %ctx
-// CHECK: hir.return -> ()
+// CHECK: hir.return
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func public @PublicVis() -> ()
@@ -467,7 +467,7 @@ hir.unified_func public @PublicVis() -> () {
     func.call @dummyA() : () -> ()
     hir.yield
   }
-  hir.return -> ()
+  hir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -488,7 +488,7 @@ hir.unified_func public @PublicVis() -> () {
 // CHECK:       } {
 // CHECK:         [[BUNPACK:%.+]] = hir.opaque_unpack %ctx
 // CHECK:         hir.coerce_type %x, [[BUNPACK]]
-// CHECK:         hir.return {{%.+}} -> ([[BUNPACK]])
+// CHECK:         hir.return {{%.+}} : [[BUNPACK]]
 
 // CHECK-NOT: hir.unified_func @DepTypeBlockArg
 // CHECK-LABEL: hir.split_func private @DepTypeBlockArg(%N: -1, %x: 0) -> (result: 0)
@@ -502,7 +502,7 @@ hir.unified_func private @DepTypeBlockArg(%N: -1, %x: 0) -> (result: 0) {
 } {
   %0 = hir.uint_type %N
   %1 = hir.coerce_type %x, %0
-  hir.return %1 -> (%0)
+  hir.return %1 : %0
 }
 
 //===----------------------------------------------------------------------===//
@@ -537,7 +537,7 @@ hir.unified_func private @TypedAdd(%N: -1, %a: 0, %b: 0) -> (result: 0) {
   %1 = hir.coerce_type %a, %0
   %2 = hir.coerce_type %b, %0
   %3 = hir.add %1, %2 : %0
-  hir.return %3 -> (%0)
+  hir.return %3 : %0
 }
 
 //===----------------------------------------------------------------------===//
@@ -552,7 +552,7 @@ hir.unified_func private @TypedAdd(%N: -1, %a: 0, %b: 0) -> (result: 0) {
 // CHECK:      } {
 // CHECK:      hir.type_of %x
 // CHECK:      hir.opaque_pack(%x
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @DynReturn.1(%ctx) -> (result)
 // CHECK:      hir.opaque_type
@@ -560,7 +560,7 @@ hir.unified_func private @TypedAdd(%N: -1, %a: 0, %b: 0) -> (result: 0) {
 // CHECK:      hir.signature
 // CHECK:      } {
 // CHECK:      hir.opaque_unpack %ctx
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @DynReturn(%x: 0) -> (result: 1)
@@ -573,18 +573,18 @@ hir.unified_func @DynReturn(%x: 0) -> (result: 1) {
   hir.signature (%0) -> (%1)
 } {
   %tx = hir.type_of %x
-  hir.return %x -> (%tx)
+  hir.return %x : %tx
 }
 
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: hir.func private @CallsPreSplit.0a
 // CHECK: hir.call @PreSplit.0(
-// CHECK: hir.return {{.*}} -> ({{.*}})
+// CHECK: hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @CallsPreSplit.0b(%y, %ctx) -> (result)
 // CHECK: hir.call @PreSplit.1(
-// CHECK: hir.return {{.*}} -> ({{.*}})
+// CHECK: hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @CallsPreSplit(%y: 0) -> (result: 0)
@@ -603,7 +603,7 @@ hir.unified_func @CallsPreSplit(%y: 0) -> (result: 0) {
   %t2 = hir.inferrable
   %r = hir.unified_call @PreSplit(%a, %y) : (%t0, %t1) -> (%t2) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
   %tr = hir.type_of %r
-  hir.return %r -> (%tr)
+  hir.return %r : %tr
 }
 
 //===----------------------------------------------------------------------===//
@@ -613,7 +613,7 @@ hir.unified_func @CallsPreSplit(%y: 0) -> (result: 0) {
 
 // CHECK-LABEL: hir.func private @Adder.0
 // CHECK:      hir.add
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func @Adder
 // CHECK-LABEL: hir.split_func @Adder(%a: 0, %b: 0) -> (result: 0)
@@ -625,18 +625,18 @@ hir.unified_func @Adder(%a: 0, %b: 0) -> (result: 0) {
   %tb = hir.type_of %b
   %t = hir.unify %ta, %tb
   %r = hir.add %a, %b : %t
-  hir.return %r -> (%t)
+  hir.return %r : %t
 }
 
 // CHECK-LABEL: hir.func private @PullExpr.0a() -> (ctx)
 // CHECK:      hir.call @Adder.0(
 // CHECK:      hir.call @ConstArg.0(
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @PullExpr.0b(%y, %ctx) -> (result)
 // CHECK:      hir.opaque_unpack
 // CHECK:      hir.call @ConstArg.1(
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @PullExpr(%y: 0) -> (result: 0)
@@ -664,7 +664,7 @@ hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
   %rt = hir.inferrable
   %r = hir.unified_call @ConstArg(%key, %y) : (%kt, %yt) -> (%rt) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
   %rrt = hir.type_of %r
-  hir.return %r -> (%rrt)
+  hir.return %r : %rrt
 }
 
 //===----------------------------------------------------------------------===//
@@ -677,13 +677,13 @@ hir.unified_func @PullExpr(%y: 0) -> (result: 0) {
 // CHECK-NOT: hir.expr
 // CHECK: func.call @dummyA
 // CHECK: hir.opaque_pack()
-// CHECK: hir.return {{.*}} -> ({{.*}})
+// CHECK: hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @NestedExpr.0b(%ctx) -> ()
 // CHECK-NOT: hir.expr
 // CHECK: hir.opaque_unpack %ctx
 // CHECK: func.call @dummyB
-// CHECK: hir.return -> ()
+// CHECK: hir.return
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @NestedExpr() -> ()
@@ -703,7 +703,7 @@ hir.unified_func @NestedExpr() -> () {
     func.call @dummyB() : () -> ()
     hir.yield
   }
-  hir.return -> ()
+  hir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -714,14 +714,14 @@ hir.unified_func @NestedExpr() -> () {
 // CHECK-NOT: hir.expr
 // CHECK: hir.constant_int 100 :
 // CHECK: hir.opaque_pack()
-// CHECK: hir.return {{.*}} -> ({{.*}})
+// CHECK: hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @NestedExprValue.0b(%ctx) -> ()
 // CHECK-NOT: hir.expr
 // CHECK: hir.opaque_unpack %ctx
 // CHECK: [[V:%.+]] = hir.constant_int 100 :
 // CHECK: hir.add [[V]], [[V]] :
-// CHECK: hir.return -> ()
+// CHECK: hir.return
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @NestedExprValue() -> ()
@@ -743,7 +743,7 @@ hir.unified_func @NestedExprValue() -> () {
     %2 = hir.add %0, %0 : %t
     hir.yield
   }
-  hir.return -> ()
+  hir.return
 }
 
 //===----------------------------------------------------------------------===//
@@ -752,16 +752,16 @@ hir.unified_func @NestedExprValue() -> () {
 // the phase -1 split of the caller, and the result forwarded to phase 0.
 
 // CHECK-LABEL: hir.func private @ConstBlockCallee.0() -> (result)
-// CHECK:         hir.return {{.*}} -> ({{.*}})
+// CHECK:         hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @ConstBlockCall.0a() -> (ctx)
 // CHECK:         hir.call @ConstBlockCallee.0()
 // CHECK:         hir.opaque_pack
-// CHECK:         hir.return {{.*}} -> ({{.*}})
+// CHECK:         hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @ConstBlockCall.0b(%ctx) -> (result)
 // CHECK:         hir.opaque_unpack
-// CHECK:         hir.return {{.*}} -> ({{.*}})
+// CHECK:         hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @ConstBlockCall() -> (result: 0)
@@ -776,7 +776,7 @@ hir.unified_func @ConstBlockCallee() -> (result: 0) {
 } {
   %1 = hir.int_type
   %0 = hir.constant_int 42 : %1
-  hir.return %0 -> (%1)
+  hir.return %0 : %1
 }
 
 hir.unified_func @ConstBlockCall() -> (result: 0) {
@@ -791,7 +791,7 @@ hir.unified_func @ConstBlockCall() -> (result: 0) {
   %1 = hir.type_of %0
   %2 = hir.int_type
   %3 = hir.unify %1, %2
-  hir.return %0 -> (%3)
+  hir.return %0 : %3
 }
 
 //===----------------------------------------------------------------------===//
@@ -817,7 +817,7 @@ hir.unified_func private @UIntLiteral(%a: 0) -> (result: 0) attributes {isModule
 } {
   %0 = hir.constant_unit
   %1 = hir.unit_type
-  hir.return %0 -> (%1)
+  hir.return %0 : %1
 }
 
 
@@ -834,7 +834,7 @@ hir.unified_func private @UIntLiteral(%a: 0) -> (result: 0) attributes {isModule
 // CHECK:      } {
 // CHECK:      hir.type_of %x
 // CHECK:      hir.opaque_pack(%x
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @DynReturnPhase0Val.1(%ctx) -> (result)
 // CHECK:      hir.opaque_type
@@ -842,7 +842,7 @@ hir.unified_func private @UIntLiteral(%a: 0) -> (result: 0) attributes {isModule
 // CHECK:      hir.signature
 // CHECK:      } {
 // CHECK:      hir.opaque_unpack %ctx
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @DynReturnPhase0Val(%x: 0) -> (result: 1)
@@ -854,7 +854,7 @@ hir.unified_func @DynReturnPhase0Val(%x: 0) -> (result: 1) {
   hir.signature (%0) -> (%0)
 } {
   %tx = hir.type_of %x
-  hir.return %x -> (%tx)
+  hir.return %x : %tx
 }
 
 //===----------------------------------------------------------------------===//
@@ -866,12 +866,12 @@ hir.unified_func @DynReturnPhase0Val(%x: 0) -> (result: 1) {
 
 // CHECK-LABEL: hir.func private @DynArgIdentity.0a() -> (ctx)
 // CHECK:      [[PACK:%.+]] = hir.opaque_pack()
-// CHECK:      hir.return [[PACK]] -> ({{.*}})
+// CHECK:      hir.return [[PACK]] : {{.*}}
 
 // CHECK-LABEL: hir.func private @DynArgIdentity.0b(%x, %ctx) -> (result)
 // CHECK:      hir.opaque_unpack %ctx
 // CHECK:      hir.coerce_type %x,
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @DynArgIdentity(%x: 1) -> (result: 1)
@@ -886,7 +886,7 @@ hir.unified_func @DynArgIdentity(%x: 1) -> (result: 1) {
 } {
   %0 = hir.int_type
   %1 = hir.coerce_type %x, %0
-  hir.return %1 -> (%0)
+  hir.return %1 : %0
 }
 
 //===----------------------------------------------------------------------===//
@@ -903,16 +903,16 @@ hir.unified_func @DynArgIdentity(%x: 1) -> (result: 1) {
 // CHECK:      hir.int_type
 // CHECK:      hir.coerce_type %a,
 // CHECK:      hir.opaque_pack(
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @MixedConstDynArg.1(%ctx) -> (result, ctx)
 // CHECK:      [[UNPACK:%.+]]{{.*}} = hir.opaque_unpack %ctx
 // CHECK:      [[PACK:%.+]] = hir.opaque_pack()
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-LABEL: hir.func private @MixedConstDynArg.2(%b, %ctx) -> ()
 // CHECK:      hir.opaque_unpack %ctx
-// CHECK:      hir.return -> ()
+// CHECK:      hir.return
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @MixedConstDynArg(%a: -1, %b: 1) -> (result: 0)
@@ -926,7 +926,7 @@ hir.unified_func @MixedConstDynArg(%a: -1, %b: 1) -> (result: 0) {
 } {
   %0 = hir.int_type
   %1 = hir.coerce_type %a, %0
-  hir.return %1 -> (%0)
+  hir.return %1 : %0
 }
 
 //===----------------------------------------------------------------------===//
@@ -940,7 +940,7 @@ hir.unified_func @MixedConstDynArg(%a: -1, %b: 1) -> (result: 0) {
 // CHECK:      hir.signature
 // CHECK:      } {
 // CHECK:      hir.type_of %a
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @MultiBlockSig(%a: 0) -> (result: 0)
@@ -956,7 +956,7 @@ hir.unified_func @MultiBlockSig(%a: 0) -> (result: 0) {
   hir.signature (%int_t) -> (%int_t)
 } {
   %tx = hir.type_of %a
-  hir.return %a -> (%tx)
+  hir.return %a : %tx
 }
 
 //===----------------------------------------------------------------------===//
@@ -970,7 +970,7 @@ hir.unified_func @MultiBlockSig(%a: 0) -> (result: 0) {
 // CHECK:      hir.signature
 // CHECK:      } {
 // CHECK:      hir.type_of %a
-// CHECK:      hir.return {{.*}} -> ({{.*}})
+// CHECK:      hir.return {{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @MultiBlockSigDivergent(%a: 0) -> (result: 0)
@@ -987,7 +987,7 @@ hir.unified_func @MultiBlockSigDivergent(%a: 0) -> (result: 0) {
   hir.signature (%bool_t) -> (%bool_t)
 } {
   %tx = hir.type_of %a
-  hir.return %a -> (%tx)
+  hir.return %a : %tx
 }
 
 //===----------------------------------------------------------------------===//
@@ -1003,7 +1003,7 @@ hir.unified_func @MultiBlockSigDivergent(%a: 0) -> (result: 0) {
 // CHECK:    ^[[BB2]]:
 // CHECK-NEXT: cf.br ^[[EXIT]](
 // CHECK:    ^[[EXIT]](%{{.*}}: !hir.any):
-// CHECK:      hir.return %{{.*}} -> ({{.*}})
+// CHECK:      hir.return %{{.*}} : {{.*}}
 
 // CHECK-NOT: hir.unified_func
 // CHECK-LABEL: hir.split_func @MultiReturn(%x: 0) -> (result: 0)
@@ -1017,7 +1017,7 @@ hir.unified_func @MultiReturn(%x: 0) -> (result: 0) {
   %tx = hir.type_of %x
   cf.cond_br %cond, ^bb1, ^bb2
 ^bb1:
-  hir.return %x -> (%tx)
+  hir.return %x : %tx
 ^bb2:
-  hir.return %x -> (%tx)
+  hir.return %x : %tx
 }
