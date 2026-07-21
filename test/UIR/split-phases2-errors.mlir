@@ -8,7 +8,7 @@ uir.func @A() -> () {
   uir.signature () -> ()
 } {
   %type_type = hir.type_type
-  uir.call @B() : () -> () () -> () [] -> []
+  uir.call @B() : () -> () [] -> []
   uir.return
 }
 
@@ -16,6 +16,6 @@ uir.func @B() -> () {
   uir.signature () -> ()
 } {
   %type_type = hir.type_type
-  uir.call @A() : () -> () () -> () [] -> []
+  uir.call @A() : () -> () [] -> []
   uir.return
 }

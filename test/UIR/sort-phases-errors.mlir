@@ -49,7 +49,7 @@ uir.func @CallsNonFunc(%x: 0) -> () {
   uir.signature (%0) -> ()
 } {
   // expected-error @below {{callee @NotUnified is neither a 'uir.func' nor a 'uir.split_func'}}
-  uir.call @NotUnified() : () -> () () -> () [] -> []
+  uir.call @NotUnified() : () -> () [] -> []
   uir.return
 }
 

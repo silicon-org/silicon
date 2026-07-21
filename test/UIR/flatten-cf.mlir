@@ -597,7 +597,7 @@ func.func @expr_pinned_dissolved(%a: !hir.any, %ty: !hir.any) -> !hir.any {
 // CHECK-NOT:     uir.pin
 // CHECK:         return %{{.*}} : !hir.any
 func.func @pin_dissolved(%a: !hir.any) -> !hir.any {
-  %r = uir.pin %a, 0 : !hir.any
+  %r = uir.pin %a, 0
   func.return %r : !hir.any
 }
 
@@ -605,7 +605,7 @@ func.func @pin_dissolved(%a: !hir.any) -> !hir.any {
 // CHECK-NOT:     uir.pin
 // CHECK:         return %{{.*}}, %{{.*}} : !hir.any, !hir.any
 func.func @pin_multi_dissolved(%a: !hir.any, %b: !hir.any) -> (!hir.any, !hir.any) {
-  %r1, %r2 = uir.pin %a, %b, -1 : !hir.any, !hir.any
+  %r1, %r2 = uir.pin %a, %b, -1
   func.return %r1, %r2 : !hir.any, !hir.any
 }
 

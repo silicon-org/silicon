@@ -99,8 +99,26 @@ uir.func @call_bad_callee(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
   // expected-error @below {{'nonexistent' does not reference a valid function}}
-  %r = uir.call @nonexistent(%a) : (%a) -> (%a) (!hir.any) -> !hir.any [0] -> [0]
+  %r = uir.call @nonexistent(%a) : (%a) -> (%a) [0] -> [0]
   uir.return %r : %a
+}
+
+// -----
+
+// Verify that uir.call rejects mismatched arguments/typeOfArgs.
+func.func @call_type_of_args_mismatch(%a: !hir.any) {
+  // expected-error @below {{failed to verify that typeOfArgs must match arguments size}}
+  "uir.call"(%a) {callee = @nowhere, argPhases = array<i32: 0>, resultPhases = array<i32>, operandSegmentSizes = array<i32: 1, 0, 0>} : (!hir.any) -> ()
+  func.return
+}
+
+// -----
+
+// Verify that uir.call rejects mismatched results/typeOfResults.
+func.func @call_type_of_results_mismatch(%a: !hir.any) {
+  // expected-error @below {{failed to verify that typeOfResults must match results size}}
+  %r = "uir.call"(%a, %a) {callee = @nowhere, argPhases = array<i32: 0>, resultPhases = array<i32: 0>, operandSegmentSizes = array<i32: 1, 1, 0>} : (!hir.any, !hir.any) -> (!hir.any)
+  func.return
 }
 
 // -----
@@ -120,7 +138,7 @@ uir.func @call_arg_phase_mismatch(%a: 0, %b: 0) -> (result: 0) {
 } {
   %t = hir.int_type
   // expected-error @below {{argument phases 0, 0 do not match the phases @call_arg_phase_callee declares for its arguments -1, 0}}
-  %r = uir.call @call_arg_phase_callee(%a, %b) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+  %r = uir.call @call_arg_phase_callee(%a, %b) : (%t, %t) -> (%t) [0, 0] -> [0]
   uir.return %r : %t
 }
 
@@ -141,7 +159,7 @@ uir.func @call_result_phase_mismatch(%a: 0) -> (result: 0) {
 } {
   %t = hir.int_type
   // expected-error @below {{result phases 1 do not match the phases @call_result_phase_callee declares for its results 0}}
-  %r = uir.call @call_result_phase_callee(%a) : (%t) -> (%t) (!hir.any) -> !hir.any [0] -> [1]
+  %r = uir.call @call_result_phase_callee(%a) : (%t) -> (%t) [0] -> [1]
   uir.return %r : %t
 }
 

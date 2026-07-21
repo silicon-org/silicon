@@ -18,7 +18,7 @@ uir.func @DissolveExprsAndPins(%a: -1) -> (result: 0) {
     uir.yield %prod : %t
   }
   // ANNOT-NOT: uir.pin
-  %pinY = uir.pin %y, 0 : !hir.any
+  %pinY = uir.pin %y, 0
   // The add consumes the former expr result directly.
   // ANNOT: [[SUM:%.+]] = hir.add {{.*}}pa.operands = ["-1", "-1", "float"]{{.*}}pa.phase = "0"
   %sum = hir.add %pinY, %pinY : %t
@@ -219,7 +219,7 @@ uir.func @DecomposeCall(%x: -1, %y: 0) -> (result: 0) {
   // ANNOT-NOT: uir.call
   // ANNOT: [[CTX:%.+]] = hir.call @half.0(%x) : (%{{.*}}) -> (%{{.*}}) {pa.operands = {{.*}}pa.phase = "-1", pa.results = ["-1"]}
   // ANNOT: [[RES:%.+]] = hir.call @half.1(%y, [[CTX]]) : (%{{.*}}, %{{.*}}) -> (%{{.*}}) {pa.operands = {{.*}}pa.phase = "0", pa.results = ["0"]}
-  %r = uir.call @half(%x, %y) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  %r = uir.call @half(%x, %y) : (%t, %t) -> (%t) [-1, 0] -> [0]
   // ANNOT: uir.return [[RES]]
   uir.return %r : %t
 }
@@ -1356,7 +1356,7 @@ uir.func @HoistCallHalf(%c: 1, %x: 0, %k: -1) -> (result: 0) {
   // CHECK: }
   uir.expr pin 1 {
     uir.if %c {
-      %r = uir.call @f(%k, %x) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+      %r = uir.call @f(%k, %x) : (%t, %t) -> (%t) [-1, 0] -> [0]
       uir.yield
     }
     uir.yield

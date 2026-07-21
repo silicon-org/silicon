@@ -410,10 +410,11 @@ LogicalResult ExprOp::verify() {
 // PinOp
 //===----------------------------------------------------------------------===//
 
-// Parse: uir.pin %val, 0 : !hir.any
-//        uir.pin %a, %b, -1 : !hir.any, !hir.any
+// Parse: uir.pin %val, 0
+//        uir.pin %a, %b, -1
 // Operands are comma-separated SSA values, followed by a comma and the
-// integer phase offset, then `: type(results)`.
+// integer phase offset. All operands and results are `!hir.any` and not
+// spelled out in the assembly; the op has one result per operand.
 ParseResult PinOp::parse(OpAsmParser &parser, OperationState &result) {
   auto &builder = parser.getBuilder();
   auto anyTy = builder.getType<hir::AnyType>();
@@ -447,15 +448,10 @@ ParseResult PinOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
   result.addAttribute("phaseOffset", builder.getSI32IntegerAttr(offset));
 
-  // Resolve operands.
+  // Resolve operands and add one `!hir.any` result per operand.
   if (parser.resolveOperands(operands, anyTy, result.operands))
     return failure();
-
-  // Parse `: type(results)`.
-  SmallVector<Type> resultTypes;
-  if (parser.parseColonTypeList(resultTypes))
-    return failure();
-  result.addTypes(resultTypes);
+  result.addTypes(SmallVector<Type>(operands.size(), anyTy));
 
   // Parse optional attributes.
   if (parser.parseOptionalAttrDict(result.attributes))
@@ -468,9 +464,6 @@ void PinOp::print(OpAsmPrinter &p) {
   p << ' ';
   llvm::interleaveComma(getInputs(), p, [&](Value v) { p.printOperand(v); });
   p << ", " << getPhaseOffset();
-  p << " : ";
-  llvm::interleaveComma(getOutputs().getTypes(), p);
-
   p.printOptionalAttrDict((*this)->getAttrs(), {"phaseOffset"});
 }
 
@@ -1256,6 +1249,98 @@ PhaseCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 //===----------------------------------------------------------------------===//
 // CallOp
 //===----------------------------------------------------------------------===//
+
+// # Custom Parser for CallOp
+//
+// The assembly format is:
+//   uir.call @callee(%args) : (%typeOfArgs) -> (%typeOfResults)
+//     [argPhases] -> [resultPhases]
+//
+// All operands and results are `!hir.any` and not spelled out in the
+// assembly; the result count is the type-of-result count.
+ParseResult CallOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto &builder = parser.getBuilder();
+  auto anyTy = builder.getType<hir::AnyType>();
+
+  // Parse the callee.
+  StringAttr calleeAttr;
+  if (parser.parseSymbolName(calleeAttr))
+    return failure();
+  result.addAttribute("callee", FlatSymbolRefAttr::get(calleeAttr));
+
+  // Parse the argument list and type operands.
+  SmallVector<OpAsmParser::UnresolvedOperand> argOperands, typeOfArgs,
+      typeOfResults;
+  if (parser.parseOperandList(argOperands, OpAsmParser::Delimiter::Paren) ||
+      parser.parseColon() ||
+      parser.parseOperandList(typeOfArgs, OpAsmParser::Delimiter::Paren) ||
+      parser.parseArrow() ||
+      parser.parseOperandList(typeOfResults, OpAsmParser::Delimiter::Paren))
+    return failure();
+
+  // Parse the phase lists: `[argPhases] -> [resultPhases]`.
+  auto parsePhases = [&](StringRef attrName) -> ParseResult {
+    SmallVector<int32_t> phases;
+    if (parser.parseLSquare())
+      return failure();
+    if (failed(parser.parseOptionalRSquare())) {
+      do {
+        int32_t phase;
+        if (parser.parseInteger(phase))
+          return failure();
+        phases.push_back(phase);
+      } while (succeeded(parser.parseOptionalComma()));
+      if (parser.parseRSquare())
+        return failure();
+    }
+    result.addAttribute(attrName, builder.getDenseI32ArrayAttr(phases));
+    return success();
+  };
+  if (parsePhases("argPhases") || parser.parseArrow() ||
+      parsePhases("resultPhases"))
+    return failure();
+
+  // Parse optional attributes.
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  // Resolve operands in segment order.
+  if (parser.resolveOperands(argOperands, anyTy, result.operands) ||
+      parser.resolveOperands(typeOfArgs, anyTy, result.operands) ||
+      parser.resolveOperands(typeOfResults, anyTy, result.operands))
+    return failure();
+  result.addAttribute(getOperandSegmentSizeAttr(),
+                      builder.getDenseI32ArrayAttr(
+                          {static_cast<int32_t>(argOperands.size()),
+                           static_cast<int32_t>(typeOfArgs.size()),
+                           static_cast<int32_t>(typeOfResults.size())}));
+
+  // Add result types.
+  result.addTypes(SmallVector<Type>(typeOfResults.size(), anyTy));
+
+  return success();
+}
+
+void CallOp::print(OpAsmPrinter &p) {
+  p << ' ';
+  p.printSymbolName(getCallee());
+  p << '(';
+  llvm::interleaveComma(getArguments(), p, [&](Value v) { p.printOperand(v); });
+  p << ") : (";
+  llvm::interleaveComma(getTypeOfArgs(), p,
+                        [&](Value v) { p.printOperand(v); });
+  p << ") -> (";
+  llvm::interleaveComma(getTypeOfResults(), p,
+                        [&](Value v) { p.printOperand(v); });
+  p << ") [";
+  llvm::interleaveComma(getArgPhases(), p);
+  p << "] -> [";
+  llvm::interleaveComma(getResultPhases(), p);
+  p << ']';
+  p.printOptionalAttrDict(
+      (*this)->getAttrs(),
+      {"callee", "argPhases", "resultPhases", getOperandSegmentSizeAttr()});
+}
 
 LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // Verify that the callee exists. We accept both uir.func and uir.split_func

@@ -166,7 +166,7 @@ uir.func @DissolveExprsAndPins(%a: 0) -> (result: 0) {
     uir.yield %prod : %t
   }
   // CHECK-NOT: uir.pin
-  %p = uir.pin %y, 0 : !hir.any
+  %p = uir.pin %y, 0
   // CHECK-NEXT:   [[SUM:%.+]] = hir.add [[PROD]], [[PROD]] : [[T]]
   %sum = hir.add %p, %p : %t
   // CHECK-NEXT:   uir.phase_return [[SUM]] : [[T]]
@@ -1043,7 +1043,7 @@ uir.func @Caller(%x: -1, %y: 0) -> (result: 0) {
   // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.unreachable
-  %r = uir.call @Callee(%x, %y) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  %r = uir.call @Callee(%x, %y) : (%t, %t) -> (%t) [-1, 0] -> [0]
   uir.return %r : %t
 }
 
@@ -1072,7 +1072,7 @@ uir.func @ShiftedCall(%k: 0, %x: 1) -> (result: 1) {
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.unreachable
   %r = uir.expr pin 1 : %t {
-    %c = uir.call @Callee(%k, %x) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+    %c = uir.call @Callee(%k, %x) : (%t, %t) -> (%t) [-1, 0] -> [0]
     uir.yield %c : %t
   }
   uir.return %r : %t
@@ -1120,7 +1120,7 @@ uir.func @ThreePhaseCall(%x: -1, %y: 0, %z: 1) -> (result: 1) {
   // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.unreachable
-  %r = uir.call @ThreePhaseCallee(%x, %y, %z) : (%t, %t, %t) -> (%t) (!hir.any, !hir.any, !hir.any) -> !hir.any [-1, 0, 1] -> [1]
+  %r = uir.call @ThreePhaseCallee(%x, %y, %z) : (%t, %t, %t) -> (%t) [-1, 0, 1] -> [1]
   uir.return %r : %t
 }
 
@@ -1146,7 +1146,7 @@ uir.func @Recurse(%x: -1, %y: 0) -> (result: 0) {
   // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.unreachable
-  %r = uir.call @Recurse(%x, %y) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  %r = uir.call @Recurse(%x, %y) : (%t, %t) -> (%t) [-1, 0] -> [0]
   uir.return %r : %t
 }
 
@@ -1461,7 +1461,7 @@ uir.func @IfArmCall(%c: -1, %x: 0) -> (result: 0) {
   uir.expr pin -1 {
     uir.if %c {
       uir.expr pin 1 {
-        %k = uir.call @Helper(%x) : (%t) -> (%t) (!hir.any) -> !hir.any [0] -> [0]
+        %k = uir.call @Helper(%x) : (%t) -> (%t) [0] -> [0]
         hir.write_var %va, %k : %t
         uir.yield
       }

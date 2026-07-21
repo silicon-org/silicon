@@ -15,7 +15,7 @@ uir.func @NoWitness(%x: 0) -> (result: 0) {
 } {
   %t = hir.int_type
   // expected-error @below {{callee @unsplit has no uir.split_func witness}}
-  %r = uir.call @unsplit(%x) : (%t) -> (%t) (!hir.any) -> !hir.any [0] -> [0]
+  %r = uir.call @unsplit(%x) : (%t) -> (%t) [0] -> [0]
   uir.return %r : %t
 }
 

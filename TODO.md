@@ -15,7 +15,6 @@
 - Rewrite FlattenCF to process regions from outer to inner, iterating over the ops once and inlining structured CF ops as it goes along.
   Once a structured CF op is inlined, its blocks and regions are inserted ahead of that op, such that the linear region/block scan will naturally visit the newly-inlined region.
   For inspiration, look at how the SCF-to-CF lowering in MLIR does things.
-- Improve UIR op parsing/printing (e.g. uir.call, maybe others) to not print the implied `!hir.any` type
 - Consider migrating `hir::getTypeOf` (Ops.cpp) to op-declared information, e.g. a `getTypeOfResult` method on `TypeOperandsOpInterface`; it currently hardcodes the op-to-type-operand mapping in a TypeSwitch.
 - Add an HIR identifier op that just pass through an operand to its result.
   We'll use this op to have a mechanism to capture the location of a named expression like `x`.

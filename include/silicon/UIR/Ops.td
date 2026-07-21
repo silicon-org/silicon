@@ -317,9 +317,12 @@ def PinOp : UIROp<"pin", []> {
     needed (clean use-def chain, no disconnected side effects).
 
     Used for:
-    - `let` bindings: `uir.pin %val, 0 : !hir.any`
-    - `const { expr }` after inlining: `uir.pin %val, -1 : !hir.any`
-    - `dyn { expr }` after inlining: `uir.pin %val, 1 : !hir.any`
+    - `let` bindings: `uir.pin %val, 0`
+    - `const { expr }` after inlining: `uir.pin %val, -1`
+    - `dyn { expr }` after inlining: `uir.pin %val, 1`
+
+    All inputs and outputs carry the implied `!hir.any` type, so no types
+    are printed; the op has one output per input.
 
     Not marked `Pure` to prevent CSE from merging distinct pins (same
     rationale as `hir.inferrable`).
@@ -407,32 +410,34 @@ def FuncOp : UIROp<"func", [
 
 def CallOp : UIROp<"call", [
   AttrSizedOperandSegments,
+  PredOpTrait<"typeOfArgs must match arguments size",
+    CPred<"$arguments.size() == $typeOfArgs.size()">>,
+  PredOpTrait<"typeOfResults must match results size",
+    CPred<"$typeOfResults.size() == $results.size()">>,
   DeclareOpInterfaceMethods<SymbolUserOpInterface>,
 ]> {
   let summary = "call to a unified function";
   let description = [{
     A call not yet split into phases. Mirrors `hir.unified_call` in the
-    UIR dialect. Carries the full set of arguments for all phases.
+    UIR dialect. Carries the full set of arguments for all phases, each
+    with a corresponding type operand.
+
+    All operands and results carry the implied `!hir.any` type, so no
+    types are printed; the result count is the type-of-result count.
 
     SplitPhases decomposes this into per-phase `hir.call` ops using the
     callee's `uir.split_func` witness.
   }];
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
-    Variadic<AnyType>:$arguments,
+    Variadic<HIRAnyType>:$arguments,
     Variadic<HIRAnyType>:$typeOfArgs,
     Variadic<HIRAnyType>:$typeOfResults,
     DenseI32ArrayAttr:$argPhases,
     DenseI32ArrayAttr:$resultPhases
   );
-  let results = (outs Variadic<AnyType>:$results);
-  let assemblyFormat = [{
-    $callee `(` $arguments `)` `:`
-    `(` $typeOfArgs `)` `->` `(` $typeOfResults `)`
-    functional-type($arguments, results)
-    $argPhases `->` $resultPhases
-    attr-dict
-  }];
+  let results = (outs Variadic<HIRAnyType>:$results);
+  let hasCustomAssemblyFormat = 1;
 }
 
 def SplitFuncOp : UIROp<"split_func", [

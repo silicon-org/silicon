@@ -389,7 +389,7 @@ Pins one or more values at a phase offset relative to the enclosing block.
 Lightweight alternative to `uir.expr` when no region is needed (clean use-def chain, no disconnected side effects).
 
 ```mlir
-%pinned = uir.pin %val, 0 : !hir.any
+%pinned = uir.pin %val, 0
 ```
 
 Used for:

@@ -26,7 +26,7 @@ uir.func @PureOpTooLate(%a: 0) -> (result: 0) {
     // Call anchored at -1 forces %sum to be available at -1.
     %tr = hir.int_type
     // expected-remark @+1 {{required by call argument 0 at phase -1}}
-    %v = uir.call @PureOpTooLateHelper(%sum) : (%tr) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    %v = uir.call @PureOpTooLateHelper(%sum) : (%tr) -> (%tr) [0] -> [0]
     uir.yield %v : %t
   }
   uir.return %0 : %t
@@ -193,7 +193,7 @@ uir.func @BlockArgInConstBlock(%a: 0) -> (result: 0) {
     %ta = hir.int_type
     %tr = hir.int_type
     // expected-remark @+1 {{required by call argument 0 at phase -1}}
-    %v = uir.call @IdentityHelper(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    %v = uir.call @IdentityHelper(%a) : (%ta) -> (%tr) [0] -> [0]
     uir.yield %v : %t
   }
   uir.return %0 : %t
@@ -232,7 +232,7 @@ uir.func @CallFeasibilityError(%a: 0) -> (result: 0) {
 } {
   %ta = hir.int_type
   // expected-remark @+1 {{required by call argument 0 at phase -1}}
-  %r = uir.call @CallFeasibilityTarget(%a) : (%ta) -> (%ta) (!hir.any) -> !hir.any [-1] -> [0]
+  %r = uir.call @CallFeasibilityTarget(%a) : (%ta) -> (%ta) [-1] -> [0]
   uir.return %r : %ta
 }
 
@@ -296,7 +296,7 @@ uir.func @ConstReturnCall(%x: 0) -> (result: -1) {
   %ta = hir.int_type
   %tr = hir.int_type
   // expected-error @+1 {{call result 0 at phase 0 cannot satisfy requirement for phase -1}}
-  %r = uir.call @ConstReturnCallHelper(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+  %r = uir.call @ConstReturnCallHelper(%x) : (%ta) -> (%tr) [0] -> [0]
   // expected-remark @+1 {{required by return value at phase -1}}
   uir.return %r : %tr
 }
@@ -317,7 +317,7 @@ uir.func @DynPinAtBlockPhase(%a: 1) -> (result: 1) {
   // expected-remark @+1 {{required by operand at phase 0}}
   %sum = hir.add %a, %c1 : %t
   // expected-remark @+1 {{required by pin at phase 0}}
-  %x = uir.pin %sum, 0 : !hir.any
+  %x = uir.pin %sum, 0
   uir.return %x : %t
 }
 
@@ -406,7 +406,7 @@ uir.func @NestedConstBlockError(%a: -1) -> (result: 0) {
       %tr = hir.int_type
       // Call anchored at -2. Arg needs phase -2, but %a is at -1.
       // expected-remark @+1 {{required by call argument 0 at phase -2}}
-      %v = uir.call @NestedIdentityHelper(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+      %v = uir.call @NestedIdentityHelper(%a) : (%ta) -> (%tr) [0] -> [0]
       uir.yield %v : %t
     }
     uir.yield %inner : %t
@@ -437,7 +437,7 @@ uir.func @DynBlockPhaseMismatch() -> (result: 0) {
   %0 = uir.expr pin 1 : %t {
     %tr = hir.int_type
     // expected-error @+1 {{call result 0 at phase 1 cannot satisfy requirement for phase 0}}
-    %v = uir.call @DynBlockCallHelper() : () -> (%tr) () -> !hir.any [] -> [0]
+    %v = uir.call @DynBlockCallHelper() : () -> (%tr) [] -> [0]
     // expected-remark @+1 {{required by yield operand}}
     uir.yield %v : %t
   }
@@ -484,7 +484,7 @@ uir.func @CallBoundaryError(%a: 0) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // expected-remark @+1 {{required by call argument 0 at phase -1}}
-  %r = uir.call @BoundaryCallHelper(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %r = uir.call @BoundaryCallHelper(%a) : (%ta) -> (%tr) [-1] -> [0]
   uir.return %r : %tr
 }
 
@@ -509,7 +509,7 @@ uir.func @DynResultBoundaryError(%a: 0) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // expected-error @+1 {{call result 0 at phase 1 cannot satisfy requirement for phase 0}}
-  %r = uir.call @DynResultHelper(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [1]
+  %r = uir.call @DynResultHelper(%a) : (%ta) -> (%tr) [0] -> [1]
   // expected-remark @+1 {{required by return value at phase 0}}
   uir.return %r : %tr
 }
@@ -548,7 +548,7 @@ uir.func @OrErrorInConstBlock(%a: -1, %b: 0) -> (result: 0) {
     %ta = hir.int_type
     %tr = hir.int_type
     // expected-remark @below {{required by call argument 0 at phase -1}}
-    %v = uir.call @IdentityHelper2(%or) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    %v = uir.call @IdentityHelper2(%or) : (%ta) -> (%tr) [0] -> [0]
     uir.yield %v : %t
   }
   uir.return %0 : %t
@@ -579,11 +579,11 @@ uir.func @PinPreventsFloat(%a: -1) -> (result: 0) {
   %sum = hir.add %a, %fortytwo : %t
   // Pin at phase 0 (let binding). Without the pin, %sum would float to -1.
   // expected-error @below {{value at phase 0 cannot satisfy requirement for phase -1}}
-  %x = uir.pin %sum, 0 : !hir.any
+  %x = uir.pin %sum, 0
   %ta = hir.int_type
   %tr = hir.int_type
   // expected-remark @below {{required by call argument 0 at phase -1}}
-  %r = uir.call @NeedsConstForPin(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %r = uir.call @NeedsConstForPin(%x) : (%ta) -> (%tr) [-1] -> [0]
   uir.return %r : %tr
 }
 
@@ -667,7 +667,7 @@ uir.func @BalancedConstDynValueError(%a: 0) -> (result: 0) {
     %ta = hir.int_type
     %tr = hir.int_type
     // expected-remark @below {{required by call argument 0 at phase -1}}
-    %r = uir.call @BalancedIdentity(%1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    %r = uir.call @BalancedIdentity(%1) : (%ta) -> (%tr) [0] -> [0]
     uir.yield %r : %t
   }
   uir.return %0 : %t
@@ -701,7 +701,7 @@ uir.func @BalancedDynConstDynValueError(%a: 1) -> (result: 1) {
       %ta = hir.int_type
       %tr = hir.int_type
       // expected-remark @below {{required by call argument 0 at phase 0}}
-      %r = uir.call @BalancedIdentity2(%2) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+      %r = uir.call @BalancedIdentity2(%2) : (%ta) -> (%tr) [0] -> [0]
       uir.yield %r : %t
     }
     uir.yield %1 : %t
@@ -737,7 +737,7 @@ uir.func @PureBottleneckSingle(%a: -1, %b: -1, %c: 0) -> (result: 0) {
     %ta = hir.int_type
     %tr = hir.int_type
     // expected-remark @below {{required by call argument 0 at phase -1}}
-    %r = uir.call @BottleneckIdentity(%abc) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    %r = uir.call @BottleneckIdentity(%abc) : (%ta) -> (%tr) [0] -> [0]
     uir.yield %r : %t
   }
   uir.return %0 : %t
@@ -772,7 +772,7 @@ uir.func @PureBottleneckTwo(%a: -1, %b: 0, %c: 0) -> (result: 0) {
     %ta = hir.int_type
     %tr = hir.int_type
     // expected-remark @below {{required by call argument 0 at phase -1}}
-    %r = uir.call @BottleneckIdentity2(%abc) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    %r = uir.call @BottleneckIdentity2(%abc) : (%ta) -> (%tr) [0] -> [0]
     uir.yield %r : %t
   }
   uir.return %0 : %t
@@ -808,7 +808,7 @@ uir.func @PureBottleneckNested(%a: -1, %b: -1, %c: 0) -> (result: 0) {
     %ta = hir.int_type
     %tr = hir.int_type
     // expected-remark @below {{required by call argument 0 at phase -1}}
-    %call = uir.call @BottleneckIdentity3(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    %call = uir.call @BottleneckIdentity3(%r) : (%ta) -> (%tr) [0] -> [0]
     uir.yield %call : %t
   }
   uir.return %0 : %t
@@ -888,14 +888,14 @@ uir.func @DynCallInConstError(%a: -1) -> (result: 0) {
     %r = uir.expr : %t {
       // expected-remark @below {{required by call argument 0 at phase -2}}
       // expected-remark @below {{required by call result 0 at phase -1}}
-      %inner = uir.call @DynCallDeferred(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [1]
+      %inner = uir.call @DynCallDeferred(%a) : (%ta) -> (%tr) [0] -> [1]
       // expected-remark @below {{required by yield operand}}
       uir.yield %inner : %t
     }
     %ta2 = hir.int_type
     %tr2 = hir.int_type
     // expected-remark @below {{required by call argument 0 at phase -1}}
-    %pinned = uir.call @DynCallPin(%r) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [0] -> [0]
+    %pinned = uir.call @DynCallPin(%r) : (%ta2) -> (%tr2) [0] -> [0]
     uir.yield %pinned : %t
   }
   uir.return %0 : %t
@@ -931,13 +931,13 @@ uir.func @MultiConsumerError(%a: -1) -> (result: 0) {
   %t = hir.int_type
   %ta = hir.int_type
   %tr = hir.int_type
-  %call = uir.call @MultiConsumerComputeErr(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+  %call = uir.call @MultiConsumerComputeErr(%a) : (%ta) -> (%tr) [0] -> [0]
   // expected-error @below {{pinned value at phase 0 cannot satisfy requirement for phase -1}}
-  %r = uir.pin %call, 0 : !hir.any
+  %r = uir.pin %call, 0
   %ta2 = hir.int_type
   %tr2 = hir.int_type
   // expected-remark @below {{required by call argument 0 at phase -1}}
-  %nc = uir.call @MultiConsumerNeedsConstErr(%r) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+  %nc = uir.call @MultiConsumerNeedsConstErr(%r) : (%ta2) -> (%tr2) [-1] -> [0]
   %sum = hir.add %nc, %r : %t
   uir.return %sum : %t
 }
@@ -1045,7 +1045,7 @@ uir.func @SharedOpError(%a: -1, %b: 0) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // expected-remark @below {{required by call argument 0 at phase -1}}
-  %r1 = uir.call @SharedNeedsConstErr(%bp1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %r1 = uir.call @SharedNeedsConstErr(%bp1) : (%ta) -> (%tr) [-1] -> [0]
   %sum = hir.add %bp1, %bp1 : %t
   %r2 = hir.add %r1, %sum : %t
   uir.return %r2 : %t
@@ -1088,14 +1088,14 @@ uir.func @CallInFloatedIf(%a: -1, %b: 0) -> (result: 0) {
     %ta = hir.int_type
     %tr = hir.int_type
     // expected-remark @below {{required by call argument 0 at phase -1}}
-    %r = uir.call @FloatedIfInner(%b) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+    %r = uir.call @FloatedIfInner(%b) : (%ta) -> (%tr) [-1] -> [0]
     uir.yield %r : %t
   } else {
     uir.yield %a : %t
   }
   %ta2 = hir.int_type
   %tr2 = hir.int_type
-  %r2 = uir.call @FloatedIfOuter(%ifr) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+  %r2 = uir.call @FloatedIfOuter(%ifr) : (%ta2) -> (%tr2) [-1] -> [0]
   uir.return %r2 : %tr2
 }
 
@@ -1135,7 +1135,7 @@ uir.func @LoopCallCascade(%flag: -1, %a: -1, %b: 0) -> (result: 0) {
       %ta = hir.int_type
       %tr = hir.int_type
       // expected-remark @below {{required by call argument 0 at phase -1}}
-      %r = uir.call @FloatedLoopInner(%b) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+      %r = uir.call @FloatedLoopInner(%b) : (%ta) -> (%tr) [-1] -> [0]
       uir.break %r : %t
     } else {
       uir.unreachable
@@ -1144,7 +1144,7 @@ uir.func @LoopCallCascade(%flag: -1, %a: -1, %b: 0) -> (result: 0) {
   }
   %ta2 = hir.int_type
   %tr2 = hir.int_type
-  %r2 = uir.call @FloatedLoopOuter2(%loopr) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+  %r2 = uir.call @FloatedLoopOuter2(%loopr) : (%ta2) -> (%tr2) [-1] -> [0]
   uir.return %r2 : %tr2
 }
 
@@ -1181,7 +1181,7 @@ uir.func @NestedCallCascade(%a: -1, %b: 0) -> (result: -1) {
   %inner = uir.expr : %t {
     // expected-remark @below {{required by call argument 0 at phase -1}}
     // expected-remark @below {{required by call result 0 at phase -1}}
-    %r = uir.call @CascadeAdd(%b, %fortytwo) : (%ta1, %ta2) -> (%tr1) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+    %r = uir.call @CascadeAdd(%b, %fortytwo) : (%ta1, %ta2) -> (%tr1) [0, 0] -> [0]
     // expected-remark @below {{required by yield operand}}
     uir.yield %r : %t
   }
@@ -1192,7 +1192,7 @@ uir.func @NestedCallCascade(%a: -1, %b: 0) -> (result: -1) {
   %outer = uir.expr : %t {
     // expected-remark @below {{required by call argument 1 at phase -1}}
     // expected-remark @below {{required by call result 0 at phase -1}}
-    %r = uir.call @CascadeAdd(%a, %inner) : (%ta3, %ta4) -> (%tr2) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+    %r = uir.call @CascadeAdd(%a, %inner) : (%ta3, %ta4) -> (%tr2) [0, 0] -> [0]
     // expected-remark @below {{required by yield operand}}
     uir.yield %r : %t
   }
@@ -1271,7 +1271,7 @@ uir.func @LoopDynBreakError() -> (result: 0) {
   %0 = uir.loop : %t {
     %tr = hir.int_type
     // expected-error @below {{call result 0 at phase 1 cannot satisfy requirement for phase 0}}
-    %call = uir.call @DeferredForLoop() : () -> (%tr) () -> !hir.any [] -> [1]
+    %call = uir.call @DeferredForLoop() : () -> (%tr) [] -> [1]
     // expected-remark @below {{required by yield operand}}
     uir.break %call : %t
   }
@@ -1506,7 +1506,7 @@ uir.func @IfInConstFloorError(%a: -2, %b: -2, %flag: -1) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // expected-remark @below {{required by call argument 0 at phase -2}}
-  %result = uir.call @NeedsDoubleConstArg(%sel) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-2] -> [0]
+  %result = uir.call @NeedsDoubleConstArg(%sel) : (%ta) -> (%tr) [-2] -> [0]
   uir.return %result : %tr
 }
 
@@ -1545,7 +1545,7 @@ uir.func @ShortCircuitFloorError(%a: -1, %b: -1) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // expected-remark @below {{required by call argument 0 at phase -1}}
-  %r = uir.call @NeedsConstBoolFloor(%and) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %r = uir.call @NeedsConstBoolFloor(%and) : (%ta) -> (%tr) [-1] -> [0]
   uir.return %r : %tr
 }
 // -----
@@ -1593,7 +1593,7 @@ uir.func @SelectRefFloorError(%sel: 0, %x: -1) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // expected-remark @below {{required by call argument 0 at phase -1}}
-  %r = uir.call @NeedsConstRef(%sel_ref) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %r = uir.call @NeedsConstRef(%sel_ref) : (%ta) -> (%tr) [-1] -> [0]
   uir.return %r : %tr
 }
 
@@ -1680,7 +1680,7 @@ uir.func @FloatingIfCondTooLate(%sel: 0, %a: -1, %b: -1) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // expected-remark @below {{required by call argument 0 at phase -1}}
-  %c = uir.call @FloatingIfCondHelper(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %c = uir.call @FloatingIfCondHelper(%r) : (%ta) -> (%tr) [-1] -> [0]
   uir.return %c : %tr
 }
 
@@ -1716,11 +1716,11 @@ uir.func @FloorErrorOnSecondDemand(%sel: 0, %a: -1, %b: -1) -> (result: 0) {
     // expected-note @below {{value provided here}}
     uir.yield %b : %t
   }
-  %p = uir.pin %r, 0 : !hir.any
+  %p = uir.pin %r, 0
   %ta = hir.int_type
   %tr = hir.int_type
   // expected-remark @below {{required by call argument 0 at phase -1}}
-  %c = uir.call @FloorSecondDemandHelper(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %c = uir.call @FloorSecondDemandHelper(%r) : (%ta) -> (%tr) [-1] -> [0]
   uir.return %c : %tr
 }
 
@@ -1816,7 +1816,7 @@ uir.func @LoopInitTooLate(%x: 0) -> (result: 0) {
   %t = hir.int_type
   %tr = hir.int_type
   // expected-error @below {{call result 0 at phase 1 cannot satisfy requirement for phase 0}}
-  %d = uir.call @LoopInitDynHelper() : () -> (%tr) () -> !hir.any [] -> [1]
+  %d = uir.call @LoopInitDynHelper() : () -> (%tr) [] -> [1]
   // expected-remark @below {{required by loop init value at phase 0}}
   %r = uir.loop (%it = %d : %t) : %t {
     uir.break %it : %t
@@ -1871,7 +1871,7 @@ uir.func @ContinueValueTooLate(%x: 0, %flag: 0) -> (result: 0) {
   %t = hir.int_type
   %tr = hir.int_type
   // expected-error @below {{call result 0 at phase 1 cannot satisfy requirement for phase 0}}
-  %d = uir.call @ContinueDynHelper() : () -> (%tr) () -> !hir.any [] -> [1]
+  %d = uir.call @ContinueDynHelper() : () -> (%tr) [] -> [1]
   %r = uir.loop (%it = %x : %t) : %t {
     uir.if %flag {
       uir.break %it : %t
@@ -1931,7 +1931,7 @@ uir.func @CallArgTypeTooLate(%N: 0, %x: 0) -> (result: 0) {
   %ut = hir.uint_type %N
   %tr = hir.int_type
   // expected-remark @below {{required by type of call argument 0}}
-  %r = uir.call @CallArgTypeTarget(%x) : (%ut) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+  %r = uir.call @CallArgTypeTarget(%x) : (%ut) -> (%tr) [0] -> [0]
   uir.return %r : %tr
 }
 
@@ -1959,7 +1959,7 @@ uir.func @CallResultTypeTooLate(%N: 0, %x: 0) -> (result: 0) {
   // expected-remark @below {{required by operand at phase -1}}
   %ut = hir.uint_type %N
   // expected-remark @below {{required by type of call result 0}}
-  %r = uir.call @CallResultTypeTarget(%x) : (%ta) -> (%ut) (!hir.any) -> !hir.any [0] -> [0]
+  %r = uir.call @CallResultTypeTarget(%x) : (%ta) -> (%ut) [0] -> [0]
   uir.return %r : %ut
 }
 
@@ -2043,7 +2043,7 @@ uir.func @SideEffectDemandContext(%a: 0) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // expected-remark @below {{required by call argument 0 at phase -1}}
-  %r = uir.call @VarRefConstTarget(%v) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %r = uir.call @VarRefConstTarget(%v) : (%ta) -> (%tr) [-1] -> [0]
   uir.return %r : %tr
 }
 
@@ -2098,7 +2098,7 @@ uir.func @CallEarlierHalfArgTooLate(%d: 1, %cond: 1) -> (result: 1) {
       %ta = hir.int_type
       %tr = hir.int_type
       // expected-remark @below {{required by call argument 0 at phase 0}}
-      %v = uir.call @EarlierHalfErrTarget(%d) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+      %v = uir.call @EarlierHalfErrTarget(%d) : (%ta) -> (%tr) [-1] -> [0]
       uir.yield %v : %t
     } else {
       uir.yield %d : %t

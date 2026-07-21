@@ -128,7 +128,7 @@ uir.func @Caller() -> () {
   %type_type = hir.type_type
   %T = hir.int_type
   %x = hir.int_type
-  %r = uir.call @TwoPhase(%T, %x) : (%type_type, %T) -> (%T) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  %r = uir.call @TwoPhase(%T, %x) : (%type_type, %T) -> (%T) [-1, 0] -> [0]
   uir.return
 }
 
@@ -346,7 +346,7 @@ uir.func @ThreeResultCallee(%x: 0) -> (r1: 0, r2: 0, r3: 0) {
 uir.func @CallVoid() -> () {
   uir.signature () -> ()
 } {
-  uir.call @SinglePhase() : () -> () () -> () [] -> []
+  uir.call @SinglePhase() : () -> () [] -> []
   uir.return
 }
 
@@ -376,7 +376,7 @@ uir.func @CallThreeArgs() -> () {
   %a = hir.int_type
   %b = hir.int_type
   %c = hir.int_type
-  %r = uir.call @ThreeArgCallee(%a, %b, %c) : (%tt, %tt, %tt) -> (%tt) (!hir.any, !hir.any, !hir.any) -> !hir.any [-2, -1, 0] -> [0]
+  %r = uir.call @ThreeArgCallee(%a, %b, %c) : (%tt, %tt, %tt) -> (%tt) [-2, -1, 0] -> [0]
   uir.return
 }
 
@@ -392,7 +392,7 @@ uir.func @CallThreeResults() -> () {
 } {
   %tt = hir.type_type
   %x = hir.int_type
-  %r1, %r2, %r3 = uir.call @ThreeResultCallee(%x) : (%tt) -> (%tt, %tt, %tt) (!hir.any) -> (!hir.any, !hir.any, !hir.any) [0] -> [0, 0, 0]
+  %r1, %r2, %r3 = uir.call @ThreeResultCallee(%x) : (%tt) -> (%tt, %tt, %tt) [0] -> [0, 0, 0]
   uir.return
 }
 
@@ -418,9 +418,9 @@ uir.func @NestedCalls() -> () {
   %tt = hir.type_type
   %T1 = hir.int_type
   %x1 = hir.int_type
-  %r1 = uir.call @TwoPhase(%T1, %x1) : (%tt, %T1) -> (%T1) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  %r1 = uir.call @TwoPhase(%T1, %x1) : (%tt, %T1) -> (%T1) [-1, 0] -> [0]
   %T2 = hir.int_type
-  %r2 = uir.call @TwoPhase(%T2, %r1) : (%tt, %T2) -> (%T2) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  %r2 = uir.call @TwoPhase(%T2, %r1) : (%tt, %T2) -> (%T2) [-1, 0] -> [0]
   uir.return
 }
 
@@ -544,7 +544,7 @@ uir.func @CallSixPhase() -> () {
   %a = hir.int_type {arg_a}
   %b = hir.int_type {arg_b}
   %c = hir.int_type {arg_c}
-  %r1, %r2, %r3 = uir.call @SixPhase(%a, %b, %c) : (%tt, %tt, %tt) -> (%tt, %tt, %tt) (!hir.any, !hir.any, !hir.any) -> (!hir.any, !hir.any, !hir.any) [-3, -1, 1] -> [-2, 0, 2]
+  %r1, %r2, %r3 = uir.call @SixPhase(%a, %b, %c) : (%tt, %tt, %tt) -> (%tt, %tt, %tt) [-3, -1, 1] -> [-2, 0, 2]
   uir.return
 }
 
@@ -644,7 +644,7 @@ uir.func @PinDissolution() -> (result: 0) {
 } {
   %v = hir.int_type
   %tt = hir.type_type
-  %pinned = uir.pin %v, 0 : !hir.any
+  %pinned = uir.pin %v, 0
   uir.return %pinned : %tt
 }
 

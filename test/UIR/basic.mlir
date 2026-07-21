@@ -175,19 +175,19 @@ func.func @expr_pinned_dyn(%a: !hir.any, %ty: !hir.any) {
 
 // CHECK-LABEL: @pin_single
 func.func @pin_single(%val: !hir.any) {
-  %r = uir.pin %val, 0 : !hir.any
+  %r = uir.pin %val, 0
   func.return
 }
 
 // CHECK-LABEL: @pin_const
 func.func @pin_const(%val: !hir.any) {
-  %r = uir.pin %val, -1 : !hir.any
+  %r = uir.pin %val, -1
   func.return
 }
 
 // CHECK-LABEL: @pin_multiple
 func.func @pin_multiple(%a: !hir.any, %b: !hir.any) {
-  %r1, %r2 = uir.pin %a, %b, 0 : !hir.any, !hir.any
+  %r1, %r2 = uir.pin %a, %b, 0
   func.return
 }
 
@@ -245,7 +245,7 @@ uir.split_func @split_witness(%a: -1, %b: 0) -> (result: 0) {
 uir.func @caller(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  %r = uir.call @simple_func(%a, %a) : (%a, %a) -> (%a) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+  %r = uir.call @simple_func(%a, %a) : (%a, %a) -> (%a) [0, 0] -> [0]
   uir.return %r : %a
 }
 

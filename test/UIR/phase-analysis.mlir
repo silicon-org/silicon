@@ -242,7 +242,7 @@ uir.func @LetPinConstraint(%a: -1) -> (result: 0) {
   // CHECK: hir.mul %a, %a {{.*}}pa.phase = "-1"
   %prod = hir.mul %a, %a : %t
   // CHECK: uir.pin {{.*}}pa.phase = "0"
-  %x = uir.pin %prod, 0 : !hir.any
+  %x = uir.pin %prod, 0
   // CHECK: uir.expr pin -1 {{.*}} attributes {{{.*}}pa.phase = "-1"
   %y = uir.expr pin -1 : %t {
     // CHECK: hir.mul %a, %a {{.*}}pa.phase = "-1"
@@ -250,7 +250,7 @@ uir.func @LetPinConstraint(%a: -1) -> (result: 0) {
     uir.yield %prod2 : %t
   }
   // CHECK: uir.pin {{.*}}pa.phase = "0"
-  %pinY = uir.pin %y, 0 : !hir.any
+  %pinY = uir.pin %y, 0
   // CHECK: hir.add {{.*}}pa.phase = "0"
   %sum = hir.add %x, %pinY : %t
   uir.return %sum : %t
@@ -344,11 +344,11 @@ uir.func @PinnedPureOps(%a: 0, %b: 0) -> (result: 0) {
   // CHECK: hir.add {{.*}} {{.*}}pa.phase = "0"
   %sum = hir.add %a, %b : %t
   // CHECK: uir.pin {{.*}}, 0 {{.*}} {{.*}}pa.phase = "0"
-  %psum = uir.pin %sum, 0 : !hir.any
+  %psum = uir.pin %sum, 0
   // CHECK: hir.sub {{.*}} {{.*}}pa.phase = "0"
   %diff = hir.sub %a, %b : %t
   // CHECK: uir.pin {{.*}}, 0 {{.*}} {{.*}}pa.phase = "0"
-  %pdiff = uir.pin %diff, 0 : !hir.any
+  %pdiff = uir.pin %diff, 0
   // CHECK: hir.mul {{.*}} {{.*}}pa.phase = "0"
   %prod = hir.mul %psum, %pdiff : %t
   uir.return %prod : %t
@@ -369,12 +369,12 @@ uir.func @PinAbsorbsSlack(%a: -1, %b: -1) -> (result: 0) {
   %c10 = hir.constant_int 10 : %t
   %sum = hir.add %a, %c10 : %t
   // CHECK: uir.pin {{.*}}, 0 {{.*}} {{.*}}pa.phase = "0"
-  %x = uir.pin %sum, 0 : !hir.any
+  %x = uir.pin %sum, 0
   // Second independent const stream, also pinned.
   %c3 = hir.constant_int 3 : %t
   %prod = hir.mul %b, %c3 : %t
   // CHECK: uir.pin {{.*}}, 0 {{.*}} {{.*}}pa.phase = "0"
-  %y = uir.pin %prod, 0 : !hir.any
+  %y = uir.pin %prod, 0
   // Combine pinned results.
   // CHECK: hir.add {{.*}} {{.*}}pa.phase = "0"
   %r = hir.add %x, %y : %t
@@ -524,11 +524,11 @@ uir.func @PinInConstBlock(%a: -1) -> (result: 0) {
     // Call anchored at const block phase -1.
     // CHECK: uir.call @SingleArgTarget({{.*}})
     // CHECK-SAME: pa.phase = "-1"
-    %v = uir.call @SingleArgTarget(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    %v = uir.call @SingleArgTarget(%a) : (%ta) -> (%tr) [0] -> [0]
     // Pin at blockPhase + 0 = -1.
     // CHECK: uir.pin {{.*}}, 0
     // CHECK-SAME: pa.phase = "-1"
-    %y = uir.pin %v, 0 : !hir.any
+    %y = uir.pin %v, 0
     %c2 = hir.constant_int 2 : %t
     // Pure op using pinned value at -1.
     // CHECK: hir.mul {{.*}}pa.phase = "-1"
@@ -617,11 +617,11 @@ uir.func @FloatingExprTightening() -> (r0: 0, r1: -1) {
     // Both calls tighten to -1 (from %y's -1 demand).
     // CHECK: uir.call @MakeValue()
     // CHECK-SAME: pa.phase = "-1"
-    %a = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+    %a = uir.call @MakeValue() : () -> (%ra) [] -> [0]
     %rb = hir.int_type
     // CHECK: uir.call @MakeValue()
     // CHECK-SAME: pa.phase = "-1"
-    %b = uir.call @MakeValue() : () -> (%rb) () -> !hir.any [] -> [0]
+    %b = uir.call @MakeValue() : () -> (%rb) [] -> [0]
     uir.yield %a, %b : %ta, %tb
   }
   uir.return %x, %y : %t, %t
@@ -640,11 +640,11 @@ uir.func @FloatingExprTransitivePure() -> (r0: 0, r1: -1) {
     %ra = hir.int_type
     // CHECK: uir.call @MakeValue()
     // CHECK-SAME: pa.phase = "-1"
-    %a = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+    %a = uir.call @MakeValue() : () -> (%ra) [] -> [0]
     %rb = hir.int_type
     // CHECK: uir.call @MakeValue()
     // CHECK-SAME: pa.phase = "-1"
-    %b = uir.call @MakeValue() : () -> (%rb) () -> !hir.any [] -> [0]
+    %b = uir.call @MakeValue() : () -> (%rb) [] -> [0]
     // Pure ops between calls and yield: constraints propagate through.
     %c1 = hir.constant_int 1 : %t
     %a2 = hir.add %a, %c1 : %t
@@ -727,7 +727,7 @@ uir.func @PinnedOpViaDFS(%a: 0) -> (result: 0) {
   %sum = hir.add %a, %a : %t
   // Pin at phase 0 (blockPhase + 0). This is the authoritative phase.
   // CHECK: uir.pin {{.*}}, 0 {{.*}} {{.*}}pa.phase = "0"
-  %pinned = uir.pin %sum, 0 : !hir.any
+  %pinned = uir.pin %sum, 0
   // The return uses %pinned — resolveValue sees it's already resolved at 0.
   uir.return %pinned : %t
 }
@@ -1109,7 +1109,7 @@ uir.func @IfArmBreakNotIfProvider(%hi: 1, %lo: 0, %sel: 0) -> (result: 1) {
       uir.yield %lo : %t
     }
     // CHECK: uir.pin {{.*}}pa.operands = ["0"], pa.phase = "0"
-    %p = uir.pin %if, 0 : !hir.any
+    %p = uir.pin %if, 0
     uir.continue
   }
   uir.return %r : %t
@@ -1172,7 +1172,7 @@ uir.func @ConstBlockWorkaround(%a: -1, %b: -1, %flag: -1) -> (result: 0) {
     }
     uir.yield %sel : %t
   }
-  %pinned = uir.pin %chosen, 0 : !hir.any
+  %pinned = uir.pin %chosen, 0
   uir.return %pinned : %t
 }
 
@@ -1350,7 +1350,7 @@ uir.func @CallAllZero(%a: 0) -> (result: 0) {
 } {
   %ta = hir.int_type
   // CHECK: uir.call @CallTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
-  %r = uir.call @CallTarget(%a, %a) : (%ta, %ta) -> (%ta) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+  %r = uir.call @CallTarget(%a, %a) : (%ta, %ta) -> (%ta) [0, 0] -> [0]
   uir.return %r : %ta
 }
 
@@ -1375,11 +1375,11 @@ uir.func @ChainedCalls(%x: 0) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // CHECK: uir.call @SingleArgTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
-  %inner = uir.call @SingleArgTarget(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+  %inner = uir.call @SingleArgTarget(%x) : (%ta) -> (%tr) [0] -> [0]
   %ta2 = hir.int_type
   %tr2 = hir.int_type
   // CHECK: uir.call @SingleArgTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
-  %outer = uir.call @SingleArgTarget(%inner) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [0] -> [0]
+  %outer = uir.call @SingleArgTarget(%inner) : (%ta2) -> (%tr2) [0] -> [0]
   uir.return %outer : %tr2
 }
 
@@ -1398,7 +1398,7 @@ uir.func @CallWithLiterals() -> (result: 0) {
   %tb = hir.int_type
   %tr = hir.int_type
   // CHECK: uir.call @CallTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
-  %r = uir.call @CallTarget(%c10, %c20) : (%ta, %tb) -> (%tr) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+  %r = uir.call @CallTarget(%c10, %c20) : (%ta, %tb) -> (%tr) [0, 0] -> [0]
   uir.return %r : %tr
 }
 
@@ -1414,7 +1414,7 @@ uir.func @CallWithConstArg(%a: -1) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // CHECK: uir.call @SingleArgTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
-  %r = uir.call @SingleArgTarget(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+  %r = uir.call @SingleArgTarget(%a) : (%ta) -> (%tr) [0] -> [0]
   uir.return %r : %tr
 }
 
@@ -1432,23 +1432,23 @@ uir.func @SequentialCalls(%a: 0, %b: 0) -> (result: 0) {
   %tb1 = hir.int_type
   %tr1 = hir.int_type
   // CHECK: uir.call @CallTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
-  %call1 = uir.call @CallTarget(%a, %b) : (%ta1, %tb1) -> (%tr1) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+  %call1 = uir.call @CallTarget(%a, %b) : (%ta1, %tb1) -> (%tr1) [0, 0] -> [0]
   // CHECK: uir.pin {{.*}}, 0 {{.*}} {{.*}}pa.phase = "0"
-  %x = uir.pin %call1, 0 : !hir.any
+  %x = uir.pin %call1, 0
 
   %ta2 = hir.int_type
   %tb2 = hir.int_type
   %tr2 = hir.int_type
   // CHECK: uir.call @CallTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
-  %call2 = uir.call @CallTarget(%x, %a) : (%ta2, %tb2) -> (%tr2) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+  %call2 = uir.call @CallTarget(%x, %a) : (%ta2, %tb2) -> (%tr2) [0, 0] -> [0]
   // CHECK: uir.pin {{.*}}, 0 {{.*}} {{.*}}pa.phase = "0"
-  %y = uir.pin %call2, 0 : !hir.any
+  %y = uir.pin %call2, 0
 
   %ta3 = hir.int_type
   %tb3 = hir.int_type
   %tr3 = hir.int_type
   // CHECK: uir.call @CallTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
-  %call3 = uir.call @CallTarget(%y, %b) : (%ta3, %tb3) -> (%tr3) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
+  %call3 = uir.call @CallTarget(%y, %b) : (%ta3, %tb3) -> (%tr3) [0, 0] -> [0]
   uir.return %call3 : %tr3
 }
 
@@ -1475,7 +1475,7 @@ uir.func @CallConstArg(%n: -1, %a: 0) -> (result: 0) {
   // Call at phase 0, arg 0 needs phase 0+(-1) = -1, arg 1 needs 0+0 = 0.
   // %n is at -1 (satisfies -1), %a is at 0 (satisfies 0).
   // CHECK: uir.call @ConstArgTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
-  %r = uir.call @ConstArgTarget(%n, %a) : (%t, %t) -> (%t) (!hir.any, !hir.any) -> !hir.any [-1, 0] -> [0]
+  %r = uir.call @ConstArgTarget(%n, %a) : (%t, %t) -> (%t) [-1, 0] -> [0]
   uir.return %r : %t
 }
 
@@ -1503,7 +1503,7 @@ uir.func @CallBothOffsets(%x: -2) -> (result: 0) {
   %r = uir.expr : %tr {
     // CHECK: uir.call @ConstArgDynResult({{.*}}) {{.*}}pa.phase = "-1"
     // CHECK-SAME: pa.results = ["0"]
-    %v = uir.call @ConstArgDynResult(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [1]
+    %v = uir.call @ConstArgDynResult(%x) : (%ta) -> (%tr) [-1] -> [1]
     uir.yield %v : %tr
   }
   uir.return %r : %tr
@@ -1536,18 +1536,18 @@ uir.func @TripleConstChain(%x: -3) -> (result: 0) {
   // CHECK: uir.expr {{.*}}pa.phase = "-2"
   %r1 = uir.expr : %tr1 {
     // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "-2"
-    %v = uir.call @TakesConst(%x) : (%t1) -> (%tr1) (!hir.any) -> !hir.any [-1] -> [0]
+    %v = uir.call @TakesConst(%x) : (%t1) -> (%tr1) [-1] -> [0]
     uir.yield %v : %tr1
   }
   // CHECK: uir.expr {{.*}}pa.phase = "-1"
   %r2 = uir.expr : %tr2 {
     // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "-1"
-    %v = uir.call @TakesConst(%r1) : (%t2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+    %v = uir.call @TakesConst(%r1) : (%t2) -> (%tr2) [-1] -> [0]
     uir.yield %v : %tr2
   }
   // Last call stays at body phase 0.
   // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "0"
-  %r3 = uir.call @TakesConst(%r2) : (%t3) -> (%tr3) (!hir.any) -> !hir.any [-1] -> [0]
+  %r3 = uir.call @TakesConst(%r2) : (%t3) -> (%tr3) [-1] -> [0]
   uir.return %r3 : %tr3
 }
 
@@ -1583,19 +1583,19 @@ uir.func @TripleDynChain(%x: -3) -> (result: 0) {
   // CHECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-3"
   // CHECK-SAME: pa.results = ["-2"]
   %r1 = uir.expr : %tr1 {
-    %v1 = uir.call @ReturnsDyn(%x) : (%t1) -> (%tr1) (!hir.any) -> !hir.any [0] -> [1]
+    %v1 = uir.call @ReturnsDyn(%x) : (%t1) -> (%tr1) [0] -> [1]
     uir.yield %v1 : %tr1
   }
   // CHECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-2"
   // CHECK-SAME: pa.results = ["-1"]
   %r2 = uir.expr : %tr2 {
-    %v2 = uir.call @ReturnsDyn(%r1) : (%t2) -> (%tr2) (!hir.any) -> !hir.any [0] -> [1]
+    %v2 = uir.call @ReturnsDyn(%r1) : (%t2) -> (%tr2) [0] -> [1]
     uir.yield %v2 : %tr2
   }
   // CHECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-1"
   // CHECK-SAME: pa.results = ["0"]
   %r3 = uir.expr : %tr3 {
-    %v3 = uir.call @ReturnsDyn(%r2) : (%t3) -> (%tr3) (!hir.any) -> !hir.any [0] -> [1]
+    %v3 = uir.call @ReturnsDyn(%r2) : (%t3) -> (%tr3) [0] -> [1]
     uir.yield %v3 : %tr3
   }
   uir.return %r3 : %tr3
@@ -1619,12 +1619,12 @@ uir.func @OffsetCancel(%x: -2) -> (result: 0) {
   %r1 = uir.expr : %tr1 {
     // CHECK: uir.call @ReturnsDyn({{.*}}) {{.*}}pa.phase = "-2"
     // CHECK-SAME: pa.results = ["-1"]
-    %v = uir.call @ReturnsDyn(%x) : (%t1) -> (%tr1) (!hir.any) -> !hir.any [0] -> [1]
+    %v = uir.call @ReturnsDyn(%x) : (%t1) -> (%tr1) [0] -> [1]
     uir.yield %v : %tr1
   }
   // Outer call at body phase 0: const arg at -1, %r1 at -1 satisfies.
   // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "0"
-  %r2 = uir.call @TakesConst(%r1) : (%t2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+  %r2 = uir.call @TakesConst(%r1) : (%t2) -> (%tr2) [-1] -> [0]
   uir.return %r2 : %tr2
 }
 
@@ -1644,12 +1644,12 @@ uir.func @DeepViaBlocks(%x: -3) -> (result: 0) {
       %tr = hir.int_type
       // Call at block phase -2. Const arg at -2 + (-1) = -3. x at -3. Ok.
       // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "-2"
-      %r = uir.call @TakesConst(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+      %r = uir.call @TakesConst(%x) : (%ta) -> (%tr) [-1] -> [0]
       uir.yield %r : %t2
     }
     uir.yield %1 : %t2
   }
-  %p = uir.pin %0, 0 : !hir.any
+  %p = uir.pin %0, 0
   uir.return %p : %t2
 }
 
@@ -1746,7 +1746,7 @@ uir.func @IfInConstInLoop(%flag: -1, %a: -1, %b: -1, %x: 0) -> (result: 0) {
     }
     // Pin absorbs the -1 result to 0.
     // CHECK: uir.pin {{.*}}pa.phase = "0"
-    %pinned = uir.pin %chosen, 0 : !hir.any
+    %pinned = uir.pin %chosen, 0
     // CHECK: hir.add {{.*}}pa.phase = "0"
     %sum = hir.add %pinned, %x : %t
     uir.break %sum : %t
@@ -1787,7 +1787,7 @@ uir.func @DeepNesting(%a: -1, %b: -1) -> (result: 0) {
     uir.yield %0 : %t
   }
   // CHECK: uir.pin {{.*}}pa.phase = "0"
-  %pinned = uir.pin %val, 0 : !hir.any
+  %pinned = uir.pin %val, 0
   uir.return %pinned : %t
 }
 
@@ -1828,7 +1828,7 @@ uir.func @PinAndFloatingConsumer(%a: 0) -> (result: 0) {
   %sum = hir.add %a, %a : %t
   // Pin processes first (root), resolveValue skips on second visit (return).
   // CHECK: uir.pin {{.*}}, 0 {{.*}} {{.*}}pa.phase = "0"
-  %p = uir.pin %sum, 0 : !hir.any
+  %p = uir.pin %sum, 0
   uir.return %p : %t
 }
 
@@ -1933,7 +1933,7 @@ uir.func @MultiResultLoopPhases(%a: 1) -> (r0: 1, r1: 0) {
     %rt = hir.int_type
     // CHECK: uir.call @MakeValue()
     // CHECK-SAME: pa.phase = "0"
-    %v = uir.call @MakeValue() : () -> (%rt) () -> !hir.any [] -> [0]
+    %v = uir.call @MakeValue() : () -> (%rt) [] -> [0]
     // CHECK: uir.break {{.*}}pa.operands = ["1", "0", "float", "float"]
     uir.break %sum, %v : %t, %t2
   }
@@ -2021,7 +2021,7 @@ uir.func @ZeroUseCall(%n: -1, %a: 0) -> () {
   %tb = hir.int_type
   // Zero-use call at blockPhase 0. Arg 0 at 0+(-1)=-1, arg 1 at 0+0=0.
   // CHECK: uir.call @VoidTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
-  uir.call @VoidTarget(%n, %a) : (%ta, %tb) -> () (!hir.any, !hir.any) -> () [-1, 0] -> []
+  uir.call @VoidTarget(%n, %a) : (%ta, %tb) -> () [-1, 0] -> []
   uir.return
 }
 
@@ -2317,7 +2317,7 @@ uir.func @SequentialConstChain(%a: -1) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // CHECK: uir.call @NeedsConstChain({{.*}}) {{.*}}pa.phase = "0"
-  %r = uir.call @NeedsConstChain(%z) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %r = uir.call @NeedsConstChain(%z) : (%ta) -> (%tr) [-1] -> [0]
   uir.return %r : %tr
 }
 
@@ -2347,10 +2347,10 @@ uir.func @InterleavedConstBody(%a: -1, %b: 0) -> (result: 0) {
   }
   %sum2 = hir.add %b, %c1 : %t
   // CHECK: uir.pin {{.*}}pa.phase = "0"
-  %y = uir.pin %sum2, 0 : !hir.any
+  %y = uir.pin %sum2, 0
   %ta = hir.int_type
   %tr = hir.int_type
-  %nc = uir.call @NeedsConstInterleaved(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %nc = uir.call @NeedsConstInterleaved(%x) : (%ta) -> (%tr) [-1] -> [0]
   // CHECK: hir.add {{.*}}pa.phase = "0"
   %r = hir.add %nc, %y : %t
   uir.return %r : %t
@@ -2622,7 +2622,7 @@ uir.func @BreakInnerBalanced(%a: 0) -> (result: 0) {
       }
       uir.continue
     }
-    %z = uir.pin %inner, 0 : !hir.any
+    %z = uir.pin %inner, 0
     %c0 = hir.constant_int 0 : %t
     uir.break %c0 : %t
   }
@@ -2738,7 +2738,7 @@ uir.func @DynCallStatement(%a: 0) -> (result: 0) {
   %tr = hir.int_type
   // CHECK: uir.expr pin {{.*}}pa.phase = "0"
   uir.expr pin {
-    %r = uir.call @DynCallStatementDeferred(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [1]
+    %r = uir.call @DynCallStatementDeferred(%a) : (%ta) -> (%tr) [0] -> [1]
     uir.yield
   }
   %c42 = hir.constant_int 42 : %t
@@ -2939,7 +2939,7 @@ uir.func @LoopInConstArg(%flag: -1, %a: -1) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // CHECK: uir.call @FloatedLoopOuter({{.*}}) {{.*}}pa.phase = "0"
-  %r = uir.call @FloatedLoopOuter(%loopr) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %r = uir.call @FloatedLoopOuter(%loopr) : (%ta) -> (%tr) [-1] -> [0]
   uir.return %r : %tr
 }
 
@@ -2956,7 +2956,7 @@ uir.func @SharedTwoConsumers(%a: -1, %b: 0) -> (result: 0) {
   %ap1 = hir.add %a, %c1 : %t
   %ta = hir.int_type
   %tr = hir.int_type
-  %r1 = uir.call @SharedNeedsConst(%ap1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %r1 = uir.call @SharedNeedsConst(%ap1) : (%ta) -> (%tr) [-1] -> [0]
   // CHECK: hir.add {{.*}}, %b {{.*}}pa.phase = "0"
   %sum = hir.add %ap1, %b : %t
   %r2 = hir.add %r1, %sum : %t
@@ -3036,13 +3036,13 @@ uir.func @MultiConsumerFixed(%a: -1) -> (result: 0) {
   %tr = hir.int_type
   // CHECK: uir.expr pin -1 {{.*}}pa.phase = "-1"
   %r = uir.expr pin -1 : %t {
-    %call = uir.call @MultiConsumerCompute(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+    %call = uir.call @MultiConsumerCompute(%a) : (%ta) -> (%tr) [0] -> [0]
     uir.yield %call : %t
   }
   %ta2 = hir.int_type
   %tr2 = hir.int_type
   // CHECK: uir.call @MultiConsumerNeedsConst({{.*}}) {{.*}}pa.phase = "0"
-  %nc = uir.call @MultiConsumerNeedsConst(%r) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+  %nc = uir.call @MultiConsumerNeedsConst(%r) : (%ta2) -> (%tr2) [-1] -> [0]
   %c42 = hir.constant_int 42 : %t
   // CHECK: hir.add {{.*}}pa.phase = "0"
   %sum = hir.add %nc, %c42 : %t
@@ -3084,12 +3084,12 @@ uir.func @DynCallInConstOk(%a: -3) -> (result: 0) {
     // Floating expr: call floats to -2 (for dyn result at -1, satisfying Pin).
     %r = uir.expr : %t {
       // CHECK: uir.call @ComplexCallee({{.*}}) {{.*}}pa.phase = "-2"
-      %inner = uir.call @ComplexCallee(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [1]
+      %inner = uir.call @ComplexCallee(%a) : (%ta) -> (%tr) [-1] -> [1]
       uir.yield %inner : %t
     }
     %ta2 = hir.int_type
     %tr2 = hir.int_type
-    %pinned = uir.call @ComplexCalleePin(%r) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [0] -> [0]
+    %pinned = uir.call @ComplexCalleePin(%r) : (%ta2) -> (%tr2) [0] -> [0]
     uir.yield %pinned : %t
   }
   uir.return %0 : %t
@@ -3123,7 +3123,7 @@ uir.func @MultiResultCall(%a: -1) -> (r0: 0, r1: 0) {
   // Call wrapped in floating expr: tightens to -1 so r1 at 0.
   // CHECK: uir.call @MultiResultTarget({{.*}}) {{.*}}pa.phase = "-1"
   %r0, %r1 = uir.expr : %tr0, %tr1 {
-    %v0, %v1 = uir.call @MultiResultTarget(%a) : (%ta) -> (%tr0, %tr1) (!hir.any) -> (!hir.any, !hir.any) [0] -> [0, 1]
+    %v0, %v1 = uir.call @MultiResultTarget(%a) : (%ta) -> (%tr0, %tr1) [0] -> [0, 1]
     uir.yield %v0, %v1 : %tr0, %tr1
   }
   %t = hir.int_type
@@ -3161,7 +3161,7 @@ uir.func @SpreadCallAllResults(%a: -1) -> (result: 0) {
   // CHECK: uir.call @Spread({{.*}}) {{.*}}pa.phase = "-1"
   // CHECK-SAME: pa.results = ["-2", "-1", "0"]
   %r0, %r1, %r2 = uir.expr : %tr0, %tr1, %tr2 {
-    %v0, %v1, %v2 = uir.call @Spread(%a) : (%ta) -> (%tr0, %tr1, %tr2) (!hir.any) -> (!hir.any, !hir.any, !hir.any) [0] -> [-1, 0, 1]
+    %v0, %v1, %v2 = uir.call @Spread(%a) : (%ta) -> (%tr0, %tr1, %tr2) [0] -> [-1, 0, 1]
     uir.yield %v0, %v1, %v2 : %tr0, %tr1, %tr2
   }
   %t = hir.int_type
@@ -3187,7 +3187,7 @@ uir.func @SpreadCallPartialUse(%a: -1) -> (result: 0) {
   // CHECK: uir.call @Spread({{.*}}) {{.*}}pa.phase = "-1"
   // CHECK-SAME: pa.results = ["-2", "-1", "0"]
   %r0, %r1, %r2 = uir.expr : %tr0, %tr1, %tr2 {
-    %v0, %v1, %v2 = uir.call @Spread(%a) : (%ta) -> (%tr0, %tr1, %tr2) (!hir.any) -> (!hir.any, !hir.any, !hir.any) [0] -> [-1, 0, 1]
+    %v0, %v1, %v2 = uir.call @Spread(%a) : (%ta) -> (%tr0, %tr1, %tr2) [0] -> [-1, 0, 1]
     uir.yield %v0, %v1, %v2 : %tr0, %tr1, %tr2
   }
   %t = hir.int_type
@@ -3237,7 +3237,7 @@ uir.func @CallWithTypeOfResults(%a: 0) -> (result: 0) {
   // typeOfResults gets callPhase + 0 - 1 = -1. hir.int_type (float) satisfies.
   %tr = hir.int_type
   // CHECK: uir.call @TypedResultTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
-  %r = uir.call @TypedResultTarget(%a) : (%ta) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+  %r = uir.call @TypedResultTarget(%a) : (%ta) -> (%tr) [0] -> [0]
   uir.return %r : %tr
 }
 
@@ -3401,7 +3401,7 @@ uir.func @CallNonConstTypeOfArgs(%n: -1, %a: 0) -> (result: 0) {
   %ut = hir.uint_type %n
   %tr = hir.int_type
   // CHECK: uir.call @TypedArgTarget({{.*}}) {{.*}} {{.*}}pa.phase = "0"
-  %r = uir.call @TypedArgTarget(%a) : (%ut) -> (%tr) (!hir.any) -> !hir.any [0] -> [0]
+  %r = uir.call @TypedArgTarget(%a) : (%ut) -> (%tr) [0] -> [0]
   uir.return %r : %tr
 }
 
@@ -3421,7 +3421,7 @@ uir.func @WhileLoop(%x: 0) -> (result: 0) {
       uir.break
     }
     %body = hir.add %x, %x : %t
-    %p = uir.pin %body, 0 : !hir.any
+    %p = uir.pin %body, 0
     uir.continue
   }
   uir.return %x : %t
@@ -3500,12 +3500,12 @@ uir.func @IfInsideFloatingExpr(%cond: -1) -> (result: -1) {
     %r = uir.if %cond : %ta {
       // CHECK: uir.call @MakeValue()
       // CHECK-SAME: pa.phase = "-1"
-      %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+      %v = uir.call @MakeValue() : () -> (%ra) [] -> [0]
       uir.yield %v : %ta
     } else {
       // CHECK: uir.call @MakeValue()
       // CHECK-SAME: pa.phase = "-1"
-      %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+      %v = uir.call @MakeValue() : () -> (%ra) [] -> [0]
       uir.yield %v : %ta
     }
     uir.yield %r : %ta
@@ -3533,7 +3533,7 @@ uir.func @LoopInsideFloatingExpr(%cond: -1) -> (result: -1) {
       uir.if %cond {
         // CHECK: uir.call @MakeValue()
         // CHECK-SAME: pa.phase = "-1"
-        %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+        %v = uir.call @MakeValue() : () -> (%ra) [] -> [0]
         // CHECK: uir.break {{.*}}pa.phase = "-1"
         uir.break %v : %ta
       } else {
@@ -3628,12 +3628,12 @@ uir.func @DeepNestedTightening(%cond: -2) -> (result: -1) {
       %r = uir.if %cond : %ta {
         // CHECK: uir.call @MakeValue()
         // CHECK-SAME: pa.phase = "-1"
-        %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+        %v = uir.call @MakeValue() : () -> (%ra) [] -> [0]
         uir.yield %v : %ta
       } else {
         // CHECK: uir.call @MakeValue()
         // CHECK-SAME: pa.phase = "-1"
-        %v = uir.call @MakeValue() : () -> (%ra) () -> !hir.any [] -> [0]
+        %v = uir.call @MakeValue() : () -> (%ra) [] -> [0]
         uir.yield %v : %ta
       }
       uir.yield %r : %ta
@@ -3709,7 +3709,7 @@ uir.func @MultiUse(%x: -2) -> (result: 0) {
   // u0 = x + 1: pure, max(-2, float) = -2. Pinned at 0.
   %u0_val = hir.add %x, %one : %t
   // CHECK: uir.pin {{.*}}, 0 {{.*}}pa.phase = "0"
-  %u0 = uir.pin %u0_val, 0 : !hir.any
+  %u0 = uir.pin %u0_val, 0
   // u1 = const { x + 2 }. Const block at -1. x at -2 OK. u1 at -1.
   %u1 = uir.expr pin -1 : %t {
     %v = hir.add %x, %two : %t
@@ -3727,7 +3727,7 @@ uir.func @MultiUse(%x: -2) -> (result: 0) {
   %tx = hir.int_type
   %tr = hir.int_type
   // CHECK: uir.call @TakesConst({{.*}}) {{.*}}pa.phase = "0"
-  %u3 = uir.call @TakesConst(%x) : (%tx) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %u3 = uir.call @TakesConst(%x) : (%tx) -> (%tr) [-1] -> [0]
   // Combine: max(0, -1, -2, 0) = 0.
   %s1 = hir.add %u0, %u1 : %t
   %s2 = hir.add %s1, %u2 : %t
@@ -3832,7 +3832,7 @@ uir.func @Factorial(%n: -1) -> (result: 0) {
     %ta = hir.int_type
     %tr = hir.int_type
     // CHECK: uir.call @Factorial({{.*}}) {{.*}}pa.phase = "0"
-    %rec = uir.call @Factorial(%nm1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+    %rec = uir.call @Factorial(%nm1) : (%ta) -> (%tr) [-1] -> [0]
     // CHECK: hir.mul %n, {{.*}}pa.phase = "0"
     %prod = hir.mul %n, %rec : %t
     uir.yield %prod : %t
@@ -3863,7 +3863,7 @@ uir.func @DeepRecurse(%n: -2) -> (result: 0) {
     %ta = hir.int_type
     %tr = hir.int_type
     // CHECK: uir.call @DeepRecurse({{.*}}) {{.*}}pa.phase = "0"
-    %rec = uir.call @DeepRecurse(%nm1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-2] -> [0]
+    %rec = uir.call @DeepRecurse(%nm1) : (%ta) -> (%tr) [-2] -> [0]
     uir.yield %rec : %t
   }
   uir.return %result : %t
@@ -3889,7 +3889,7 @@ uir.func @IsOdd(%n: -1) -> (result: 0) {
     %nm1 = hir.sub %n, %one : %t
     %ta = hir.int_type
     %tr = hir.int_type
-    %rec = uir.call @IsEven(%nm1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+    %rec = uir.call @IsEven(%nm1) : (%ta) -> (%tr) [-1] -> [0]
     uir.yield %rec : %t
   }
   uir.return %result : %t
@@ -3915,7 +3915,7 @@ uir.func @IsEven(%n: -1) -> (result: 0) {
     %ta = hir.int_type
     %tr = hir.int_type
     // CHECK: uir.call @IsOdd({{.*}}) {{.*}}pa.phase = "0"
-    %rec = uir.call @IsOdd(%nm1) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+    %rec = uir.call @IsOdd(%nm1) : (%ta) -> (%tr) [-1] -> [0]
     uir.yield %rec : %t
   }
   uir.return %result : %t
@@ -3944,7 +3944,7 @@ uir.func @RecursiveChain(%n: -1, %acc: 1) -> (result: 1) {
     %tb = hir.int_type
     %tr = hir.int_type
     // CHECK: uir.call @RecursiveChain({{.*}}) {{.*}}pa.phase = "0"
-    %rec = uir.call @RecursiveChain(%nm1, %acc) : (%ta, %tb) -> (%tr) (!hir.any, !hir.any) -> !hir.any [-1, 1] -> [1]
+    %rec = uir.call @RecursiveChain(%nm1, %acc) : (%ta, %tb) -> (%tr) [-1, 1] -> [1]
     uir.yield %rec : %t
   }
   uir.return %result : %t
@@ -4212,7 +4212,7 @@ uir.func @FloatingIfResolvedByDemand(%sel: -1, %a: -1, %b: -1) -> (result: 0) {
   %ta = hir.int_type
   %tr = hir.int_type
   // CHECK: uir.call @FloatingIfHelper({{.*}}) {{.*}}pa.phase = "0"
-  %c = uir.call @FloatingIfHelper(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %c = uir.call @FloatingIfHelper(%r) : (%ta) -> (%tr) [-1] -> [0]
   uir.return %c : %tr
 }
 
@@ -4250,7 +4250,7 @@ uir.func @DRuleCallEarlierHalfUnderLaterCF(%x: 0, %d: 1, %cond: 1) -> (result: 1
       // Call at the if's block phase 1; const arg demand at 1-1 = 0,
       // satisfied by %x at 0 across the later-phase control flow.
       // CHECK: uir.call @EarlierHalfTarget(%x) {{.*}}pa.phase = "1"
-      %v = uir.call @EarlierHalfTarget(%x) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+      %v = uir.call @EarlierHalfTarget(%x) : (%ta) -> (%tr) [-1] -> [0]
       uir.yield %v : %t
     } else {
       uir.yield %d : %t
@@ -4766,7 +4766,7 @@ uir.func @EffectSlidesToDynDemand() -> (result: 1) {
   %g = uir.expr : %tg {
     %tr = hir.int_type
     // CHECK: uir.call @MakeValue() {{.*}}pa.phase = "1"
-    %v = uir.call @MakeValue() : () -> (%tr) () -> !hir.any [] -> [0]
+    %v = uir.call @MakeValue() : () -> (%tr) [] -> [0]
     uir.yield %v : %tg
   }
   // Sole consumer at +1.
@@ -4830,13 +4830,13 @@ uir.func @IfFloorRecompute(%sel: -1, %a: -1, %b: -1) -> (r0: 0, r1: 0) {
     }
     %tr = hir.int_type
     // CHECK: uir.call @MakeValue() {{.*}}pa.phase = "-1"
-    %v = uir.call @MakeValue() : () -> (%tr) () -> !hir.any [] -> [0]
+    %v = uir.call @MakeValue() : () -> (%tr) [] -> [0]
     uir.yield %s, %v : %ta, %tb
   }
-  %p = uir.pin %x, 0 : !hir.any
+  %p = uir.pin %x, 0
   %ta2 = hir.int_type
   %tr2 = hir.int_type
-  %c = uir.call @FloatingIfHelper(%y) : (%ta2) -> (%tr2) (!hir.any) -> !hir.any [-1] -> [0]
+  %c = uir.call @FloatingIfHelper(%y) : (%ta2) -> (%tr2) [-1] -> [0]
   uir.return %p, %c : %t, %tr2
 }
 
@@ -5138,7 +5138,7 @@ uir.func @NeverCoercesToAnyPhase() -> (r0: 0, r1: -1) {
   %tr = hir.int_type
   // Const call arg (demand at -1) accepts the never value.
   // CHECK: uir.call @NeverConstTarget({{.*}}) {{.*}}pa.phase = "0"
-  %c = uir.call @NeverConstTarget(%r) : (%ta) -> (%tr) (!hir.any) -> !hir.any [-1] -> [0]
+  %c = uir.call @NeverConstTarget(%r) : (%ta) -> (%tr) [-1] -> [0]
   // Const function result (demand at -1) accepts the never value too.
   // CHECK: uir.return
   // CHECK-SAME: pa.operands = ["0", "never", "float", "float"]
@@ -5317,7 +5317,7 @@ uir.func @PickBreakAlt(%c: 0, %x: 0, %y: 0) -> (result: 0) {
     }]
     // CHECK: }] {pa.operands = ["0"], pa.phase = "0", pa.results = ["0"]}
     // CHECK: uir.pin {{.*}} {pa.operands = ["0"], pa.phase = "0"
-    %pv = uir.pin %v, 0 : !hir.any
+    %pv = uir.pin %v, 0
     uir.continue
   }
   uir.return %r : %t
