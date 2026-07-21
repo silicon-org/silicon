@@ -2243,3 +2243,19 @@ uir.func @PickDistinctYieldFloorError(%sel: -1, %a: -1, %b: -1) -> (result: -1) 
   // expected-remark @below {{required by return value at phase -1}}
   uir.return %r : %t
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Signature from inside a phase-shifted block.
+
+uir.func @SignatureFromConstBlock(%x: 0) -> () {
+  %0 = hir.int_type
+  uir.expr pin -1 {
+    // expected-error @+1 {{signature from a phase-shifted block is not allowed}}
+    uir.signature (%0) -> ()
+  }
+  uir.unreachable
+} {
+  uir.return
+}

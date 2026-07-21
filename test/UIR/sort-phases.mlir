@@ -6636,3 +6636,176 @@ uir.func @InnerFrameUnderIf(%c: 0, %d: 0, %x: 1, %n: 0) -> () {
   }
   uir.return
 }
+
+//===----------------------------------------------------------------------===//
+// Signature-region hoisting: hoisting runs on both function regions, so a
+// phase -1 op nested inside a phase-0 `uir.if` frame in the signature region
+// moves out before the frame and wraps into its own phase op, exactly like
+// body content.
+
+// CHECK-LABEL: uir.func @SignatureFrameHoist
+uir.func @SignatureFrameHoist(%N: -1, %c: 0) -> (result: 0) {
+  // CHECK-NEXT: [[T:%.+]] = hir.int_type
+  %int = hir.int_type
+  // CHECK-NEXT: uir.phase -1 {
+  // CHECK-NEXT:   hir.uint_type %N
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   uir.if %c : [[T]] {
+  // CHECK-NEXT:     uir.yield [[T]] : [[T]]
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     uir.yield [[T]] : [[T]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.signature ([[T]], [[T]]) -> ([[T]])
+  %ty = uir.if %c : %int {
+    %w = hir.uint_type %N
+    uir.yield %int : %int
+  } else {
+    uir.yield %int : %int
+  }
+  uir.signature (%int, %int) -> (%int)
+} {
+  %t = hir.int_type
+  %r = hir.add %c, %c : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Signature-region single-provider forwarding: the loop's sole break carries
+// an outside-defined phase -1 value, so the loop result forwards to it and
+// the signature terminator consumes the phase -1 crossing directly as the
+// function's result type.
+
+// CHECK-LABEL: uir.func @SignatureLoopForward
+uir.func @SignatureLoopForward(%N: -1, %c: 0) -> (result: 0) {
+  // CHECK-NEXT: [[T:%.+]] = hir.int_type
+  %int = hir.int_type
+  // CHECK-NEXT: [[W:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[U:%.+]] = hir.uint_type %N
+  // CHECK-NEXT:   uir.phase_return yield [[U]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   uir.loop {
+  // CHECK-NEXT:     uir.if %c {
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.signature ([[T]], [[T]]) -> ([[W]])
+  %w = hir.uint_type %N
+  %l = uir.loop : %int {
+    uir.if %c {
+      uir.break %w : %int
+    }
+    uir.continue
+  }
+  uir.signature (%int, %int) -> (%l)
+} {
+  %t = hir.int_type
+  uir.return %c : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Signature-region branch extraction: a phase-0 if in the signature computes
+// a phase-1 argument type in one arm, so the result choice-ifies — phase 0
+// yields the cf choice, and the receiving pick at phase 1 reconstructs the
+// selected type, which the signature terminator consumes as the type of the
+// phase-2 argument.
+
+// CHECK-LABEL: uir.func @SignatureBranchExtract
+uir.func @SignatureBranchExtract(%c: 0, %m: 1, %x: 2) -> (result: 0) {
+  // CHECK-NEXT: [[B:%.+]] = hir.bool_type
+  %b = hir.bool_type
+  // CHECK-NEXT: [[T:%.+]] = hir.int_type
+  %int = hir.int_type
+  // CHECK-NEXT: [[CT:%.+]] = hir.choice_type
+  // CHECK-NEXT: [[P0:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[IF:%.+]] = uir.if %c : [[CT]] {
+  // CHECK-NEXT:     [[C0:%.+]] = hir.choice 0()
+  // CHECK-NEXT:     uir.yield [[C0]] : [[CT]]
+  // CHECK-NEXT:   } else {
+  // CHECK-NEXT:     [[C1:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     uir.yield [[C1]] : [[CT]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[IF]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[P1:%.+]] = uir.phase 1 {
+  // CHECK-NEXT:   [[PK:%.+]] = hir.pick [[P0]] : !hir.any [0 (): {
+  // CHECK-NEXT:     [[U:%.+]] = hir.uint_type %m
+  // CHECK-NEXT:     hir.yield [[U]] : !hir.any
+  // CHECK-NEXT:   } 1 (): {
+  // CHECK-NEXT:     hir.yield [[T]] : !hir.any
+  // CHECK-NEXT:   }]
+  // CHECK-NEXT:   uir.phase_return yield [[PK]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.signature ([[B]], [[T]], [[P1]]) -> ([[T]])
+  %ty = uir.if %c : %int {
+    %u = hir.uint_type %m
+    uir.yield %u : %int
+  } else {
+    uir.yield %int : %int
+  }
+  uir.signature (%b, %int, %ty) -> (%int)
+} {
+  %t = hir.int_type
+  uir.return %c : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Signature-region record extraction: a phase-0 loop in the signature holds
+// phase-1 content, so the loop records its activations onto a hit list and a
+// phase-1 replicate in the signature region replays the content — the same
+// record machinery as in the body, in a region no other test extracts from.
+
+// CHECK-LABEL: uir.func @SignatureLoopRecord
+uir.func @SignatureLoopRecord(%c: 0, %m: 1) -> (result: 0) {
+  // CHECK-NEXT: [[B:%.+]] = hir.bool_type
+  %b = hir.bool_type
+  // CHECK-NEXT: [[T:%.+]] = hir.int_type
+  %int = hir.int_type
+  // CHECK-NEXT: [[P0:%.+]] = uir.phase 0 {
+  // CHECK-NEXT:   [[L0:%.+]] = hir.opaque_list_create
+  // CHECK-NEXT:   uir.loop {
+  // CHECK-NEXT:     uir.if %c {
+  // CHECK-NEXT:       [[NR:%.+]] = hir.choice 0()
+  // CHECK-NEXT:       [[R0:%.+]] = hir.opaque_pack([[NR]])
+  // CHECK-NEXT:       hir.opaque_list_push [[L0]], [[R0]]
+  // CHECK-NEXT:       uir.break
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[RE:%.+]] = hir.choice 1()
+  // CHECK-NEXT:     [[R1:%.+]] = hir.opaque_pack([[RE]])
+  // CHECK-NEXT:     hir.opaque_list_push [[L0]], [[R1]]
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return yield [[L0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 1 {
+  // CHECK-NEXT:   hir.replicate ([[RA:%.+]]) in [[P0]] {
+  // CHECK-NEXT:     hir.uint_type %m
+  // CHECK-NEXT:     hir.pick [[RA]] [0 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     } 1 (): {
+  // CHECK-NEXT:       hir.yield
+  // CHECK-NEXT:     }]
+  // CHECK-NEXT:     hir.yield
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.signature ([[B]], [[T]]) -> ([[T]])
+  uir.loop {
+    %u = hir.uint_type %m
+    uir.if %c {
+      uir.break
+    }
+    uir.continue
+  }
+  uir.signature (%b, %int) -> (%int)
+} {
+  %t = hir.int_type
+  uir.return %c : %t
+}

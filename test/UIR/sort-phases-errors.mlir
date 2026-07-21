@@ -132,25 +132,3 @@ uir.func @DivergingArmLaterContent(%c: 0, %x: 1) -> () {
   uir.return
 }
 
-// -----
-
-// Hoisting, forwarding, and extraction all run on the body only, so an
-// earlier-phase op nested inside a later-phase frame in the signature region is
-// not hoisted out and surfaces as a nested-content rejection instead. Here a
-// phase -1 `hir.uint_type` sits inside a phase-0 `uir.if` frame that computes
-// the argument type conditionally.
-uir.func @SignatureFrameHoist(%N: -1, %c: 0) -> (result: 0) {
-  %int = hir.int_type
-  %ty = uir.if %c : %int {
-    // expected-error @below {{at phase -1 is nested inside later phase 0 content; hoisting it out is not implemented in phase sorting yet}}
-    %w = hir.uint_type %N
-    uir.yield %int : %int
-  } else {
-    uir.yield %int : %int
-  }
-  uir.signature (%int, %int) -> (%int)
-} {
-  %t = hir.int_type
-  %r = hir.add %c, %c : %t
-  uir.return %r : %t
-}

@@ -1540,9 +1540,14 @@ LogicalResult PhaseAnalysis::processOp(Operation *op, int16_t blockPhase) {
 
   if (isa<SignatureOp>(op)) {
     opPhases[op] = blockPhase;
-    // The verifier pins uir.signature to the func's signature region, which is
-    // always processed at phase 0.
-    assert(blockPhase == 0 && "signature region must be at phase 0");
+    // The signature region's return-like exit follows the same rule as
+    // uir.return in the body: it may sit under structured CF, but never in a
+    // phase-shifted block.
+    if (blockPhase != 0) {
+      emitError(op->getLoc())
+          << "signature from a phase-shifted block is not allowed";
+      return failure();
+    }
     return success();
   }
 

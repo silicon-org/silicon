@@ -1008,7 +1008,7 @@ unsigned PhaseSorter::countResultProviders(Operation *op, unsigned idx) {
 /// with no provenance test.
 LogicalResult PhaseSorter::extractBranches(bool &changed) {
   SmallVector<Operation *> branchOps;
-  funcOp.getBody().walk<WalkOrder::PostOrder>([&](Operation *op) {
+  funcOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
     if (isa<IfOp, hir::PickOp>(op) && realPhaseOf(op))
       branchOps.push_back(op);
   });
@@ -2377,7 +2377,7 @@ LogicalResult PhaseSorter::extractFromFrame(Operation *frameOp, int16_t p,
 /// driving multi-boundary chains. Sets `changed` when it rewrites any frame.
 LogicalResult PhaseSorter::extractFrames(bool &changed) {
   SmallVector<Operation *> frames;
-  funcOp.getBody().walk<WalkOrder::PostOrder>([&](Operation *op) {
+  funcOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
     if (isa<LoopOp, hir::ReplicateOp>(op) && realPhaseOf(op))
       frames.push_back(op);
   });
@@ -2592,7 +2592,7 @@ LogicalResult PhaseSorter::forwardSingleProviderResults(bool &changed) {
   // external operand of its enclosing op when that op is considered (forwarding
   // chains).
   SmallVector<Operation *> ops;
-  funcOp.getBody().walk<WalkOrder::PostOrder>([&](Operation *op) {
+  funcOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
     if (isa<IfOp, hir::PickOp, LoopOp>(op) && realPhaseOf(op))
       ops.push_back(op);
   });
@@ -2669,7 +2669,7 @@ LogicalResult PhaseSorter::hoistEarlierContent(bool &changed) {
   // siblings, so their mutual SSA dependencies stay dominated; a single move to
   // the outermost frame avoids re-cloning a floating value once per level.
   SmallVector<Operation *> hoist;
-  funcOp.getBody().walk<WalkOrder::PreOrder>([&](Operation *op) {
+  funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
     if (op == funcOp)
       return;
     auto *parent = op->getParentOp();
@@ -2760,14 +2760,12 @@ static std::string phaseName(int16_t phase) {
 ///   float phase, which neither forwards (its provider is defined inside the
 ///   op, not iteration-invariant external content) nor choice-ifies (a float
 ///   phase is not a later real phase), and so awaits float sinking.
-/// - Anchored content whose phase differs from its parent frame's phase. In the
-///   body, hoisting already lifted every op earlier than its frame out, and the
+/// - Anchored content whose phase differs from its parent frame's phase.
+///   Hoisting already lifted every op earlier than its frame out, and the
 ///   joint extraction fixpoint carries later-phase content across any number of
-///   boundaries, so a residual is later-phase content the fixpoint settled
-///   without lifting: content trapped in a provably diverging branch arm, which
-///   no extraction rule owns. Hoisting and extraction run on the body only, so
-///   a phase mismatch in either direction inside the signature region surfaces
-///   here too.
+///   boundaries, in both function regions alike, so a residual is later-phase
+///   content the fixpoint settled without lifting: content trapped in a
+///   provably diverging branch arm, which no extraction rule owns.
 ///
 /// Together these establish that every op and every value inside anchored
 /// content is at that content's phase, which is what makes the wrap and
@@ -2808,13 +2806,10 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
 
     // Reject content nested inside a differently-phased frame that neither
     // hoisting nor extraction lifted. Every frame ends with a real phase, so a
-    // parent — always a region-bearing frame — is never floating. The two
-    // directions have distinct missing machinery, and both survive here only
-    // where that machinery does not run: later-phase content survives only
-    // where no extraction rule owns it (trapped in a provably diverging branch
-    // arm), and hoisting and extraction both run on the body only, so any
-    // phase mismatch inside the signature region — which this pass does not
-    // hoist or extract — surfaces here as well.
+    // parent — always a region-bearing frame — is never floating. Hoisting and
+    // extraction run on both function regions, so a residual survives here
+    // only where no rule owns it: later-phase content trapped in a provably
+    // diverging branch arm.
     if (auto *parent = op->getParentOp(); parent != funcOp) {
       auto parentIt = analysis.opPhases.find(parent);
       assert(parentIt != analysis.opPhases.end() && "op phase not computed");
@@ -3042,17 +3037,24 @@ LogicalResult PhaseSorter::run() {
   LLVM_DEBUG(llvm::dbgs() << "Sorting phases in @" << funcOp.getSymName()
                           << "\n");
 
-  // Normalized input is single-exit: the body's sole `uir.return` is its
-  // terminator, so no `uir.return` is ever nested in control flow. Every stage
-  // below relies on this — dissolution, extraction, and the exit-terminator
-  // helpers all treat only `break`/`continue` as exits — so assert it up front,
-  // before any transformation runs.
+  // Normalized input is single-exit in both regions: the body's sole
+  // `uir.return` is its terminator and the signature's sole `uir.signature`
+  // is its terminator, so no exit op is ever nested in control flow. Every
+  // stage below relies on this — dissolution, extraction, and the
+  // exit-terminator helpers all treat only `break`/`continue` as exits — so
+  // assert it up front, before any transformation runs.
 #ifndef NDEBUG
   auto *bodyTerminator = funcOp.getBody().front().getTerminator();
   funcOp.getBody().walk([&](ReturnOp op) {
     assert(op == bodyTerminator &&
            "expected normalized single-exit input: the sole uir.return is the "
            "body terminator (run normalize-exits first)");
+  });
+  auto *sigTerminator = funcOp.getSignature().front().getTerminator();
+  funcOp.getSignature().walk([&](SignatureOp op) {
+    assert(op == sigTerminator &&
+           "expected normalized single-exit input: the sole uir.signature is "
+           "the signature terminator (run normalize-exits first)");
   });
 #endif
 

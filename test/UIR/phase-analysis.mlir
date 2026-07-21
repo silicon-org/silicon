@@ -5435,3 +5435,50 @@ uir.func @UnreachableBreakLoop(%c: 0, %x: -1) -> (result: -1) {
   }
   uir.return %r : %t
 }
+
+//===----------------------------------------------------------------------===//
+// A normalized signature-region exit analyzes under the same rules as a
+// normalized body exit: the rebuilt if sits at phase 0, its tag and phase-0
+// type slot deliver at phase 0, the phase-1 type slots floor to their
+// provider's phase, and the dispatch pick anchors at the tag's phase 0 with
+// only the later slots floored to 1. The trailing uir.signature consumes the
+// slots at their per-slot phases.
+
+// CHECK-LABEL: uir.func @NormalizedSignatureExit
+uir.func @NormalizedSignatureExit(%m: 1, %x: 2) -> (result: 2) {
+  %ct = hir.choice_type
+  %s0 = hir.inferrable
+  %s1 = hir.inferrable
+  %s2 = hir.inferrable
+  %int = hir.int_type
+  %c = hir.constant_int 1 : %int
+  // CHECK: uir.if
+  // CHECK-SAME: pa.phase = "0"
+  // CHECK-SAME: pa.results = ["0", "1", "1", "0"]
+  %if:4 = uir.if %c : %s0, %s1, %s2, %ct {
+    // CHECK: hir.uint_type %m {pa.operands = ["1"], pa.phase = "1", pa.results = ["1"]}
+    %u = hir.uint_type %m
+    %c0 = hir.choice 0()
+    uir.yield %int, %u, %u, %c0 : %s0, %s1, %s2, %ct
+  } else {
+    %u0 = uir.unreachable_value
+    %u1 = uir.unreachable_value
+    %u2 = uir.unreachable_value
+    %c1 = hir.choice 1()
+    uir.yield %u0, %u1, %u2, %c1 : %s0, %s1, %s2, %ct
+  }
+  // CHECK: hir.pick
+  %p:3 = hir.pick %if#3 : !hir.any, !hir.any, !hir.any [0 (): {
+    hir.yield %if#0, %if#1, %if#2 : !hir.any, !hir.any, !hir.any
+  } 1 (): {
+    hir.yield %int, %int, %int : !hir.any, !hir.any, !hir.any
+  }]
+  // CHECK: }] {pa.operands = ["0"], pa.phase = "0", pa.results = ["0", "1", "1"]}
+  // CHECK: uir.signature
+  // CHECK-SAME: pa.operands = ["0", "1", "1"]
+  // CHECK-SAME: pa.phase = "0"
+  uir.signature (%p#0, %p#1) -> (%p#2)
+} {
+  %t = hir.int_type
+  uir.return %x : %t
+}
