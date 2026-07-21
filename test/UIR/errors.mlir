@@ -262,13 +262,66 @@ func.func @break_nested_arity_mismatch(%cond: !hir.any, %a: !hir.any, %ty: !hir.
 
 // -----
 
-// Verify that uir.signature cannot terminate the function body.
+// Verify that uir.signature cannot appear in the function body.
 uir.func @sig_in_body(%a: 0) -> () {
   uir.signature (%a) -> ()
 } {
-  // expected-error @below {{expected 'uir.return' or 'uir.unreachable' terminator in function body}}
+  // expected-error @below {{must be nested in the signature region of the enclosing function}}
   uir.signature (%a) -> ()
 }
+
+// -----
+
+// Verify that uir.signature cannot appear nested under control flow in the
+// function body either.
+uir.func @sig_nested_in_body(%a: 0) -> () {
+  uir.signature (%a) -> ()
+} {
+  uir.if %a {
+    // expected-error @below {{must be nested in the signature region of the enclosing function}}
+    uir.signature (%a) -> ()
+  }
+  uir.return
+}
+
+// -----
+
+// Verify that uir.signature requires an enclosing function.
+func.func @sig_outside_func(%c: !hir.any) {
+  uir.if %c {
+    // expected-error @below {{must be nested in the signature region of a 'uir.func' or 'uir.split_func'}}
+    uir.signature () -> ()
+  }
+  func.return
+}
+
+// -----
+
+// Verify that a uir.signature nested under control flow still checks its
+// operand arity against the enclosing function.
+uir.func @sig_nested_arity(%a: 0) -> () {
+  uir.if %a {
+    // expected-error @below {{has 0 argument types but parent function has 1 arguments}}
+    uir.signature () -> ()
+  }
+  uir.signature (%a) -> ()
+} {
+  uir.return
+}
+
+// -----
+
+// Verify that a uir.signature nested under control flow in a split_func
+// signature region checks its operand arity against the enclosing function.
+uir.split_func @split_sig_nested_arity(%a: 0) -> () {
+  uir.if %a {
+    // expected-error @below {{has 0 argument types but parent function has 1 arguments}}
+    uir.signature () -> ()
+  }
+  uir.signature (%a) -> ()
+} [
+  0: @split_sig_nested_arity.0
+]
 
 // -----
 

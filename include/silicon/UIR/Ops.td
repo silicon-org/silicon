@@ -345,15 +345,19 @@ let opDocGroup = UnifiedFunctions in {
 
 def SignatureOp : UIROp<"signature", [
   AttrSizedOperandSegments,
-  ParentOneOf<["FuncOp", "SplitFuncOp"]>,
   Pure,
   Terminator,
 ]> {
-  let summary = "terminator for a UIR function's signature region";
+  let summary = "signature region exit of a UIR function";
   let description = [{
-    Terminates the signature region of a `uir.func` or `uir.split_func`.
-    Carries the type-level values for each argument and result.
-    Mirrors `hir.signature` but lives in the UIR dialect to avoid
+    The return-like exit of the signature region of a `uir.func` or
+    `uir.split_func`, carrying the type-level values for each argument and
+    result. It is the signature region's counterpart to `uir.return` in the
+    body region: it may sit under structured control flow at any nesting
+    depth, and exit normalization rewrites every `uir.signature` that is not
+    the region terminator into choice/pick value form, leaving one as the
+    terminator. Must be nested in the signature region of its enclosing
+    function. Mirrors `hir.signature` but lives in the UIR dialect to avoid
     cross-dialect parent dependencies.
   }];
   let arguments = (ins

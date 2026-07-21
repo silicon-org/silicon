@@ -485,18 +485,33 @@ LogicalResult PinOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult SignatureOp::verify() {
-  auto *parentOp = (*this)->getParentOp();
-  unsigned numArgs, numResults;
+  // Climb to the enclosing function, remembering which of its regions holds
+  // this op. `uir.signature` is the signature region's return-like exit and
+  // may sit under structured control flow at any nesting depth, but only
+  // inside the signature region.
+  Operation *op = getOperation();
+  while (op->getParentOp() && !isa<FuncOp, SplitFuncOp>(op->getParentOp()))
+    op = op->getParentOp();
+  auto *funcLike = op->getParentOp();
+  if (!funcLike)
+    return emitOpError() << "must be nested in the signature region of a "
+                            "'uir.func' or 'uir.split_func'";
 
-  if (auto func = dyn_cast<FuncOp>(parentOp)) {
+  unsigned numArgs, numResults;
+  Region *sigRegion;
+  if (auto func = dyn_cast<FuncOp>(funcLike)) {
     numArgs = func.getArgNames().size();
     numResults = func.getResultNames().size();
-  } else if (auto func = dyn_cast<SplitFuncOp>(parentOp)) {
-    numArgs = func.getArgNames().size();
-    numResults = func.getResultNames().size();
+    sigRegion = &func.getSignature();
   } else {
-    return success();
+    auto splitFunc = cast<SplitFuncOp>(funcLike);
+    numArgs = splitFunc.getArgNames().size();
+    numResults = splitFunc.getResultNames().size();
+    sigRegion = &splitFunc.getSignature();
   }
+  if (op->getParentRegion() != sigRegion)
+    return emitOpError() << "must be nested in the signature region of the "
+                            "enclosing function";
 
   if (getTypeOfArgs().size() != numArgs)
     return emitOpError() << "has " << getTypeOfArgs().size()
@@ -700,13 +715,8 @@ LogicalResult FuncOp::verifyRegions() {
            << "expected 'uir.return' or 'uir.unreachable' terminator "
               "in function body";
 
-  // Body must not contain uir.signature anywhere (even nested).
-  auto bodyWalkResult = getBody().walk([](SignatureOp op) {
-    op.emitOpError() << "cannot appear in function body";
-    return WalkResult::interrupt();
-  });
-  if (bodyWalkResult.wasInterrupted())
-    return failure();
+  // A uir.signature outside the signature region is rejected by its own
+  // verifier, so the body needs no walk for it here.
 
   // Every return in the body provides exactly one value per declared
   // function result, no matter how deeply it is nested.

@@ -214,6 +214,18 @@ uir.func @no_args() -> () {
   uir.return
 }
 
+// uir.signature is the signature region's return-like exit and may sit under
+// structured control flow at any nesting depth, like uir.return in the body.
+// CHECK-LABEL: uir.func @sig_under_cf
+uir.func @sig_under_cf(%c: 0, %x: 0) -> (result: 0) {
+  uir.if %c {
+    uir.signature (%c, %x) -> (%x)
+  }
+  uir.signature (%c, %x) -> (%c)
+} {
+  uir.return %x : %x
+}
+
 // CHECK-LABEL: uir.func @with_module
 uir.func @with_module(%x: 0) -> (result: 0) attributes {isModule} {
   uir.signature (%x) -> (%x)
