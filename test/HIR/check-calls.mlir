@@ -299,3 +299,33 @@ hir.unified_func @DupCaller() -> () {
   %r1 = hir.unified_call @DupCallee(%v0, %v1) : (%i3, %i4) -> (%i5) (!hir.any, !hir.any) -> !hir.any [0, 0] -> [0]
   hir.return -> ()
 }
+
+//===----------------------------------------------------------------------===//
+// A call inside a structured control-flow region. The callee's single-block
+// signature is spliced into the region's block ahead of the call.
+
+// CHECK-LABEL: hir.unified_func private @RegionCallee
+hir.unified_func private @RegionCallee(%a: 0) -> (result: 0) {
+  %t = hir.int_type
+  hir.signature (%t) -> (%t)
+} {
+  %t0 = hir.type_of %a
+  hir.return %a -> (%t0)
+}
+
+// CHECK-LABEL: hir.unified_func @CallInsideIfArm
+hir.unified_func @CallInsideIfArm(%c: 0) -> () {
+  %ct = hir.bool_type
+  hir.signature (%ct) -> ()
+} {
+  %i0 = hir.inferrable
+  %i1 = hir.inferrable
+  // CHECK: uir.if
+  uir.if %c {
+    // CHECK: [[T:%.+]] = hir.int_type
+    // CHECK: hir.unified_call @RegionCallee({{.*}}) : ([[T]]) -> ([[T]])
+    %r = hir.unified_call @RegionCallee(%c) : (%i0) -> (%i1) (!hir.any) -> !hir.any [0] -> [0]
+    uir.yield
+  }
+  hir.return -> ()
+}

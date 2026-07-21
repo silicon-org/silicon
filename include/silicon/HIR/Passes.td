@@ -61,9 +61,11 @@ def CheckCallsPass : Pass<"check-calls", "mlir::ModuleOp"> {
     call arguments, and `hir.unify` ops are created to constrain
     declared argument and result types against the call's type
     operands. For single-block signatures, ops are spliced directly
-    before the call. For multi-block signatures, the call's block is
-    split and the signature blocks form a preamble, with type values
-    threaded as block arguments to the continuation block.
+    before the call, which works at any call position, including
+    calls nested inside structured control-flow regions. For
+    multi-block signatures, the call's block is split and the
+    signature blocks form a preamble, with type values threaded as
+    block arguments to the continuation block.
 
     For function bodies, the signature region is cloned into the body
     region. `hir.coerce_type` ops are inserted to constrain block
