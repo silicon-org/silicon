@@ -164,3 +164,46 @@ func.func @IntLiteralWithUnitType() {
   call @use_value(%1) : (!hir.any) -> ()
   return
 }
+
+// -----
+
+// Type mismatch inside a structured control-flow arm.
+func.func @MismatchInsideIfArm(%c: !hir.any) {
+  %0 = hir.unit_type
+  uir.if %c {
+    %1 = hir.int_type
+    // expected-error @below {{type mismatch: `()` is not compatible with `int`}}
+    %2 = hir.unify %0, %1
+    uir.yield
+  }
+  return
+}
+
+// -----
+
+// Integer literal with a non-integer type inside a loop body.
+func.func @IntLiteralWithUnitTypeInLoop() {
+  %0 = hir.unit_type
+  uir.loop {
+    // expected-error @below {{integer literal is not compatible with type `()`}}
+    %1 = hir.constant_int 42 : %0
+    uir.break
+  }
+  return
+}
+
+// -----
+
+func.func private @use_type(%arg0: !hir.any)
+
+// An unresolved unify with an inferrable operand inside an arm produces no
+// error; later pipeline stages may still resolve it.
+func.func @InferrableInsideArmNoError(%c: !hir.any) {
+  %0 = hir.int_type
+  uir.if %c {
+    %1 = hir.inferrable
+    %2 = hir.unify %1, %0
+    uir.yield
+  }
+  return
+}
