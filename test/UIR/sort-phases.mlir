@@ -263,6 +263,46 @@ uir.func @SinglePhaseIf(%c: 0, %x: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// All-empty machinery is never materialized: a loop entirely at one phase has
+// no later-phase content and no demanded later result, so record extraction
+// does not fire — the loop wraps wholesale into its phase op with no hit
+// list, no record pushes, and no receiving replicate or pick. The exhaustive
+// CHECK-NEXT chain pins the full output, so any stray machinery fails it.
+
+// CHECK-LABEL: uir.func @SinglePhaseLoop
+uir.func @SinglePhaseLoop(%n: 0, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[ONE:%.+]] = hir.constant_int 1 : [[T]]
+  %one = hir.constant_int 1 : %t
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[L:%.+]] = uir.loop (%arg0 = %x : [[T]]) : [[T]] {
+  // CHECK-NEXT:     [[C:%.+]] = hir.geq %arg0, %n : [[T]]
+  // CHECK-NEXT:     uir.if [[C]] {
+  // CHECK-NEXT:       uir.break %arg0 : [[T]]
+  // CHECK-NEXT:     }
+  // CHECK-NEXT:     [[NEXT:%.+]] = hir.add %arg0, [[ONE]] : [[T]]
+  // CHECK-NEXT:     uir.continue [[NEXT]] : [[T]]
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return [[L]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %r = uir.loop (%i = %x : %t) : %t {
+    %c = hir.geq %i, %n : %t
+    uir.if %c {
+      uir.break %i : %t
+    }
+    %next = hir.add %i, %one : %t
+    uir.continue %next : %t
+  }
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Independent phases without value crossings each get their own phase op,
 // in increasing phase order.
 
