@@ -89,25 +89,6 @@ uir.func @PhaseCallInInput(%x: 0) -> () {
 
 // -----
 
-// A single-provider loop result whose provider is defined inside the loop at a
-// float phase (a constant): it does not forward (not external, iteration-
-// invariant content) and does not choice-ify (a float phase is not a later real
-// phase), so it survives to the delivery rejection awaiting float sinking.
-uir.func @LoopBreakFloatConst(%c: 0) -> (result: 0) {
-  %0 = hir.int_type
-  uir.signature (%0) -> (%0)
-} {
-  %t = hir.int_type
-  // expected-error @below {{delivers result #0 at phase float instead of its own phase 0; delivering this cross-phase result is not implemented in phase sorting yet (a single-provider float value awaiting float sinking)}}
-  %l = uir.loop : %t {
-    %five = hir.constant_int 5 : %t
-    uir.break %five : %t
-  }
-  uir.return %l : %t
-}
-
-// -----
-
 // Later-phase content in a provably diverging branch arm (a breakless loop
 // before the yield) has no reaching arm to extract into: branch extraction
 // leaves the branch untouched, and the content surfaces as a nested-content

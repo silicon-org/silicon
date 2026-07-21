@@ -52,7 +52,8 @@ Five stages, each owning a single concern:
   Empty and passthrough-only phase ops are threading normalization's vocabulary: it materializes them freely for gap phases and threading hops, so the splitter emits exactly one function per phase op and never synthesizes.
 - **Crossings in sorted output may jump.** Sorting yields a value once, from the phase computing it; consumers at any later phase use that result directly, and function arguments and floating ops are consumed directly at any phase.
   Hop-by-hop threading is threading normalization's job, not sorting's: no sorting rule depends on whether an intermediate phase op happens to exist.
-  A floating (dead, phase-free) op that uses values moved into phase regions sinks into the latest such phase; its operands from earlier phases cross as ordinary phase results, so even a yield demanded only by dead content is a real crossing rather than a special case.
+  Floating ops are never assigned a phase by sorting (settled 2026-07-20): a floating pure value is a phase-compatible provider at any phase, so sorting delivers, forwards, and extracts it as-is — cloning its region-free pure tree to the use side where dominance demands it — and floats stay at the region top level, unmoved.
+  Sinking floats into the phase regions that use them is exclusively threading normalization's job.
 - **Body and signature regions follow one set of rules.** The same control flow and exit arrangements are legal in both, phase ops and their verifiers do not distinguish the regions, and sorting looks at op phases and moves ops around without caring which region it rewrites.
   In particular, which function result values a `uir.phase_return` must carry is part of the splitting contract (diagnosed there), not an op verifier rule, since no single verifier rule covers both regions.
 - **Signature region.** The signature undergoes the same phase sorting and contains its own `uir.phase` ops.

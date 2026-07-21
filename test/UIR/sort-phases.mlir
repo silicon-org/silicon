@@ -5106,9 +5106,10 @@ uir.func @NeverLoopResult(%a: -1, %x: 0) -> (c: -1) {
 }
 
 // A dead pure region-free op consuming a never result with no real operand
-// stays float (undemanded), so never-forwarding leaves it alone. The sorter's
-// float-sink rule places it in the never producer's phase after the producer,
-// keeping the never operand, unused — no crossing, no error.
+// stays float. Never-forwarding severs its use of the never value with a
+// floating `uir.unreachable_value` stand-in, so the float keeps its place at
+// the region top level while the never producer wraps into its phase — no
+// crossing, no sinking, no error.
 // CHECK-LABEL: uir.func @DeadFloatNeverConsumer
 uir.func @DeadFloatNeverConsumer(%x: 0) -> () {
   %0 = hir.int_type
@@ -5116,12 +5117,13 @@ uir.func @DeadFloatNeverConsumer(%x: 0) -> () {
 } {
   // CHECK: [[T:%.+]] = hir.int_type
   %t = hir.int_type
-  // CHECK: uir.phase 0 {
-  // CHECK-NEXT: [[L:%.+]] = uir.loop : [[T]] {
-  // CHECK-NEXT:   uir.continue
-  // CHECK-NEXT: }
-  // CHECK-NEXT: hir.add [[L]], [[L]] : [[T]]
-  // CHECK-NEXT: uir.phase_return{{$}}
+  // CHECK: [[UV:%.+]] = uir.unreachable_value
+  // CHECK-NEXT: hir.add [[UV]], [[UV]] : [[T]]
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   uir.loop : [[T]] {
+  // CHECK-NEXT:     uir.continue
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return{{$}}
   // CHECK-NEXT: }
   %r = uir.loop : %t {
     uir.continue
@@ -5561,6 +5563,36 @@ uir.func @ForwardResultLoop(%c: 0, %y: 1) -> (result: 1) {
   // CHECK-NEXT: }
   %l = uir.loop : %t {
     uir.break %y : %t
+  }
+  uir.return %l : %t
+}
+
+// A single-provider loop result whose provider is a floating constant defined
+// inside the loop: a float is a phase-compatible provider at any phase, so
+// the result forwards to a clone of the floating tree materialized in front
+// of the loop — the same cloning hoisting applies to floating operands — and
+// the loop becomes resultless. The original constant stays behind as dead
+// loop content; sorting never removes content.
+
+// CHECK-LABEL: uir.func @LoopBreakFloatConst
+// CHECK: uir.signature
+uir.func @LoopBreakFloatConst(%c: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[FIVE:%.+]] = hir.constant_int 5 : [[T]]
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   uir.loop {
+  // CHECK-NEXT:     hir.constant_int 5 : [[T]]
+  // CHECK-NEXT:     uir.break
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   uir.phase_return [[FIVE]] : [[T]]
+  // CHECK-NEXT: }
+  %l = uir.loop : %t {
+    %five = hir.constant_int 5 : %t
+    uir.break %five : %t
   }
   uir.return %l : %t
 }

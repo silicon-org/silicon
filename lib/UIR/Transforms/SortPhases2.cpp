@@ -24,12 +24,14 @@
 //   direct uses of them from inside phase regions dominate.
 //
 // - **Float**: a top-level op without a real phase (the float and never
-//   sentinels) stays at the region top level, unless it uses a value
-//   defined by an op that moved into a phase region — then it sinks into
-//   the latest such phase region, after its operands; operands from
-//   earlier phases cross like any other use. Such ops are dead (any live
-//   consumer would have anchored them through demand), so their placement
-//   is only a dominance concern.
+//   sentinels) stays at the region top level, unmoved: a floating pure op
+//   is a phase-compatible provider at any phase, and sorting never assigns
+//   it one. Nothing a float references ever moves into a phase region — a
+//   real-phase operand would have given the pure op a real derived phase,
+//   and never operands are severed by never-forwarding — so keeping its
+//   position always preserves dominance. Sinking floats into the phase
+//   regions that use them is exclusively the splitter's
+//   threading-normalization concern.
 //
 // - **Return**: the body's `uir.return` dissolves. The value and type
 //   operand of result i move onto the `uir.phase_return` of the phase op
@@ -134,7 +136,10 @@
 // never provide) is not a selection but a transparent forwarding of the
 // provider's operand: when that operand is defined outside the op it forwards
 // directly to the result's uses and the result drops from the op, in either
-// direction (the operand may be earlier or later than the op). Forwarding runs
+// direction (the operand may be earlier or later than the op). A floating
+// provider defined inside the op forwards the same way — a float is a
+// region-free pure tree, materializable at any point, so its tree is cloned in
+// front of the op and the result forwards to the clone. Forwarding runs
 // before extraction, so branch extraction and break-value delivery only ever
 // see genuine selections — a multi-provider result, or a single provider
 // defined inside the op whose value varies per path or iteration and so needs
@@ -161,13 +166,11 @@
 //
 // The pass covers straight-line content, multi-boundary branch and record
 // extraction, break values delivered through receiving-phase variables,
-// single-provider result forwarding, and hoisting of body content earlier than
-// its enclosing frame. Inputs that need the remaining sorting machinery are
-// rejected with explicit diagnostics instead of being sorted incorrectly: a
-// single-provider value the op holds at a float phase awaiting float sinking,
-// later-phase content trapped in a provably diverging branch arm that no
-// extraction rule owns, and any phase mismatch inside the signature region,
-// which this pass does not hoist or extract.
+// single-provider result forwarding, and hoisting of body content earlier
+// than its enclosing frame, in both function regions alike. Inputs that need
+// the remaining sorting machinery are rejected with explicit diagnostics
+// instead of being sorted incorrectly: later-phase content trapped in a
+// provably diverging branch arm, which no extraction rule owns.
 //
 //===----------------------------------------------------------------------===//
 
@@ -602,30 +605,31 @@ LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
 // Sorting must not carry a `never` value across a phase boundary: the value
 // stays on its producer, but the wrap and crossing rules would otherwise see a
 // use whose value phase (`never`) sits below every real phase, and a
-// backward-crossing or a spurious yield would result. This step severs those
-// uses ahead of any placement: for every operand of a real-phase op whose value
-// is `never`, it materializes a fresh `uir.unreachable_value` right before the
-// consumer, at the phase where sorting will attribute that use, and rewrites
-// the operand to it. The `never` result is left on its producer, now unused by
-// real-phase content (a dead float consumer, if any, keeps it — see the sorter
-// float rules). The invariant established: no real-phase op operand carries a
-// `never` value, so wrapping and crossing never encounter one.
+// backward-crossing or a spurious yield would result. This step severs every
+// use ahead of any placement: for each operand carrying a `never` value, it
+// materializes a fresh `uir.unreachable_value` right before the consumer, at
+// the phase where sorting will attribute that use, and rewrites the operand to
+// it. The `never` result is left on its producer, entirely unused. The
+// invariant established: no op operand carries a `never` value, so wrapping
+// and crossing never encounter one, and a floating consumer keeps no
+// reference into the phase region its producer wraps into (floats are never
+// placed, so such a reference could not dominate).
 //
 // The use-attribution phase mirrors `sortRegion`: every op consumes its
-// operands at its own phase, except `uir.return`, which distributes its value
-// and type operands onto the `uir.phase_return` of each result's declared
-// phase — so a return operand is consumed at that result's declared phase, not
-// the return op's own (always 0). Float and never consumers are left alone;
-// they are dead and never placed.
+// operands at its own phase — the float sentinel for a floating (dead pure)
+// consumer, whose stand-in then floats alongside it — except `uir.return`,
+// which distributes its value and type operands onto the `uir.phase_return`
+// of each result's declared phase, so a return operand is consumed at that
+// result's declared phase, not the return op's own (always 0).
 
-/// Replace every real-phase use of a `never`-phased value with a fresh
+/// Replace every use of a `never`-phased value with a fresh
 /// `uir.unreachable_value` at the consuming phase. See the section header.
 LogicalResult PhaseSorter::forwardNeverValues() {
   auto resultPhases = funcOp.getResultPhases();
 
-  // The phase at which sorting attributes operand `operand` of real-phase op
-  // `op`: the op's own phase, except a `uir.return` fans each value/type
-  // operand onto the phase_return of that result's declared phase.
+  // The phase at which sorting attributes operand `operand` of op `op`: the
+  // op's own phase, except a `uir.return` fans each value/type operand onto
+  // the phase_return of that result's declared phase.
   auto consumerPhase = [&](Operation *op, OpOperand &operand) -> int16_t {
     if (auto returnOp = dyn_cast<ReturnOp>(op)) {
       unsigned numValues = returnOp.getValues().size();
@@ -639,19 +643,20 @@ LogicalResult PhaseSorter::forwardNeverValues() {
   // Collect first: materializing ops while walking invalidates the walk.
   SmallVector<Operation *> ops;
   funcOp->walk([&](Operation *op) {
-    if (op != funcOp && realPhaseOf(op))
+    if (op != funcOp)
       ops.push_back(op);
   });
 
   auto anyTy = hir::AnyType::get(funcOp.getContext());
   for (auto *op : ops) {
     // One unreachable value per consuming phase suffices for all of this op's
-    // never operands that land there.
-    DenseMap<int16_t, Value> perPhase;
+    // never operands that land there. Keyed by std::map: the float sentinel
+    // is not a representable DenseMap key.
+    std::map<int16_t, Value> perPhase;
     for (auto &operand : op->getOpOperands()) {
       auto it = analysis.actualPhase.find(operand.get());
       assert(it != analysis.actualPhase.end() &&
-             "real-phase op operand has no computed phase");
+             "op operand has no computed phase");
       if (it->second != PhaseAnalysis::kNeverPhase)
         continue;
       int16_t phase = consumerPhase(op, operand);
@@ -1039,7 +1044,12 @@ LogicalResult PhaseSorter::extractBranches(bool &changed) {
       }
       // A never result (zero reaching providers; the whole op diverges) is
       // left unused after never-forwarding, its consumers already
-      // `uir.unreachable_value`, so the op is not extracted.
+      // `uir.unreachable_value`, so the op is not extracted. No other phase
+      // reaches here: single-provider float and earlier-phase results were
+      // forwarded away (after hoisting, for anchored interior providers), and
+      // a multi-provider result is floored at the op's phase.
+      assert(vph == PhaseAnalysis::kNeverPhase &&
+             "mismatched branch result survived forwarding and hoisting");
       extractable = false;
       break;
     }
@@ -2417,19 +2427,25 @@ LogicalResult PhaseSorter::extractFrames(bool &changed) {
 // same forwarding covers both directions.
 //
 // The externality of the provider, not its count, is the boundary between
-// forwarding and selection. Only a single-provider result whose operand is
-// defined outside the op forwards; everything else is a genuine selection left
-// to branch extraction and break-value delivery, which run *after* this step.
-// Running forwarding first means those steps only ever see selections: a
-// multi-provider result (delivered regardless of distance), or a single
-// provider defined *inside* the op — later-phase arm content or an
-// iteration-snapshotted break value, where the interior value genuinely varies
-// per path or iteration and so cannot forward even at a provider count of one.
-// A multi-provider result is skipped here without inspecting its operands.
-// Never results were already severed by never-forwarding. A single provider
-// defined inside the op at an earlier phase (backward interior content) or a
-// non-real float phase needs hoisting or float sinking and is left for the
-// corresponding rejection.
+// forwarding and selection. A single-provider result whose operand is defined
+// outside the op forwards directly. A single interior provider at the float
+// phase forwards too: a float is a region-free pure tree, materializable at
+// any point, so its tree is cloned in front of the op — where it dominates
+// every use of the result — and the result forwards to the clone, exactly as
+// hoisting clones the floating operands of the content it moves. Everything
+// else is a genuine selection left to branch extraction and break-value
+// delivery, which run *after* this step. Running forwarding first means those
+// steps only ever see selections: a multi-provider result (delivered
+// regardless of distance), or a single anchored provider defined *inside* the
+// op — later-phase arm content or an iteration-snapshotted break value, where
+// the interior value genuinely varies per path or iteration and so cannot
+// forward even at a provider count of one. A multi-provider result is skipped
+// here without inspecting its operands; its phase is floored at the op's, so
+// only single-provider results ever sit at the float phase. Never results
+// were already severed by never-forwarding. A single anchored provider
+// defined inside the op at an earlier phase (backward interior content) is
+// hoisted out by the joint fixpoint with `hoistEarlierContent`, after which
+// it is external and forwards here.
 
 /// The terminator operands delivering result `idx` of a control-flow op from
 /// its reachable carriers: the yield operands of a branch's reachable,
@@ -2585,8 +2601,9 @@ void PhaseSorter::forwardResults(Operation *op, ArrayRef<Value> forwardTo,
 }
 
 /// Forward every single-provider control-flow result whose provider operand is
-/// defined outside its op. Sets `changed` when it forwards any result. See the
-/// section header for the rule and invariant.
+/// defined outside its op or is a floating pure tree (cloned in front of the
+/// op). Sets `changed` when it forwards any result. See the section header for
+/// the rule and invariant.
 LogicalResult PhaseSorter::forwardSingleProviderResults(bool &changed) {
   // Innermost first, so a forwarded inner result is already an ordinary
   // external operand of its enclosing op when that op is considered (forwarding
@@ -2611,10 +2628,32 @@ LogicalResult PhaseSorter::forwardSingleProviderResults(bool &changed) {
       auto providers = collectResultProviders(op, idx);
       if (providers.size() != 1)
         continue;
-      // A provider defined inside the op is later- or earlier-phase interior
-      // content; leave it for the nested-content rejection.
-      if (definedOutside(providers.front(), op)) {
-        forwardTo[idx] = providers.front();
+      Value provider = providers.front();
+      if (definedOutside(provider, op)) {
+        forwardTo[idx] = provider;
+        anyForward = true;
+        continue;
+      }
+      // An interior provider at the float phase is a region-free pure tree,
+      // materializable at any point: clone it in front of the op, where the
+      // clone dominates every use of the result, and forward to the clone.
+      // Any other interior provider is anchored later-phase arm content or an
+      // iteration-snapshotted break value; extraction delivers it.
+      if (analysis.actualPhase.at(provider) == PhaseAnalysis::kFloatPhase) {
+        auto *defOp = provider.getDefiningOp();
+        assert(defOp && !isRealPhase(analysis.opPhases.at(defOp)) &&
+               hir::isEffectivelyPure(defOp) && defOp->getNumRegions() == 0 &&
+               "float-phase provider must be a region-free pure tree");
+        OpBuilder builder(op);
+        IRMapping mapping;
+        SmallVector<Operation *> clonedOps;
+        auto clone =
+            cloneFloatingTree(op, provider, builder, mapping, clonedOps);
+        for (auto *clonedOp : clonedOps)
+          clonedOp->walk([&](Operation *cloned) {
+            setPhase(cloned, PhaseAnalysis::kFloatPhase);
+          });
+        forwardTo[idx] = clone;
         anyForward = true;
       }
     }
@@ -2733,39 +2772,25 @@ LogicalResult PhaseSorter::hoistEarlierContent(bool &changed) {
 // Reject Unimplemented Sorting Machinery
 //===----------------------------------------------------------------------===//
 
-/// Format a phase for diagnostics, naming the sentinels like the phase
-/// analysis annotation does.
-static std::string phaseName(int16_t phase) {
-  if (phase == PhaseAnalysis::kFloatPhase)
-    return "float";
-  if (phase == PhaseAnalysis::kNeverPhase)
-    return "never";
-  return std::to_string(phase);
-}
-
 /// Reject inputs that need sorting machinery beyond wrapping, call
 /// decomposition, and forward crossings, with explicit diagnostics instead of
 /// sorting them incorrectly:
 ///
-/// - Ops delivering a result at a phase different from their own phase. Single-
-///   provider results whose operand is defined outside the op were forwarded
-///   above, branch selection obligations (a result provided by more than one
-///   terminator, or a single provider defined inside the op at a later real
-///   phase) were lifted into a choice plus a receiving pick by branch
-///   extraction, and later-phase loop results were lowered onto receiving-phase
-///   variables by break-value delivery; never-produced results are skipped here
-///   (their consumers are already `uir.unreachable_value`, so the result is
-///   unused).
-///   One residual remains: a single-provider value the op holds at a non-real
-///   float phase, which neither forwards (its provider is defined inside the
-///   op, not iteration-invariant external content) nor choice-ifies (a float
-///   phase is not a later real phase), and so awaits float sinking.
 /// - Anchored content whose phase differs from its parent frame's phase.
 ///   Hoisting already lifted every op earlier than its frame out, and the
 ///   joint extraction fixpoint carries later-phase content across any number of
 ///   boundaries, in both function regions alike, so a residual is later-phase
 ///   content the fixpoint settled without lifting: content trapped in a
 ///   provably diverging branch arm, which no extraction rule owns.
+///
+/// Cross-phase result delivery, by contrast, is fully covered and asserted
+/// rather than rejected: single-provider results were forwarded (externally
+/// defined providers directly, floating interior providers via clones,
+/// earlier-phase interior providers after hoisting), branch selection
+/// obligations were lifted into a choice plus a receiving pick by branch
+/// extraction, later-phase loop results were lowered onto receiving-phase
+/// variables by break-value delivery, and never-produced results stay unused
+/// on their producer (their consumers are already `uir.unreachable_value`).
 ///
 /// Together these establish that every op and every value inside anchored
 /// content is at that content's phase, which is what makes the wrap and
@@ -2779,28 +2804,18 @@ LogicalResult PhaseSorter::rejectUnimplemented() {
     assert(phaseIt != analysis.opPhases.end() && "op phase not computed");
     int16_t opPhase = phaseIt->second;
 
-    // Reject results delivered at a phase other than the op's own.
+    // Every op delivers each result at its own phase, or holds an unused
+    // never result; forwarding, extraction, and break-value delivery
+    // established this above.
     if (isRealPhase(opPhase)) {
-      for (auto [index, value] : llvm::enumerate(op->getResults())) {
+      for (auto value : op->getResults()) {
         auto valueIt = analysis.actualPhase.find(value);
         assert(valueIt != analysis.actualPhase.end() &&
                "value phase not computed");
-        // A never result stays on its producer: its real-phase consumers were
-        // rewritten to `uir.unreachable_value` by never-forwarding, so the
-        // result is unused (or used only by dead float content) and needs no
-        // forwarding of its own.
-        if (valueIt->second == PhaseAnalysis::kNeverPhase)
-          continue;
-        if (valueIt->second != opPhase) {
-          op->emitOpError()
-              << "delivers result #" << index << " at phase "
-              << phaseName(valueIt->second) << " instead of its own phase "
-              << phaseName(opPhase)
-              << "; delivering this cross-phase result is not implemented in "
-                 "phase sorting yet (a single-provider float value awaiting "
-                 "float sinking)";
-          return WalkResult::interrupt();
-        }
+        assert((valueIt->second == opPhase ||
+                valueIt->second == PhaseAnalysis::kNeverPhase) &&
+               "cross-phase result survived forwarding and extraction");
+        (void)valueIt;
       }
     }
 
@@ -2852,33 +2867,17 @@ LogicalResult PhaseSorter::sortRegion(Region &region) {
   auto returnOp = dyn_cast<ReturnOp>(terminator);
 
   // Decide placement for every top-level op, in program order: real-phase
-  // ops go to their phase, sentinel-phase ops sink after any operand that
-  // moves, and stay at the top level otherwise. The map is ordered so phase
-  // ops are later created in ascending phase order.
+  // ops go to their phase; sentinel-phase ops stay at the region top level,
+  // unmoved, where they precede the phase ops and remain visible to every
+  // phase. A float is never assigned a phase, and it never references a
+  // placed value — a real-phase operand would have anchored the pure op, and
+  // never operands were severed — so keeping its position preserves
+  // dominance. The map is ordered so phase ops are later created in
+  // ascending phase order.
   std::map<int16_t, SmallVector<Operation *>> phaseContent;
   DenseMap<Operation *, int16_t> placement;
   for (auto &op : block.without_terminator()) {
-    std::optional<int16_t> target = realPhaseOf(&op);
-    if (!target) {
-      // Sink after the latest operand that moves into a phase region. Also
-      // consider operands of nested ops, whose defs may sit at the top
-      // level.
-      op.walk([&](Operation *user) {
-        for (auto operand : user->getOperands()) {
-          auto *defOp = operand.getDefiningOp();
-          if (!defOp)
-            continue;
-          auto *ancestor = block.findAncestorOpInBlock(*defOp);
-          assert(ancestor && "operand defined outside the function region");
-          if (ancestor == &op)
-            continue;
-          auto it = placement.find(ancestor);
-          if (it != placement.end())
-            target = std::max(target.value_or(it->second), it->second);
-        }
-      });
-    }
-    if (target) {
+    if (auto target = realPhaseOf(&op)) {
       phaseContent[*target].push_back(&op);
       placement[&op] = *target;
     }
@@ -2913,12 +2912,11 @@ LogicalResult PhaseSorter::sortRegion(Region &region) {
   // sorting: uses inside placed content belong to that content's phase, the
   // dissolving `uir.return`'s operands belong to the declared phase of
   // their function result, and uses by the region terminator sit after all
-  // phase ops. With divergent results and nested phase mismatches rejected
-  // up front, the only uses left at a phase before the defining op's
-  // placement are inside floating (dead) content nested under
-  // earlier-phase control flow, which cannot sink and is rejected.
-  // Insertion follows program order of the defining ops, keeping the yield
-  // lists deterministic.
+  // phase ops. With nested phase mismatches rejected up front and never uses
+  // severed, no floating op uses a placed value and no use sits at a phase
+  // before its definition, so every attributed use is a same-phase use or a
+  // forward crossing. Insertion follows program order of the defining ops,
+  // keeping the yield lists deterministic.
   std::map<int16_t, llvm::SetVector<Value>> phaseYields;
   for (auto &op : block.without_terminator()) {
     auto placementIt = placement.find(&op);
@@ -2935,7 +2933,7 @@ LogicalResult PhaseSorter::sortRegion(Region &region) {
         if (ancestor != terminator) {
           auto it = placement.find(ancestor);
           assert(it != placement.end() &&
-                 "floating op using a placed value must have sunk");
+                 "floating op cannot use a placed value");
           usePhase = it->second;
         } else if (returnOp) {
           auto numValues = returnOp.getValues().size();
@@ -2945,15 +2943,8 @@ LogicalResult PhaseSorter::sortRegion(Region &region) {
         }
         if (usePhase == defPhase)
           continue;
-        if (usePhase && *usePhase < defPhase) {
-          auto diag = use.getOwner()->emitOpError()
-                      << "uses a value from phase " << defPhase
-                      << " inside phase " << *usePhase
-                      << " content; backward crossings are not implemented "
-                         "in phase sorting yet";
-          diag.attachNote(value.getLoc()) << "value defined here";
-          return failure();
-        }
+        assert((!usePhase || *usePhase > defPhase) &&
+               "backward crossing survived analysis and extraction");
         phaseYields[defPhase].insert(value);
       }
     }
