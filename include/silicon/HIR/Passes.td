@@ -23,9 +23,16 @@ def InferTypesPass : Pass<"infer-types"> {
        order and replaces all uses of the later one.
     2. **One inferrable, one concrete:** replaces the inferrable with
        the concrete value, provided the concrete dominates. If it does
-       not dominate but can be cloned (pure, single-result, no
-       regions, all operands dominate), the pass clones the concrete
-       op to the inferrable's location.
+       not dominate, the pass materializes the concrete value's
+       defining tree at the inferrable's location by cloning its
+       memory-effect-free, region-free, single-result ops until
+       reaching values that dominate the inferrable. This hoists type
+       expression trees out of nested regions (structured control-flow
+       arms, loop bodies, expression blocks) and across later program
+       points; such ops are location-free, so the clone preserves
+       semantics. Trees rooted in values local to a region (e.g. loop
+       iteration arguments) refuse to materialize and leave the
+       unification unresolved.
     3. **Both concrete:** if both operands are defined by structurally
        equivalent ops (same op kind, same attributes, same number of
        operands), the later op is replaced with the earlier one and

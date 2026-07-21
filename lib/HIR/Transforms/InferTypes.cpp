@@ -9,6 +9,7 @@
 #include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Passes.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/IRMapping.h"
 #include "llvm/Support/Debug.h"
 
 using namespace mlir;
@@ -29,6 +30,55 @@ struct InferTypesPass : public hir::impl::InferTypesPassBase<InferTypesPass> {
   void runOnOperation() override;
 };
 } // namespace
+
+/// Materialize a value at an insertion point by cloning its defining tree.
+///
+/// Walks the value's use-def tree and clones every op that does not already
+/// properly dominate `point`, until reaching values that do. Only
+/// memory-effect-free, region-free, single-result ops are cloned; such ops are
+/// location-free, so materializing a copy at a dominating position preserves
+/// semantics. Returns the materialized value, or null if the tree contains a
+/// non-cloneable op (or block argument) that does not dominate `point`.
+///
+/// This makes type constraints from nested regions (structured control flow
+/// arms, loop bodies, expression blocks) or later program points available at
+/// the position of an inferrable: the type expression tree is hoisted to where
+/// the inferrable is defined. Trees rooted in values that are genuinely local
+/// to a region (e.g. loop iteration arguments) refuse to materialize and leave
+/// the unification unresolved.
+static Value materializeAtPoint(Value value, Operation *point,
+                                DominanceInfo &domInfo) {
+  if (domInfo.properlyDominates(value, point))
+    return value;
+
+  // Collect the ops that need cloning in post-order, such that cloning them in
+  // order visits defs before uses.
+  SmallVector<Operation *> toClone;
+  SmallPtrSet<Operation *, 8> visited;
+  std::function<bool(Value)> collect = [&](Value collectValue) {
+    if (domInfo.properlyDominates(collectValue, point))
+      return true;
+    auto *defOp = collectValue.getDefiningOp();
+    if (!defOp || !isMemoryEffectFree(defOp) || defOp->getNumResults() != 1 ||
+        defOp->getNumRegions() != 0)
+      return false;
+    if (!visited.insert(defOp).second)
+      return true;
+    for (auto operand : defOp->getOperands())
+      if (!collect(operand))
+        return false;
+    toClone.push_back(defOp);
+    return true;
+  };
+  if (!collect(value))
+    return {};
+
+  OpBuilder builder(point);
+  IRMapping mapping;
+  for (auto *op : toClone)
+    builder.clone(*op, mapping);
+  return mapping.lookup(value);
+}
 
 void InferTypesPass::runOnOperation() {
   SmallVector<UnifyOp> worklist;
@@ -86,27 +136,19 @@ void InferTypesPass::runOnOperation() {
         continue;
       }
 
-      // If the concrete doesn't dominate the inferrable but can be cloned
-      // to the inferrable's location, do so. This handles the pattern where
-      // type constructors inside branches constrain an inferrable in the
-      // dominator block.
-      if (auto *concreteOp = concrete.getDefiningOp()) {
-        if (isMemoryEffectFree(concreteOp) &&
-            concreteOp->getNumResults() == 1 &&
-            concreteOp->getNumRegions() == 0 &&
-            llvm::all_of(concreteOp->getOperands(), [&](Value v) {
-              return domInfo.properlyDominates(v, inferrable.getOperation());
-            })) {
-          OpBuilder builder(inferrable);
-          auto *cloned = builder.clone(*concreteOp);
-          LLVM_DEBUG(llvm::dbgs() << "Cloned " << *concreteOp << " to resolve "
-                                  << inferrable << "\n");
-          inferrable.replaceAllUsesWith(cloned->getResult(0));
-          inferrable.erase();
-          unifyOp.replaceAllUsesWith(cloned->getResult(0));
-          unifyOp.erase();
-          continue;
-        }
+      // If the concrete doesn't dominate the inferrable, try to materialize
+      // its defining tree at the inferrable's location. This handles the
+      // pattern where type constructors after the inferrable or inside nested
+      // regions (branch arms, loop bodies, expression blocks) constrain an
+      // inferrable in a dominating position.
+      if (auto cloned = materializeAtPoint(concrete, inferrable, domInfo)) {
+        LLVM_DEBUG(llvm::dbgs() << "Materialized " << cloned << " to resolve "
+                                << inferrable << "\n");
+        inferrable.replaceAllUsesWith(cloned);
+        inferrable.erase();
+        unifyOp.replaceAllUsesWith(cloned);
+        unifyOp.erase();
+        continue;
       }
 
       LLVM_DEBUG(llvm::dbgs() << "Skipping " << inferrable

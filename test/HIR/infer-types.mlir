@@ -230,3 +230,201 @@ func.func @CloneCrossBlock(%arg0: i1) {
   call @use_type(%0) : (!hir.any) -> ()
   return
 }
+
+//===----------------------------------------------------------------------===//
+// Structured control-flow regions
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: func @UnifyInsideIfArms
+func.func @UnifyInsideIfArms(%c: !hir.any, %x: !hir.any) {
+  // A shared inferrable constrained by unify ops inside both arms resolves to
+  // the concrete type; the arm-local unify ops dissolve.
+  // CHECK: [[T:%.+]] = hir.bool_type
+  %st = hir.inferrable
+  %t = hir.bool_type
+  // CHECK: uir.if %arg0 : [[T]]
+  %r = uir.if %c : %st {
+    %u = hir.unify %st, %t
+    // CHECK: uir.yield %arg1 : [[T]]
+    uir.yield %x : %u
+  } else {
+    %u = hir.unify %st, %t
+    uir.yield %x : %u
+  }
+  // CHECK: call @use_type([[T]])
+  call @use_type(%st) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @HoistTreeFromIfArm
+func.func @HoistTreeFromIfArm(%c: !hir.any) {
+  // A type tree defined inside an arm is materialized at the inferrable's
+  // location, including the tree's cloned leaves.
+  // CHECK: [[INT:%.+]] = hir.int_type
+  // CHECK-NEXT: [[W:%.+]] = hir.constant_int 8 : [[INT]]
+  // CHECK-NEXT: [[U:%.+]] = hir.uint_type [[W]]
+  %st = hir.inferrable
+  %int = hir.int_type
+  uir.if %c {
+    %w = hir.constant_int 8 : %int
+    %u = hir.uint_type %w
+    %uu = hir.unify %st, %u
+    uir.yield
+  }
+  // CHECK: call @use_type([[U]])
+  call @use_type(%st) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @HoistTreeFromLoop
+func.func @HoistTreeFromLoop() {
+  // A type tree defined inside a loop body is materialized at the inferrable.
+  // CHECK: [[INT:%.+]] = hir.int_type
+  // CHECK-NEXT: [[W:%.+]] = hir.constant_int 4 : [[INT]]
+  // CHECK-NEXT: [[W2:%.+]] = hir.add [[W]], [[W]] : [[INT]]
+  // CHECK-NEXT: [[U:%.+]] = hir.uint_type [[W2]]
+  %st = hir.inferrable
+  %int = hir.int_type
+  uir.loop {
+    %w = hir.constant_int 4 : %int
+    %w2 = hir.add %w, %w : %int
+    %u = hir.uint_type %w2
+    %uu = hir.unify %st, %u
+    uir.break
+  }
+  // CHECK: call @use_type([[U]])
+  call @use_type(%st) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @HoistTreeFromExpr
+func.func @HoistTreeFromExpr(%x: !hir.any) {
+  // A type tree defined inside a uir.expr body is materialized at the
+  // inferrable; the expr's result type operand resolves to the hoisted tree.
+  // CHECK: [[INT:%.+]] = hir.int_type
+  // CHECK-NEXT: [[W:%.+]] = hir.constant_int 4 : [[INT]]
+  // CHECK-NEXT: [[U:%.+]] = hir.uint_type [[W]]
+  %st = hir.inferrable
+  %int = hir.int_type
+  // CHECK: uir.expr : [[U]]
+  %r = uir.expr : %st {
+    %w = hir.constant_int 4 : %int
+    %u = hir.uint_type %w
+    %uu = hir.unify %st, %u
+    // CHECK: uir.yield %arg0 : [[U]]
+    uir.yield %x : %uu
+  }
+  // CHECK: call @use_type([[U]])
+  call @use_type(%st) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @HoistTreeFromPickAlternative
+func.func @HoistTreeFromPickAlternative(%c: !hir.any) {
+  // A type tree defined inside a pick alternative is materialized at the
+  // inferrable.
+  // CHECK: [[INT:%.+]] = hir.int_type
+  // CHECK-NEXT: [[W:%.+]] = hir.constant_int 8 : [[INT]]
+  // CHECK-NEXT: [[U:%.+]] = hir.uint_type [[W]]
+  %st = hir.inferrable
+  %int = hir.int_type
+  hir.pick %c [
+    0 (): {
+      %w = hir.constant_int 8 : %int
+      %u = hir.uint_type %w
+      %uu = hir.unify %st, %u
+      hir.yield
+    }
+  ]
+  // CHECK: call @use_type([[U]])
+  call @use_type(%st) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @TwoArmsConstrainSameInferrable
+func.func @TwoArmsConstrainSameInferrable(%c: !hir.any) {
+  // Both arms constrain the same inferrable with structurally equal trees;
+  // the first resolves the inferrable, the second unifies structurally.
+  // CHECK: [[INT:%.+]] = hir.int_type
+  // CHECK-NEXT: [[W:%.+]] = hir.constant_int 8 : [[INT]]
+  // CHECK-NEXT: [[U:%.+]] = hir.uint_type [[W]]
+  // CHECK-NOT: hir.unify
+  %st = hir.inferrable
+  %int = hir.int_type
+  uir.if %c {
+    %w = hir.constant_int 8 : %int
+    %u = hir.uint_type %w
+    %uu = hir.unify %st, %u
+    uir.yield
+  } else {
+    %w = hir.constant_int 8 : %int
+    %u = hir.uint_type %w
+    %uu = hir.unify %st, %u
+    uir.yield
+  }
+  // CHECK: call @use_type([[U]])
+  call @use_type(%st) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @NonHoistableLoopArg
+func.func @NonHoistableLoopArg(%a: !hir.any, %int: !hir.any) {
+  // The type tree hangs off a loop iteration argument, which is genuinely
+  // local to the loop body. The unification is left unresolved for later
+  // passes to diagnose.
+  // CHECK: hir.inferrable
+  // CHECK: hir.unify
+  %st = hir.inferrable
+  uir.loop (%w = %a : %int) {
+    %u = hir.uint_type %w
+    %uu = hir.unify %st, %u
+    uir.continue %w : %int
+  }
+  call @use_type(%st) : (!hir.any) -> ()
+  return
+}
+
+// CHECK-LABEL: func @ConcreteDominatesIntoArm
+func.func @ConcreteDominatesIntoArm(%c: !hir.any) {
+  // An inferrable inside an arm resolves to a concrete type defined outside.
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  uir.if %c {
+    %i = hir.inferrable
+    // CHECK: hir.constant_int 42 : [[T]]
+    %v = hir.constant_int 42 : %i
+    %u = hir.unify %i, %t
+    uir.yield
+  }
+  return
+}
+
+// CHECK-LABEL: func @ConstantIntFallbackInRegion
+func.func @ConstantIntFallbackInRegion(%c: !hir.any) {
+  // The int_type fallback for unconstrained literals applies inside regions.
+  uir.if %c {
+    // CHECK: [[T:%.+]] = hir.int_type
+    // CHECK: hir.constant_int 42 : [[T]]
+    %i = hir.inferrable
+    %v = hir.constant_int 42 : %i
+    uir.yield
+  }
+  return
+}
+
+// CHECK-LABEL: func @HoistTreeSameBlock
+func.func @HoistTreeSameBlock() {
+  // Tree materialization is position-based, not region-based: a multi-level
+  // tree defined after the inferrable in the same block hoists as well.
+  // CHECK: [[INT:%.+]] = hir.int_type
+  // CHECK-NEXT: [[W:%.+]] = hir.constant_int 8 : [[INT]]
+  // CHECK-NEXT: [[U:%.+]] = hir.uint_type [[W]]
+  %st = hir.inferrable
+  %int = hir.int_type
+  %w = hir.constant_int 8 : %int
+  %u = hir.uint_type %w
+  %uu = hir.unify %st, %u
+  // CHECK: call @use_type([[U]])
+  call @use_type(%st) : (!hir.any) -> ()
+  return
+}
