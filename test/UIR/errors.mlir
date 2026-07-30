@@ -423,13 +423,29 @@ uir.func @phase_yield_mismatch(%c: 0, %x: 0) -> () {
 
 // -----
 
+// Verify that uir.phase_call requires a uir.phase ancestor: it is
+// sorted-output vocabulary that names a specific callee phase and only ever
+// legitimately appears inside a phase region.
+uir.func @phase_call_no_phase_ancestor(%a: 0) -> (result: 0) {
+  uir.signature (%a) -> (%a)
+} {
+  // expected-error @below {{'uir.phase_call' op must be nested inside a 'uir.phase'}}
+  %r = uir.phase_call @phase_call_no_phase_ancestor[0] (%a) : (%a) -> (%a)
+  uir.return %r : %a
+}
+
+// -----
+
 // Verify that uir.phase_call rejects a non-existent callee.
 uir.func @phase_call_bad_callee(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{'nonexistent' does not reference a valid function}}
-  %r = uir.phase_call @nonexistent[0] (%a) : (%a) -> (%a)
-  uir.return %r : %a
+  uir.phase 0 {
+    // expected-error @below {{'nonexistent' does not reference a valid function}}
+    %r = uir.phase_call @nonexistent[0] (%a) : (%a) -> (%a)
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----
@@ -442,9 +458,12 @@ func.func private @not_a_uir_func() {
 uir.func @phase_call_wrong_callee_kind(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{'not_a_uir_func' does not reference a 'uir.func' or 'uir.split_func'}}
-  %r = uir.phase_call @not_a_uir_func[0] (%a) : (%a) -> (%a)
-  uir.return %r : %a
+  uir.phase 0 {
+    // expected-error @below {{'not_a_uir_func' does not reference a 'uir.func' or 'uir.split_func'}}
+    %r = uir.phase_call @not_a_uir_func[0] (%a) : (%a) -> (%a)
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----
@@ -458,9 +477,12 @@ uir.func @pc_callee(%x: 0) -> (result: 0) {
 uir.func @phase_call_bad_phase(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{callee @pc_callee has no phase 1 in its declared span [0, 0]}}
-  %r = uir.phase_call @pc_callee[1] (%a) : (%a) -> (%a)
-  uir.return %r : %a
+  uir.phase 0 {
+    // expected-error @below {{callee @pc_callee has no phase 1 in its declared span [0, 0]}}
+    %r = uir.phase_call @pc_callee[1] (%a) : (%a) -> (%a)
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----
@@ -475,9 +497,12 @@ uir.func @pc_callee(%x: 0) -> (result: 0) {
 uir.func @phase_call_arg_count(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{has 2 arguments but callee @pc_callee declares 1 arguments at phase 0}}
-  %r = uir.phase_call @pc_callee[0] (%a, %a) : (%a, %a) -> (%a)
-  uir.return %r : %a
+  uir.phase 0 {
+    // expected-error @below {{has 2 arguments but callee @pc_callee declares 1 arguments at phase 0}}
+    %r = uir.phase_call @pc_callee[0] (%a, %a) : (%a, %a) -> (%a)
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----
@@ -492,9 +517,12 @@ uir.func @pc_callee(%x: 0) -> (result: 0) {
 uir.func @phase_call_result_count(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{has 0 results but callee @pc_callee declares 1 results at phase 0}}
-  uir.phase_call @pc_callee[0] (%a) : (%a) -> ()
-  uir.return %a : %a
+  uir.phase 0 {
+    // expected-error @below {{has 0 results but callee @pc_callee declares 1 results at phase 0}}
+    uir.phase_call @pc_callee[0] (%a) : (%a) -> ()
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----
@@ -508,9 +536,12 @@ uir.func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
 uir.func @phase_call_missing_context(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{requires a context operand: phase 0 is not the callee's first span phase}}
-  %r = uir.phase_call @pc_callee2[0] (%a) : (%a) -> (%a)
-  uir.return %r : %a
+  uir.phase 0 {
+    // expected-error @below {{requires a context operand: phase 0 is not the callee's first span phase}}
+    %r = uir.phase_call @pc_callee2[0] (%a) : (%a) -> (%a)
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----
@@ -524,9 +555,12 @@ uir.func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
 uir.func @phase_call_spurious_context(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{cannot have a context operand: phase -1 is the callee's first span phase}}
-  %ctx = uir.phase_call @pc_callee2[-1] (%a) context %a : (%a) -> () context
-  uir.return %a : %a
+  uir.phase -1 {
+    // expected-error @below {{cannot have a context operand: phase -1 is the callee's first span phase}}
+    %ctx = uir.phase_call @pc_callee2[-1] (%a) context %a : (%a) -> () context
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----
@@ -540,9 +574,12 @@ uir.func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
 uir.func @phase_call_missing_context_out(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{requires a context result: phase -1 is not the callee's last span phase}}
-  uir.phase_call @pc_callee2[-1] (%a) : (%a) -> ()
-  uir.return %a : %a
+  uir.phase -1 {
+    // expected-error @below {{requires a context result: phase -1 is not the callee's last span phase}}
+    uir.phase_call @pc_callee2[-1] (%a) : (%a) -> ()
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----
@@ -556,9 +593,12 @@ uir.func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
 uir.func @phase_call_spurious_context_out(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{cannot have a context result: phase 0 is the callee's last span phase}}
-  %r, %ctx = uir.phase_call @pc_callee2[0] (%a) context %a : (%a) -> (%a) context
-  uir.return %r : %a
+  uir.phase 0 {
+    // expected-error @below {{cannot have a context result: phase 0 is the callee's last span phase}}
+    %r, %ctx = uir.phase_call @pc_callee2[0] (%a) context %a : (%a) -> (%a) context
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----
@@ -576,9 +616,12 @@ uir.func @pc_gap_callee(%m: -2, %x: 0) -> (result: 0) {
 uir.func @phase_call_gap_missing_context(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{requires a context operand: phase -1 is not the callee's first span phase}}
-  %ctx = uir.phase_call @pc_gap_callee[-1] () : () -> () context
-  uir.return %a : %a
+  uir.phase -1 {
+    // expected-error @below {{requires a context operand: phase -1 is not the callee's first span phase}}
+    %ctx = uir.phase_call @pc_gap_callee[-1] () : () -> () context
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----
@@ -595,9 +638,12 @@ uir.func @pc_gap_callee(%m: -2, %x: 0) -> (result: 0) {
 uir.func @phase_call_below_span(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{callee @pc_gap_callee has no phase -3 in its declared span [-2, 0]}}
-  %ctx = uir.phase_call @pc_gap_callee[-3] () : () -> () context
-  uir.return %a : %a
+  uir.phase 0 {
+    // expected-error @below {{callee @pc_gap_callee has no phase -3 in its declared span [-2, 0]}}
+    %ctx = uir.phase_call @pc_gap_callee[-3] () : () -> () context
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----
@@ -606,9 +652,12 @@ uir.func @phase_call_below_span(%a: 0) -> (result: 0) {
 uir.func @phase_call_arg_type_mismatch(%a: 0) -> () {
   uir.signature (%a) -> ()
 } {
-  // expected-error @below {{has 1 arguments but 0 typeOfArgs}}
-  "uir.phase_call"(%a) {callee = @pc_callee, calleePhase = 0 : si32, operandSegmentSizes = array<i32: 1, 0, 0, 0>, resultSegmentSizes = array<i32: 0, 0>} : (!hir.any) -> ()
-  uir.return
+  uir.phase 0 {
+    // expected-error @below {{has 1 arguments but 0 typeOfArgs}}
+    "uir.phase_call"(%a) {callee = @pc_callee, calleePhase = 0 : si32, operandSegmentSizes = array<i32: 1, 0, 0, 0>, resultSegmentSizes = array<i32: 0, 0>} : (!hir.any) -> ()
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----
@@ -617,9 +666,12 @@ uir.func @phase_call_arg_type_mismatch(%a: 0) -> () {
 uir.func @phase_call_result_type_mismatch(%a: 0) -> () {
   uir.signature (%a) -> ()
 } {
-  // expected-error @below {{has 1 results but 0 typeOfResults}}
-  %r = "uir.phase_call"() {callee = @pc_callee, calleePhase = 0 : si32, operandSegmentSizes = array<i32: 0, 0, 0, 0>, resultSegmentSizes = array<i32: 1, 0>} : () -> (!hir.any)
-  uir.return
+  uir.phase 0 {
+    // expected-error @below {{has 1 results but 0 typeOfResults}}
+    %r = "uir.phase_call"() {callee = @pc_callee, calleePhase = 0 : si32, operandSegmentSizes = array<i32: 0, 0, 0, 0>, resultSegmentSizes = array<i32: 1, 0>} : () -> (!hir.any)
+    uir.phase_return
+  }
+  uir.unreachable
 }
 
 // -----

@@ -599,6 +599,10 @@ def PhaseCallOp : UIROp<"phase_call", [
     `context` operand, and every entry except the last produces a context
     result, printed as a trailing `context` keyword. Context values carry no
     type operands; function splitting materializes their opaque types.
+
+    As sorted-output vocabulary that calls one specific phase, a
+    `uir.phase_call` must be nested inside a `uir.phase` region, at any
+    depth, including under structured control flow within that phase.
   }];
   let arguments = (ins
     FlatSymbolRefAttr:$callee,

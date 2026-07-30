@@ -1162,6 +1162,8 @@ void PhaseCallOp::print(OpAsmPrinter &p) {
 }
 
 LogicalResult PhaseCallOp::verify() {
+  if (!hasAncestorOp(*this, "uir.phase"))
+    return emitOpError("must be nested inside a 'uir.phase'");
   if (getArguments().size() != getTypeOfArgs().size())
     return emitOpError() << "has " << getArguments().size() << " arguments but "
                          << getTypeOfArgs().size() << " typeOfArgs";

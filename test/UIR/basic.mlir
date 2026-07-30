@@ -356,27 +356,38 @@ uir.func @phase_return_in_loop(%x: 0) -> (result: 0) {
 }
 
 // A call to a single-phase callee decomposes into one uir.phase_call with
-// no context values.
+// no context values. A uir.phase_call is sorted-output vocabulary and must
+// live inside a uir.phase region.
 // CHECK-LABEL: uir.func @phase_call_single
 uir.func @phase_call_single(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  %r = uir.phase_call @simple_func[0] (%a, %a) : (%a, %a) -> (%a)
-  uir.return %r : %a
+  uir.phase 0 {
+    %r = uir.phase_call @simple_func[0] (%a, %a) : (%a, %a) -> (%a)
+    uir.phase_return %r : %a
+  }
+  uir.unreachable
 }
 
 // A call to a two-phase callee decomposes into chained uir.phase_calls: the
 // first entry produces a context result (trailing `context` keyword), the
-// last entry consumes it (`context` operand).
+// last entry consumes it (`context` operand). The entries live in the
+// caller phases where they execute.
 // CHECK-LABEL: uir.func @phase_call_chain
 uir.func @phase_call_chain(%n: -1, %x: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
-  %ctx = uir.phase_call @const_arg[-1] (%n) : (%t) -> () context
-  %r = uir.phase_call @const_arg[0] (%x) context %ctx : (%t) -> (%t)
-  uir.return %r : %t
+  %ctx = uir.phase -1 {
+    %c = uir.phase_call @const_arg[-1] (%n) : (%t) -> () context
+    uir.phase_return yield %c
+  }
+  uir.phase 0 {
+    %r = uir.phase_call @const_arg[0] (%x) context %ctx : (%t) -> (%t)
+    uir.phase_return %r : %t
+  }
+  uir.unreachable
 }
 
 // A uir.phase_call may target a callee that is already split.
@@ -384,9 +395,34 @@ uir.func @phase_call_chain(%n: -1, %x: 0) -> (result: 0) {
 uir.func @phase_call_split_callee(%a: -1) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  %ctx = uir.phase_call @split_witness[-1] (%a) : (%a) -> () context
-  %r = uir.phase_call @split_witness[0] (%a) context %ctx : (%a) -> (%a)
-  uir.return %r : %a
+  %ctx = uir.phase -1 {
+    %c = uir.phase_call @split_witness[-1] (%a) : (%a) -> () context
+    uir.phase_return yield %c
+  }
+  uir.phase 0 {
+    %r = uir.phase_call @split_witness[0] (%a) context %ctx : (%a) -> (%a)
+    uir.phase_return %r : %a
+  }
+  uir.unreachable
+}
+
+// A uir.phase_call satisfies its uir.phase ancestor requirement at any
+// nesting depth: here it sits under structured control flow inside the phase.
+// CHECK-LABEL: uir.func @phase_call_under_cf
+uir.func @phase_call_under_cf(%c: 0, %a: 0) -> (result: 0) {
+  uir.signature (%c, %a) -> (%a)
+} {
+  uir.phase 0 {
+    uir.if %c {
+      // CHECK: uir.phase_call @simple_func[0]
+      %r = uir.phase_call @simple_func[0] (%a, %a) : (%a, %a) -> (%a)
+      uir.phase_return %r : %a
+    } else {
+      uir.phase_return %a : %a
+    }
+    uir.unreachable
+  }
+  uir.unreachable
 }
 
 // A callee whose declared phases have a gap (arguments at -2 and 0, none at
@@ -408,11 +444,20 @@ uir.func @phase_call_gap(%n: -2, %x: 0) -> (result: 0) {
   uir.signature (%0, %0) -> (%0)
 } {
   %t = hir.int_type
-  %ctx0 = uir.phase_call @gap_callee[-2] (%n) : (%t) -> () context
-  // CHECK: uir.phase_call @gap_callee[-1] () context %{{.+}} : () -> () context
-  %ctx1 = uir.phase_call @gap_callee[-1] () context %ctx0 : () -> () context
-  %r = uir.phase_call @gap_callee[0] (%x) context %ctx1 : (%t) -> (%t)
-  uir.return %r : %t
+  %ctx0 = uir.phase -2 {
+    %c0 = uir.phase_call @gap_callee[-2] (%n) : (%t) -> () context
+    uir.phase_return yield %c0
+  }
+  %ctx1 = uir.phase -1 {
+    // CHECK: uir.phase_call @gap_callee[-1] () context %{{.+}} : () -> () context
+    %c1 = uir.phase_call @gap_callee[-1] () context %ctx0 : () -> () context
+    uir.phase_return yield %c1
+  }
+  uir.phase 0 {
+    %r = uir.phase_call @gap_callee[0] (%x) context %ctx1 : (%t) -> (%t)
+    uir.phase_return %r : %t
+  }
+  uir.unreachable
 }
 
 // # Exit Terminators in Replicate/Pick Bodies

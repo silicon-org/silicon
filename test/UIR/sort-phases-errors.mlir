@@ -77,12 +77,15 @@ uir.func @PhaseCallCallee(%x: 0) -> () {
   uir.return
 }
 
+// A bare uir.phase_call in unsorted input never reaches the pass: it lacks
+// the uir.phase ancestor its verifier requires, so module verification
+// rejects it before sorting runs.
 uir.func @PhaseCallInInput(%x: 0) -> () {
   %0 = hir.int_type
   uir.signature (%0) -> ()
 } {
   %t = hir.int_type
-  // expected-error @below {{is phase-sorting output vocabulary and cannot appear in phase-sorting input}}
+  // expected-error @below {{'uir.phase_call' op must be nested inside a 'uir.phase'}}
   uir.phase_call @PhaseCallCallee[0] (%x) : (%t) -> ()
   uir.return
 }
