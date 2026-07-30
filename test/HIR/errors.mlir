@@ -353,3 +353,207 @@ func.func @pick_bad_tag(%choice: !hir.any) {
   ]
   return
 }
+
+// -----
+
+// eager_func: at least two links are required.
+// expected-error @below {{phaseFuncs must have at least two entries}}
+hir.eager_func @one_link() -> (out) [
+  @one_link.0
+]
+
+// -----
+
+// eager_func: the head link must take no arguments.
+hir.func @head_args.head(%a) -> (ctx) {
+  %o = hir.opaque_type
+  hir.signature (%o) -> (%o)
+} {
+  %o = hir.opaque_type
+  %c = hir.opaque_pack()
+  hir.return %c : %o
+}
+hir.func @head_args.tail(%ctx) -> (out) {
+  %o = hir.opaque_type
+  hir.signature (%o) -> (%o)
+} {
+  %o = hir.opaque_type
+  %r = hir.opaque_pack()
+  hir.return %r : %o
+}
+// expected-error @below {{link @head_args.head has 1 arguments, expected 0}}
+hir.eager_func @head_args() -> (out) [
+  @head_args.head,
+  @head_args.tail
+]
+
+// -----
+
+// eager_func: the head link must produce exactly one result.
+hir.func @head_res.head() -> (c1, c2) {
+  %o = hir.opaque_type
+  hir.signature () -> (%o, %o)
+} {
+  %o = hir.opaque_type
+  %c = hir.opaque_pack()
+  hir.return %c, %c : %o, %o
+}
+hir.func @head_res.tail(%ctx) -> (out) {
+  %o = hir.opaque_type
+  hir.signature (%o) -> (%o)
+} {
+  %o = hir.opaque_type
+  %r = hir.opaque_pack()
+  hir.return %r : %o
+}
+// expected-error @below {{link @head_res.head has 2 results, expected 1}}
+hir.eager_func @head_res() -> (out) [
+  @head_res.head,
+  @head_res.tail
+]
+
+// -----
+
+// eager_func: a middle link must take exactly one argument.
+hir.func @mid_arity.head() -> (ctx) {
+  %o = hir.opaque_type
+  hir.signature () -> (%o)
+} {
+  %o = hir.opaque_type
+  %c = hir.opaque_pack()
+  hir.return %c : %o
+}
+hir.func @mid_arity.mid(%a, %b) -> (ctx) {
+  %o = hir.opaque_type
+  hir.signature (%o, %o) -> (%o)
+} {
+  %o = hir.opaque_type
+  %c = hir.opaque_pack()
+  hir.return %c : %o
+}
+hir.func @mid_arity.tail(%ctx) -> (out) {
+  %o = hir.opaque_type
+  hir.signature (%o) -> (%o)
+} {
+  %o = hir.opaque_type
+  %r = hir.opaque_pack()
+  hir.return %r : %o
+}
+// expected-error @below {{link @mid_arity.mid has 2 arguments, expected 1}}
+hir.eager_func @mid_arity() -> (out) [
+  @mid_arity.head,
+  @mid_arity.mid,
+  @mid_arity.tail
+]
+
+// -----
+
+// eager_func: the tail link takes the declared args plus one context arg.
+hir.func @tail_args.head() -> (ctx) {
+  %o = hir.opaque_type
+  hir.signature () -> (%o)
+} {
+  %o = hir.opaque_type
+  %c = hir.opaque_pack()
+  hir.return %c : %o
+}
+hir.func @tail_args.tail(%x) -> (out) {
+  %o = hir.opaque_type
+  hir.signature (%o) -> (%o)
+} {
+  %o = hir.opaque_type
+  %r = hir.opaque_pack()
+  hir.return %r : %o
+}
+// expected-error @below {{link @tail_args.tail has 1 arguments, expected 2}}
+hir.eager_func @tail_args(x) -> (out) [
+  @tail_args.head,
+  @tail_args.tail
+]
+
+// -----
+
+// eager_func: the tail link produces exactly the declared results.
+hir.func @tail_res.head() -> (ctx) {
+  %o = hir.opaque_type
+  hir.signature () -> (%o)
+} {
+  %o = hir.opaque_type
+  %c = hir.opaque_pack()
+  hir.return %c : %o
+}
+hir.func @tail_res.tail(%x, %ctx) -> () {
+  %o = hir.opaque_type
+  hir.signature (%o, %o) -> ()
+} {
+  hir.return
+}
+// expected-error @below {{link @tail_res.tail has 0 results, expected 1}}
+hir.eager_func @tail_res(x) -> (out) [
+  @tail_res.head,
+  @tail_res.tail
+]
+
+// -----
+
+// eager_func: every link must resolve to a symbol.
+hir.func @unresolved.tail(%ctx) -> (out) {
+  %o = hir.opaque_type
+  hir.signature (%o) -> (%o)
+} {
+  %o = hir.opaque_type
+  %r = hir.opaque_pack()
+  hir.return %r : %o
+}
+// expected-error @below {{link @nope does not reference a valid symbol}}
+hir.eager_func @unresolved() -> (out) [
+  @nope,
+  @unresolved.tail
+]
+
+// -----
+
+// eager_func: every link must resolve to an `hir.func`.
+func.func @not_a_func() {
+  return
+}
+hir.func @wrong_kind.tail(%ctx) -> (out) {
+  %o = hir.opaque_type
+  hir.signature (%o) -> (%o)
+} {
+  %o = hir.opaque_type
+  %r = hir.opaque_pack()
+  hir.return %r : %o
+}
+// expected-error @below {{link @not_a_func must reference an `hir.func`}}
+hir.eager_func @wrong_kind() -> (out) [
+  @not_a_func,
+  @wrong_kind.tail
+]
+
+// -----
+
+// hir.call: argument count must match an eager_func callee.
+hir.func @call_mismatch.head() -> (ctx) {
+  %o = hir.opaque_type
+  hir.signature () -> (%o)
+} {
+  %o = hir.opaque_type
+  %c = hir.opaque_pack()
+  hir.return %c : %o
+}
+hir.func @call_mismatch.tail(%a, %b, %ctx) -> (out) {
+  %o = hir.opaque_type
+  hir.signature (%o, %o, %o) -> (%o)
+} {
+  %o = hir.opaque_type
+  %r = hir.opaque_pack()
+  hir.return %r : %o
+}
+hir.eager_func @call_mismatch(a, b) -> (out) [
+  @call_mismatch.head,
+  @call_mismatch.tail
+]
+%cm_ty = hir.int_type
+// expected-error @below {{has 1 arguments, but callee @call_mismatch expects 2}}
+hir.call @call_mismatch(%cm_ty) : (%cm_ty) -> (%cm_ty)

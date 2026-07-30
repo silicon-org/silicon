@@ -171,6 +171,66 @@ hir.multiphase_func @MultiNoArgs() -> (out) [
   @MultiNoArgs.2
 ]
 
+// eager_func link functions: head takes no args and yields a context; the tail
+// takes the declared args plus the incoming context.
+hir.func @Eager.head() -> (ctx) {
+  %o = hir.opaque_type
+  hir.signature () -> (%o)
+} {
+  %o = hir.opaque_type
+  %c = hir.opaque_pack()
+  hir.return %c : %o
+}
+hir.func @Eager.tail(%a, %b, %ctx) -> (out) {
+  %o = hir.opaque_type
+  hir.signature (%o, %o, %o) -> (%o)
+} {
+  %o = hir.opaque_type
+  %r = hir.opaque_pack()
+  hir.return %r : %o
+}
+
+// eager_func with a two-link chain
+hir.eager_func @Eager(a, b) -> (out) [
+  @Eager.head,
+  @Eager.tail
+]
+
+// hir.call targeting an eager_func, using the same external signature as an
+// ordinary function
+hir.call @Eager(%int_type, %c42_int) : (%int_type, %int_type) -> (%int_type)
+
+// eager_func middle link: one incoming and one outgoing context
+hir.func @Eager3.mid(%ctx) -> (ctx) {
+  %o = hir.opaque_type
+  hir.signature (%o) -> (%o)
+} {
+  %o = hir.opaque_type
+  %c = hir.opaque_pack()
+  hir.return %c : %o
+}
+hir.func @Eager3.tail(%x, %ctx) -> (r) {
+  %o = hir.opaque_type
+  hir.signature (%o, %o) -> (%o)
+} {
+  %o = hir.opaque_type
+  %r = hir.opaque_pack()
+  hir.return %r : %o
+}
+
+// eager_func with a middle link
+hir.eager_func @Eager3(x) -> (r) [
+  @Eager.head,
+  @Eager3.mid,
+  @Eager3.tail
+]
+
+// eager_func with explicit visibility
+hir.eager_func private @EagerPriv(a, b) -> (out) [
+  @Eager.head,
+  @Eager.tail
+]
+
 // opaque ops
 hir.opaque_type
 %opaque_a = hir.int_type

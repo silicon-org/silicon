@@ -759,6 +759,185 @@ MultiphaseFuncOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 }
 
 //===----------------------------------------------------------------------===//
+// EagerFuncOp
+//===----------------------------------------------------------------------===//
+
+// # Custom Parser for EagerFuncOp
+//
+// The assembly format is:
+//   hir.eager_func @name(arg, ...) -> (result, ...) [
+//     @sym, ...
+//   ]
+//
+// Unlike `hir.multiphase_func`, arguments carry no `first`/`last` marker: all
+// declared arguments belong to the tail link.
+
+ParseResult EagerFuncOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto &props = result.getOrAddProperties<EagerFuncOp::Properties>();
+  auto *ctx = parser.getContext();
+  auto builder = OpBuilder(ctx);
+
+  // Parse optional visibility.
+  StringAttr visAttr;
+  if (parseSymbolVisibility(parser, visAttr))
+    return failure();
+  if (visAttr)
+    props.sym_visibility = visAttr;
+
+  // Parse symbol name.
+  StringAttr nameAttr;
+  if (parser.parseSymbolName(nameAttr))
+    return failure();
+  props.sym_name = nameAttr;
+
+  // Parse argument list: (name, ...).
+  SmallVector<Attribute> argNames;
+  if (parser.parseLParen())
+    return failure();
+  if (failed(parser.parseOptionalRParen())) {
+    do {
+      std::string name;
+      if (parser.parseKeywordOrString(&name))
+        return failure();
+      argNames.push_back(builder.getStringAttr(name));
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRParen())
+      return failure();
+  }
+  props.argNames = builder.getArrayAttr(argNames);
+
+  // Parse result list: -> (name, ...).
+  SmallVector<Attribute> resultNames;
+  if (parser.parseArrow() || parser.parseLParen())
+    return failure();
+  if (failed(parser.parseOptionalRParen())) {
+    do {
+      std::string name;
+      if (parser.parseKeywordOrString(&name))
+        return failure();
+      resultNames.push_back(builder.getStringAttr(name));
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRParen())
+      return failure();
+  }
+  props.resultNames = builder.getArrayAttr(resultNames);
+
+  // Parse link list: [@sym, ...].
+  SmallVector<Attribute> phaseFuncs;
+  if (parser.parseLSquare())
+    return failure();
+  if (failed(parser.parseOptionalRSquare())) {
+    do {
+      FlatSymbolRefAttr sym;
+      if (parser.parseAttribute(sym))
+        return failure();
+      phaseFuncs.push_back(sym);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRSquare())
+      return failure();
+  }
+  props.phaseFuncs = builder.getArrayAttr(phaseFuncs);
+
+  return success();
+}
+
+void EagerFuncOp::print(OpAsmPrinter &p) {
+  p << ' ';
+  printSymbolVisibility(p, *this, getSymVisibilityAttr());
+  p.printSymbolName(getSymName());
+
+  // Print argument list.
+  p << '(';
+  auto argNames = getArgNames();
+  for (size_t i = 0, e = argNames.size(); i < e; ++i) {
+    if (i)
+      p << ", ";
+    p << cast<StringAttr>(argNames[i]).getValue();
+  }
+  p << ')';
+
+  // Print result list.
+  p << " -> (";
+  auto resultNames = getResultNames();
+  for (size_t i = 0, e = resultNames.size(); i < e; ++i) {
+    if (i)
+      p << ", ";
+    p << cast<StringAttr>(resultNames[i]).getValue();
+  }
+  p << ") [";
+
+  // Print link list, one entry per line.
+  auto phaseFuncs = getPhaseFuncs();
+  for (size_t i = 0, e = phaseFuncs.size(); i < e; ++i) {
+    if (i)
+      p << ',';
+    p.printNewline();
+    p << "  ";
+    p.printAttribute(phaseFuncs[i]);
+  }
+  p.printNewline();
+  p << ']';
+}
+
+LogicalResult EagerFuncOp::verify() {
+  if (getPhaseFuncs().size() < 2)
+    return emitOpError() << "phaseFuncs must have at least two entries";
+  return success();
+}
+
+/// Verify that each link referenced by the eager_func resolves to an `hir.func`
+/// with the expected number of arguments and results. The links chain an
+/// opaque context value:
+///
+/// - Head link: 0 arguments, 1 result (outgoing context).
+/// - Middle links: 1 argument (incoming context), 1 result (outgoing context).
+/// - Tail link: declared arguments + 1 (incoming context), declared results.
+LogicalResult
+EagerFuncOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto phaseFuncs = getPhaseFuncs();
+  unsigned n = phaseFuncs.size();
+  unsigned declaredArgs = getArgNames().size();
+  unsigned declaredResults = getResultNames().size();
+
+  for (unsigned i = 0; i < n; ++i) {
+    auto sym = cast<FlatSymbolRefAttr>(phaseFuncs[i]);
+    auto *symOp = symbolTable.lookupNearestSymbolFrom(getOperation(), sym);
+    if (!symOp)
+      return emitOpError() << "link " << sym
+                           << " does not reference a valid symbol";
+    auto func = dyn_cast<FuncOp>(symOp);
+    if (!func)
+      return emitOpError() << "link " << sym << " must reference an `hir.func`";
+
+    unsigned actualArgs = func.getBody().front().getNumArguments();
+    unsigned actualResults = func.getResultNames().size();
+
+    // Compute expected arg/result counts based on position.
+    unsigned expectedArgs, expectedResults;
+    if (i == 0) {
+      expectedArgs = 0;
+      expectedResults = 1; // ctx
+    } else if (i == n - 1) {
+      expectedArgs = declaredArgs + 1; // declared args + ctx
+      expectedResults = declaredResults;
+    } else {
+      expectedArgs = 1;    // ctx
+      expectedResults = 1; // ctx
+    }
+
+    if (actualArgs != expectedArgs)
+      return emitOpError() << "link " << sym << " has " << actualArgs
+                           << " arguments, expected " << expectedArgs;
+
+    if (actualResults != expectedResults)
+      return emitOpError() << "link " << sym << " has " << actualResults
+                           << " results, expected " << expectedResults;
+  }
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // CallOp
 //===----------------------------------------------------------------------===//
 
@@ -779,8 +958,8 @@ CallOp::inferReturnTypes(MLIRContext *ctx, std::optional<Location>,
 
 /// Verify that the call's argument and result counts match the callee's
 /// interface. The callee may be an `hir.func` (matched against block args and
-/// return values) or an `hir.multiphase_func` (matched against declared args
-/// and results).
+/// return values), an `hir.multiphase_func`, or an `hir.eager_func` (matched
+/// against declared args and results).
 LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   auto callee = getCalleeAttr();
   unsigned expectedArgs, expectedResults;
@@ -794,6 +973,10 @@ LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
                      getOperation(), callee)) {
     expectedArgs = mpFunc.getArgNames().size();
     expectedResults = mpFunc.getResultNames().size();
+  } else if (auto eagerFunc = symbolTable.lookupNearestSymbolFrom<EagerFuncOp>(
+                 getOperation(), callee)) {
+    expectedArgs = eagerFunc.getArgNames().size();
+    expectedResults = eagerFunc.getResultNames().size();
   } else {
     // The callee may have been lowered to MIR or evaluated already. In that
     // case we can't check counts — just succeed.

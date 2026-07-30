@@ -726,6 +726,54 @@ def MultiphaseFuncOp : HIROp<"multiphase_func", [
   let hasVerifier = 1;
 }
 
+def EagerFuncOp : HIROp<"eager_func", [
+  Symbol,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+]> {
+  let summary = "A chain of eagerly-evaluated compile-time links ending in a runtime tail";
+  let description = [{
+    An `hir.eager_func` names a chain of functions whose leading links are
+    compile-time phases the evaluation driver evaluates eagerly, ending in a
+    tail link that carries the function's declared runtime arguments. The shape
+    is:
+
+    ```mlir
+    hir.eager_func @f(a, b) -> (r, ctx) [@f.pre0, @f.pre1, @f.tail]
+    ```
+
+    The links chain an opaque context value from one to the next:
+
+    - The head link takes no arguments and produces exactly one result, the
+      outgoing context.
+    - Each middle link takes exactly one argument, the incoming context, and
+      produces exactly one result, the outgoing context.
+    - The tail link takes the op's declared arguments plus one trailing context
+      argument, and produces exactly the op's declared results.
+
+    There are always at least two links, and every link resolves to an
+    `hir.func`. The op's external signature is exactly its declared arguments
+    and results, so `hir.call` targets an `hir.eager_func` like it targets an
+    `hir.func`.
+
+    Eagerness is policy carried by this op's existence, not inferred from a
+    function being zero-argument: a plain zero-argument function is runtime code
+    and is never eagerly interpreted, whereas the links of an `hir.eager_func`
+    are. The evaluation driver evaluates the head link once it becomes evaluable
+    and specializes the next link forward. When reduction leaves a single link,
+    the whole op is replaced by a same-name `hir.func` shim that tail-calls that
+    link, so no symbol use is ever rewritten.
+  }];
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<StrAttr>:$sym_visibility,
+    ArrayAttr:$argNames,
+    ArrayAttr:$resultNames,
+    ArrayAttr:$phaseFuncs
+  );
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // Opaque Bundles
 //===----------------------------------------------------------------------===//
