@@ -29,6 +29,7 @@ Five stages, each owning a single concern:
    Its output contract is purely structural, with no notion of "floating" left: regions hold exactly `uir.phase` ops and the region terminator, every value crossing between phase ops is yielded by the immediately preceding one, and every function result rides the `uir.phase_return` of its phase.
 5. **Function splitting** is phase-blind: it never asks what phase an op has.
    It expects the normalized contract, creates one per-phase `hir.func` per `uir.phase` op (never synthesizing any), converts phase-op result flow into opaque context pack/unpack, rewrites `uir.phase_call` to `hir.call`, reconstructs signatures, and emits the structural ops (`uir.split_func`, `hir.eager_func`).
+   It also diagnoses `uir.phase` ops later than the declared span as a user error (runtime work past the last declared phase has no executor), which catches call-implied late phases uniformly since calls are already decomposed into `uir.phase_call` entries by this point.
 
 ## New ops
 

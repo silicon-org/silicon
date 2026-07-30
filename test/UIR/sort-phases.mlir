@@ -415,14 +415,16 @@ uir.func @ResultCrossing(%a: -1, %b: 0) -> (c: 0) {
 }
 
 //===----------------------------------------------------------------------===//
-// Internal phases: content past the last declared phase wraps into a
-// uir.phase op like any other phase, even though callers cannot target it;
-// crossings into the internal phase are ordinary phase results.
+// Trailing declared phase: a phase later than 0 that the function declares
+// (here a phase-1 result) wraps its content into a uir.phase op like any
+// other phase; crossings into it are ordinary phase results. Content past the
+// last *declared* phase is rejected elsewhere; a declared trailing phase is
+// legal.
 
-// CHECK-LABEL: uir.func @TrailingInternalPhase
-uir.func @TrailingInternalPhase(%a: 0) -> (result: 0) {
+// CHECK-LABEL: uir.func @TrailingDeclaredPhase
+uir.func @TrailingDeclaredPhase(%a: 0) -> (result: 0, late: 1) {
   %0 = hir.int_type
-  uir.signature (%0) -> (%0)
+  uir.signature (%0) -> (%0, %0)
 } {
   // CHECK: uir.signature
   // CHECK: [[T:%.+]] = hir.int_type
@@ -435,15 +437,52 @@ uir.func @TrailingInternalPhase(%a: 0) -> (result: 0) {
   // CHECK-NEXT: uir.phase 1 {
   // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
   // CHECK-NEXT:   hir.write_var [[V]], [[P]] : [[T]]
-  // CHECK-NEXT:   uir.phase_return{{$}}
+  // CHECK-NEXT:   [[RD:%.+]] = hir.read_var [[V]] : [[T]]
+  // CHECK-NEXT:   uir.phase_return [[RD]] : [[T]]
   // CHECK-NEXT: }
-  uir.expr pin 1 {
+  %late = uir.expr pin 1 : %t {
     %v = hir.var : %t
     hir.write_var %v, %sq : %t
-    uir.yield
+    %rd = hir.read_var %v : %t
+    uir.yield %rd : %t
   }
   // CHECK-NEXT: uir.unreachable
-  uir.return %sq : %t
+  uir.return %sq, %late : %t, %t
+}
+
+//===----------------------------------------------------------------------===//
+// Pre-span content: a phase earlier than the span minimum (here phase -1,
+// below the phase-0 span of an all-phase-0 function) is legal and sorts
+// without error. It is argument-free by construction — no declared value
+// exists that early — and wraps into its own phase op ahead of phase 0.
+
+// CHECK-LABEL: uir.func @PreSpanContent
+uir.func @PreSpanContent(%x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[C:%.+]] = hir.constant_int 1 : [[T]]
+  %c = hir.constant_int 1 : %t
+  // CHECK-NEXT: uir.phase -1 {
+  // CHECK-NEXT:   [[V:%.+]] = hir.var : [[T]]
+  // CHECK-NEXT:   hir.write_var [[V]], [[C]] : [[T]]
+  // CHECK-NEXT:   uir.phase_return{{$}}
+  // CHECK-NEXT: }
+  uir.expr pin -1 {
+    %v = hir.var : %t
+    hir.write_var %v, %c : %t
+    uir.yield
+  }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[R:%.+]] = hir.add %x, %x : [[T]]
+  // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
+  // CHECK-NEXT: }
+  %r = hir.add %x, %x : %t
+  // CHECK-NEXT: uir.unreachable
+  uir.return %r : %t
 }
 
 //===----------------------------------------------------------------------===//
@@ -528,9 +567,9 @@ uir.func @DeadContentAcrossPhases(%a: -1, %x: 0) -> () {
 // op lands in the receiving pick's matching arm.
 
 // CHECK-LABEL: uir.func @DeadContentInBranch
-uir.func @DeadContentInBranch(%c: 0, %x: 0) -> () {
+uir.func @DeadContentInBranch(%c: 0, %x: 0, %dyn: 1) -> () {
   %0 = hir.int_type
-  uir.signature (%0, %0) -> ()
+  uir.signature (%0, %0, %0) -> ()
 } {
   // CHECK: [[T:%.+]] = hir.int_type
   %t = hir.int_type
@@ -1355,15 +1394,15 @@ uir.func @IfSameValueChoice(%c: 0, %y: 1) -> (result: 1) {
 }
 
 //===----------------------------------------------------------------------===//
-// Branch extraction into an internal phase: a phase-0 if with later-phase
-// (phase 1) content and no results. The else-less if gets a materialized
-// else region for the not-taken tag, and the pick lands in the trailing
-// internal phase 1.
+// Branch extraction into a trailing declared phase: a phase-0 if with
+// later-phase (phase 1) content and no results, the phase declared via a dyn
+// argument. The else-less if gets a materialized else region for the
+// not-taken tag, and the pick lands in the trailing phase 1.
 
 // CHECK-LABEL: uir.func @IfLaterContentInternal
-uir.func @IfLaterContentInternal(%c: 0, %x: 0) -> () {
+uir.func @IfLaterContentInternal(%c: 0, %x: 0, %dyn: 1) -> () {
   %0 = hir.int_type
-  uir.signature (%0, %0) -> ()
+  uir.signature (%0, %0, %0) -> ()
 } {
   // CHECK: hir.int_type
   %t = hir.int_type
@@ -1528,9 +1567,9 @@ uir.func @IfArmCall(%c: -1, %x: 0) -> (result: 0) {
 // the moved content.
 
 // CHECK-LABEL: uir.func @PickChoiceEffects
-uir.func @PickChoiceEffects(%c: 0, %x: 0) -> () {
+uir.func @PickChoiceEffects(%c: 0, %x: 0, %dyn: 1) -> () {
   %0 = hir.int_type
-  uir.signature (%0, %0) -> ()
+  uir.signature (%0, %0, %0) -> ()
 } {
   // CHECK: uir.signature
   // CHECK: [[T:%.+]] = hir.int_type
@@ -1587,9 +1626,9 @@ uir.func @PickChoiceEffects(%c: 0, %x: 0) -> () {
 // alternative's block argument.
 
 // CHECK-LABEL: uir.func @PickPayloadCrossing
-uir.func @PickPayloadCrossing(%c: 0, %x: 0) -> () {
+uir.func @PickPayloadCrossing(%c: 0, %x: 0, %dyn: 1) -> () {
   %0 = hir.int_type
-  uir.signature (%0, %0) -> ()
+  uir.signature (%0, %0, %0) -> ()
 } {
   // CHECK: uir.signature
   // CHECK: [[T:%.+]] = hir.int_type
@@ -1756,9 +1795,9 @@ uir.func @PickPartialChoiceResult(%c: 0, %y: 1) -> (result: 1) {
 // nest one per level.
 
 // CHECK-LABEL: uir.func @IfInPickChoice
-uir.func @IfInPickChoice(%c: 0, %d: 0, %x: 0) -> () {
+uir.func @IfInPickChoice(%c: 0, %d: 0, %x: 0, %dyn: 1) -> () {
   %0 = hir.int_type
-  uir.signature (%0, %0, %0) -> ()
+  uir.signature (%0, %0, %0, %0) -> ()
 } {
   // CHECK: uir.signature
   // CHECK: [[T:%.+]] = hir.int_type
@@ -2023,9 +2062,9 @@ uir.func @SingleProviderInternalPick(%c: 0, %y: 1) -> (result: 1) {
 // carries which arm ran; the dead alternative yields nothing.
 
 // CHECK-LABEL: uir.func @UnreachableArmIf
-uir.func @UnreachableArmIf(%c: 0, %x: 0) -> () {
+uir.func @UnreachableArmIf(%c: 0, %x: 0, %dyn: 1) -> () {
   %0 = hir.int_type
-  uir.signature (%0, %0) -> ()
+  uir.signature (%0, %0, %0) -> ()
 } {
   // CHECK: uir.signature
   // CHECK: [[T:%.+]] = hir.int_type
@@ -2069,9 +2108,9 @@ uir.func @UnreachableArmIf(%c: 0, %x: 0) -> () {
 // leaves the other alternative single-provider; its later effect extracts.
 
 // CHECK-LABEL: uir.func @UnreachableAltPick
-uir.func @UnreachableAltPick(%c: 0, %x: 0) -> () {
+uir.func @UnreachableAltPick(%c: 0, %x: 0, %dyn: 1) -> () {
   %0 = hir.int_type
-  uir.signature (%0, %0) -> ()
+  uir.signature (%0, %0, %0) -> ()
 } {
   // CHECK: uir.signature
   // CHECK: [[T:%.+]] = hir.int_type
@@ -2756,9 +2795,9 @@ uir.func @LoopRecords(%n: -1, %x: 0) -> (result: 0) {
 // (no exit-path choice), it exercises the no-divergence record path.
 
 // CHECK-LABEL: uir.func @LoopNoDivergence
-uir.func @LoopNoDivergence(%n: -1, %x: 0) -> () {
+uir.func @LoopNoDivergence(%n: -1, %x: 0, %dyn: 1) -> () {
   %0 = hir.int_type
-  uir.signature (%0, %0) -> ()
+  uir.signature (%0, %0, %0) -> ()
 } {
   // CHECK: [[T:%.+]] = hir.int_type
   %t = hir.int_type
@@ -6568,9 +6607,9 @@ uir.func @WideBreakPickInReplicate(%c: 0, %x: 2, %y: 2, %n: 0) -> () {
 // and phase 2 unpacks it once more to run the accumulation.
 
 // CHECK-LABEL: uir.func @WideRecordSampleFerry
-uir.func @WideRecordSampleFerry(%n: 0) -> () {
+uir.func @WideRecordSampleFerry(%n: 0, %dyn: 2) -> () {
   %0 = hir.int_type
-  uir.signature (%0) -> ()
+  uir.signature (%0, %0) -> ()
 } {
   // CHECK: uir.signature
   // CHECK: [[T:%.+]] = hir.int_type
@@ -6852,9 +6891,9 @@ uir.func @TranscoderPhase(%n: 0, %x: 2, %y: 2) -> () {
 // consumes it.
 
 // CHECK-LABEL: uir.func @ThreeWideRecordContent
-uir.func @ThreeWideRecordContent(%n: 0) -> () {
+uir.func @ThreeWideRecordContent(%n: 0, %dyn: 3) -> () {
   %0 = hir.int_type
-  uir.signature (%0) -> ()
+  uir.signature (%0, %0) -> ()
 } {
   // CHECK: uir.signature
   // CHECK: [[T:%.+]] = hir.int_type
