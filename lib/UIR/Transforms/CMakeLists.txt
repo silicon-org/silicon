@@ -5,6 +5,7 @@ add_silicon_dialect_library(SiliconUIRTransforms
   SortPhases2.cpp
   SplitPhases2.cpp
   TestPhaseAnalysis2.cpp
+  ThreadPhases.cpp
 
   LINK_LIBS PUBLIC
   SiliconHIR

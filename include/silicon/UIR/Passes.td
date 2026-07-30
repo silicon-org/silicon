@@ -160,6 +160,66 @@ def SortPhasesPass : Pass<"sort-phases", "mlir::ModuleOp"> {
   }];
 }
 
+def ThreadPhasesPass : Pass<"thread-phases", "mlir::ModuleOp"> {
+  let summary = "Thread sorted uir.func content into fully threaded phase form";
+  let description = [{
+    A cheap, purely structural normalization run after `sort-phases` and
+    before the phase-blind function splitter. It reads phase numbers off the
+    `uir.phase` op attributes and the function's declared argument and result
+    phases; it never runs phase analysis. Both the body and signature region
+    of every `uir.func` follow one set of rules.
+
+    Sorted form leaves crossings free to *jump*: a value yielded by phase P
+    may be consumed directly by any later phase, a function argument or a
+    floating op may be consumed at any phase, and externally visible phases
+    without content have no `uir.phase` op. This pass removes all such
+    slack:
+
+    - **Materialize missing phase ops.** After normalization there is exactly
+      one `uir.phase` op for every phase in the contiguous range from the
+      function's earliest phase to its latest, in increasing order. The range
+      spans the function's declared argument and result phases (always
+      including phase 0), every existing `uir.phase` op (pre-span phases
+      earlier than the declared span and internal phases later than it
+      included), and all phases in between. Gap phases and contentless span
+      phases become empty `uir.phase` ops holding just a `uir.phase_return`.
+
+    - **Thread crossings hop-by-hop.** Every value a `uir.phase` op at phase Q
+      consumes from outside it comes, after normalization, from the
+      immediately preceding phase op (Q-1) as one of its results. A value
+      produced in phase P and consumed at phase Q > P+1 is yielded and passed
+      on by every intermediate phase op; a function argument declared at
+      phase P and consumed at a later phase enters the chain at phase P
+      (arguments are consumed directly only in their own declared phase).
+
+    - **Sink floats.** A floating op (a region-free pure op at the region top
+      level) is cloned into each `uir.phase` region that uses it, before its
+      first use; its operands are cloned or threaded along the same rules.
+      Floating ops never consume phase-op results — this is verified and
+      hard-errored. After normalization no floating op remains at the region
+      top level.
+
+    - **Signature interface.** The `uir.signature` terminator's operands are
+      the type-level values of the function's arguments and results. Each is
+      delivered as a result of the `uir.phase` op at that argument's or
+      result's declared phase, so a phase-P argument's type is available at
+      phase P; floating type values sink into that phase and thread as above.
+
+    Every function result already rides the `uir.phase_return` of its declared
+    phase in sorted form; the pass asserts this rather than fixing it.
+
+    Output contract: each region holds exactly `uir.phase` ops (one per phase,
+    contiguous and increasing) plus the region terminator; every value
+    crossing between phases is yielded by the immediately preceding phase op;
+    no floating ops remain; nothing else. Inputs that violate the sorted-form
+    input expectation — an unexpected op kind at the region top level, a
+    floating op consuming a phase-op result, or a value referencing a later or
+    non-result phase interior — are rejected with a diagnostic; this compiler
+    errors loudly rather than silently mis-threading.
+  }];
+  let dependentDialects = ["silicon::hir::HIRDialect"];
+}
+
 def SplitPhases2Pass : Pass<"split-phases2", "mlir::ModuleOp"> {
   let summary = "Split UIR unified functions into per-phase HIR functions";
   let description = [{
