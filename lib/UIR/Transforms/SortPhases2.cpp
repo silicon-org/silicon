@@ -401,12 +401,15 @@ private:
 /// only ever produced by sorting itself, and their presence in the input means
 /// the pipeline is out of order. Reject them loudly instead of treating them as
 /// opaque content, which would silently mis-sort their phase structure (the
-/// phase analysis does not model them). `uir.unreachable_value` is not among
-/// them: it is legal input marking a control-flow slot no path provides, and
-/// analysis models it at the bottom phase `never`.
+/// phase analysis does not model them). Checking for `uir.phase` suffices:
+/// `uir.phase_return` and `uir.phase_call` require a `uir.phase` ancestor by
+/// their verifiers, so the pre-order walk always hits the enclosing phase op
+/// first. `uir.unreachable_value` is not among the rejected ops: it is legal
+/// input marking a control-flow slot no path provides, and analysis models it
+/// at the bottom phase `never`.
 LogicalResult PhaseSorter::rejectSortedVocabulary() {
   auto result = funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
-    if (!isa<PhaseOp, PhaseReturnOp, PhaseCallOp>(op))
+    if (!isa<PhaseOp>(op))
       return WalkResult::advance();
     op->emitOpError() << "is phase-sorting output vocabulary and cannot "
                          "appear in phase-sorting input";
