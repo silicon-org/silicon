@@ -28,7 +28,7 @@ Five stages, each owning a single concern:
    It brings the sorted form into a fully threaded shape: it materializes `uir.phase` ops for externally visible phases that have no content and for intermediate hops of skipping crossings, threads every crossing through adjacent phase ops (function arguments starting at their declared phase), and sinks floating ops into the phase regions that use them.
    Its output contract is purely structural, with no notion of "floating" left: regions hold exactly `uir.phase` ops and the region terminator, every value crossing between phase ops is yielded by the immediately preceding one, and every function result rides the `uir.phase_return` of its phase.
 5. **Function splitting** is phase-blind: it never asks what phase an op has.
-   It expects the normalized contract, creates one per-phase `hir.func` per `uir.phase` op (never synthesizing any), converts phase-op result flow into opaque context pack/unpack, rewrites `uir.phase_call` to `hir.call`, reconstructs signatures, and emits the structural ops (`uir.split_func`, `hir.multiphase_func`).
+   It expects the normalized contract, creates one per-phase `hir.func` per `uir.phase` op (never synthesizing any), converts phase-op result flow into opaque context pack/unpack, rewrites `uir.phase_call` to `hir.call`, reconstructs signatures, and emits the structural ops (`uir.split_func`, `hir.eager_func`).
 
 ## New ops
 
@@ -39,14 +39,28 @@ Five stages, each owning a single concern:
   It carries both the function results belonging to that phase and the values yielded as the phase op's results.
   Exactly one `uir.phase_return` terminates each phase region: early exits are normalized to value form before analysis, so exit values arrive threaded through picks rather than on extra returns.
 - `uir.phase_call`: calls one specific phase of a `uir.func`, with the callee's args and results filtered down to that phase, plus an opaque context value chaining consecutive phase calls.
-  The caller-visible phase entries are exactly the callee's external phases, which are derivable from the callee's *declared* arg/result phases (plus phase 0).
-  No split witness is needed at sort time, so there is no callee-before-caller processing order, and recursion is no longer structurally rejected.
+  The caller-visible phase entries are one per phase in the callee's *declared span* — the range from the earliest to the latest declared argument/result phase, always including phase 0 — with pass-through entries for phases that carry no arguments or results.
+  The span is derivable from the callee's declaration alone: no split witness is needed at sort time, so there is no callee-before-caller processing order, and recursion is no longer structurally rejected.
 
 ## Settled decisions
 
-- **Internal phases.** Sorting distributes content into a `uir.phase` op for every phase, including phases not visible in the function's declaration — leading, mid-range, and trailing internal phases, such as effect-only `dyn` content past the last declared phase.
-  Callers cannot target internal phases: the `uir.phase_call` entries are exactly the declaration-derived external phases.
-  How internal phases end up executing is a function-splitting and evaluation concern (multiphase funcs are the likely vehicle), not a sorting concern; sorting stoically wraps them like any other phase.
+- **Phase span and internal phases** (settled 2026-07-29, superseding the multiphase-absorption model).
+  A function's phase span is the range from its earliest to its latest declared argument/result phase, always including phase 0.
+  Callers thread one `uir.phase_call` entry per phase in the span, including pass-through entries for phases without arguments or results, so mid-span internal phases execute lock-step in the caller's timeline and are never hidden behind a callee-side vehicle.
+  Content *later* than the span is a user error: runtime work past the last declared phase has no executor, and the fix is declaring it (e.g. a `dyn` result or effect marker).
+  Content *earlier* than the span is legal: it is argument-free by construction (no declared value exists that early), prefixes into the earliest span entry, and is eagerly evaluated at definition time.
+  The asymmetry is deliberate: compile-time work can always be pulled earlier to definition time, later runtime work cannot.
+  Sorting itself stays span-agnostic: it distributes content into a `uir.phase` op for every phase with content, and the span error and eager absorption are splitting/evaluation concerns.
+- **Eager evaluation is explicit policy, never inferred from zero-argument-ness** (settled 2026-07-29).
+  A zero-argument phase-0 function is runtime code; the compiler is not entitled to interpret it.
+  Pre-span phases are compile-time by construction, and `hir.eager_func` — the successor of `hir.multiphase_func` — is the op that carries the eagerness policy: `hir.eager_func @f(args) -> (results) [@pre0, ..., @tail]`, where the head link is always zero-argument, consecutive links chain an opaque context, and the tail takes the earliest span entry's declared arguments.
+  The op's external signature is exactly the earliest span entry's signature, so `uir.split_func` entries and `hir.call`s target it like any function; the `first`/`last` argument split of `hir.multiphase_func` disappears.
+  The evaluation driver keys on the op's existence: it evaluates the head link when it becomes evaluable and specializes the next link forward; when a single link remains, the op is replaced by a same-name `hir.func` shim that tail-calls it, so no symbol use is ever rewritten.
+  Expressing the eager chain as plain calls and SSA use-def chains instead of a dedicated op is deferred exploration.
+- **`uir.split_func` is the stable late-binding interface** (settled 2026-07-29).
+  Its purpose is to combine the post-splitting function symbols back into a single unsplit symbol that `uir.call` can target interchangeably with a `uir.func`; this is what enables library precompilation.
+  Its signature region holds the original, unsorted signature — the type interface that call checking inlines at late-bound call sites, folding toward constants as eager evaluation publishes results; pre-span signature computation is additionally relocated into the eager chain's bodies as re-evaluable clones.
+  The old "decomposition witness" role is obsolete: call decomposition is declaration-derived and never consults the split_func.
 - **No empty phases in sorted output.** Sorting creates a `uir.phase` op only for phases that have content; it never materializes empty ones.
   A `uir.phase_return` carrying function results or yields is content: a result-only phase gets a phase op holding just its `uir.phase_return`.
   Empty and passthrough-only phase ops are threading normalization's vocabulary: it materializes them freely for gap phases and threading hops, so the splitter emits exactly one function per phase op and never synthesizes.
