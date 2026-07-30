@@ -220,6 +220,55 @@ def ThreadPhasesPass : Pass<"thread-phases", "mlir::ModuleOp"> {
   let dependentDialects = ["silicon::hir::HIRDialect"];
 }
 
+def SplitFuncsPass : Pass<"split-funcs", "mlir::ModuleOp"> {
+  let summary = "Split threaded uir.func ops into per-phase hir.func ops";
+  let description = [{
+    The phase-blind function splitter. It consumes the fully threaded phase
+    form produced by `thread-phases` and never runs phase analysis: the only
+    phase information it reads is the `uir.phase` op `phase` attribute and each
+    function's declared `argPhases`/`resultPhases`.
+
+    For every `uir.func @f`, in dependency-free order, the pass:
+
+    - **Diagnoses** content later than the declared span. The span is the
+      integer range over the declared argument and result phases, always
+      including phase 0; a `uir.phase` op later than the span maximum executes
+      runtime work past the last declared phase, which has no executor, and is
+      a user error whose fix is declaring that phase (e.g. a `dyn` result).
+      Because calls are already decomposed into `uir.phase_call` entries living
+      inside phase ops, this uniformly catches call-implied late phases. The
+      pass also rejects any region content that violates the threaded input
+      contract (an op that is neither a `uir.phase` nor the terminator, a wrong
+      terminator, or a phase whose body is not straight-line).
+
+    - **Splits** each `uir.phase` op in the body region into one private
+      `hir.func @f.<phase>` (negative phases quote the symbol). A func takes its
+      phase's declared arguments plus a trailing opaque context argument for
+      every phase but the first, and returns its phase's declared results plus a
+      trailing opaque context result for every phase but the last. Values
+      crossing a phase boundary are packed with `hir.opaque_pack` into the
+      producing func's context result and unpacked in the consuming func. Each
+      `uir.phase_call` becomes an `hir.call` to the callee's concrete per-phase
+      func symbol, its context threading like any other crossing.
+
+    - **Reconstructs signatures** for each per-phase func. Each phase boundary's
+      opaque context carries the deduplicated union of the body crossings the
+      next phase consumes and the signature type values a later signature
+      depends on; a dependent argument type computed one phase earlier is
+      unpacked in the signature region, relocated (recomputed) into the
+      producing phase's body when the body does not already thread it.
+
+    - **Emits structural ops**: a `uir.split_func @f` replacing the original,
+      holding the flat de-phase-ified signature and mapping each span phase to
+      its per-phase func; and, when the function has pre-span compile-time
+      phases, an `hir.eager_func` chaining them into the earliest span entry,
+      which the `uir.split_func` names in that phase's slot.
+
+    Anything the pass cannot handle is a hard error, never a silent skip.
+  }];
+  let dependentDialects = ["silicon::hir::HIRDialect"];
+}
+
 def SplitPhases2Pass : Pass<"split-phases2", "mlir::ModuleOp"> {
   let summary = "Split UIR unified functions into per-phase HIR functions";
   let description = [{
