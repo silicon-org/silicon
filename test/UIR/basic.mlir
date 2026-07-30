@@ -389,6 +389,32 @@ uir.func @phase_call_split_callee(%a: -1) -> (result: 0) {
   uir.return %r : %a
 }
 
+// A callee whose declared phases have a gap (arguments at -2 and 0, none at
+// -1) exposes an internal span phase as a pass-through uir.phase_call: no
+// arguments or results, threading only context.
+// CHECK-LABEL: uir.func @gap_callee
+uir.func @gap_callee(%a: -2, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %r = hir.add %a, %b : %t
+  uir.return %r : %t
+}
+
+// CHECK-LABEL: uir.func @phase_call_gap
+uir.func @phase_call_gap(%n: -2, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %ctx0 = uir.phase_call @gap_callee[-2] (%n) : (%t) -> () context
+  // CHECK: uir.phase_call @gap_callee[-1] () context %{{.+}} : () -> () context
+  %ctx1 = uir.phase_call @gap_callee[-1] () context %ctx0 : () -> () context
+  %r = uir.phase_call @gap_callee[0] (%x) context %ctx1 : (%t) -> (%t)
+  uir.return %r : %t
+}
+
 // # Exit Terminators in Replicate/Pick Bodies
 //
 // Receiving-phase replicate/pick bodies may terminate in uir.return instead

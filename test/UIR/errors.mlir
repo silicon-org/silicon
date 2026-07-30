@@ -458,7 +458,7 @@ uir.func @pc_callee(%x: 0) -> (result: 0) {
 uir.func @phase_call_bad_phase(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{callee @pc_callee has no externally visible phase 1}}
+  // expected-error @below {{callee @pc_callee has no phase 1 in its declared span [0, 0]}}
   %r = uir.phase_call @pc_callee[1] (%a) : (%a) -> (%a)
   uir.return %r : %a
 }
@@ -508,7 +508,7 @@ uir.func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
 uir.func @phase_call_missing_context(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{requires a context operand: phase 0 is not the callee's first externally visible phase}}
+  // expected-error @below {{requires a context operand: phase 0 is not the callee's first span phase}}
   %r = uir.phase_call @pc_callee2[0] (%a) : (%a) -> (%a)
   uir.return %r : %a
 }
@@ -524,7 +524,7 @@ uir.func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
 uir.func @phase_call_spurious_context(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{cannot have a context operand: phase -1 is the callee's first externally visible phase}}
+  // expected-error @below {{cannot have a context operand: phase -1 is the callee's first span phase}}
   %ctx = uir.phase_call @pc_callee2[-1] (%a) context %a : (%a) -> () context
   uir.return %a : %a
 }
@@ -540,7 +540,7 @@ uir.func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
 uir.func @phase_call_missing_context_out(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{requires a context result: phase -1 is not the callee's last externally visible phase}}
+  // expected-error @below {{requires a context result: phase -1 is not the callee's last span phase}}
   uir.phase_call @pc_callee2[-1] (%a) : (%a) -> ()
   uir.return %a : %a
 }
@@ -556,9 +556,48 @@ uir.func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
 uir.func @phase_call_spurious_context_out(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
-  // expected-error @below {{cannot have a context result: phase 0 is the callee's last externally visible phase}}
+  // expected-error @below {{cannot have a context result: phase 0 is the callee's last span phase}}
   %r, %ctx = uir.phase_call @pc_callee2[0] (%a) context %a : (%a) -> (%a) context
   uir.return %r : %a
+}
+
+// -----
+
+// Verify that a mid-span pass-through entry (a gap phase with no arguments or
+// results) still requires a context operand.
+uir.func @pc_gap_callee(%m: -2, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %r = hir.add %m, %x : %t
+  uir.return %r : %t
+}
+uir.func @phase_call_gap_missing_context(%a: 0) -> (result: 0) {
+  uir.signature (%a) -> (%a)
+} {
+  // expected-error @below {{requires a context operand: phase -1 is not the callee's first span phase}}
+  %ctx = uir.phase_call @pc_gap_callee[-1] () : () -> () context
+  uir.return %a : %a
+}
+
+// -----
+
+// Verify that uir.phase_call rejects an entry phase below the declared span.
+uir.func @pc_gap_callee(%m: -2, %x: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %r = hir.add %m, %x : %t
+  uir.return %r : %t
+}
+uir.func @phase_call_below_span(%a: 0) -> (result: 0) {
+  uir.signature (%a) -> (%a)
+} {
+  // expected-error @below {{callee @pc_gap_callee has no phase -3 in its declared span [-2, 0]}}
+  %ctx = uir.phase_call @pc_gap_callee[-3] () : () -> () context
+  uir.return %a : %a
 }
 
 // -----

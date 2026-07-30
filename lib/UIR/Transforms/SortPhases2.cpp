@@ -53,7 +53,7 @@
 // replaced by their inputs: the grouping ops exist to communicate phase
 // constraints to PhaseAnalysis and only stand in the way once the phase map
 // is computed. Then every `uir.call` is decomposed into `uir.phase_call`
-// entries, one per externally visible callee phase; every earlier-phase
+// entries, one per phase in the callee's declared span; every earlier-phase
 // branch — a `uir.if` or an `hir.pick` — with later-phase content or a
 // choice-ified result is decomposed
 // into a choice-yielding branch plus a receiving `hir.pick`; and every
@@ -62,17 +62,20 @@
 // plus a receiving `hir.replicate`:
 //
 // - **Decompose**: a call is replaced by one `uir.phase_call` per phase in
-//   the callee's declaration-derived external phase set (its declared arg
-//   and result phases plus phase 0, in the callee's own frame). The call's
-//   own analysis phase is the single frame shift shared by all entries, so
-//   the entry for callee-frame phase p lands at caller phase shift + p. Each
-//   entry carries the call's arguments and results filtered to p, and
-//   consecutive entries chain in ascending phase order through an opaque
-//   context value. The entries are ordinary ops that the wrap and cross
-//   rules then place and thread like any other content; the context value
-//   crosses phases as an ordinary crossing. Deriving the entries from the
-//   callee declaration alone means no split witness, no callee-before-caller
-//   order, and recursion decomposes like any other call.
+//   the callee's declaration-derived span — the contiguous range from its
+//   earliest to its latest declared arg or result phase, always including
+//   phase 0, in the callee's own frame. Gap phases inside the span carry no
+//   declared args or results and become pass-through entries (context only),
+//   so the callee's mid-span internal phases run lock-step in the caller's
+//   timeline. The call's own analysis phase is the single frame shift shared
+//   by all entries, so the entry for callee-frame phase p lands at caller
+//   phase shift + p. Each entry carries the call's arguments and results
+//   filtered to p, and consecutive entries chain in ascending phase order
+//   through an opaque context value. The entries are ordinary ops that the
+//   wrap and cross rules then place and thread like any other content; the
+//   context value crosses phases as an ordinary crossing. Deriving the
+//   entries from the callee declaration alone means no split witness, no
+//   callee-before-caller order, and recursion decomposes like any other call.
 //
 // - **Extract branches**: a branch (`uir.if` or `hir.pick`) at phase p whose
 //   arms hold later-phase content, or whose result selects between
@@ -486,14 +489,16 @@ LogicalResult PhaseSorter::dissolveExprsAndPins() {
 // Decompose Calls
 //===----------------------------------------------------------------------===//
 
-/// The callee's declaration-derived externally visible phases: its declared
-/// argument and result phases plus phase 0, in the callee's own frame, sorted
-/// and deduplicated. This mirrors the `uir.phase_call` verifier, so every
-/// entry the decomposition emits validates against the same set. A callee may
-/// be a `uir.func` (the common case at sort time) or a `uir.split_func` (an
-/// already-split callee); both carry the declared phases.
-static LogicalResult calleeExternalPhases(CallOp callOp, Operation *calleeOp,
-                                          SmallVectorImpl<int32_t> &externals) {
+/// The callee's declaration-derived phase span: the contiguous integer range
+/// from its earliest to its latest declared argument or result phase, always
+/// including phase 0, in the callee's own frame. This mirrors the
+/// `uir.phase_call` verifier, so every entry the decomposition emits — one per
+/// phase in the span, including gap phases carrying no arguments or results —
+/// validates against the same range. A callee may be a `uir.func` (the common
+/// case at sort time) or a `uir.split_func` (an already-split callee); both
+/// carry the declared phases.
+static LogicalResult calleeSpanPhases(CallOp callOp, Operation *calleeOp,
+                                      SmallVectorImpl<int32_t> &span) {
   ArrayRef<int32_t> argPhases, resultPhases;
   if (auto funcOp = dyn_cast<FuncOp>(calleeOp)) {
     argPhases = funcOp.getArgPhases();
@@ -506,12 +511,17 @@ static LogicalResult calleeExternalPhases(CallOp callOp, Operation *calleeOp,
            << "callee @" << callOp.getCallee()
            << " is neither a 'uir.func' nor a 'uir.split_func'";
   }
-  externals.push_back(0);
-  externals.append(argPhases.begin(), argPhases.end());
-  externals.append(resultPhases.begin(), resultPhases.end());
-  llvm::sort(externals);
-  externals.erase(std::unique(externals.begin(), externals.end()),
-                  externals.end());
+  int32_t lo = 0, hi = 0;
+  for (auto phase : argPhases) {
+    lo = std::min(lo, phase);
+    hi = std::max(hi, phase);
+  }
+  for (auto phase : resultPhases) {
+    lo = std::min(lo, phase);
+    hi = std::max(hi, phase);
+  }
+  for (int32_t phase = lo; phase <= hi; ++phase)
+    span.push_back(phase);
   return success();
 }
 
@@ -527,17 +537,22 @@ LogicalResult PhaseSorter::decomposeCalls() {
 
 /// Decompose one `uir.call` into per-phase `uir.phase_call` entries.
 ///
-/// The callee's externally visible phases come from its declaration alone —
-/// no split witness, no callee-before-caller order, so recursion decomposes
-/// like any other call. The call's own analysis phase is the single frame
-/// shift shared by all entries: an entry for the callee-frame phase `e` lands
-/// at caller phase `shift + e`. Each entry carries the call's arguments and
-/// results filtered to `e` (via the call's per-argument and per-result phase
-/// attributes, which are the callee's declared phases), and consecutive
-/// entries chain through an opaque context value in ascending phase order.
-/// The entries are created as ordinary ops at the call site; sorting then
-/// wraps each into its phase's `uir.phase` op and threads the context across
-/// phases like any other crossing.
+/// The callee's phase span comes from its declaration alone — the contiguous
+/// range from its earliest to its latest declared argument or result phase,
+/// always including phase 0 — so no split witness, no callee-before-caller
+/// order, and recursion decomposes like any other call. One entry is emitted
+/// per phase in the span: gap phases carrying no declared arguments or results
+/// become pass-through entries (empty arg and result lists, context only), so
+/// the callee's mid-span internal phases execute lock-step in the caller's
+/// timeline. The call's own analysis phase is the single frame shift shared by
+/// all entries: an entry for the callee-frame phase `e` lands at caller phase
+/// `shift + e`. Each entry carries the call's arguments and results filtered
+/// to `e` (via the call's per-argument and per-result phase attributes, which
+/// are the callee's declared phases), and consecutive entries chain through an
+/// opaque context value in ascending phase order. The entries are created as
+/// ordinary ops at the call site; sorting then wraps each into its phase's
+/// `uir.phase` op and threads the context across phases like any other
+/// crossing.
 LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
   // The frame shift is the call's own analysis phase. A call is
   // side-effecting, so it is always anchored at a real block phase.
@@ -548,10 +563,10 @@ LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
 
   auto *calleeOp = symbolTable.lookup(callOp.getCallee());
   assert(calleeOp && "call to undeclared callee survived verification");
-  SmallVector<int32_t> externals;
-  if (failed(calleeExternalPhases(callOp, calleeOp, externals)))
+  SmallVector<int32_t> span;
+  if (failed(calleeSpanPhases(callOp, calleeOp, span)))
     return failure();
-  assert(!externals.empty() && "external phases always contain phase 0");
+  assert(!span.empty() && "phase span always contains phase 0");
 
   // Partition the call's arguments and results by their callee-frame phase.
   // The lists preserve program order, keeping the entries deterministic.
@@ -566,14 +581,14 @@ LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
   for (auto [index, phase] : llvm::enumerate(callOp.getResultPhases()))
     phaseResults[phase].push_back({index, callOp.getTypeOfResults()[index]});
 
-  // Create one entry per external phase, ascending, chaining opaque context.
+  // Create one entry per span phase, ascending, chaining opaque context.
   OpBuilder builder(callOp);
   auto loc = callOp.getLoc();
   auto anyTy = hir::AnyType::get(callOp.getContext());
-  int32_t maxPhase = externals.back();
+  int32_t maxPhase = span.back();
   Value prevContext;
   SmallVector<Value> replacements(callOp.getNumResults());
-  for (int32_t phase : externals) {
+  for (int32_t phase : span) {
     auto &results = phaseResults[phase];
     SmallVector<Value> typeOfResults;
     SmallVector<Type> resultTypes;
@@ -592,7 +607,7 @@ LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
   }
 
   assert(llvm::all_of(replacements, [](Value v) { return !!v; }) &&
-         "every call result has an external phase entry");
+         "every call result has a span phase entry");
   callOp->replaceAllUsesWith(replacements);
   forget(callOp);
   callOp.erase();

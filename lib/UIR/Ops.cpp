@@ -1195,23 +1195,29 @@ PhaseCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
                             "'uir.split_func'";
   }
 
-  // The callee's externally visible phases are its declared arg and result
-  // phases plus phase 0, derivable from the declaration alone.
-  SmallVector<int32_t> externals;
-  externals.push_back(0);
-  externals.append(argPhases.begin(), argPhases.end());
-  externals.append(resultPhases.begin(), resultPhases.end());
-  llvm::sort(externals);
-  externals.erase(std::unique(externals.begin(), externals.end()),
-                  externals.end());
+  // The callee's phase span is the contiguous integer range from its earliest
+  // to its latest declared argument or result phase, always including phase 0.
+  // Callers thread one entry per phase in the span, so every phase in the
+  // range — including gap phases carrying no arguments or results — is a legal
+  // entry, derivable from the declaration alone.
+  int32_t lo = 0, hi = 0;
+  for (auto phase : argPhases) {
+    lo = std::min(lo, phase);
+    hi = std::max(hi, phase);
+  }
+  for (auto phase : resultPhases) {
+    lo = std::min(lo, phase);
+    hi = std::max(hi, phase);
+  }
 
   auto phase = getCalleePhase();
-  if (!llvm::is_contained(externals, phase))
-    return emitOpError() << "callee @" << callee.getValue()
-                         << " has no externally visible phase " << phase;
+  if (phase < lo || phase > hi)
+    return emitOpError() << "callee @" << callee.getValue() << " has no phase "
+                         << phase << " in its declared span [" << lo << ", "
+                         << hi << "]";
 
   // The call's arguments and results are the callee's declared arguments and
-  // results at this phase.
+  // results at this phase — none for a gap phase inside the span.
   auto expectedArgs = llvm::count(argPhases, phase);
   if (static_cast<int64_t>(getArguments().size()) != expectedArgs)
     return emitOpError() << "has " << getArguments().size()
@@ -1225,23 +1231,21 @@ PhaseCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
                          << " declares " << expectedResults
                          << " results at phase " << phase;
 
-  // Context values chain consecutive externally visible phases.
-  bool needsContextIn = phase != externals.front();
+  // Context values chain consecutive entries across the span.
+  bool needsContextIn = phase != lo;
   if (needsContextIn && !getContextIn())
     return emitOpError() << "requires a context operand: phase " << phase
-                         << " is not the callee's first externally visible "
-                            "phase";
+                         << " is not the callee's first span phase";
   if (!needsContextIn && getContextIn())
     return emitOpError() << "cannot have a context operand: phase " << phase
-                         << " is the callee's first externally visible phase";
-  bool needsContextOut = phase != externals.back();
+                         << " is the callee's first span phase";
+  bool needsContextOut = phase != hi;
   if (needsContextOut && !getContextOut())
     return emitOpError() << "requires a context result: phase " << phase
-                         << " is not the callee's last externally visible "
-                            "phase";
+                         << " is not the callee's last span phase";
   if (!needsContextOut && getContextOut())
     return emitOpError() << "cannot have a context result: phase " << phase
-                         << " is the callee's last externally visible phase";
+                         << " is the callee's last span phase";
 
   return success();
 }

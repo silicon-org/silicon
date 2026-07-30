@@ -1021,7 +1021,7 @@ uir.func @Callee(%a: -1, %b: 0) -> (result: 0) {
 
 //===----------------------------------------------------------------------===//
 // Call decomposition: a call to the two-phase @Callee becomes one
-// uir.phase_call per externally visible callee phase. The call sits at the
+// uir.phase_call per phase in the callee's declared span. The call sits at the
 // caller's phase 0 (its own analysis phase, the frame shift), so entry [-1]
 // lands in caller phase -1 and entry [0] in caller phase 0. The context value
 // chaining the entries crosses phases like any other value.
@@ -1079,8 +1079,8 @@ uir.func @ShiftedCall(%k: 0, %x: 1) -> (result: 1) {
 }
 
 //===----------------------------------------------------------------------===//
-// A three-external-phase callee: its declared arg and result phases yield the
-// external set {-1, 0, 1}.
+// A three-phase callee: its declared arg and result phases span [-1, 1], with
+// no gaps, so the span is the set {-1, 0, 1}.
 
 // CHECK-LABEL: uir.func @ThreePhaseCallee
 uir.func @ThreePhaseCallee(%a: -1, %b: 0, %c: 1) -> (result: 1) {
@@ -1094,7 +1094,7 @@ uir.func @ThreePhaseCallee(%a: -1, %b: 0, %c: 1) -> (result: 1) {
 }
 
 //===----------------------------------------------------------------------===//
-// Structurally different from @Caller: a three-external-phase callee produces
+// Structurally different from @Caller: a three-phase callee produces
 // three entries, and the middle entry (phase 0) both consumes the previous
 // context and produces the next one. Both context values cross forward one
 // phase.
@@ -1147,6 +1147,52 @@ uir.func @Recurse(%x: -1, %y: 0) -> (result: 0) {
   // CHECK-NEXT: }
   // CHECK-NEXT: uir.unreachable
   %r = uir.call @Recurse(%x, %y) : (%t, %t) -> (%t) [-1, 0] -> [0]
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A callee whose declared phases have a gap: arguments at -2 and 0 with no
+// declared value at -1. Its span is the contiguous range [-2, 0], so phase -1
+// is an internal phase carrying no arguments or results.
+
+// CHECK-LABEL: uir.func @GapCallee
+uir.func @GapCallee(%a: -2, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %r = hir.add %a, %b : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// Gap decomposition: the span [-2, 0] yields three entries. The middle entry
+// (phase -1) carries no arguments or results — it is a pass-through threading
+// only context, so the callee's internal phase runs lock-step in the caller's
+// timeline. All three context values cross forward one phase.
+
+// CHECK-LABEL: uir.func @GapCall
+uir.func @GapCall(%x: -2, %y: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  // CHECK: uir.signature
+  // CHECK: [[T:%.+]] = hir.int_type
+  %t = hir.int_type
+  // CHECK-NEXT: [[CTX0:%.+]] = uir.phase -2 {
+  // CHECK-NEXT:   [[C0:%.+]] = uir.phase_call @GapCallee[-2] (%x) : ([[T]]) -> () context
+  // CHECK-NEXT:   uir.phase_return yield [[C0]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[CTX1:%.+]] = uir.phase -1 {
+  // CHECK-NEXT:   [[C1:%.+]] = uir.phase_call @GapCallee[-1] () context [[CTX0]] : () -> () context
+  // CHECK-NEXT:   uir.phase_return yield [[C1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase 0 {
+  // CHECK-NEXT:   [[R:%.+]] = uir.phase_call @GapCallee[0] (%y) context [[CTX1]] : ([[T]]) -> ([[T]])
+  // CHECK-NEXT:   uir.phase_return [[R]] : [[T]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.unreachable
+  %r = uir.call @GapCallee(%x, %y) : (%t, %t) -> (%t) [-2, 0] -> [0]
   uir.return %r : %t
 }
 

@@ -445,16 +445,22 @@ def SplitFuncOp : UIROp<"split_func", [
   Symbol,
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
 ]> {
-  let summary = "witness recording how a unified function was split";
+  let summary = "stable late-binding interface for a split function";
   let description = [{
-    Records the result of splitting a `uir.func` into separate per-phase
-    functions. Preserves the original function's signature (for library
-    callers) and maps phase numbers to the generated per-phase `hir.func`
-    ops.
+    Combines the post-splitting per-phase function symbols back into a
+    single unsplit symbol that `uir.call` can target interchangeably with a
+    `uir.func`. This is the stable late-binding interface: it lets callers
+    bind to a function whose phases have already been split — enabling
+    library precompilation — without knowing the per-phase decomposition.
+    The op maps phase numbers to the generated per-phase `hir.func` ops.
 
-    Its sole purpose is to allow `uir.call` ops to be decomposed into
-    per-phase `hir.call` ops without re-running phase inference on the
-    callee.
+    Its signature region holds the original, unsorted signature: the type
+    interface that call checking inlines at late-bound call sites, folding
+    toward constants as eager evaluation publishes results.
+
+    Call decomposition never consults this op — it is derived from the
+    callee's declared phases alone — so this op carries no decomposition
+    witness role.
   }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,
@@ -575,21 +581,24 @@ def PhaseCallOp : UIROp<"phase_call", [
 ]> {
   let summary = "call one phase of a function";
   let description = [{
-    Calls one externally visible phase of a `uir.func`, produced by
+    Calls one phase in a `uir.func`'s declared span, produced by
     decomposing a `uir.call` during phase sorting. The `calleePhase`
-    attribute is the phase number in the callee's own frame; the callee's
-    externally visible phases are its declared argument and result phases
-    plus phase 0, so the set of valid entries is derivable from the
-    callee's declaration alone, without a split witness.
+    attribute is the phase number in the callee's own frame. Decomposing a
+    call emits one entry per phase in the callee's span — the contiguous
+    integer range from its earliest to its latest declared argument or
+    result phase, always including phase 0 — so the set of valid entries is
+    derivable from the callee's declaration alone, without a split witness.
 
     The `arguments` and `results` are the callee's arguments and results
-    declared at that phase, each with a corresponding type operand.
-    Consecutive entries of one decomposed call are chained through an
-    opaque context value: every entry except the callee's first externally
-    visible phase takes a `context` operand, and every entry except the
-    last produces a context result, printed as a trailing `context`
-    keyword. Context values carry no type operands; function splitting
-    materializes their opaque types.
+    declared at that phase, each with a corresponding type operand. A gap
+    phase inside the span carries no declared arguments or results and is a
+    pass-through entry threading only context, so the callee's mid-span
+    internal phases execute lock-step in the caller's timeline. Consecutive
+    entries of one decomposed call are chained through an opaque context
+    value: every entry except the callee's first span phase takes a
+    `context` operand, and every entry except the last produces a context
+    result, printed as a trailing `context` keyword. Context values carry no
+    type operands; function splitting materializes their opaque types.
   }];
   let arguments = (ins
     FlatSymbolRefAttr:$callee,

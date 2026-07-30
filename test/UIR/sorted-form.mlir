@@ -199,7 +199,7 @@ uir.func @ArgCrossing(%a: -1, %x: 0) -> (result: 0) {
 
 //===----------------------------------------------------------------------===//
 // Call decomposition: a call to a two-phase callee becomes one
-// uir.phase_call per externally visible callee phase, each inside the
+// uir.phase_call per phase in the callee's declared span, each inside the
 // caller's phase where that entry executes. The context value chaining the
 // entries crosses phases like any other value.
 
