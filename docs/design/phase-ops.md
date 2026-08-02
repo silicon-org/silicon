@@ -18,7 +18,9 @@ Five stages, each owning a single concern:
    It is phase-blind and runs before PhaseAnalysis, so analysis and sorting input is always single-exit.
 2. **PhaseAnalysis** (unchanged) computes phases for ops and values.
    It is consumed only by the sorting pass; the phase map never crosses a pass boundary.
-3. **Phase sorting** rewrites the *internals* of a `uir.func` and leaves the function op untouched.
+3. **Phase sorting** rewrites the internals of a `uir.func`.
+   Before touching a function, it snapshots the declaration: it creates the `uir.split_func` under the function's original name, holding the original unsorted signature region verbatim and an empty link list, moves the implementation func to a fresh uniquified name, and records that name in an implementation-reference attribute on the split_func.
+   Existing `uir.call`/`uir.phase_call` references keep resolving, since the split_func is a legal callee for both.
    Output contract: the body and signature regions contain only `uir.phase` ops, floating ops, and the region's terminator (`uir.unreachable` for the body, `uir.signature` for the signature), at most one `uir.phase` per phase, in increasing phase order.
    Values computed inside a phase and consumed in a later one cross as phase-op results: yielded by `uir.phase_return`, consumed by any later phase, at any distance.
    Values already visible at the region top level — function arguments and floating ops — are consumed directly wherever needed, without routing through a phase op.
@@ -28,7 +30,7 @@ Five stages, each owning a single concern:
    It brings the sorted form into a fully threaded shape: it materializes `uir.phase` ops for externally visible phases that have no content and for intermediate hops of skipping crossings, threads every crossing through adjacent phase ops (function arguments starting at their declared phase), and sinks floating ops into the phase regions that use them.
    Its output contract is purely structural, with no notion of "floating" left: regions hold exactly `uir.phase` ops and the region terminator, every value crossing between phase ops is yielded by the immediately preceding one, and every function result rides the `uir.phase_return` of its phase.
 5. **Function splitting** is phase-blind: it never asks what phase an op has.
-   It expects the normalized contract, creates one per-phase `hir.func` per `uir.phase` op (never synthesizing any), converts phase-op result flow into opaque context pack/unpack, rewrites `uir.phase_call` to `hir.call`, reconstructs signatures, and emits the structural ops (`uir.split_func`, `hir.eager_func`).
+   It expects the normalized contract, creates one per-phase `hir.func` per `uir.phase` op (never synthesizing any), converts phase-op result flow into opaque context pack/unpack, rewrites `uir.phase_call` to `hir.call` against the callee split_func's link list, reconstructs per-phase signatures, fills the split_func's links (all link lists before lowering any call), emits `hir.eager_func` for pre-span chains, and deletes the implementation func and reference.
    It also diagnoses `uir.phase` ops later than the declared span as a user error (runtime work past the last declared phase has no executor), which catches call-implied late phases uniformly since calls are already decomposed into `uir.phase_call` entries by this point.
 
 ## New ops
@@ -58,10 +60,23 @@ Five stages, each owning a single concern:
   The op's external signature is exactly the earliest span entry's signature, so `uir.split_func` entries and `hir.call`s target it like any function; the `first`/`last` argument split of `hir.multiphase_func` disappears.
   The evaluation driver keys on the op's existence: it evaluates the head link when it becomes evaluable and specializes the next link forward; when a single link remains, the op is replaced by a same-name `hir.func` shim that tail-calls it, so no symbol use is ever rewritten.
   Expressing the eager chain as plain calls and SSA use-def chains instead of a dedicated op is deferred exploration.
-- **`uir.split_func` is the stable late-binding interface** (settled 2026-07-29).
+- **`uir.split_func` is the stable late-binding interface** (settled 2026-07-29; custody settled 2026-08-01).
   Its purpose is to combine the post-splitting function symbols back into a single unsplit symbol that `uir.call` can target interchangeably with a `uir.func`; this is what enables library precompilation.
-  Its signature region holds the original, unsorted signature — the type interface that call checking inlines at late-bound call sites, folding toward constants as eager evaluation publishes results; pre-span signature computation is additionally relocated into the eager chain's bodies as re-evaluable clones.
+  Its signature region holds the original, unsorted signature — the type interface that call checking inlines at call sites, folding toward constants as eager evaluation publishes results; pre-span signature computation is additionally relocated into the eager chain's bodies as re-evaluable clones.
+  The flat signature is preserved, never reconstructed: sorting creates the split_func before mutating the function (see stage 3), and the splitter only fills the links, so signature computations may contain calls without any de-phase-ification being possible or needed.
+  The op has three verifier states: *declared* (no implementation reference, no links), *sorted* (implementation reference, no links), and *split* (links, no implementation reference); the declared state doubles as a natural "not yet compiled" form for incremental compilation.
   The old "decomposition witness" role is obsolete: call decomposition is declaration-derived and never consults the split_func.
+- **Dependent types across the split are delivered by checker inlining** (settled 2026-08-01).
+  Call checking runs before sorting and inlines the callee's signature computation into the caller — from the signature region of whichever of `uir.func` or `uir.split_func` the callee symbol resolves to, identically — and unifies the inlined types with the caller's.
+  A split caller thus recomputes a dependent callee type from arguments it already holds and threads it through its *own* opaque context; the callee's context is private plumbing, never read for types, and the caller supplies call type operands independently.
+  Agreement between the caller-side and callee-side type computation is structural: checking either rejects the program with a user diagnostic or guarantees both sides pick the same types.
+  A type disagreement observed at evaluation time, when a per-phase func is specialized, is therefore an internal compiler error, and the evaluator must trap on it loudly.
+- **Phase boundaries pack uniformly** (settled 2026-08-01).
+  Every phase boundary packs exactly one fresh opaque context bundling all its crossings: no special case for a single crossing, for a crossing that is already an opaque context, or for a contentless gap phase (whose func unpacks and repacks unchanged).
+  Packing must stay symmetric with the receiving phase's unpacking, so skipping a "redundant" pack is not a local decision.
+  Collapsing degenerate transcodes is folding (`opaque_pack(opaque_unpack(x))` → `x`, usable via `createOrFold`) or plain canonicalization, never splitter logic.
+- **Per-phase function names are cosmetic** (settled 2026-08-01).
+  Split_func link lists, eager_func chains, and the implementation-reference attribute are the authoritative connections; nothing resolves by name convention, and names may be uniquified freely.
 - **No empty phases in sorted output.** Sorting creates a `uir.phase` op only for phases that have content; it never materializes empty ones.
   A `uir.phase_return` carrying function results or yields is content: a result-only phase gets a phase op holding just its `uir.phase_return`.
   Empty and passthrough-only phase ops are threading normalization's vocabulary: it materializes them freely for gap phases and threading hops, so the splitter emits exactly one function per phase op and never synthesizes.

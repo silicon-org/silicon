@@ -8,10 +8,9 @@
 // thread-phases.mlir), splitting emits one per-phase `hir.func` per `uir.phase`
 // op, wires the phase-op result flow into opaque context pack/unpack, rewrites
 // `uir.phase_call` into `hir.call` to the callee's per-phase entries,
-// reconstructs each per-phase signature, and combines the results back under a
-// `uir.split_func` (with `hir.eager_func` heading any pre-span chain). The
-// splitter itself does not exist yet; this file forces its output shape while
-// it is cheap and doubles as the lit-test contract.
+// reconstructs each per-phase signature, and fills the phase-to-func link list
+// of the `uir.split_func` (with `hir.eager_func` heading any pre-span chain).
+// This file doubles as the lit-test contract for the splitter's output shape.
 //
 // The contract, per split function:
 //
@@ -31,7 +30,10 @@
 // - `uir.split_func` maps each span phase number to its entry func and holds
 //   the original, unsorted signature (in terms of the declared block
 //   arguments) as the stable late-binding interface. It is the callee symbol a
-//   phase-agnostic `uir.call` targets.
+//   phase-agnostic `uir.call` targets. The signature region is preserved
+//   verbatim from before sorting (sorting creates the split_func and moves the
+//   implementation func aside), never reconstructed from the sorted form
+//   (settled 2026-08-01).
 // - A pre-span phase (content earlier than the declared span, argument-free by
 //   construction) is folded into an `hir.eager_func` whose head link is the
 //   pre-span func and whose tail is the earliest span entry; `uir.split_func`
@@ -39,9 +41,10 @@
 //   the earliest span entry's declared arguments and results — i.e. the tail
 //   link's arguments minus the trailing pre-span context argument.
 //
-// Per-phase funcs are named `@<f>.<phase>` (quoted for negative phases). This
-// naming is provisional (see the open-question list in the task report); the
-// split_func's phase list is the authoritative phase-to-func mapping.
+// Per-phase funcs are named `@<f>.<phase>` (quoted for negative phases). The
+// names are cosmetic and may be uniquified freely; link lists and the
+// split_func's phase list are the authoritative phase-to-func mapping, and
+// nothing resolves by name convention (settled 2026-08-01).
 
 //===----------------------------------------------------------------------===//
 // Case 1: simple two-phase split of a dependent-type identity function.
@@ -69,10 +72,11 @@ hir.func @"Id.-1"(%N) -> (ctx) {
 
 hir.func @"Id.0"(%x, %ctx) -> (result) {
   %o = hir.opaque_type
-  // PROVISIONAL: the dependent type of %x is delivered by unpacking the
-  // incoming context in the signature region (sig-crossing relocation). How a
-  // split caller specializing phase 0 obtains this type one phase earlier is the
-  // load-bearing open question, exercised in case 5.
+  // The dependent type of %x is delivered by unpacking the incoming context in
+  // the signature region (sig-crossing relocation). A split caller specializing
+  // phase 0 never reads this context for types: call checking inlines the
+  // callee's signature computation into the caller, which recomputes the type
+  // in its own earlier phase (settled 2026-08-01; exercised in case 5).
   %ty = hir.opaque_unpack %ctx : !hir.any
   hir.signature (%ty, %o) -> (%ty)
 } {
@@ -81,9 +85,11 @@ hir.func @"Id.0"(%x, %ctx) -> (result) {
   hir.return %r : %ty
 }
 
-// PROVISIONAL: the split_func keeps the unsorted signature flat (no phase ops);
-// the original dependent type computation is inlined in terms of the block
-// arguments.
+// The split_func keeps the unsorted signature flat (no phase ops), with the
+// original dependent type computation inlined in terms of the block arguments.
+// This flat region is load-bearing: it is what call checking inlines at
+// late-bound call sites, identically to a `uir.func` signature region (settled
+// 2026-08-01).
 uir.split_func @Id(%N: -1, %x: 0) -> (result: 0) {
   %int = hir.int_type
   %ty = hir.uint_type %N
@@ -134,9 +140,10 @@ hir.func @"Pre.-1.tail"(%N, %ctx_pre) -> (ctx) {
   hir.return %ctx : %o
 }
 
-// PROVISIONAL: the pre-span func keeps its phase-number name (@"Pre.-2") and the
-// span-entry name goes to the eager_func, so the phase -1 body func is
-// disambiguated as @"Pre.-1.tail". Relocating dependent pre-span signature
+// The pre-span func keeps its phase-number name (@"Pre.-2") and the span-entry
+// name goes to the eager_func, so the phase -1 body func is disambiguated as
+// @"Pre.-1.tail"; these names are cosmetic, the eager_func's chain links are
+// authoritative (settled 2026-08-01). Relocating dependent pre-span signature
 // computation into the eager links (settled 2026-07-29) is not exercised here,
 // since @Pre has a non-dependent signature.
 hir.eager_func @"Pre.-1"(N) -> (ctx) [
@@ -286,14 +293,16 @@ hir.func @"Caller.-1"(%x) -> (ctx) {
 } {
   %o = hir.opaque_type
   %int = hir.int_type
-  // PROVISIONAL: a decomposed uir.phase_call targets the callee's concrete
-  // per-phase func (@"MultiPhase.-1"), not the @MultiPhase split_func; the
-  // split_func is the late-binding target only for a phase-agnostic uir.call.
+  // A decomposed uir.phase_call targets the callee's concrete per-phase func
+  // (@"MultiPhase.-1"), resolved through the @MultiPhase split_func's link
+  // list; the split_func itself is the late-binding target only for a
+  // phase-agnostic uir.call (settled 2026-08-01).
   %cc = hir.call @"MultiPhase.-1"(%x) : (%int) -> (%o)
-  // PROVISIONAL: the single callee context crossing is re-wrapped in the
-  // caller's own context bundle (opaque_pack of one opaque) rather than threaded
-  // directly, matching the uniform "all crossings ride one opaque context"
-  // mechanism.
+  // The single callee context crossing is re-wrapped in the caller's own
+  // context bundle (opaque_pack of one opaque) rather than threaded directly:
+  // packing must stay symmetric with the receiving phase's unpacking, so there
+  // is no special case for crossing count or already-opaque crossings (settled
+  // 2026-08-01).
   %ctx = hir.opaque_pack(%cc)
   hir.return %ctx : %o
 }
@@ -338,11 +347,15 @@ uir.split_func @Caller(%x: -1, %y: 0) -> (result: 0) {
 // carries both the caller's recomputed type crossing and the callee's context,
 // side by side.
 //
-// PROVISIONAL: this "caller recomputes and threads the type; callee context is
-// never read for types" resolution is the provisional answer to the file's
-// central open question; it is defensible (it is exactly the old-model
-// signature-inlining behaviour) but unverified until the splitter and
-// CheckCalls interaction is built.
+// Settled 2026-08-01: "caller recomputes and threads the type; callee context
+// is never read for types" is the design. Call checking inlines the callee's
+// signature computation into the caller before sorting (from the signature
+// region of the `uir.func` or `uir.split_func` the callee symbol resolves to,
+// identically) and unifies it with the caller's types, so agreement across the
+// split boundary is structural: checking either rejects the program with a user
+// diagnostic or guarantees both sides pick the same types. A disagreement
+// observed when the evaluator specializes a per-phase func is an internal
+// compiler error, not a user diagnostic.
 
 hir.func @"Use.-1"(%N) -> (ctx) {
   %o = hir.opaque_type
