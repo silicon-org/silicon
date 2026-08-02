@@ -4,9 +4,13 @@
 // The phase-blind function splitter turns each threaded `uir.func` into one
 // `hir.func` per `uir.phase` op, wires phase-op crossings into opaque context
 // pack/unpack, rewrites `uir.phase_call` into `hir.call` to the callee's
-// per-phase entry, reconstructs each per-phase signature, and combines the
-// results under a `uir.split_func` (with `hir.eager_func` heading any pre-span
-// chain). Inputs are the fully threaded form of thread-phases.mlir.
+// per-phase entry, reconstructs each per-phase signature, and fills in the
+// phase list of the `uir.split_func` holding the declaration (with
+// `hir.eager_func` heading any pre-span chain).
+//
+// Inputs are the fully threaded form of thread-phases.mlir, paired with the
+// `uir.split_func` in the sorted state that phase sorting created for it: the
+// flat signature is preserved from before sorting, never reconstructed here.
 
 //===----------------------------------------------------------------------===//
 // Case 1: two-phase split of a dependent-type identity function. The dependent
@@ -43,7 +47,13 @@
 // CHECK-NEXT:    -1: @"Id.-1",
 // CHECK-NEXT:    0: @Id.0
 // CHECK-NEXT:  ]
-uir.func @Id(%N: -1, %x: 0) -> (result: 0) {
+uir.split_func @Id(%N: -1, %x: 0) -> (result: 0) {
+  %int = hir.int_type
+  %ty = hir.uint_type %N
+  uir.signature (%int, %ty) -> (%ty)
+} impl @Id.impl []
+
+uir.func @Id.impl(%N: -1, %x: 0) -> (result: 0) {
   %s0:2 = uir.phase -1 {
     %int = hir.int_type
     %ui = hir.uint_type %N
@@ -111,7 +121,12 @@ uir.func @Id(%N: -1, %x: 0) -> (result: 0) {
 // CHECK-NEXT:    -1: @"Pre.-1",
 // CHECK-NEXT:    0: @Pre.0
 // CHECK-NEXT:  ]
-uir.func @Pre(%N: -1, %x: 0) -> (result: 0) {
+uir.split_func @Pre(%N: -1, %x: 0) -> (result: 0) {
+  %int = hir.int_type
+  uir.signature (%int, %int) -> (%int)
+} impl @Pre.impl []
+
+uir.func @Pre.impl(%N: -1, %x: 0) -> (result: 0) {
   %sm1 = uir.phase -1 {
     %int = hir.int_type
     uir.phase_return yield %int
@@ -176,7 +191,12 @@ uir.func @Pre(%N: -1, %x: 0) -> (result: 0) {
 // CHECK-NEXT:    -1: @"Gap.-1",
 // CHECK-NEXT:    0: @Gap.0
 // CHECK-NEXT:  ]
-uir.func @Gap(%a: -2, %x: 0) -> (result: 0) {
+uir.split_func @Gap(%a: -2, %x: 0) -> (result: 0) {
+  %int = hir.int_type
+  uir.signature (%int, %int) -> (%int)
+} impl @Gap.impl []
+
+uir.func @Gap.impl(%a: -2, %x: 0) -> (result: 0) {
   %sm2 = uir.phase -2 {
     %int = hir.int_type
     uir.phase_return yield %int
@@ -215,7 +235,12 @@ uir.func @Gap(%a: -2, %x: 0) -> (result: 0) {
 
 // CHECK-LABEL: hir.func private @"MultiPhase.-1"(%a) -> (ctx) {
 // CHECK-LABEL: hir.func private @MultiPhase.0(%b, %ctx) -> (result) {
-uir.func @MultiPhase(%a: -1, %b: 0) -> (result: 0) {
+uir.split_func @MultiPhase(%a: -1, %b: 0) -> (result: 0) {
+  %int = hir.int_type
+  uir.signature (%int, %int) -> (%int)
+} impl @MultiPhase.impl []
+
+uir.func @MultiPhase.impl(%a: -1, %b: 0) -> (result: 0) {
   %sm1 = uir.phase -1 {
     %int = hir.int_type
     uir.phase_return yield %int
@@ -258,7 +283,12 @@ uir.func @MultiPhase(%a: -1, %b: 0) -> (result: 0) {
 // CHECK-NEXT:  }
 
 // CHECK-LABEL: uir.split_func @Caller(%x: -1, %y: 0) -> (result: 0) {
-uir.func @Caller(%x: -1, %y: 0) -> (result: 0) {
+uir.split_func @Caller(%x: -1, %y: 0) -> (result: 0) {
+  %int = hir.int_type
+  uir.signature (%int, %int) -> (%int)
+} impl @Caller.impl []
+
+uir.func @Caller.impl(%x: -1, %y: 0) -> (result: 0) {
   %sm1 = uir.phase -1 {
     %int = hir.int_type
     uir.phase_return yield %int
@@ -318,7 +348,13 @@ uir.func @Caller(%x: -1, %y: 0) -> (result: 0) {
 // CHECK-NEXT:    -1: @"Use.-1",
 // CHECK-NEXT:    0: @Use.0
 // CHECK-NEXT:  ]
-uir.func @Use(%N: -1, %x: 0) -> (r: 0) {
+uir.split_func @Use(%N: -1, %x: 0) -> (r: 0) {
+  %int = hir.int_type
+  %xty = hir.uint_type %N
+  uir.signature (%int, %xty) -> (%xty)
+} impl @Use.impl []
+
+uir.func @Use.impl(%N: -1, %x: 0) -> (r: 0) {
   %s0:2 = uir.phase -1 {
     %int = hir.int_type
     %ui = hir.uint_type %N
@@ -366,7 +402,13 @@ uir.func @Use(%N: -1, %x: 0) -> (r: 0) {
 // CHECK-NEXT:  }
 
 // CHECK-LABEL: uir.split_func @F(%N: -1, %y: 0) -> () {
-uir.func @F(%N: -1, %y: 0) -> () {
+uir.split_func @F(%N: -1, %y: 0) -> () {
+  %int = hir.int_type
+  %xty = hir.uint_type %N
+  uir.signature (%int, %xty) -> ()
+} impl @F.impl []
+
+uir.func @F.impl(%N: -1, %y: 0) -> () {
   %s0:2 = uir.phase -1 {
     %int = hir.int_type
     %ui = hir.uint_type %N
@@ -385,3 +427,102 @@ uir.func @F(%N: -1, %y: 0) -> () {
   }
   uir.unreachable
 }
+
+//===----------------------------------------------------------------------===//
+// Case 7: per-phase function names are cosmetic. A pre-existing symbol occupies
+// the callee's conventional phase name, so the splitter uniquifies it; the
+// caller's `uir.phase_call` still resolves through the callee split_func's
+// phase list, which is the authoritative mapping.
+
+// The squatter, left untouched by the pass.
+// CHECK-LABEL: hir.func private @"Cosmetic.-1"(%a) -> (r) {
+hir.func private @"Cosmetic.-1"(%a) -> (r) {
+  %int = hir.int_type
+  hir.signature (%int) -> (%int)
+} {
+  %int = hir.int_type
+  hir.return %a : %int
+}
+
+// CHECK-LABEL: hir.func private @"Cosmetic.-1_0"(%a) -> (ctx) {
+// CHECK-LABEL: hir.func private @Cosmetic.0(%b, %ctx) -> (result) {
+// CHECK-LABEL: uir.split_func @Cosmetic(%a: -1, %b: 0) -> (result: 0) {
+// CHECK:       } [
+// CHECK-NEXT:    -1: @"Cosmetic.-1_0",
+// CHECK-NEXT:    0: @Cosmetic.0
+// CHECK-NEXT:  ]
+uir.split_func @Cosmetic(%a: -1, %b: 0) -> (result: 0) {
+  %int = hir.int_type
+  uir.signature (%int, %int) -> (%int)
+} impl @Cosmetic.impl []
+
+uir.func @Cosmetic.impl(%a: -1, %b: 0) -> (result: 0) {
+  %sm1 = uir.phase -1 {
+    %int = hir.int_type
+    uir.phase_return yield %int
+  }
+  %s0 = uir.phase 0 {
+    %int = hir.int_type
+    uir.phase_return yield %int
+  }
+  uir.signature (%sm1, %s0) -> (%s0)
+} {
+  %p = uir.phase -1 {
+    %int = hir.int_type
+    %sq = hir.mul %a, %a : %int
+    uir.phase_return yield %sq
+  }
+  uir.phase 0 {
+    %int = hir.int_type
+    %r = hir.add %p, %b : %int
+    uir.phase_return %r : %int
+  }
+  uir.unreachable
+}
+
+// CHECK-LABEL: hir.func private @"CosmeticCaller.-1"(%x) -> (ctx) {
+// CHECK:         hir.call @"Cosmetic.-1_0"(%x)
+// CHECK-LABEL: hir.func private @CosmeticCaller.0(%y, %ctx) -> (result) {
+// CHECK:         hir.call @Cosmetic.0(%y,
+uir.split_func @CosmeticCaller(%x: -1, %y: 0) -> (result: 0) {
+  %int = hir.int_type
+  uir.signature (%int, %int) -> (%int)
+} impl @CosmeticCaller.impl []
+
+uir.func @CosmeticCaller.impl(%x: -1, %y: 0) -> (result: 0) {
+  %sm1 = uir.phase -1 {
+    %int = hir.int_type
+    uir.phase_return yield %int
+  }
+  %s0 = uir.phase 0 {
+    %int = hir.int_type
+    uir.phase_return yield %int
+  }
+  uir.signature (%sm1, %s0) -> (%s0)
+} {
+  %ctx = uir.phase -1 {
+    %t = hir.int_type
+    %c = uir.phase_call @Cosmetic[-1] (%x) : (%t) -> () context
+    uir.phase_return yield %c
+  }
+  uir.phase 0 {
+    %t = hir.int_type
+    %r = uir.phase_call @Cosmetic[0] (%y) context %ctx : (%t) -> (%t)
+    uir.phase_return %r : %t
+  }
+  uir.unreachable
+}
+
+//===----------------------------------------------------------------------===//
+// Case 8: a `uir.split_func` in the declared state — an interface whose
+// implementation has not been compiled, e.g. from a precompiled library — has
+// no implementation to split and passes through untouched.
+
+// CHECK-LABEL: uir.split_func @Declared(%a: -1, %b: 0) -> (result: 0) {
+// CHECK-NEXT:    [[INT:%.+]] = hir.int_type
+// CHECK-NEXT:    uir.signature ([[INT]], [[INT]]) -> ([[INT]])
+// CHECK-NEXT:  } []
+uir.split_func @Declared(%a: -1, %b: 0) -> (result: 0) {
+  %int = hir.int_type
+  uir.signature (%int, %int) -> (%int)
+} []

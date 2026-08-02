@@ -3140,6 +3140,52 @@ LogicalResult PhaseSorter::run() {
 }
 
 //===----------------------------------------------------------------------===//
+// Declaration Custody
+//===----------------------------------------------------------------------===//
+
+/// Snapshot a function's declaration into a `uir.split_func` before sorting
+/// rewrites the function.
+///
+/// The `uir.split_func` is the stable late-binding interface a phase-agnostic
+/// `uir.call` targets, and its signature region is the flat, unsorted type
+/// interface that call checking inlines at call sites. Sorting distributes that
+/// signature into `uir.phase` ops, an irreversible rewrite once a signature
+/// computation contains anything but a pure tree, so the flat form is preserved
+/// rather than reconstructed: the split_func is created first, holding a
+/// verbatim clone of the untouched signature region, and the implementation
+/// function moves aside under a fresh name recorded in the split_func's `impl`
+/// reference. Function splitting later fills in the phase list and consumes the
+/// implementation.
+///
+/// The split_func takes over the function's original symbol name, so no symbol
+/// use is rewritten: a `uir.call` or `uir.phase_call` naming the function
+/// resolves to the split_func, which declares the same argument and result
+/// phases.
+static void snapshotDeclaration(FuncOp funcOp, SymbolTable &symbolTable) {
+  auto *ctx = funcOp.getContext();
+  auto name = funcOp.getSymNameAttr();
+
+  // Move the implementation aside. `SymbolTable::insert` uniquifies the name
+  // against everything else in the module; the name is cosmetic, since the
+  // `impl` reference is the authoritative connection.
+  symbolTable.remove(funcOp);
+  SymbolTable::setSymbolName(funcOp, (name.getValue() + ".impl").str());
+  symbolTable.insert(funcOp);
+
+  OpBuilder builder(funcOp);
+  auto splitFunc = SplitFuncOp::create(
+      builder, funcOp.getLoc(), name, funcOp.getSymVisibilityAttr(),
+      funcOp.getArgNamesAttr(), funcOp.getArgPhasesAttr(),
+      funcOp.getResultNamesAttr(), funcOp.getResultPhasesAttr(),
+      FlatSymbolRefAttr::get(funcOp),
+      DenseI32ArrayAttr::get(ctx, ArrayRef<int32_t>{}),
+      builder.getArrayAttr({}));
+  IRMapping mapping;
+  funcOp.getSignature().cloneInto(&splitFunc.getSignature(), mapping);
+  symbolTable.insert(splitFunc);
+}
+
+//===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 
@@ -3147,10 +3193,19 @@ namespace {
 struct SortPhasesPass : public uir::impl::SortPhasesPassBase<SortPhasesPass> {
   void runOnOperation() override {
     // The symbol table resolves call decomposition's callee lookups. Sorting
-    // only rewrites function interiors, never adds or removes symbols, so one
-    // table stays valid across all functions.
+    // only rewrites function interiors, so the table stays valid across all
+    // functions once the declarations have been snapshotted.
     SymbolTable symbolTable(getOperation());
-    for (auto funcOp : getOperation().getOps<FuncOp>()) {
+
+    // Take custody of every declaration up front, before sorting any function.
+    // Doing the whole module first also keeps callee lookups uniform: a callee
+    // resolves to its `uir.split_func` regardless of the order functions are
+    // sorted in.
+    SmallVector<FuncOp> funcs(getOperation().getOps<FuncOp>());
+    for (auto funcOp : funcs)
+      snapshotDeclaration(funcOp, symbolTable);
+
+    for (auto funcOp : funcs) {
       PhaseAnalysis analysis(funcOp);
       if (failed(analysis.run()))
         return signalPassFailure();

@@ -1,6 +1,94 @@
 // RUN: silicon-opt --sort-phases %s | FileCheck %s
 
 //===----------------------------------------------------------------------===//
+// Declaration custody: before sorting rewrites a function, its declaration is
+// snapshotted into a `uir.split_func` under the original symbol name, holding
+// a verbatim clone of the unsorted signature region and an implementation
+// reference to the function, which moves aside under a fresh name. Every
+// sorted function below leaves such a shell behind; this section checks the
+// shape once.
+
+// CHECK-LABEL: uir.split_func @Custody(%a: -1, %b: 0) -> (result: 0) {
+// CHECK-NEXT:    [[T:%.+]] = hir.int_type
+// CHECK-NEXT:    uir.signature ([[T]], [[T]]) -> ([[T]])
+// CHECK-NEXT:  } impl @Custody.impl []
+// CHECK-LABEL: uir.func @Custody.impl(%a: -1, %b: 0) -> (result: 0) {
+uir.func @Custody(%a: -1, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %sq = hir.mul %a, %a : %t
+  %r = hir.add %sq, %b : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A signature computation that contains a call is preserved verbatim in the
+// split_func, while the implementation's own signature is sorted and its call
+// decomposed into `uir.phase_call` entries. The flat form is kept, never
+// reconstructed from the sorted one, which is what makes this legal.
+
+// CHECK-LABEL: uir.split_func @CustodySigCall(%N: -1, %x: 0) -> (result: 0) {
+// CHECK-NEXT:    [[INT:%.+]] = hir.int_type
+// CHECK-NEXT:    [[W:%.+]] = uir.call @CustodyWidth([[N:%.+]]) : ([[INT]]) -> ([[INT]]) [-1] -> [-1]
+// CHECK-NEXT:    [[TY:%.+]] = hir.uint_type [[W]]
+// CHECK-NEXT:    uir.signature ([[INT]], [[TY]]) -> ([[TY]])
+// CHECK-NEXT:  } impl @CustodySigCall.impl []
+// CHECK-LABEL: uir.func @CustodySigCall.impl(%N: -1, %x: 0) -> (result: 0) {
+uir.func @CustodySigCall(%N: -1, %x: 0) -> (result: 0) {
+  %int = hir.int_type
+  %w = uir.call @CustodyWidth(%N) : (%int) -> (%int) [-1] -> [-1]
+  %ty = hir.uint_type %w
+  uir.signature (%int, %ty) -> (%ty)
+} {
+  %t = hir.int_type
+  %r = hir.add %x, %x : %t
+  uir.return %r : %t
+}
+
+// The callee of that signature call: an ordinary function, sorted like any
+// other. Calls keep naming the original symbol, which now resolves to the
+// split_func instead of the implementation.
+// CHECK-LABEL: uir.split_func @CustodyWidth(%N: -1) -> (w: -1) {
+// CHECK-LABEL: uir.func @CustodyWidth.impl(%N: -1) -> (w: -1) {
+uir.func @CustodyWidth(%N: -1) -> (w: -1) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  %r = hir.mul %N, %N : %t
+  uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// The implementation name is uniquified against the module: a function whose
+// `.impl` name is already taken gets a uniqued one. Names are cosmetic; the
+// `impl` reference is the authoritative connection.
+
+// CHECK-LABEL: uir.split_func @Collide(%a: 0) -> (result: 0) {
+// CHECK:       } impl @Collide.impl_0 []
+// CHECK-LABEL: uir.func @Collide.impl_0(%a: 0) -> (result: 0) {
+uir.func @Collide(%a: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.return %a : %t
+}
+
+// CHECK-LABEL: uir.split_func @Collide.impl(%a: 0) -> (result: 0) {
+// CHECK:       } impl @Collide.impl.impl []
+// CHECK-LABEL: uir.func @Collide.impl.impl(%a: 0) -> (result: 0) {
+uir.func @Collide.impl(%a: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.return %a : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Straight-line, single phase: all anchored content wraps into one uir.phase
 // op whose phase return carries the function result; the body terminator
 // becomes uir.unreachable. Floating constants stay at the region top level,

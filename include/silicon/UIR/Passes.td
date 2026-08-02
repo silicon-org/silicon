@@ -87,6 +87,18 @@ def NormalizeExitsPass : Pass<"normalize-exits", "mlir::ModuleOp"> {
 def SortPhasesPass : Pass<"sort-phases", "mlir::ModuleOp"> {
   let summary = "Sort uir.func content into per-phase uir.phase ops";
   let description = [{
+    Before rewriting anything, the pass takes custody of every function's
+    declaration: it creates a `uir.split_func` under the function's original
+    symbol name, holding a verbatim clone of the untouched signature region
+    and an `impl` reference to the function, which moves aside under a fresh
+    uniquified name. The flat signature is the late-binding type interface
+    call checking inlines at call sites, and sorting distributes signature
+    computations into phase ops irreversibly, so the flat form is preserved
+    rather than reconstructed later. No symbol use is rewritten: a `uir.call`
+    or `uir.phase_call` naming the function now resolves to the split_func,
+    which declares the same argument and result phases. Function splitting
+    later fills in the phase list and retires the implementation.
+
     Runs phase analysis on each `uir.func` and rewrites the internals of its
     body and signature regions into the sorted phase-op form, leaving the
     function op itself untouched: each region holds only `uir.phase` ops (at
@@ -228,7 +240,12 @@ def SplitFuncsPass : Pass<"split-funcs", "mlir::ModuleOp"> {
     phase information it reads is the `uir.phase` op `phase` attribute and each
     function's declared `argPhases`/`resultPhases`.
 
-    For every `uir.func @f`, in dependency-free order, the pass:
+    The pass is driven by the `uir.split_func` ops phase sorting left in the
+    *sorted* state, each pairing the declaration with the `uir.func` its `impl`
+    reference names. A split_func without an implementation reference is either
+    an uncompiled declaration or already split and is left alone; a `uir.func`
+    that no split_func claims is rejected, since nothing took custody of its
+    declaration. For every such pair, in dependency-free order, the pass:
 
     - **Diagnoses** content later than the declared span. The span is the
       integer range over the declared argument and result phases, always
@@ -242,27 +259,39 @@ def SplitFuncsPass : Pass<"split-funcs", "mlir::ModuleOp"> {
       terminator, or a phase whose body is not straight-line).
 
     - **Splits** each `uir.phase` op in the body region into one private
-      `hir.func @f.<phase>` (negative phases quote the symbol). A func takes its
-      phase's declared arguments plus a trailing opaque context argument for
-      every phase but the first, and returns its phase's declared results plus a
-      trailing opaque context result for every phase but the last. Values
-      crossing a phase boundary are packed with `hir.opaque_pack` into the
-      producing func's context result and unpacked in the consuming func. Each
-      `uir.phase_call` becomes an `hir.call` to the callee's concrete per-phase
-      func symbol, its context threading like any other crossing.
+      `hir.func @f.<phase>` (negative phases quote the symbol; the names are
+      cosmetic and uniquified against the module). A func takes its phase's
+      declared arguments plus a trailing opaque context argument for every phase
+      but the first, and returns its phase's declared results plus a trailing
+      opaque context result for every phase but the last. Values crossing a
+      phase boundary are packed with `hir.opaque_pack` into the producing func's
+      context result and unpacked in the consuming func. Each `uir.phase_call`
+      becomes an `hir.call` to the callee's concrete per-phase func, resolved
+      through the callee split_func's phase list — never by name convention —
+      with its context threading like any other crossing.
 
-    - **Reconstructs signatures** for each per-phase func. Each phase boundary's
-      opaque context carries the deduplicated union of the body crossings the
-      next phase consumes and the signature type values a later signature
-      depends on; a dependent argument type computed one phase earlier is
-      unpacked in the signature region, relocated (recomputed) into the
-      producing phase's body when the body does not already thread it.
+    - **Reconstructs per-phase signatures** for each per-phase func. Each phase
+      boundary's opaque context carries the deduplicated union of the body
+      crossings the next phase consumes and the signature type values a later
+      signature depends on; a dependent argument type computed one phase earlier
+      is unpacked in the signature region, relocated (recomputed) into the
+      producing phase's body when the body does not already thread it. Only pure
+      region-free computations survive that relocation, so a dependent type
+      computed by a call is rejected. The function's *flat* signature is not
+      reconstructed: it sits on the `uir.split_func`, preserved from before
+      sorting.
 
-    - **Emits structural ops**: a `uir.split_func @f` replacing the original,
-      holding the flat de-phase-ified signature and mapping each span phase to
-      its per-phase func; and, when the function has pre-span compile-time
-      phases, an `hir.eager_func` chaining them into the earliest span entry,
-      which the `uir.split_func` names in that phase's slot.
+    - **Fills the split_func**: its phase list maps each span phase to the func
+      implementing it, and the `impl` reference and the implementation function
+      are retired. When the function has pre-span compile-time phases, an
+      `hir.eager_func` chains them into the earliest span entry and takes that
+      phase's slot.
+
+    Because a call resolves through the callee's phase list, the module is
+    processed in stages: every phase list is filled before any `uir.phase_call`
+    is lowered, and implementations are retired only once all of them are, so
+    the result never depends on the order the functions are visited in.
+    Recursion and mutual recursion fall out of this.
 
     Anything the pass cannot handle is a hard error, never a silent skip.
   }];
