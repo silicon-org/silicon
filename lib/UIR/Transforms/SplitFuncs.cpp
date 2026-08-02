@@ -712,7 +712,7 @@ void FuncSplitter::buildEagerAndSplitFunc() {
       builder, loc, funcOp.getSymNameAttr(), funcOp.getSymVisibilityAttr(),
       funcOp.getArgNamesAttr(), funcOp.getArgPhasesAttr(),
       funcOp.getResultNamesAttr(), funcOp.getResultPhasesAttr(),
-      DenseI32ArrayAttr::get(ctx, phaseNumbers),
+      FlatSymbolRefAttr{}, DenseI32ArrayAttr::get(ctx, phaseNumbers),
       ArrayAttr::get(ctx, phaseFuncs));
   buildFlatSignature(splitFunc.getSignature());
 }

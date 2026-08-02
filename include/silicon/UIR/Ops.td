@@ -444,6 +444,7 @@ def SplitFuncOp : UIROp<"split_func", [
   IsolatedFromAbove,
   Symbol,
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>,
 ]> {
   let summary = "stable late-binding interface for a split function";
   let description = [{
@@ -456,11 +457,27 @@ def SplitFuncOp : UIROp<"split_func", [
 
     Its signature region holds the original, unsorted signature: the type
     interface that call checking inlines at late-bound call sites, folding
-    toward constants as eager evaluation publishes results.
+    toward constants as eager evaluation publishes results. That region is
+    preserved verbatim, never reconstructed: phase sorting creates this op
+    before it rewrites the function it describes, and moves the function
+    aside under a fresh name recorded in `impl`. Signature computations may
+    therefore contain arbitrary content, calls included.
+
+    The op has three states:
+
+    - *declared*: no `impl`, no phase list. The interface is known but no
+      implementation has been compiled yet; this doubles as the natural form
+      for incremental compilation and precompiled libraries.
+    - *sorted*: `impl` names the `uir.func` holding the implementation,
+      whose phases have not been split into per-phase functions yet.
+    - *split*: the phase list maps each phase of the declared span to the
+      function implementing it, and no `impl` remains.
 
     Call decomposition never consults this op — it is derived from the
     callee's declared phases alone — so this op carries no decomposition
-    witness role.
+    witness role. The phase list is authoritative for resolving a
+    `uir.phase_call` to a concrete per-phase function; nothing resolves by
+    name convention.
   }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,
@@ -469,6 +486,7 @@ def SplitFuncOp : UIROp<"split_func", [
     DenseI32ArrayAttr:$argPhases,
     ArrayAttr:$resultNames,
     DenseI32ArrayAttr:$resultPhases,
+    OptionalAttr<FlatSymbolRefAttr>:$impl,
     DenseI32ArrayAttr:$phaseNumbers,
     ArrayAttr:$phaseFuncs
   );

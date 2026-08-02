@@ -1281,6 +1281,7 @@ void PhaseSplitter2::emitStructuralOps() {
           funcOp.getContext(),
           SmallVector<int32_t>(funcOp.getResultPhases().begin(),
                                funcOp.getResultPhases().end())),
+      FlatSymbolRefAttr{},
       DenseI32ArrayAttr::get(funcOp.getContext(), phaseNumbers),
       builder.getArrayAttr(phaseFuncs));
 

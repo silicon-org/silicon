@@ -233,13 +233,42 @@ uir.func @with_module(%x: 0) -> (result: 0) attributes {isModule} {
   uir.return %x : %x
 }
 
+// A uir.split_func in the split state maps each span phase to the function
+// implementing it and holds no implementation reference.
 // CHECK-LABEL: uir.split_func @split_witness
 uir.split_func @split_witness(%a: -1, %b: 0) -> (result: 0) {
   uir.signature (%a, %b) -> (%b)
+// CHECK: } [
+// CHECK-NEXT: -1: @split_witness.0,
+// CHECK-NEXT: 0: @split_witness.1
+// CHECK-NEXT: ]
 } [
   -1: @split_witness.0,
   0: @split_witness.1
 ]
+
+// A uir.split_func in the declared state has neither an implementation nor a
+// phase list: the interface is known, but nothing has been compiled for it.
+// CHECK-LABEL: uir.split_func @declared_func
+// CHECK: } []
+uir.split_func @declared_func(%a: -1, %b: 0) -> (result: 0) {
+  uir.signature (%a, %b) -> (%b)
+} []
+
+// A uir.split_func in the sorted state points at the uir.func holding the
+// implementation whose phases have not been split apart yet.
+// CHECK-LABEL: uir.split_func @sorted_func
+// CHECK: } impl @sorted_func.impl []
+uir.split_func @sorted_func(%a: -1, %b: 0) -> (result: 0) {
+  uir.signature (%a, %b) -> (%b)
+} impl @sorted_func.impl []
+
+// CHECK-LABEL: uir.func @sorted_func.impl
+uir.func @sorted_func.impl(%a: -1, %b: 0) -> (result: 0) {
+  uir.signature (%a, %b) -> (%b)
+} {
+  uir.return %b : %b
+}
 
 // CHECK-LABEL: uir.func @caller
 uir.func @caller(%a: 0) -> (result: 0) {

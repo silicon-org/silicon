@@ -343,6 +343,69 @@ uir.split_func @split_sig_nested_arity(%a: 0) -> () {
 
 // -----
 
+// Verify that a uir.split_func rejects the state where an implementation
+// reference and a phase list coexist.
+// expected-error @below {{has both an implementation reference and a phase list}}
+uir.split_func @impl_and_phases(%a: 0) -> () {
+  uir.signature (%a) -> ()
+} impl @impl_and_phases.impl [
+  0: @impl_and_phases.0
+]
+uir.func @impl_and_phases.impl(%a: 0) -> () {
+  uir.signature (%a) -> ()
+} {
+  uir.return
+}
+
+// -----
+
+// Verify that a uir.split_func implementation reference must resolve.
+// expected-error @below {{'missing_impl' does not reference a valid function}}
+uir.split_func @unresolved_impl(%a: 0) -> () {
+  uir.signature (%a) -> ()
+} impl @missing_impl []
+
+// -----
+
+// Verify that a uir.split_func implementation reference must be a uir.func.
+func.func @not_a_func() {
+  func.return
+}
+// expected-error @below {{'not_a_func' does not reference a 'uir.func'}}
+uir.split_func @wrong_impl_kind(%a: 0) -> () {
+  uir.signature (%a) -> ()
+} impl @not_a_func []
+
+// -----
+
+// Verify that a uir.split_func and its implementation agree on the phases
+// declared for the arguments.
+// expected-error @below {{argument phases -1 do not match the phases @arg_phase_mismatch.impl declares for its arguments 0}}
+uir.split_func @arg_phase_mismatch(%a: -1) -> () {
+  uir.signature (%a) -> ()
+} impl @arg_phase_mismatch.impl []
+uir.func @arg_phase_mismatch.impl(%a: 0) -> () {
+  uir.signature (%a) -> ()
+} {
+  uir.return
+}
+
+// -----
+
+// Verify that a uir.split_func and its implementation agree on the phases
+// declared for the results.
+// expected-error @below {{result phases 1 do not match the phases @result_phase_mismatch.impl declares for its results 0}}
+uir.split_func @result_phase_mismatch(%a: 0) -> (r: 1) {
+  uir.signature (%a) -> (%a)
+} impl @result_phase_mismatch.impl []
+uir.func @result_phase_mismatch.impl(%a: 0) -> (r: 0) {
+  uir.signature (%a) -> (%a)
+} {
+  uir.return %a : %a
+}
+
+// -----
+
 // Verify that uir.phase requires a uir.func parent.
 func.func @phase_wrong_parent() {
   // expected-error @below {{expects parent op 'uir.func'}}

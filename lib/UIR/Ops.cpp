@@ -36,6 +36,28 @@ static LoopOp getEnclosingLoop(Operation *op) {
   return {};
 }
 
+std::pair<int32_t, int32_t> silicon::uir::DeclaredPhases::span() const {
+  int32_t lo = 0, hi = 0;
+  for (auto phase : argPhases) {
+    lo = std::min(lo, phase);
+    hi = std::max(hi, phase);
+  }
+  for (auto phase : resultPhases) {
+    lo = std::min(lo, phase);
+    hi = std::max(hi, phase);
+  }
+  return {lo, hi};
+}
+
+std::optional<silicon::uir::DeclaredPhases>
+silicon::uir::getDeclaredPhases(Operation *op) {
+  if (auto funcOp = dyn_cast_or_null<FuncOp>(op))
+    return DeclaredPhases{funcOp.getArgPhases(), funcOp.getResultPhases()};
+  if (auto funcOp = dyn_cast_or_null<SplitFuncOp>(op))
+    return DeclaredPhases{funcOp.getArgPhases(), funcOp.getResultPhases()};
+  return std::nullopt;
+}
+
 //===----------------------------------------------------------------------===//
 // YieldOp
 //===----------------------------------------------------------------------===//
@@ -747,7 +769,10 @@ void FuncOp::getAsmBlockArgumentNames(Region &region,
 // The assembly format is:
 //   uir.split_func @name(%arg: phase, ...) -> (result: phase, ...) {
 //     <signature region>
-//   } [phase: @sym, ...]
+//   } impl @sym [phase: @sym, ...]
+//
+// The `impl @sym` clause is present in the sorted state only; the phase list
+// is always printed, and is empty in the declared and sorted states.
 
 ParseResult SplitFuncOp::parse(OpAsmParser &parser, OperationState &result) {
   auto &props = result.getOrAddProperties<SplitFuncOp::Properties>();
@@ -818,6 +843,14 @@ ParseResult SplitFuncOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseRegion(*region, args))
     return failure();
 
+  // Parse the optional implementation reference: `impl @sym`.
+  if (succeeded(parser.parseOptionalKeyword("impl"))) {
+    FlatSymbolRefAttr implAttr;
+    if (parser.parseAttribute(implAttr))
+      return failure();
+    props.impl = implAttr;
+  }
+
   // Parse phase map: [phase: @sym, ...].
   SmallVector<int32_t> phaseNumbers;
   SmallVector<Attribute> phaseFuncs;
@@ -875,6 +908,12 @@ void SplitFuncOp::print(OpAsmPrinter &p) {
   // Print signature region without entry block arguments.
   p.printRegion(getSignature(), /*printEntryBlockArgs=*/false);
 
+  // Print the implementation reference of the sorted state.
+  if (auto impl = getImplAttr()) {
+    p << " impl ";
+    p.printAttribute(impl);
+  }
+
   // Print phase map.
   p << " [";
   auto phaseNumbers = getPhaseNumbers();
@@ -886,7 +925,8 @@ void SplitFuncOp::print(OpAsmPrinter &p) {
     p << "  " << phaseNumbers[i] << ": ";
     p.printAttribute(phaseFuncs[i]);
   }
-  p.printNewline();
+  if (!phaseNumbers.empty())
+    p.printNewline();
   p << ']';
 }
 
@@ -905,6 +945,14 @@ LogicalResult SplitFuncOp::verify() {
     return emitOpError() << "phaseNumbers has " << getPhaseNumbers().size()
                          << " entries but phaseFuncs has "
                          << getPhaseFuncs().size() << " entries";
+
+  // The three states are exclusive: an implementation reference means the
+  // function has been sorted but not yet split into per-phase functions, so no
+  // phase list exists yet; a phase list means splitting has consumed the
+  // implementation.
+  if (getImplAttr() && !getPhaseNumbers().empty())
+    return emitOpError() << "has both an implementation reference and a phase "
+                            "list; a split function has no implementation left";
 
   // Check block arguments in signature region.
   if (!getSignature().empty()) {
@@ -937,6 +985,37 @@ LogicalResult SplitFuncOp::verifyRegions() {
   });
   if (walkResult.wasInterrupted())
     return failure();
+
+  return success();
+}
+
+LogicalResult
+SplitFuncOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto impl = getImplAttr();
+  if (!impl)
+    return success();
+
+  auto *implOp = symbolTable.lookupNearestSymbolFrom(getOperation(), impl);
+  if (!implOp)
+    return emitOpError() << "'" << impl.getValue()
+                         << "' does not reference a valid function";
+  auto funcOp = dyn_cast<FuncOp>(implOp);
+  if (!funcOp)
+    return emitOpError() << "'" << impl.getValue()
+                         << "' does not reference a 'uir.func'";
+
+  // The implementation describes the same interface this op publishes: sorting
+  // rewrites a function's interior, never its declaration.
+  if (funcOp.getArgPhases() != getArgPhases())
+    return emitOpError() << "argument phases " << getArgPhases()
+                         << " do not match the phases @" << impl.getValue()
+                         << " declares for its arguments "
+                         << funcOp.getArgPhases();
+  if (funcOp.getResultPhases() != getResultPhases())
+    return emitOpError() << "result phases " << getResultPhases()
+                         << " do not match the phases @" << impl.getValue()
+                         << " declares for its results "
+                         << funcOp.getResultPhases();
 
   return success();
 }
@@ -1184,33 +1263,20 @@ PhaseCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // Accept both uir.func and uir.split_func as callees, since a callee may
   // already be split when the caller is verified. Both carry the declared
   // arg and result phases this op is checked against.
-  ArrayRef<int32_t> argPhases, resultPhases;
-  if (auto funcOp = dyn_cast<FuncOp>(calleeOp)) {
-    argPhases = funcOp.getArgPhases();
-    resultPhases = funcOp.getResultPhases();
-  } else if (auto funcOp = dyn_cast<SplitFuncOp>(calleeOp)) {
-    argPhases = funcOp.getArgPhases();
-    resultPhases = funcOp.getResultPhases();
-  } else {
+  auto declared = getDeclaredPhases(calleeOp);
+  if (!declared)
     return emitOpError() << "'" << callee.getValue()
                          << "' does not reference a 'uir.func' or "
                             "'uir.split_func'";
-  }
+  auto argPhases = declared->argPhases;
+  auto resultPhases = declared->resultPhases;
 
   // The callee's phase span is the contiguous integer range from its earliest
   // to its latest declared argument or result phase, always including phase 0.
   // Callers thread one entry per phase in the span, so every phase in the
   // range — including gap phases carrying no arguments or results — is a legal
   // entry, derivable from the declaration alone.
-  int32_t lo = 0, hi = 0;
-  for (auto phase : argPhases) {
-    lo = std::min(lo, phase);
-    hi = std::max(hi, phase);
-  }
-  for (auto phase : resultPhases) {
-    lo = std::min(lo, phase);
-    hi = std::max(hi, phase);
-  }
+  auto [lo, hi] = declared->span();
 
   auto phase = getCalleePhase();
   if (phase < lo || phase > hi)
@@ -1367,16 +1433,11 @@ LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // to derive the phase entries from the callee declaration alone; without the
   // check a phase present on the call but not the callee would silently drop
   // an argument or result.
-  ArrayRef<int32_t> calleeArgPhases, calleeResultPhases;
-  if (auto funcOp = dyn_cast<FuncOp>(calleeOp)) {
-    calleeArgPhases = funcOp.getArgPhases();
-    calleeResultPhases = funcOp.getResultPhases();
-  } else if (auto funcOp = dyn_cast<SplitFuncOp>(calleeOp)) {
-    calleeArgPhases = funcOp.getArgPhases();
-    calleeResultPhases = funcOp.getResultPhases();
-  } else {
+  auto declared = getDeclaredPhases(calleeOp);
+  if (!declared)
     return success();
-  }
+  auto calleeArgPhases = declared->argPhases;
+  auto calleeResultPhases = declared->resultPhases;
 
   if (getArgPhases() != calleeArgPhases)
     return emitOpError() << "argument phases " << getArgPhases()
