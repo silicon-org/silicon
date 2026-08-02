@@ -359,6 +359,34 @@ uir.func @impl_and_phases.impl(%a: 0) -> () {
 
 // -----
 
+// Verify that the phase list, which callers resolve their phase calls through,
+// names functions that exist.
+// expected-error @below {{'no_such_phase_func' does not reference a valid function}}
+uir.split_func @dangling_phase_func(%a: 0) -> () {
+  uir.signature (%a) -> ()
+} [
+  0: @no_such_phase_func
+]
+
+// -----
+
+// Verify that the phase list is in increasing order, so a phase maps to at
+// most one function.
+hir.func private @unordered.0() -> () {
+  hir.signature () -> ()
+} {
+  hir.return
+}
+// expected-error @below {{maps phase -1 after phase 0; phases must be listed in increasing order}}
+uir.split_func @unordered(%a: -1, %b: 0) -> () {
+  uir.signature (%a, %b) -> ()
+} [
+  0: @unordered.0,
+  -1: @unordered.0
+]
+
+// -----
+
 // Verify that a uir.split_func implementation reference must resolve.
 // expected-error @below {{'missing_impl' does not reference a valid function}}
 uir.split_func @unresolved_impl(%a: 0) -> () {

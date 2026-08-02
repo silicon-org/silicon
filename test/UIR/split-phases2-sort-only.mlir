@@ -202,6 +202,24 @@ uir.func @DeadLoopResultLaterValue(%n: 0, %x: 0) -> (result: 0) {
 // witness entry, chained through an opaque context value, each at its
 // absolute phase.
 
+
+// Stub per-phase functions for the phase list below, which must name functions
+// that exist.
+hir.func private @half.0(%a0) -> (r0) {
+  %t = hir.int_type
+  hir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  hir.return %a0 : %t
+}
+hir.func private @half.1(%a0, %a1) -> (r0) {
+  %t = hir.int_type
+  hir.signature (%t, %t) -> (%t)
+} {
+  %t = hir.int_type
+  hir.return %a0 : %t
+}
+
 uir.split_func @half(%a: -1, %b: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
@@ -1335,6 +1353,24 @@ uir.func @HoistConstWrite(%c: 1, %x: 0) -> (result: 0) {
 // Hoisting a callee's earlier half: after call decomposition, the phase-0
 // half of a call under a phase-1 if hoists out; the phase-1 half stays
 // conditional and consumes the hoisted context.
+
+
+// Stub per-phase functions for the phase list below, which must name functions
+// that exist.
+hir.func private @f.0(%a0) -> (r0) {
+  %t = hir.int_type
+  hir.signature (%t) -> (%t)
+} {
+  %t = hir.int_type
+  hir.return %a0 : %t
+}
+hir.func private @f.1(%a0, %a1) -> (r0) {
+  %t = hir.int_type
+  hir.signature (%t, %t) -> (%t)
+} {
+  %t = hir.int_type
+  hir.return %a0 : %t
+}
 
 uir.split_func @f(%a: -1, %b: 0) -> (result: 0) {
   %0 = hir.int_type

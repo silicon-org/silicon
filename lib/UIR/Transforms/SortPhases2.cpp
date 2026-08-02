@@ -502,27 +502,12 @@ LogicalResult PhaseSorter::dissolveExprsAndPins() {
 /// carry the declared phases.
 static LogicalResult calleeSpanPhases(CallOp callOp, Operation *calleeOp,
                                       SmallVectorImpl<int32_t> &span) {
-  ArrayRef<int32_t> argPhases, resultPhases;
-  if (auto funcOp = dyn_cast<FuncOp>(calleeOp)) {
-    argPhases = funcOp.getArgPhases();
-    resultPhases = funcOp.getResultPhases();
-  } else if (auto funcOp = dyn_cast<SplitFuncOp>(calleeOp)) {
-    argPhases = funcOp.getArgPhases();
-    resultPhases = funcOp.getResultPhases();
-  } else {
+  auto declared = getDeclaredPhases(calleeOp);
+  if (!declared)
     return callOp.emitOpError()
            << "callee @" << callOp.getCallee()
            << " is neither a 'uir.func' nor a 'uir.split_func'";
-  }
-  int32_t lo = 0, hi = 0;
-  for (auto phase : argPhases) {
-    lo = std::min(lo, phase);
-    hi = std::max(hi, phase);
-  }
-  for (auto phase : resultPhases) {
-    lo = std::min(lo, phase);
-    hi = std::max(hi, phase);
-  }
+  auto [lo, hi] = declared->span();
   for (int32_t phase = lo; phase <= hi; ++phase)
     span.push_back(phase);
   return success();

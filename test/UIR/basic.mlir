@@ -233,6 +233,19 @@ uir.func @with_module(%x: 0) -> (result: 0) attributes {isModule} {
   uir.return %x : %x
 }
 
+// Stub per-phase functions for the phase list below, which must name functions
+// that exist.
+hir.func private @split_witness.0() -> () {
+  hir.signature () -> ()
+} {
+  hir.return
+}
+hir.func private @split_witness.1() -> () {
+  hir.signature () -> ()
+} {
+  hir.return
+}
+
 // A uir.split_func in the split state maps each span phase to the function
 // implementing it and holds no implementation reference.
 // CHECK-LABEL: uir.split_func @split_witness

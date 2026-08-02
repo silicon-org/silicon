@@ -43,9 +43,10 @@
 //   chains them into the earliest span entry and takes that slot.
 //
 // Because callers resolve their `uir.phase_call`s through the callee's phase
-// list rather than by name convention, the pass runs in two stages over the
-// whole module: every split_func's phase list is filled before any phase call
-// is lowered.
+// list rather than by name convention, the pass runs in stages over the whole
+// module: every split_func's phase list is filled before any phase call is
+// lowered, and the implementations are retired only once all of them are, so
+// the result never depends on the order the functions are visited in.
 //
 // ## Crossings: a shared, deduplicated context
 //
@@ -93,11 +94,12 @@ namespace {
 /// Splits a single threaded `uir.func` into per-phase `hir.func` ops and fills
 /// in the `uir.split_func` that took custody of its declaration.
 ///
-/// The work runs in two stages: `declare()` checks the input and creates the
-/// per-phase functions and the split_func's phase list, and `implement()` fills
-/// their bodies and signatures. Splitting the module's functions stage by stage
-/// makes every callee's phase list available before any `uir.phase_call` is
-/// lowered against it.
+/// The work runs in stages: `declare()` checks the input and creates the
+/// per-phase functions and the split_func's phase list, `implement()` fills
+/// their bodies and signatures, and `retire()` drops the implementation.
+/// Splitting the module's functions stage by stage makes every callee's phase
+/// list available before any `uir.phase_call` is lowered against it, and keeps
+/// every symbol alive until the last one is lowered.
 struct FuncSplitter {
   FuncSplitter(SplitFuncOp splitFunc, FuncOp funcOp, SymbolTable &symbolTable)
       : splitFunc(splitFunc), funcOp(funcOp), symbolTable(symbolTable),
@@ -268,11 +270,8 @@ LogicalResult FuncSplitter::diagnose() {
   // the range over the declared argument and result phases, always including
   // phase 0; this uniformly catches call-implied late phases, since calls are
   // already decomposed into `uir.phase_call` entries living in phase ops.
-  int spanHi = 0;
-  for (auto p : argPhases)
-    spanHi = std::max<int>(spanHi, p);
-  for (auto p : resultPhases)
-    spanHi = std::max<int>(spanHi, p);
+  auto [spanLo, spanHi] = DeclaredPhases{argPhases, resultPhases}.span();
+  std::map<int, PhaseOp> phases;
   for (auto &op : funcOp.getBody().front().without_terminator()) {
     auto phaseOp = cast<PhaseOp>(&op);
     if (phaseOp.getPhase() > spanHi)
@@ -281,7 +280,27 @@ LogicalResult FuncSplitter::diagnose() {
              << " runs past the function's last declared phase " << spanHi
              << ", which has no executor; declare a result at phase "
              << phaseOp.getPhase() << " (e.g. a dyn result) to extend the span";
+    phases[phaseOp.getPhase()] = phaseOp;
   }
+
+  // The threaded form has one `uir.phase` op per phase from the function's
+  // earliest to its latest, with no gaps: every phase becomes a function, and
+  // every phase but the last hands its context to the next one. Each declared
+  // span phase needs one because callers thread an entry through it, and each
+  // phase in between because the context chain passes through it.
+  if (phases.empty())
+    return funcOp.emitOpError()
+           << "has no 'uir.phase' op in its body region; the threaded form "
+              "holds one per phase";
+  for (int phase = std::min<int>(phases.begin()->first, spanLo);
+       phase <= spanHi; ++phase)
+    if (!phases.count(phase))
+      return funcOp.emitOpError()
+             << "has no 'uir.phase' op for phase " << phase
+             << " in its body region, but holds phases "
+             << phases.begin()->first << " through "
+             << std::max<int>(phases.rbegin()->first, spanHi)
+             << "; the threaded form has no gaps";
   return success();
 }
 
@@ -823,7 +842,15 @@ struct SplitFuncsPass : public uir::impl::SplitFuncsPassBase<SplitFuncsPass> {
       auto funcOp = symbolTable.lookup<FuncOp>(impl.getValue());
       assert(funcOp && "implementation of a verified 'uir.split_func' must "
                        "resolve to a 'uir.func'");
-      implementations.insert(funcOp);
+      // An implementation belongs to exactly one declaration. Two claims on it
+      // would split the same function twice, into two sets of per-phase
+      // functions with two sets of callers bound to them.
+      if (!implementations.insert(funcOp).second) {
+        splitFunc.emitOpError()
+            << "shares its implementation @" << impl.getValue()
+            << " with another 'uir.split_func'";
+        return signalPassFailure();
+      }
       splitters.push_back(
           std::make_unique<FuncSplitter>(splitFunc, funcOp, symbolTable));
     }

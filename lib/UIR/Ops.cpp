@@ -991,6 +991,23 @@ LogicalResult SplitFuncOp::verifyRegions() {
 
 LogicalResult
 SplitFuncOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  // The phase list is the authoritative mapping callers resolve a
+  // `uir.phase_call` through: every entry must name a function that exists, and
+  // the phases must be listed in increasing order so a phase maps to at most
+  // one function.
+  int32_t previous = 0;
+  for (auto [index, phase] : llvm::enumerate(getPhaseNumbers())) {
+    if (index != 0 && phase <= previous)
+      return emitOpError() << "maps phase " << phase << " after phase "
+                           << previous
+                           << "; phases must be listed in increasing order";
+    previous = phase;
+    auto entry = cast<FlatSymbolRefAttr>(getPhaseFuncs()[index]);
+    if (!symbolTable.lookupNearestSymbolFrom(getOperation(), entry))
+      return emitOpError() << "'" << entry.getValue()
+                           << "' does not reference a valid function";
+  }
+
   auto impl = getImplAttr();
   if (!impl)
     return success();
