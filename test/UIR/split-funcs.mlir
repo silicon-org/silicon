@@ -781,3 +781,33 @@ uir.func @DefaultWidth.impl() -> (w: 0) {
   }
   uir.unreachable
 }
+
+//===----------------------------------------------------------------------===//
+// Case 11: a function with no arguments and no results. Its signature has
+// nothing to deliver, so the signature region holds no phase op at all, the
+// merged range is the bare span {0}, and the single func needs no context
+// plumbing and no eager chain.
+
+// CHECK-LABEL: hir.func private @Bare.0() -> () {
+// CHECK-NEXT:    hir.signature () -> ()
+// CHECK-NEXT:  } {
+// CHECK-NEXT:    hir.return
+// CHECK-NEXT:  }
+
+// CHECK-LABEL: uir.split_func @Bare() -> () {
+// CHECK-NEXT:    uir.signature () -> ()
+// CHECK-NEXT:  } [
+// CHECK-NEXT:    0: @Bare.0
+// CHECK-NEXT:  ]
+uir.split_func @Bare() -> () {
+  uir.signature () -> ()
+} impl @Bare.impl []
+
+uir.func @Bare.impl() -> () {
+  uir.signature () -> ()
+} {
+  uir.phase 0 {
+    uir.phase_return
+  }
+  uir.unreachable
+}
