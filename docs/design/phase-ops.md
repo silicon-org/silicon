@@ -93,6 +93,9 @@ Five stages, each owning a single concern:
   Phases before the declared span that arise this way are ordinary pre-span phases: arg-free by construction, evaluated eagerly via the `hir.eager_func` chain, after which the receiving signature's unpack folds and the per-phase function is self-describing.
   Splitting merges, never relocates: the phase-P function body is the signature region's phase-P content followed by the body region's phase-P content (either may be absent and counts as empty), its outgoing context is the union of both yields, and its signature region is built solely from unpacks of the slots the `uir.signature` operands name.
   The splitter never looks inside a phase region and never clones computation, so signature `uir.phase_call` chains need no special handling.
+- **Module-ness lives on the declaration** (settled 2026-08-20).
+  `isModule` is a declaration attribute: sorting's declaration snapshot copies it onto `uir.split_func`, and the single-link collapse shim inherits it, so after evaluation the consumer still finds it on the resulting function.
+  A module's hardware is its phase-0 link, resolved through the link list like any other callee resolution; the splitter never stamps per-phase functions and knows nothing about modules.
 - **No canonicalization between the passes** for now; sorting and splitting run back-to-back.
   Effect modeling and canonicalization interactions (CSE across phase regions, constant hoisting out of them) are deferred until a canonicalizer needs to run in between.
 - **The phase-op-only contract is not verifier-enforced.**
