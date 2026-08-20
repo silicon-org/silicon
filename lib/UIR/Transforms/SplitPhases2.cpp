@@ -1283,7 +1283,7 @@ void PhaseSplitter2::emitStructuralOps() {
                                funcOp.getResultPhases().end())),
       FlatSymbolRefAttr{},
       DenseI32ArrayAttr::get(funcOp.getContext(), phaseNumbers),
-      builder.getArrayAttr(phaseFuncs));
+      builder.getArrayAttr(phaseFuncs), /*isModule=*/UnitAttr{});
 
   // Move cloned unified signature into the split_func.
   splitFuncOp.getSignature().takeBody(clonedUnifiedSig);

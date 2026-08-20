@@ -260,6 +260,14 @@ uir.split_func @split_witness(%a: -1, %b: 0) -> (result: 0) {
   0: @split_witness.1
 ]
 
+// Module-ness is a property of the declaration and thus lives on the
+// uir.split_func.
+// CHECK-LABEL: uir.split_func @module_witness
+// CHECK-SAME: attributes {isModule}
+uir.split_func @module_witness(%a: 0) -> (result: 0) attributes {isModule} {
+  uir.signature (%a) -> (%a)
+} []
+
 // A uir.split_func in the declared state has neither an implementation nor a
 // phase list: the interface is known, but nothing has been compiled for it.
 // CHECK-LABEL: uir.split_func @declared_func

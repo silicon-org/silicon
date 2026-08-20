@@ -478,6 +478,11 @@ def SplitFuncOp : UIROp<"split_func", [
     witness role. The phase list is authoritative for resolving a
     `uir.phase_call` to a concrete per-phase function; nothing resolves by
     name convention.
+
+    `isModule` marks the function as a hardware module. Module-ness is a
+    property of the declaration, so it lives here and nowhere else: neither the
+    implementation this op references nor the per-phase functions its phase
+    list names may carry the marker.
   }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,
@@ -488,7 +493,8 @@ def SplitFuncOp : UIROp<"split_func", [
     DenseI32ArrayAttr:$resultPhases,
     OptionalAttr<FlatSymbolRefAttr>:$impl,
     DenseI32ArrayAttr:$phaseNumbers,
-    ArrayAttr:$phaseFuncs
+    ArrayAttr:$phaseFuncs,
+    OptionalAttr<UnitAttr>:$isModule
   );
   let regions = (region MinSizedRegion<1>:$signature);
   let hasCustomAssemblyFormat = 1;

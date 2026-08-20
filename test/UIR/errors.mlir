@@ -434,6 +434,20 @@ uir.func @result_phase_mismatch.impl(%a: 0) -> (r: 0) {
 
 // -----
 
+// Verify that module-ness stays on the declaration: an implementation that
+// kept the marker would lose it silently once splitting retires it.
+// expected-error @below {{implementation @module_impl.impl is marked 'isModule'; module-ness belongs to the declaration, not the implementation}}
+uir.split_func @module_impl(%a: 0) -> () {
+  uir.signature (%a) -> ()
+} impl @module_impl.impl []
+uir.func @module_impl.impl(%a: 0) -> () attributes {isModule} {
+  uir.signature (%a) -> ()
+} {
+  uir.return
+}
+
+// -----
+
 // Verify that uir.phase requires a uir.func parent.
 func.func @phase_wrong_parent() {
   // expected-error @below {{expects parent op 'uir.func'}}

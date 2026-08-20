@@ -767,7 +767,8 @@ void FuncOp::getAsmBlockArgumentNames(Region &region,
 // # Custom Parser for SplitFuncOp
 //
 // The assembly format is:
-//   uir.split_func @name(%arg: phase, ...) -> (result: phase, ...) {
+//   uir.split_func @name(%arg: phase, ...) -> (result: phase, ...)
+//   attributes {...} {
 //     <signature region>
 //   } impl @sym [phase: @sym, ...]
 //
@@ -838,6 +839,10 @@ ParseResult SplitFuncOp::parse(OpAsmParser &parser, OperationState &result) {
   props.resultNames = builder.getArrayAttr(resultNames);
   props.resultPhases = builder.getDenseI32ArrayAttr(resultPhases);
 
+  // Parse optional attributes.
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
   // Parse signature region with the inline arguments as entry block args.
   auto *region = result.addRegion();
   if (parser.parseRegion(*region, args))
@@ -903,9 +908,19 @@ void SplitFuncOp::print(OpAsmPrinter &p) {
       p << ", ";
     p << cast<StringAttr>(resultNames[i]).getValue() << ": " << resultPhases[i];
   }
-  p << ") ";
+  p << ")";
+
+  // Print optional attributes, excluding the properties the syntax spells out
+  // itself, before and after the signature region.
+  p.printOptionalAttrDictWithKeyword(
+      (*this)->getAttrs(),
+      {getSymNameAttrName(), getSymVisibilityAttrName(), getArgNamesAttrName(),
+       getArgPhasesAttrName(), getResultNamesAttrName(),
+       getResultPhasesAttrName(), getImplAttrName(), getPhaseNumbersAttrName(),
+       getPhaseFuncsAttrName()});
 
   // Print signature region without entry block arguments.
+  p << ' ';
   p.printRegion(getSignature(), /*printEntryBlockArgs=*/false);
 
   // Print the implementation reference of the sorted state.
@@ -1033,6 +1048,14 @@ SplitFuncOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
                          << " do not match the phases @" << impl.getValue()
                          << " declares for its results "
                          << funcOp.getResultPhases();
+
+  // Module-ness is part of that interface and belongs to this op alone. An
+  // implementation that kept the marker would carry a declaration fact nothing
+  // reads, and would lose it silently once splitting retires it.
+  if (funcOp.getIsModuleAttr())
+    return emitOpError() << "implementation @" << impl.getValue()
+                         << " is marked 'isModule'; module-ness belongs to the "
+                            "declaration, not the implementation";
 
   return success();
 }

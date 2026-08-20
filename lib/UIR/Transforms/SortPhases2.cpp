@@ -3157,6 +3157,10 @@ static void snapshotDeclaration(FuncOp funcOp, SymbolTable &symbolTable) {
   SymbolTable::setSymbolName(funcOp, (name.getValue() + ".impl").str());
   symbolTable.insert(funcOp);
 
+  // Module-ness is a property of the declaration, so it moves to the snapshot
+  // and leaves the implementation behind: consumers look for hardware modules
+  // on the interface, and the per-phase functions the implementation is later
+  // split into are never modules themselves.
   OpBuilder builder(funcOp);
   auto splitFunc = SplitFuncOp::create(
       builder, funcOp.getLoc(), name, funcOp.getSymVisibilityAttr(),
@@ -3164,7 +3168,8 @@ static void snapshotDeclaration(FuncOp funcOp, SymbolTable &symbolTable) {
       funcOp.getResultNamesAttr(), funcOp.getResultPhasesAttr(),
       FlatSymbolRefAttr::get(funcOp),
       DenseI32ArrayAttr::get(ctx, ArrayRef<int32_t>{}),
-      builder.getArrayAttr({}));
+      builder.getArrayAttr({}), funcOp.getIsModuleAttr());
+  funcOp.removeIsModuleAttr();
   IRMapping mapping;
   funcOp.getSignature().cloneInto(&splitFunc.getSignature(), mapping);
   symbolTable.insert(splitFunc);

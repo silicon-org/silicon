@@ -853,3 +853,33 @@ uir.func @Bare.impl() -> () {
   }
   uir.unreachable
 }
+
+//===----------------------------------------------------------------------===//
+// Case 12: a module. Module-ness sits on the declaration and stays there: the
+// splitter neither reads nor stamps it, so the per-phase functions come out
+// unmarked and consumers keep finding the marker on the interface, whose
+// hardware is the phase-0 link.
+
+// CHECK-LABEL: hir.func private @Mod.0() -> () {
+// CHECK-NEXT:    hir.signature () -> ()
+// CHECK-NEXT:  } {
+// CHECK-NEXT:    hir.return
+// CHECK-NEXT:  }
+
+// CHECK-LABEL: uir.split_func @Mod() -> () attributes {isModule} {
+// CHECK-NEXT:    uir.signature () -> ()
+// CHECK-NEXT:  } [
+// CHECK-NEXT:    0: @Mod.0
+// CHECK-NEXT:  ]
+uir.split_func @Mod() -> () attributes {isModule} {
+  uir.signature () -> ()
+} impl @Mod.impl []
+
+uir.func @Mod.impl() -> () {
+  uir.signature () -> ()
+} {
+  uir.phase 0 {
+    uir.phase_return
+  }
+  uir.unreachable
+}

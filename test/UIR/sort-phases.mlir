@@ -89,6 +89,22 @@ uir.func @Collide.impl(%a: 0) -> (result: 0) {
 }
 
 //===----------------------------------------------------------------------===//
+// Module-ness travels with the declaration: the snapshot carries `isModule`,
+// and the implementation is left unmarked, since the per-phase functions it
+// is split into are not modules.
+
+// CHECK-LABEL: uir.split_func @CustodyModule(%a: 0) -> (result: 0) attributes {isModule} {
+// CHECK:       } impl @CustodyModule.impl []
+// CHECK-LABEL: uir.func @CustodyModule.impl(%a: 0) -> (result: 0) {
+uir.func @CustodyModule(%a: 0) -> (result: 0) attributes {isModule} {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  uir.return %a : %t
+}
+
+//===----------------------------------------------------------------------===//
 // Straight-line, single phase: all anchored content wraps into one uir.phase
 // op whose phase return carries the function result; the body terminator
 // becomes uir.unreachable. Floating constants stay at the region top level,
