@@ -12,20 +12,33 @@
 // it through the materialized gap phase -1 (which carries a receiving `hir.var`
 // write), and splitting turns each phase into a context-threaded func.
 
-// CHECK-LABEL: hir.func private @"Chain.-2"(%a) -> (ctx) {
+// The signature's type for the phase -2 argument %a is computed one phase
+// earlier still, so the chain reaches phase -3 and heads an eager chain.
+// CHECK-LABEL: hir.func private @"Chain.-3"() -> (ctx) {
+// CHECK:         [[T:%.+]] = hir.int_type
+// CHECK:         hir.opaque_pack([[T]])
+
+// CHECK-LABEL: hir.func private @"Chain.-2.tail"(%a, %ctx) -> (ctx) {
+// CHECK:       } {
 // CHECK:         [[SQ:%.+]] = hir.mul %a, %a
 // CHECK:         hir.opaque_pack([[SQ]])
 
 // CHECK-LABEL: hir.func private @"Chain.-1"(%ctx) -> (ctx) {
 // CHECK:       } {
 // CHECK:         [[U:%.+]] = hir.opaque_unpack %ctx
+// CHECK:         [[XTY:%.+]] = hir.int_type
 // CHECK:         hir.write_var {{%.+}}, [[U]]
-// CHECK:         hir.opaque_pack([[U]])
+// CHECK:         hir.opaque_pack([[XTY]], [[U]])
 
 // CHECK-LABEL: hir.func private @Chain.0(%x, %ctx) -> (result) {
 // CHECK:       } {
-// CHECK:         [[U:%.+]] = hir.opaque_unpack %ctx
-// CHECK:         hir.add [[U]], %x
+// CHECK:         [[U:%.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:         hir.add [[U]]#1, %x
+
+// CHECK-LABEL: hir.eager_func @"Chain.-2"(a) -> (ctx) [
+// CHECK-NEXT:    @"Chain.-3",
+// CHECK-NEXT:    @"Chain.-2.tail"
+// CHECK-NEXT:  ]
 
 // CHECK-LABEL: uir.split_func @Chain(%a: -2, %x: 0) -> (result: 0) {
 // CHECK:       } [
@@ -54,15 +67,15 @@ uir.func @Chain(%a: -2, %x: 0) -> (result: 0) {
 // concrete per-phase func. The callee context threads across the caller's own
 // phase boundary.
 
-// CHECK-LABEL: hir.func private @"Caller.-1"(%x) -> (ctx) {
+// CHECK-LABEL: hir.func private @"Caller.-1.tail"(%x, %ctx) -> (ctx) {
 // CHECK:       } {
 // CHECK:         [[CC:%.+]] = hir.call @"Chain2.-1"(%x)
-// CHECK:         hir.opaque_pack([[CC]])
+// CHECK:         hir.opaque_pack({{%.+}}, [[CC]])
 
 // CHECK-LABEL: hir.func private @Caller.0(%y, %ctx) -> (result) {
 // CHECK:       } {
-// CHECK:         [[CC:%.+]] = hir.opaque_unpack %ctx
-// CHECK:         hir.call @Chain2.0(%y, [[CC]])
+// CHECK:         [[CC:%.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:         hir.call @Chain2.0(%y, [[CC]]#1)
 
 // CHECK-LABEL: uir.split_func @Caller(%x: -1, %y: 0) -> (result: 0) {
 uir.func @Caller(%x: -1, %y: 0) -> (result: 0) {

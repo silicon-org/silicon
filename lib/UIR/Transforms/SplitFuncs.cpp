@@ -21,26 +21,33 @@
 // - **Diagnoses** content later than the declared span (runtime work past the
 //   last declared phase, which has no executor) as a user error, and rejects
 //   any region content that violates the threaded input contract.
-// - **Splits** every `uir.phase` op in the body region into a private
-//   `hir.func`. Values crossing a phase boundary ride an opaque context: each
-//   non-last func packs its outgoing crossings with `hir.opaque_pack` into one
-//   trailing context result, and each non-first func unpacks its incoming
-//   context. Declared arguments enter at their phase's func; declared results
-//   ride the `hir.return` of their phase's func. Each `uir.phase_call` becomes
-//   an `hir.call` to the callee's concrete per-phase func, resolved through the
-//   callee `uir.split_func`'s phase list; its context threads like any other
-//   crossing.
-// - **Reconstructs signatures** for each per-phase func. A per-phase signature
-//   names the types of that func's arguments and results. A dependent type
-//   computed one phase earlier crosses in the opaque context and is unpacked in
-//   the signature region — relocated (recomputed) into the producing phase's
-//   body when the body does not already thread it, so the body and signature
-//   share one context. The function's *flat* signature is not reconstructed:
-//   it already sits on the `uir.split_func`, preserved from before sorting.
+// - **Merges** the two regions phase by phase. Splitting never relocates and
+//   never clones: the private `hir.func` for phase P holds the signature
+//   region's phase-P content followed by the body region's phase-P content,
+//   with either side absent counting as empty. Values crossing a phase
+//   boundary ride an opaque context: each non-last func packs its outgoing
+//   crossings with `hir.opaque_pack` into one trailing context result, and
+//   each non-first func unpacks its incoming context. Declared arguments enter
+//   at their phase's func; declared results ride the `hir.return` of their
+//   phase's func. Each `uir.phase_call` becomes an `hir.call` to the callee's
+//   concrete per-phase func, resolved through the callee `uir.split_func`'s
+//   phase list; its context threads like any other crossing. Signature phase
+//   calls need no special handling — they are ordinary phase content.
+// - **Reconstructs signatures** for each per-phase func. A type ascribing a
+//   phase-P argument or result is phase P-1 content, so a per-phase signature
+//   region holds nothing but `hir.opaque_type` and one `hir.opaque_unpack` of
+//   the incoming context: the slots the `uir.signature` operands name. It
+//   never reads the function's own arguments, which is what makes a per-phase
+//   MIR signature constructible after monomorphization without evaluating
+//   anything. An operand that is not a result of the phase P-1 signature op
+//   violates that contract and is a hard error. The function's *flat*
+//   signature is not reconstructed: it already sits on the `uir.split_func`,
+//   preserved from before sorting.
 // - **Fills the split_func**: the phase list maps each span phase to its entry
 //   func, and the `impl` reference and the implementation function go away.
 //   When the function has pre-span (compile-time) phases, an `hir.eager_func`
-//   chains them into the earliest span entry and takes that slot.
+//   chains them into the earliest span entry and takes that slot. Phases that
+//   exist only to compute signature types are pre-span phases like any other.
 //
 // Because callers resolve their `uir.phase_call`s through the callee's phase
 // list rather than by name convention, the pass runs in stages over the whole
@@ -50,18 +57,14 @@
 //
 // ## Crossings: a shared, deduplicated context
 //
-// The body and the signature are threaded independently, so each phase boundary
-// carries the union of two crossing sets: the body values the next phase
-// consumes, and the signature type values a later phase's signature depends on.
-// Both are packed into one opaque context per boundary and deduplicated by a
+// The body and the signature are threaded independently, so a phase op's
+// outgoing context is the union of what both regions' phase ops yield. The two
+// sets are packed into one opaque context per boundary and deduplicated by a
 // structural key `canonKey`: a declared argument keys by its index (so the body
 // and signature copies of an argument coincide), a phase-op result sees through
 // to the value it yields, and a pure computation keys by op name, attributes,
 // and its operands' keys. Impure or opaque values (calls, context) key by
-// identity and never coincide. A signature-only crossing whose computation the
-// body lacks is cloned into the producing phase's body (its argument and
-// earlier-crossing leaves resolved there), so it rides the shared context like
-// any body crossing.
+// identity and never coincide, so a type computed by a call gets its own slot.
 //
 //===----------------------------------------------------------------------===//
 
@@ -70,7 +73,6 @@
 #include "silicon/UIR/Ops.h"
 #include "silicon/UIR/Passes.h"
 #include "mlir/IR/IRMapping.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
 
@@ -121,7 +123,9 @@ private:
   ArrayRef<int32_t> resultPhases;
 
   int spanMin = 0, spanMax = 0;
-  int bodyMin = 0, bodyMax = 0;
+  /// The contiguous phase range covered by either region's phase ops; one
+  /// per-phase function is emitted for each phase in it.
+  int phaseMin = 0, phaseMax = 0;
 
   /// The body/signature `uir.phase` op for each phase.
   std::map<int, PhaseOp> bodyPhase;
@@ -129,12 +133,12 @@ private:
   /// The `uir.signature` terminator of the signature region.
   SignatureOp sigTerminator;
 
-  /// The generated per-phase `hir.func` for each body phase.
+  /// The generated per-phase `hir.func` for each phase.
   std::map<int, hir::FuncOp> phaseFunc;
 
   /// One value crossing a phase boundary in the opaque context. A crossing is a
-  /// body value the next phase consumes or a signature type value a later phase
-  /// depends on; both regions share one deduplicated slot list per boundary.
+  /// value either region's phase op yields; both regions share one deduplicated
+  /// slot list per boundary.
   struct Slot {
     std::string key;
     Value source;
@@ -145,12 +149,6 @@ private:
   std::map<int, llvm::StringMap<unsigned>> slotIndex;
 
   DenseMap<Value, std::string> keyMemo;
-
-  /// A per-phase-func signature-region unpack of the incoming context, created
-  /// lazily when a dependent type needs a body crossing slot.
-  struct SigCtx {
-    hir::OpaqueUnpackOp unpack;
-  };
 
   std::string phaseName(int phase);
   std::string canonKey(Value value);
@@ -163,8 +161,6 @@ private:
   hir::FuncOp buildPhaseFunc(int phase);
   LogicalResult buildPhaseBody(int phase, hir::FuncOp func);
   LogicalResult buildPhaseSignature(int phase, hir::FuncOp func);
-  Value realizeSigType(int phase, Value sigValue, hir::FuncOp func,
-                       OpBuilder &builder, IRMapping &memo, SigCtx &sigCtx);
   FailureOr<FlatSymbolRefAttr> resolvePhaseEntry(PhaseCallOp call);
 
   void buildEagerFuncAndLinks();
@@ -266,46 +262,55 @@ LogicalResult FuncSplitter::diagnose() {
       failed(checkRegion(funcOp.getBody(), /*isBody=*/true)))
     return failure();
 
+  // Collect the phase ops of both regions. The function is split phase by
+  // phase, merging what the two regions hold at the same phase, so from here
+  // on the two are only ever consulted together.
+  for (auto &op : funcOp.getBody().front().without_terminator())
+    bodyPhase[cast<PhaseOp>(&op).getPhase()] = cast<PhaseOp>(&op);
+  for (auto &op : funcOp.getSignature().front().without_terminator())
+    sigPhase[cast<PhaseOp>(&op).getPhase()] = cast<PhaseOp>(&op);
+  sigTerminator =
+      cast<SignatureOp>(funcOp.getSignature().front().getTerminator());
+
   // Content later than the declared span has no executor. The span maximum is
   // the range over the declared argument and result phases, always including
   // phase 0; this uniformly catches call-implied late phases, since calls are
   // already decomposed into `uir.phase_call` entries living in phase ops.
   auto [spanLo, spanHi] = DeclaredPhases{argPhases, resultPhases}.span();
-  std::map<int, PhaseOp> phases;
-  for (auto &op : funcOp.getBody().front().without_terminator()) {
-    auto phaseOp = cast<PhaseOp>(&op);
-    if (phaseOp.getPhase() > spanHi)
-      return phaseOp.emitError()
-             << "phase " << phaseOp.getPhase()
-             << " runs past the function's last declared phase " << spanHi
-             << ", which has no executor; declare a result at phase "
-             << phaseOp.getPhase() << " (e.g. a dyn result) to extend the span";
-    phases[phaseOp.getPhase()] = phaseOp;
-  }
+  for (auto *phases : {&bodyPhase, &sigPhase})
+    for (auto &[phase, phaseOp] : *phases)
+      if (phase > spanHi)
+        return phaseOp.emitError()
+               << "phase " << phase
+               << " runs past the function's last declared phase " << spanHi
+               << ", which has no executor; declare a result at phase " << phase
+               << " (e.g. a dyn result) to extend the span";
 
   // The threaded form has one `uir.phase` op per phase from the function's
   // earliest to its latest, with no gaps: every phase becomes a function, and
   // every phase but the last hands its context to the next one. Each declared
   // span phase needs one because callers thread an entry through it, and each
-  // phase in between because the context chain passes through it.
-  if (phases.empty())
-    return funcOp.emitOpError()
-           << "has no 'uir.phase' op in its body region; the threaded form "
-              "holds one per phase";
-  for (int phase = std::min<int>(phases.begin()->first, spanLo);
-       phase <= spanHi; ++phase)
-    if (!phases.count(phase))
+  // phase in between because the context chain passes through it. A phase the
+  // signature alone reaches — a pre-span phase computing the types of the
+  // earliest declared arguments — counts like any other.
+  int lo = spanLo;
+  if (!bodyPhase.empty())
+    lo = std::min(lo, bodyPhase.begin()->first);
+  if (!sigPhase.empty())
+    lo = std::min(lo, sigPhase.begin()->first);
+  for (int phase = lo; phase <= spanHi; ++phase)
+    if (!bodyPhase.count(phase) && !sigPhase.count(phase))
       return funcOp.emitOpError()
              << "has no 'uir.phase' op for phase " << phase
-             << " in its body region, but holds phases "
-             << phases.begin()->first << " through "
-             << std::max<int>(phases.rbegin()->first, spanHi)
-             << "; the threaded form has no gaps";
+             << " in either region, but holds phases " << lo << " through "
+             << spanHi << "; the threaded form has no gaps";
   return success();
 }
 
-/// Compute the declared span and the contiguous body/signature phase ranges,
-/// and collect the phase ops of both regions.
+/// Compute the declared span and the contiguous range of phases the two
+/// regions cover between them. Every phase in that range becomes one per-phase
+/// function; `diagnose` has already established that it has no gaps and does
+/// not run past the span.
 void FuncSplitter::computeRanges() {
   spanMin = spanMax = 0;
   for (auto p : argPhases) {
@@ -316,58 +321,38 @@ void FuncSplitter::computeRanges() {
     spanMin = std::min<int>(spanMin, p);
     spanMax = std::max<int>(spanMax, p);
   }
-  for (auto &op : funcOp.getBody().front().without_terminator()) {
-    auto phaseOp = cast<PhaseOp>(&op);
-    bodyPhase[phaseOp.getPhase()] = phaseOp;
-  }
-  for (auto &op : funcOp.getSignature().front().without_terminator()) {
-    auto phaseOp = cast<PhaseOp>(&op);
-    sigPhase[phaseOp.getPhase()] = phaseOp;
-  }
-  sigTerminator =
-      cast<SignatureOp>(funcOp.getSignature().front().getTerminator());
-  bodyMin = bodyPhase.begin()->first;
-  bodyMax = bodyPhase.rbegin()->first;
+  phaseMin = spanMin;
+  phaseMax = spanMax;
+  for (auto *phases : {&bodyPhase, &sigPhase})
+    for (auto &[phase, phaseOp] : *phases) {
+      phaseMin = std::min(phaseMin, phase);
+      phaseMax = std::max(phaseMax, phase);
+    }
 }
 
-/// Compute the ordered context slots entering each phase. A boundary P-1 -> P
-/// carries the deduplicated union of the body crossings the next phase consumes
-/// (the yields of body phase P-1) and the signature crossings a later phase's
-/// signature depends on (the results of signature phase P-1 that signature
-/// phase P references). Both regions are threaded independently, so a dependent
-/// signature type computed one phase earlier than it is used is delivered here
-/// even when the body never threads that type itself.
+/// Compute the ordered context slots entering each phase. Because the phase-P
+/// function holds both regions' phase-P content, the boundary P-1 -> P carries
+/// exactly the deduplicated union of what the two phase P-1 ops yield: the body
+/// crossings the next phase consumes, and the type values the next phase's
+/// signature and content need. Structurally identical crossings from the two
+/// regions coincide in one slot (see `canonKey`).
 void FuncSplitter::computeSlots() {
-  for (int phase = bodyMin + 1; phase <= bodyMax; ++phase) {
+  for (int phase = phaseMin + 1; phase <= phaseMax; ++phase) {
     auto &list = slots[phase];
     auto &index = slotIndex[phase];
-    auto addSlot = [&](Value source) {
-      auto key = canonKey(source);
-      if (index.count(key))
-        return;
-      index[key] = list.size();
-      list.push_back({key, source});
-    };
-    auto bodyIt = bodyPhase.find(phase - 1);
-    if (bodyIt != bodyPhase.end()) {
+    for (auto *phases : {&sigPhase, &bodyPhase}) {
+      auto it = phases->find(phase - 1);
+      if (it == phases->end())
+        continue;
       auto ret =
-          cast<PhaseReturnOp>(bodyIt->second.getBody().front().getTerminator());
-      for (auto yield : ret.getYields())
-        addSlot(yield);
-    }
-    auto prevSig = sigPhase.find(phase - 1);
-    auto curSig = sigPhase.find(phase);
-    if (prevSig != sigPhase.end() && curSig != sigPhase.end()) {
-      // The signature crossings of this boundary are the previous signature
-      // phase's results that the current signature phase reads.
-      SetVector<Value> referenced;
-      curSig->second.getBody().walk([&](Operation *op) {
-        for (auto operand : op->getOperands())
-          if (operand.getDefiningOp() == prevSig->second.getOperation())
-            referenced.insert(operand);
-      });
-      for (auto v : referenced)
-        addSlot(v);
+          cast<PhaseReturnOp>(it->second.getBody().front().getTerminator());
+      for (auto yield : ret.getYields()) {
+        auto key = canonKey(yield);
+        if (index.count(key))
+          continue;
+        index[key] = list.size();
+        list.push_back({key, yield});
+      }
     }
   }
 }
@@ -385,12 +370,12 @@ hir::FuncOp FuncSplitter::buildPhaseFunc(int phase) {
   for (auto [i, p] : llvm::enumerate(argPhases))
     if ((int)p == phase)
       argNames.push_back(funcOp.getArgNames()[i]);
-  if (phase != bodyMin)
+  if (phase != phaseMin)
     argNames.push_back(StringAttr::get(ctx, "ctx"));
   for (auto [i, p] : llvm::enumerate(resultPhases))
     if ((int)p == phase)
       resultNames.push_back(funcOp.getResultNames()[i]);
-  if (phase != bodyMax)
+  if (phase != phaseMax)
     resultNames.push_back(StringAttr::get(ctx, "ctx"));
 
   OpBuilder builder(splitFunc);
@@ -431,18 +416,21 @@ FailureOr<FlatSymbolRefAttr> FuncSplitter::resolvePhaseEntry(PhaseCallOp call) {
 }
 
 /// Fill in a per-phase func's body: unpack the incoming context, clone the
-/// phase's straight-line content (rewriting `uir.phase_call` to `hir.call`),
-/// and terminate with an `hir.return` carrying the declared results plus the
-/// packed outgoing context.
+/// signature region's phase content followed by the body region's (rewriting
+/// `uir.phase_call` to `hir.call`), and terminate with an `hir.return` carrying
+/// the declared results plus the packed outgoing context. Nothing is relocated
+/// or recomputed here: both regions' content is moved to the phase it already
+/// sits at, and everything crossing to the next phase is already yielded by one
+/// of the two phase ops.
 LogicalResult FuncSplitter::buildPhaseBody(int phase, hir::FuncOp func) {
-  PhaseOp phaseOp = bodyPhase.at(phase);
   Block &block = func.getBody().front();
   auto loc = func.getLoc();
   IRMapping map;
 
   // Map declared arguments at this phase to the func's leading block args. Both
-  // the body and signature copies of an argument map to the same func arg, so a
-  // relocated signature type computation resolves its argument leaves here too.
+  // the body and signature copies of an argument map to the same func arg, so
+  // signature content computing a later phase's types resolves its argument
+  // leaves here too.
   unsigned argIdx = 0;
   for (auto [i, p] : llvm::enumerate(argPhases))
     if ((int)p == phase) {
@@ -476,67 +464,36 @@ LogicalResult FuncSplitter::buildPhaseBody(int phase, hir::FuncOp func) {
 
   OpBuilder builder(&block, block.end());
 
-  // Produce a value from either region inside this func's body: a value already
-  // built maps directly, a crossing from an earlier phase comes from the
-  // incoming context, and any other pure computation is cloned in place. Used
-  // both to seed the incoming body crossings and to relocate the outgoing
-  // signature crossings so they ride the same context as the body crossings.
-  // Returns a null value after emitting a diagnostic for a signature
-  // computation that cannot be relocated.
-  std::function<Value(Value)> resolveBody = [&](Value v) -> Value {
-    if (Value mapped = map.lookupOrNull(v))
-      return mapped;
-    Value result;
-    if (auto phaseResult = dyn_cast<OpResult>(v);
-        phaseResult && isa<PhaseOp>(phaseResult.getOwner())) {
-      auto phaseOp = cast<PhaseOp>(phaseResult.getOwner());
-      if (phaseOp.getPhase() == phase) {
-        auto ret =
-            cast<PhaseReturnOp>(phaseOp.getBody().front().getTerminator());
-        result = resolveBody(ret.getYields()[phaseResult.getResultNumber()]);
-      } else {
-        result = getIncoming(canonKey(v));
-      }
-    } else {
-      // Relocating a signature computation into the body re-evaluates it
-      // there, which only a pure, region-free computation supports. A
-      // dependent type computed by a call crosses this line: its
-      // `uir.phase_call` would have to be re-created in the body with its own
-      // context chain, which this pass does not build.
-      Operation *defOp = v.getDefiningOp();
-      assert(defOp && "block argument outside the function's own arguments");
-      if (defOp->getNumRegions() != 0 || !isMemoryEffectFree(defOp)) {
-        defOp->emitOpError()
-            << "cannot be relocated into the phase " << phase
-            << " body; a signature computation crossing a phase boundary must "
-               "be pure and region-free";
-        return {};
-      }
-      IRMapping cloneMap;
-      for (auto operand : defOp->getOperands()) {
-        Value resolved = resolveBody(operand);
-        if (!resolved)
-          return {};
-        cloneMap.map(operand, resolved);
-      }
-      Operation *clone = builder.clone(*defOp, cloneMap);
-      result = clone->getResult(cast<OpResult>(v).getResultNumber());
+  // Seed the incoming crossings this phase consumes — the results of either
+  // region's preceding phase op — so cloning the phase content resolves them to
+  // the unpacked context.
+  if (phase != phaseMin)
+    for (auto *phases : {&sigPhase, &bodyPhase}) {
+      auto it = phases->find(phase - 1);
+      if (it != phases->end())
+        for (auto result : it->second.getResults())
+          map.map(result, getIncoming(canonKey(result)));
     }
-    map.map(v, result);
-    return result;
-  };
 
-  // Seed the incoming body crossings this phase consumes, so cloning the phase
-  // content resolves them to the unpacked context.
-  if (phase != bodyMin)
-    for (auto result : bodyPhase.at(phase - 1).getResults())
-      map.map(result, getIncoming(canonKey(result)));
-
-  // Clone the phase content in order. A `uir.phase_call` becomes an `hir.call`
-  // to the callee's concrete per-phase func, its context operand and result
-  // threaded like any other value.
-  for (auto &op : phaseOp.getBody().front().without_terminator()) {
-    if (auto call = dyn_cast<PhaseCallOp>(&op)) {
+  // Clone one phase op's content in order. A `uir.phase_call` becomes an
+  // `hir.call` to the callee's concrete per-phase func, its context operand and
+  // result threaded like any other value.
+  auto cloneContent = [&](PhaseOp phaseOp) -> LogicalResult {
+    for (auto &op : phaseOp.getBody().front().without_terminator()) {
+      auto call = dyn_cast<PhaseCallOp>(&op);
+      if (!call) {
+        // Every operand is either an interior value already cloned into the
+        // func (hence in `map`), an argument at this phase, or an incoming
+        // crossing seeded from the context. An operand missing from `map` is a
+        // value that reached this phase without being threaded to it — a
+        // violation of the thread-phases crossing contract; assert loudly
+        // rather than clone a dangling cross-region reference.
+        for (auto operand : op.getOperands())
+          assert(map.contains(operand) &&
+                 "phase content references a value not threaded to its phase");
+        builder.clone(op, map);
+        continue;
+      }
       SmallVector<Value> args, typeOfArgs, typeOfResults;
       for (auto v : call.getArguments())
         args.push_back(map.lookup(v));
@@ -564,37 +521,36 @@ LogicalResult FuncSplitter::buildPhaseBody(int phase, hir::FuncOp func) {
         map.map(orig, repl);
       if (call.getContextOut())
         map.map(call.getContextOut(), hirCall.getResults().back());
-    } else {
-      // Every operand is either an interior value already cloned into the func
-      // (hence in `map`), an argument at this phase, or an incoming crossing
-      // seeded from the context. An operand missing from `map` is a value that
-      // reached this phase without being threaded to it — a violation of the
-      // thread-phases crossing contract; assert loudly rather than clone a
-      // dangling cross-region reference.
-      for (auto operand : op.getOperands())
-        assert(map.contains(operand) &&
-               "phase content references a value not threaded to its phase");
-      builder.clone(op, map);
     }
+    return success();
+  };
+
+  // The signature's content for this phase computes the types the next phase's
+  // interface is spelled in, so it goes first; the body's content follows.
+  for (auto *phases : {&sigPhase, &bodyPhase}) {
+    auto it = phases->find(phase);
+    if (it != phases->end() && failed(cloneContent(it->second)))
+      return failure();
   }
 
   // Build the terminator. Declared results and their types ride the return;
-  // the yielded crossings are packed into the trailing context result.
-  auto ret = cast<PhaseReturnOp>(phaseOp.getBody().front().getTerminator());
+  // they live in the body region, so a phase the signature alone reaches
+  // returns none. The crossings to the next phase are packed into the trailing
+  // context result.
   SmallVector<Value> values, typeOfValues;
-  for (auto v : ret.getValues())
-    values.push_back(map.lookup(v));
-  for (auto v : ret.getTypeOfValues())
-    typeOfValues.push_back(map.lookup(v));
-  if (phase != bodyMax) {
-    // Pack every slot crossing to the next phase: the body crossings this phase
-    // yields and the signature crossings a later signature depends on, the
-    // latter relocated (cloned) into this body so they ride the same context.
+  if (auto bodyIt = bodyPhase.find(phase); bodyIt != bodyPhase.end()) {
+    auto ret =
+        cast<PhaseReturnOp>(bodyIt->second.getBody().front().getTerminator());
+    for (auto v : ret.getValues())
+      values.push_back(map.lookup(v));
+    for (auto v : ret.getTypeOfValues())
+      typeOfValues.push_back(map.lookup(v));
+  }
+  if (phase != phaseMax) {
     SmallVector<Value> outgoing;
     for (auto &slot : slots.at(phase + 1)) {
-      Value value = resolveBody(slot.source);
-      if (!value)
-        return failure();
+      Value value = map.lookup(slot.source);
+      assert(value && "context slot is not produced by its own phase");
       outgoing.push_back(value);
     }
     auto pack = hir::OpaquePackOp::create(builder, loc, anyTy, outgoing);
@@ -609,96 +565,19 @@ LogicalResult FuncSplitter::buildPhaseBody(int phase, hir::FuncOp func) {
 // Per-Phase Signatures
 //===----------------------------------------------------------------------===//
 
-/// Realize the type value `sigValue` (an operand of the threaded
-/// `uir.signature`, delivered at `phase`) inside a per-phase func's signature
-/// region. Interior computations are cloned; a value crossing from an earlier
-/// phase is looked up by structural key in this boundary's context slots and
-/// unpacked from the incoming context (the producing body packs that slot).
-/// Returns a null value after emitting a diagnostic for a computation that
-/// cannot be cloned into a signature region.
-Value FuncSplitter::realizeSigType(int phase, Value sigValue, hir::FuncOp func,
-                                   OpBuilder &builder, IRMapping &memo,
-                                   SigCtx &sigCtx) {
-  if (Value cached = memo.lookupOrNull(sigValue))
-    return cached;
-
-  Value result;
-  if (auto blockArg = dyn_cast<BlockArgument>(sigValue)) {
-    // A declared argument at this phase: the func's leading signature args.
-    assert(blockArg.getOwner()->getParentOp() == funcOp);
-    unsigned argIdx = 0;
-    for (auto [i, p] : llvm::enumerate(argPhases)) {
-      if ((int)p != phase)
-        continue;
-      if (i == blockArg.getArgNumber()) {
-        result = func.getSignature().front().getArgument(argIdx);
-        break;
-      }
-      ++argIdx;
-    }
-    assert(result && "signature references an argument of another phase");
-  } else if (auto phaseOp = dyn_cast<PhaseOp>(sigValue.getDefiningOp())) {
-    if (phaseOp.getPhase() < phase) {
-      // A crossing from an earlier phase: look up its context slot and unpack
-      // it from the incoming context. computeSlots guarantees a slot exists.
-      auto &index = slotIndex.at(phase);
-      auto it = index.find(canonKey(sigValue));
-      assert(it != index.end() &&
-             "dependent signature type has no context slot");
-      if (!sigCtx.unpack) {
-        Value ctxArg = func.getSignature().front().getArguments().back();
-        OpBuilder b(&func.getSignature().front(),
-                    func.getSignature().front().begin());
-        sigCtx.unpack = hir::OpaqueUnpackOp::create(
-            b, func.getLoc(), SmallVector<Type>(slots.at(phase).size(), anyTy),
-            ctxArg);
-      }
-      result = sigCtx.unpack.getResult(it->second);
-    } else {
-      // Delivered at this phase: realize the value it yields.
-      auto ret = cast<PhaseReturnOp>(phaseOp.getBody().front().getTerminator());
-      Value yielded =
-          ret.getYields()[cast<OpResult>(sigValue).getResultNumber()];
-      result = realizeSigType(phase, yielded, func, builder, memo, sigCtx);
-    }
-  } else {
-    // A per-phase signature region holds the type computation of its own
-    // phase's arguments and results, cloned from the threaded signature. Only
-    // a pure, region-free computation can be re-evaluated there; a type
-    // computed by a call would need its own context chain in the signature.
-    Operation *defOp = sigValue.getDefiningOp();
-    if (defOp->getNumRegions() != 0 || !isMemoryEffectFree(defOp)) {
-      defOp->emitOpError() << "cannot be cloned into the phase " << phase
-                           << " signature; a signature type computation must "
-                              "be pure and region-free";
-      return {};
-    }
-    IRMapping cloneMap;
-    for (auto operand : defOp->getOperands()) {
-      Value resolved =
-          realizeSigType(phase, operand, func, builder, memo, sigCtx);
-      if (!resolved)
-        return {};
-      cloneMap.map(operand, resolved);
-    }
-    Operation *clone = builder.clone(*defOp, cloneMap);
-    result = clone->getResult(cast<OpResult>(sigValue).getResultNumber());
-  }
-  if (!result)
-    return {};
-
-  memo.map(sigValue, result);
-  return result;
-}
-
 /// Build a per-phase func's signature region: the type of each declared
 /// argument and result at this phase, plus an opaque type for each context
 /// argument and result.
+///
+/// A type ascribing a phase-P argument or result is phase P-1 content, so it
+/// reaches this function only through the incoming context. The region
+/// therefore holds nothing but `hir.opaque_type` and one `hir.opaque_unpack` of
+/// the context argument, and never touches the function's own arguments — which
+/// is what lets the per-phase MIR signature be constructed after
+/// monomorphization and folding without evaluating anything.
 LogicalResult FuncSplitter::buildPhaseSignature(int phase, hir::FuncOp func) {
   Block &block = func.getSignature().front();
   OpBuilder builder(&block, block.end());
-  IRMapping memo;
-  SigCtx sigCtx;
   hir::OpaqueTypeOp opaqueType;
   auto getOpaque = [&]() -> Value {
     if (!opaqueType) {
@@ -707,29 +586,58 @@ LogicalResult FuncSplitter::buildPhaseSignature(int phase, hir::FuncOp func) {
     }
     return opaqueType.getResult();
   };
+  hir::OpaqueUnpackOp unpack;
+  auto getUnpack = [&]() -> hir::OpaqueUnpackOp {
+    if (!unpack) {
+      OpBuilder b(&block, block.begin());
+      unpack = hir::OpaqueUnpackOp::create(
+          b, func.getLoc(), SmallVector<Type>(slots.at(phase).size(), anyTy),
+          block.getArguments().back());
+    }
+    return unpack;
+  };
+
+  // Deliver one `uir.signature` operand. It must be a result of the signature
+  // region's phase P-1 op, which the boundary P-1 -> P packs into the context
+  // as an ordinary slot; anything else cannot describe this interface.
+  auto deliver = [&](Value sigValue, StringRef what) -> Value {
+    auto result = dyn_cast<OpResult>(sigValue);
+    auto producer = result ? dyn_cast<PhaseOp>(result.getOwner()) : nullptr;
+    if (!producer || producer.getPhase() != phase - 1) {
+      sigTerminator.emitOpError()
+          << "types a phase " << phase << " " << what
+          << " with a value that is not a result of the phase " << (phase - 1)
+          << " signature op; a phase-P interface is described by phase P-1 "
+             "content, which reaches the per-phase function only through its "
+             "incoming context";
+      return {};
+    }
+    auto &index = slotIndex.at(phase);
+    auto it = index.find(canonKey(sigValue));
+    assert(it != index.end() && "signature crossing has no context slot");
+    return getUnpack().getResult(it->second);
+  };
 
   SmallVector<Value> typeOfArgs, typeOfResults;
   for (auto [i, p] : llvm::enumerate(argPhases)) {
     if ((int)p != phase)
       continue;
-    Value type = realizeSigType(phase, sigTerminator.getTypeOfArgs()[i], func,
-                                builder, memo, sigCtx);
+    Value type = deliver(sigTerminator.getTypeOfArgs()[i], "argument");
     if (!type)
       return failure();
     typeOfArgs.push_back(type);
   }
-  if (phase != bodyMin)
+  if (phase != phaseMin)
     typeOfArgs.push_back(getOpaque());
   for (auto [i, p] : llvm::enumerate(resultPhases)) {
     if ((int)p != phase)
       continue;
-    Value type = realizeSigType(phase, sigTerminator.getTypeOfResults()[i],
-                                func, builder, memo, sigCtx);
+    Value type = deliver(sigTerminator.getTypeOfResults()[i], "result");
     if (!type)
       return failure();
     typeOfResults.push_back(type);
   }
-  if (phase != bodyMax)
+  if (phase != phaseMax)
     typeOfResults.push_back(getOpaque());
 
   hir::SignatureOp::create(builder, func.getLoc(), typeOfArgs, typeOfResults);
@@ -756,10 +664,10 @@ void FuncSplitter::buildEagerFuncAndLinks() {
     phaseFuncs.push_back(FlatSymbolRefAttr::get(phaseFunc.at(phase)));
   }
 
-  if (bodyMin < spanMin) {
+  if (phaseMin < spanMin) {
     hir::FuncOp entry = phaseFunc.at(spanMin);
     SmallVector<Attribute> links;
-    for (int phase = bodyMin; phase < spanMin; ++phase)
+    for (int phase = phaseMin; phase < spanMin; ++phase)
       links.push_back(FlatSymbolRefAttr::get(phaseFunc.at(phase)));
     // The earliest span func becomes the eager chain's tail; rename it so the
     // span-entry name is free for the eager func itself. The eager func's
@@ -794,7 +702,7 @@ LogicalResult FuncSplitter::declare() {
     return failure();
   computeRanges();
   computeSlots();
-  for (auto &[phase, op] : bodyPhase)
+  for (int phase = phaseMin; phase <= phaseMax; ++phase)
     phaseFunc[phase] = buildPhaseFunc(phase);
   buildEagerFuncAndLinks();
   return success();

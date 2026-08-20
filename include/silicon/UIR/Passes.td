@@ -263,11 +263,16 @@ def SplitFuncsPass : Pass<"split-funcs", "mlir::ModuleOp"> {
       inside phase ops, this uniformly catches call-implied late phases. The
       pass also rejects any region content that violates the threaded input
       contract (an op that is neither a `uir.phase` nor the terminator, a wrong
-      terminator, or a phase whose body is not straight-line).
+      terminator, a phase whose body is not straight-line, or a gap in the
+      phases the two regions cover between them).
 
-    - **Splits** each `uir.phase` op in the body region into one private
-      `hir.func @f.<phase>` (negative phases quote the symbol; the names are
-      cosmetic and uniquified against the module). A func takes its phase's
+    - **Merges and splits** the two regions phase by phase into one private
+      `hir.func @f.<phase>` per phase present in either region (negative phases
+      quote the symbol; the names are cosmetic and uniquified against the
+      module). The func's body is the signature region's phase-P content
+      followed by the body region's; the pass never relocates or clones
+      computation and never looks inside a phase region, so a `uir.phase_call`
+      in the signature needs no special handling. A func takes its phase's
       declared arguments plus a trailing opaque context argument for every phase
       but the first, and returns its phase's declared results plus a trailing
       opaque context result for every phase but the last. Values crossing a
@@ -277,22 +282,26 @@ def SplitFuncsPass : Pass<"split-funcs", "mlir::ModuleOp"> {
       through the callee split_func's phase list — never by name convention —
       with its context threading like any other crossing.
 
-    - **Reconstructs per-phase signatures** for each per-phase func. Each phase
-      boundary's opaque context carries the deduplicated union of the body
-      crossings the next phase consumes and the signature type values a later
-      signature depends on; a dependent argument type computed one phase earlier
-      is unpacked in the signature region, relocated (recomputed) into the
-      producing phase's body when the body does not already thread it. Only pure
-      region-free computations survive that relocation, so a dependent type
-      computed by a call is rejected. The function's *flat* signature is not
-      reconstructed: it sits on the `uir.split_func`, preserved from before
-      sorting.
+    - **Reconstructs per-phase signatures** for each per-phase func. A phase
+      boundary's opaque context carries the deduplicated union of what both
+      regions' phase ops yield, so a type the signature and the body both
+      compute occupies one slot. A type ascribing a phase-P argument or result
+      is phase P-1 content, so a per-phase signature region holds nothing but
+      `hir.opaque_type` and one `hir.opaque_unpack` of the incoming context: it
+      never reads the func's own arguments, which is what makes the per-phase
+      MIR signature constructible after monomorphization and folding without
+      evaluating anything. A `uir.signature` operand that is not a result of the
+      phase P-1 signature op violates that contract and is a hard error. The
+      function's *flat* signature is not reconstructed: it sits on the
+      `uir.split_func`, preserved from before sorting.
 
     - **Fills the split_func**: its phase list maps each span phase to the func
       implementing it, and the `impl` reference and the implementation function
       are retired. When the function has pre-span compile-time phases, an
       `hir.eager_func` chains them into the earliest span entry and takes that
-      phase's slot.
+      phase's slot. Phases that exist only to compute signature types are
+      pre-span phases like any other, so a function declaring arguments at its
+      earliest span phase always has at least one.
 
     Because a call resolves through the callee's phase list, the module is
     processed in stages: every phase list is filled before any `uir.phase_call`
