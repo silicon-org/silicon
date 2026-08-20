@@ -605,9 +605,15 @@ uir.split_func @Declared(%a: -1, %b: 0) -> (result: 0) {
 // Case 9: a dependent argument type computed by a call in the signature. Since
 // splitting merges the signature's phase content into the per-phase func rather
 // than relocating it, a `uir.phase_call` in the signature needs no special
-// handling: it lands in the phase -1 func like any other content, and the type
-// it produces rides the shared context into phase 0's signature. @Width spans
-// [0, 0] and is called at offset -1, so it contributes a single entry.
+// handling: it lands in the func of the phase it already sits at, and the type
+// it produces rides the shared context into phase 0's signature.
+//
+// @Width spans [-1, 0], so the caller threads two entries through its own
+// signature region: the phase -1 entry produces the width, and the phase 0
+// entry is the pass-through the callee's span requires. The signature region
+// consequently reaches phase 0 even though it delivers no type there — its
+// phase range is the declared span shifted down, widened over its own phase
+// ops, exactly like the body's.
 
 // CHECK-LABEL: hir.func private @"sig_call.-2"() -> (ctx) {
 // CHECK:       } {
@@ -625,17 +631,26 @@ uir.split_func @Declared(%a: -1, %b: 0) -> (result: 0) {
 // CHECK-NEXT:    [[O2:%.+]] = hir.opaque_type
 // CHECK-NEXT:    hir.opaque_unpack %ctx : !hir.any
 // CHECK-NEXT:    [[INT:%.+]] = hir.int_type
-// CHECK-NEXT:    [[W:%.+]] = hir.call @Width.0(%N) : ([[INT]]) -> ([[INT]])
-// CHECK-NEXT:    [[TY:%.+]] = hir.uint_type [[W]]
-// CHECK-NEXT:    [[CTX:%.+]] = hir.opaque_pack([[TY]])
+// CHECK-NEXT:    [[W:%.+]]:2 = hir.call @"Width.-1"(%N) : ([[INT]]) -> ([[INT]], [[O2]])
+// CHECK-NEXT:    [[TY:%.+]] = hir.uint_type [[W]]#0
+// CHECK-NEXT:    [[CTX:%.+]] = hir.opaque_pack([[TY]], [[W]]#1)
 // CHECK-NEXT:    hir.return [[CTX]] : [[O2]]
 // CHECK-NEXT:  }
 
+// The phase 0 func's signature unpacks the type; its body carries the callee's
+// pass-through entry, which is ordinary runtime-phase content.
 // CHECK-LABEL: hir.func private @sig_call.0(%x, %ctx) -> (result) {
 // CHECK-NEXT:    [[O:%.+]] = hir.opaque_type
-// CHECK-NEXT:    [[TY:%.+]] = hir.opaque_unpack %ctx : !hir.any
-// CHECK-NEXT:    hir.signature ([[TY]], [[O]]) -> ([[TY]])
+// CHECK-NEXT:    [[U:%.+]]:2 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+// CHECK-NEXT:    hir.signature ([[U]]#0, [[O]]) -> ([[U]]#0)
 // CHECK-NEXT:  } {
+// CHECK-NEXT:    [[O2:%.+]] = hir.opaque_type
+// CHECK-NEXT:    [[U2:%.+]]:2 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+// CHECK-NEXT:    hir.call @Width.0([[U2]]#1) : ([[O2]]) -> ()
+// CHECK-NEXT:    [[INT:%.+]] = hir.int_type
+// CHECK-NEXT:    [[R:%.+]] = hir.add %x, %x : [[INT]]
+// CHECK-NEXT:    hir.return [[R]] : [[INT]]
+// CHECK-NEXT:  }
 
 // CHECK-LABEL: hir.eager_func @"sig_call.-1"(N) -> (ctx) [
 // CHECK-NEXT:    @"sig_call.-2",
@@ -653,7 +668,7 @@ uir.split_func @Declared(%a: -1, %b: 0) -> (result: 0) {
 // CHECK-NEXT:  ]
 uir.split_func @sig_call(%N: -1, %x: 0) -> (result: 0) {
   %int = hir.int_type
-  %w = uir.call @Width(%N) : (%int) -> (%int) [0] -> [0]
+  %w = uir.call @Width(%N) : (%int) -> (%int) [-1] -> [-1]
   %ty = hir.uint_type %w
   uir.signature (%int, %ty) -> (%ty)
 } impl @sig_call.impl []
@@ -663,13 +678,17 @@ uir.func @sig_call.impl(%N: -1, %x: 0) -> (result: 0) {
     %int = hir.int_type
     uir.phase_return yield %int
   }
-  %s1 = uir.phase -1 {
+  %s1:2 = uir.phase -1 {
     %int = hir.int_type
-    %w = uir.phase_call @Width[0] (%N) : (%int) -> (%int)
+    %w, %c = uir.phase_call @Width[-1] (%N) : (%int) -> (%int) context
     %ty = hir.uint_type %w
-    uir.phase_return yield %ty
+    uir.phase_return yield %ty, %c
   }
-  uir.signature (%s2, %s1) -> (%s1)
+  uir.phase 0 {
+    uir.phase_call @Width[0] () context %s1#1 : () -> ()
+    uir.phase_return
+  }
+  uir.signature (%s2, %s1#0) -> (%s1#0)
 } {
   uir.phase -1 {
     uir.phase_return
@@ -682,108 +701,32 @@ uir.func @sig_call.impl(%N: -1, %x: 0) -> (result: 0) {
   uir.unreachable
 }
 
-// CHECK-LABEL: uir.split_func @Width(%N: 0) -> (w: 0) {
-uir.split_func @Width(%N: 0) -> (w: 0) {
+// CHECK-LABEL: uir.split_func @Width(%N: -1) -> (w: -1) {
+uir.split_func @Width(%N: -1) -> (w: -1) {
   %int = hir.int_type
   uir.signature (%int) -> (%int)
 } impl @Width.impl []
 
-uir.func @Width.impl(%N: 0) -> (w: 0) {
-  %sm1 = uir.phase -1 {
+uir.func @Width.impl(%N: -1) -> (w: -1) {
+  %sm2 = uir.phase -2 {
     %int = hir.int_type
     uir.phase_return yield %int
   }
-  uir.signature (%sm1) -> (%sm1)
+  uir.signature (%sm2) -> (%sm2)
 } {
-  uir.phase 0 {
+  uir.phase -1 {
     %int = hir.int_type
     %r = hir.mul %N, %N : %int
     uir.phase_return %r : %int
   }
-  uir.unreachable
-}
-
-//===----------------------------------------------------------------------===//
-// Case 10: the same, one phase earlier. The type of the phase -1 argument %N is
-// computed by a call in the pre-span phase -2, which is the eager chain's
-// zero-argument head; the call is therefore argument-free by construction.
-
-// CHECK-LABEL: hir.func private @"pre_sig_call.-2"() -> (ctx) {
-// CHECK-NEXT:    [[O:%.+]] = hir.opaque_type
-// CHECK-NEXT:    hir.signature () -> ([[O]])
-// CHECK-NEXT:  } {
-// CHECK-NEXT:    [[O2:%.+]] = hir.opaque_type
-// CHECK-NEXT:    [[INT:%.+]] = hir.int_type
-// CHECK-NEXT:    [[W:%.+]] = hir.call @DefaultWidth.0() : () -> ([[INT]])
-// CHECK-NEXT:    [[TY:%.+]] = hir.uint_type [[W]]
-// CHECK-NEXT:    [[CTX:%.+]] = hir.opaque_pack([[TY]])
-// CHECK-NEXT:    hir.return [[CTX]] : [[O2]]
-// CHECK-NEXT:  }
-
-// CHECK-LABEL: hir.func private @"pre_sig_call.-1.tail"(%N, %ctx) -> (ctx) {
-// CHECK-NEXT:    [[O:%.+]] = hir.opaque_type
-// CHECK-NEXT:    [[TY:%.+]] = hir.opaque_unpack %ctx : !hir.any
-// CHECK-NEXT:    hir.signature ([[TY]], [[O]]) -> ([[O]])
-// CHECK-NEXT:  } {
-
-// The callee's own phase list entry is its eager_func: its pre-span link
-// computes the types, its tail is the runtime phase 0 body.
-// CHECK-LABEL: hir.eager_func @DefaultWidth.0() -> (w) [
-// CHECK-NEXT:    @"DefaultWidth.-1",
-// CHECK-NEXT:    @DefaultWidth.0.tail
-// CHECK-NEXT:  ]
-uir.split_func @pre_sig_call(%N: -1, %x: 0) -> () {
-  %int = hir.int_type
-  %w = uir.call @DefaultWidth() : () -> (%int) [] -> [0]
-  %ty = hir.uint_type %w
-  uir.signature (%ty, %int) -> ()
-} impl @pre_sig_call.impl []
-
-uir.func @pre_sig_call.impl(%N: -1, %x: 0) -> () {
-  %s2 = uir.phase -2 {
-    %int = hir.int_type
-    %w = uir.phase_call @DefaultWidth[0] () : () -> (%int)
-    %ty = hir.uint_type %w
-    uir.phase_return yield %ty
-  }
-  %s1 = uir.phase -1 {
-    %int = hir.int_type
-    uir.phase_return yield %int
-  }
-  uir.signature (%s2, %s1) -> ()
-} {
-  uir.phase -1 {
-    uir.phase_return
-  }
   uir.phase 0 {
     uir.phase_return
   }
   uir.unreachable
 }
 
-// CHECK-LABEL: uir.split_func @DefaultWidth() -> (w: 0) {
-uir.split_func @DefaultWidth() -> (w: 0) {
-  %int = hir.int_type
-  uir.signature () -> (%int)
-} impl @DefaultWidth.impl []
-
-uir.func @DefaultWidth.impl() -> (w: 0) {
-  %sm1 = uir.phase -1 {
-    %int = hir.int_type
-    uir.phase_return yield %int
-  }
-  uir.signature () -> (%sm1)
-} {
-  uir.phase 0 {
-    %int = hir.int_type
-    %r = hir.constant_int 8 : %int
-    uir.phase_return %r : %int
-  }
-  uir.unreachable
-}
-
 //===----------------------------------------------------------------------===//
-// Case 11: a function with no arguments and no results. Its signature has
+// Case 10: a function with no arguments and no results. Its signature has
 // nothing to deliver, so the signature region holds no phase op at all, the
 // merged range is the bare span {0}, and the single func needs no context
 // plumbing and no eager chain.
@@ -812,7 +755,7 @@ uir.func @Bare.impl() -> () {
   uir.unreachable
 }
 //===----------------------------------------------------------------------===//
-// Case 12: a deep chain of shared subexpressions crossing a phase boundary.
+// Case 11: a deep chain of shared subexpressions crossing a phase boundary.
 // The structural key that deduplicates the two regions' crossings must intern
 // its operands rather than spell them out: with `%a{i} = add %a{i-1}, %a{i-1}`
 // the spelled-out key doubles in length at every level, so a couple of dozen
