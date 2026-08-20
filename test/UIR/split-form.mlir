@@ -24,9 +24,9 @@
 //   they belong to; the last func returns no context.
 // - Values crossing a phase boundary are packed into the outgoing context by
 //   the producing func (`hir.opaque_pack`) and unpacked by the consuming func
-//   (`hir.opaque_unpack`). The boundary carries the union of what both regions'
-//   phase ops yield, deduplicated structurally, so a type the signature and the
-//   body both compute occupies one slot.
+//   (`hir.opaque_unpack`). The boundary carries what both regions' phase ops
+//   yield, concatenated signature first and never deduplicated, so a type the
+//   signature and the body both compute occupies one slot each.
 // - A per-phase signature region contains nothing but `hir.opaque_type` and one
 //   `hir.opaque_unpack` of the incoming context. A type ascribing a phase-P
 //   argument or result is phase P-1 content, so it always arrives through the
@@ -68,9 +68,9 @@
 //
 // %N is declared at phase -1, so its own (plain int) type is phase -2 content
 // and gets a func of its own, below the declared span. The dependent type
-// uint[N] is phase -1 content and rides the opaque context into phase 0, where
-// it is unpacked in the signature region (as the type of %x and the result) and
-// again in the body (as the add type).
+// uint[N] is phase -1 content in both regions and rides the opaque context into
+// phase 0 in a slot per region, where the signature unpacks its own (as the
+// type of %x and the result) and the body unpacks the other (as the add type).
 
 hir.func @"Id.-2"() -> (ctx) {
   %o = hir.opaque_type
@@ -83,17 +83,19 @@ hir.func @"Id.-2"() -> (ctx) {
 }
 
 // The phase -1 func merges the signature's phase -1 content with the body's.
-// Both compute uint[N]; the two coincide in one context slot, so the splitter
-// packs one of them and leaves the other dead for the canonicalizer (elided
-// here). %N's type is unpacked from the incoming context, never recomputed.
+// Both compute uint[N], and the splitter deduplicates nothing: each copy gets
+// its own context slot, so the phase 0 func declares %x with the signature's
+// slot and types the add with the body's. %N's type is unpacked from the
+// incoming context, never recomputed.
 hir.func @"Id.-1.tail"(%N, %ctx_in) -> (ctx) {
   %o = hir.opaque_type
   %nty = hir.opaque_unpack %ctx_in : !hir.any
   hir.signature (%nty, %o) -> (%o)
 } {
   %o = hir.opaque_type
-  %ty = hir.uint_type %N
-  %ctx = hir.opaque_pack(%ty)
+  %sty = hir.uint_type %N
+  %bty = hir.uint_type %N
+  %ctx = hir.opaque_pack(%sty, %bty)
   hir.return %ctx : %o
 }
 
@@ -109,10 +111,10 @@ hir.func @"Id.0"(%x, %ctx) -> (result) {
   // checking inlines the callee's signature computation into the caller, which
   // recomputes the type in its own earlier phase (settled 2026-08-01;
   // exercised in case 5).
-  %ty = hir.opaque_unpack %ctx : !hir.any
+  %ty, %bty = hir.opaque_unpack %ctx : !hir.any, !hir.any
   hir.signature (%ty, %o) -> (%ty)
 } {
-  %ty = hir.opaque_unpack %ctx : !hir.any
+  %sty, %ty = hir.opaque_unpack %ctx : !hir.any, !hir.any
   %r = hir.add %x, %x : %ty
   hir.return %r : %ty
 }
@@ -453,16 +455,20 @@ hir.func @"Use.-1.tail"(%N, %ctx_in) -> (ctx) {
   hir.signature (%nty, %o) -> (%o)
 } {
   %o = hir.opaque_type
+  // The dependent type of the caller's own %x argument, computed by the
+  // caller's signature region at phase -1 and merged into this func — not a
+  // relocated copy.
+  %sty = hir.uint_type %N
   %int = hir.int_type
-  // The dependent argument type the caller computes in its own phase -1, for
-  // the phase-0 call site's typeOfArgs. It is signature content here, not a
-  // relocated copy: the signature region carries this computation at phase -1
-  // and splitting merges it into this func.
+  // The dependent argument type the caller's body computes in its own phase -1,
+  // for the phase-0 call site's typeOfArgs. It is a second copy of the same
+  // computation, since the two regions are threaded independently and the
+  // splitter deduplicates nothing.
   %xty = hir.uint_type %N
   // The callee's phase -1 entry; its result is the callee's private context.
   %idctx = hir.call @"Id.-1"(%N) : (%int) -> (%o)
-  // Both cross the caller's phase boundary in one opaque context.
-  %ctx = hir.opaque_pack(%xty, %idctx)
+  // All three cross the caller's phase boundary in one opaque context.
+  %ctx = hir.opaque_pack(%sty, %xty, %idctx)
   hir.return %ctx : %o
 }
 
@@ -473,11 +479,11 @@ hir.eager_func @"Use.-1"(N) -> (ctx) [
 
 hir.func @"Use.0"(%x, %ctx) -> (r) {
   %o = hir.opaque_type
-  %xty, %idctx = hir.opaque_unpack %ctx : !hir.any, !hir.any
-  hir.signature (%xty, %o) -> (%xty)
+  %sty, %bty, %bidctx = hir.opaque_unpack %ctx : !hir.any, !hir.any, !hir.any
+  hir.signature (%sty, %o) -> (%sty)
 } {
   %o = hir.opaque_type
-  %xty, %idctx = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %sty, %xty, %idctx = hir.opaque_unpack %ctx : !hir.any, !hir.any, !hir.any
   %r = hir.call @"Id.0"(%x, %idctx) : (%xty, %o) -> (%xty)
   hir.return %r : %xty
 }

@@ -58,16 +58,27 @@
 // lowered, and the implementations are retired only once all of them are, so
 // the result never depends on the order the functions are visited in.
 //
-// ## Crossings: a shared, deduplicated context
+// ## Crossings: one shared context per boundary
 //
-// The body and the signature are threaded independently, so a phase op's
-// outgoing context is the union of what both regions' phase ops yield. The two
-// sets are packed into one opaque context per boundary and deduplicated by a
-// structural key `canonKey`: a declared argument keys by its index (so the body
-// and signature copies of an argument coincide), a phase-op result sees through
-// to the value it yields, and a pure computation keys by op name, attributes,
-// and its operands' keys. Impure or opaque values (calls, context) key by
-// identity and never coincide, so a type computed by a call gets its own slot.
+// The body and the signature are threaded independently, so the boundary
+// P-1 -> P carries what both regions' phase P-1 ops yield, packed into one
+// opaque context. The two yield lists are concatenated, signature first, and
+// slots are purely positional: the phase P-1 signature op's result #k is slot
+// #k, and the body op's result #k follows behind the signature's slots.
+//
+// The splitter deduplicates nothing. Whether the signature's copy and the
+// body's copy of a value are "the same computation" is not something the IR
+// says and not something the splitter may reconstruct — a structural
+// comparison would have to give up on calls and every other impure value
+// anyway.
+//
+// A type both regions compute therefore crosses in two slots, and the per-phase
+// func declares its argument with the signature's slot while its body uses the
+// body's. CSE collapses the two computations on the producing side, but the two
+// slots stay: they are separate results of the consumer's `hir.opaque_unpack`,
+// and identifying them would mean rewriting one function's unpack users from
+// another function's pack. The duplication is a property of the context
+// interface, not litter this pass could tidy up.
 //
 //===----------------------------------------------------------------------===//
 
@@ -76,7 +87,6 @@
 #include "silicon/UIR/Ops.h"
 #include "silicon/UIR/Passes.h"
 #include "mlir/IR/IRMapping.h"
-#include "llvm/Support/raw_ostream.h"
 #include <map>
 
 using namespace mlir;
@@ -139,26 +149,15 @@ private:
   /// The generated per-phase `hir.func` for each phase.
   std::map<int, hir::FuncOp> phaseFunc;
 
-  /// One value crossing a phase boundary in the opaque context. A crossing is a
-  /// value either region's phase op yields; both regions share one deduplicated
-  /// slot list per boundary.
-  struct Slot {
-    std::string key;
-    Value source;
-  };
-  /// The ordered context slots entering each phase, keyed by the receiving
-  /// phase P (boundary P-1 -> P), plus a key-to-index lookup.
-  std::map<int, SmallVector<Slot>> slots;
-  std::map<int, llvm::StringMap<unsigned>> slotIndex;
-
-  DenseMap<Value, std::string> keyMemo;
-  /// Interned structural keys, giving every distinct key a small integer id.
-  llvm::StringMap<unsigned> keyIds;
+  /// The values crossing into each phase in the opaque context, keyed by the
+  /// receiving phase P (boundary P-1 -> P): the phase P-1 signature op's yields
+  /// followed by the phase P-1 body op's yields, in that order.
+  std::map<int, SmallVector<Value>> slots;
+  /// The slot each `uir.phase` result arrives in at the following phase.
+  DenseMap<Value, unsigned> slotIndex;
 
   std::string phaseName(int phase);
-  std::string canonKey(Value value);
-  unsigned canonId(Value value);
-  static Value underlying(Value value);
+  unsigned slotOf(Value phaseResult);
 
   LogicalResult diagnose();
   void computeRanges();
@@ -174,7 +173,7 @@ private:
 } // namespace
 
 //===----------------------------------------------------------------------===//
-// Naming and Structural Keys
+// Naming and Context Slots
 //===----------------------------------------------------------------------===//
 
 /// The per-phase function name `@<f>.<phase>`, derived from the split_func's
@@ -186,64 +185,12 @@ std::string FuncSplitter::phaseName(int phase) {
   return (splitFunc.getSymName() + "." + Twine(phase)).str();
 }
 
-/// See through phase-op results to the value actually computed: a `uir.phase`
-/// result resolves to the operand its region's `uir.phase_return` yields.
-Value FuncSplitter::underlying(Value value) {
-  while (auto phaseOp = dyn_cast_or_null<PhaseOp>(value.getDefiningOp())) {
-    auto ret = cast<PhaseReturnOp>(phaseOp.getBody().front().getTerminator());
-    value = ret.getYields()[cast<OpResult>(value).getResultNumber()];
-  }
-  return value;
-}
-
-/// A structural key identifying a value across the body and signature regions.
-/// Declared arguments key by index; pure computations key by op name,
-/// attributes, and operand keys; everything else keys by identity.
-///
-/// Operands enter the key as interned ids (`canonId`), not as their own key
-/// strings: a shared subexpression then costs one token per use instead of an
-/// inlined copy of its whole tree. Spelling operands out would make the key of
-/// a chain like `%b = add %a, %a` double in length at every level, so a few
-/// dozen ops suffice to exhaust memory.
-std::string FuncSplitter::canonKey(Value value) {
-  if (auto it = keyMemo.find(value); it != keyMemo.end())
-    return it->second;
-  Value canon = underlying(value);
-  if (auto it = keyMemo.find(canon); it != keyMemo.end())
-    return keyMemo[value] = it->second;
-
-  std::string key;
-  if (auto blockArg = dyn_cast<BlockArgument>(canon)) {
-    if (blockArg.getOwner()->getParentOp() == funcOp)
-      key = ("arg#" + Twine(blockArg.getArgNumber())).str();
-    else
-      key = ("blk#" + Twine((intptr_t)canon.getAsOpaquePointer())).str();
-  } else {
-    Operation *defOp = canon.getDefiningOp();
-    if (defOp->getNumRegions() == 0 && isMemoryEffectFree(defOp)) {
-      llvm::raw_string_ostream os(key);
-      os << defOp->getName().getStringRef() << "[";
-      llvm::interleaveComma(defOp->getAttrs(), os, [&](NamedAttribute attr) {
-        os << attr.getName() << "=" << attr.getValue();
-      });
-      os << "](";
-      llvm::interleaveComma(defOp->getOperands(), os,
-                            [&](Value v) { os << canonId(v); });
-      os << ")#" << cast<OpResult>(canon).getResultNumber();
-    } else {
-      key = ("id#" + Twine((intptr_t)canon.getAsOpaquePointer())).str();
-    }
-  }
-  keyMemo[canon] = key;
-  keyMemo[value] = key;
-  return key;
-}
-
-/// The interned id of a value's structural key: equal ids mean equal keys, so
-/// an id stands in for a whole subtree when building an enclosing key.
-unsigned FuncSplitter::canonId(Value value) {
-  auto key = canonKey(value);
-  return keyIds.insert({key, (unsigned)keyIds.size()}).first->second;
+/// The context slot a `uir.phase` op's result arrives in at the next phase.
+/// Every result of every phase op has one, assigned by `computeSlots`.
+unsigned FuncSplitter::slotOf(Value phaseResult) {
+  auto it = slotIndex.find(phaseResult);
+  assert(it != slotIndex.end() && "phase result has no context slot");
+  return it->second;
 }
 
 //===----------------------------------------------------------------------===//
@@ -355,26 +302,26 @@ void FuncSplitter::computeRanges() {
 
 /// Compute the ordered context slots entering each phase. Because the phase-P
 /// function holds both regions' phase-P content, the boundary P-1 -> P carries
-/// exactly the deduplicated union of what the two phase P-1 ops yield: the body
-/// crossings the next phase consumes, and the type values the next phase's
-/// signature and content need. Structurally identical crossings from the two
-/// regions coincide in one slot (see `canonKey`).
+/// what the two phase P-1 ops yield: the body crossings the next phase
+/// consumes, and the type values the next phase's signature and content need.
+/// The two lists are concatenated, signature first, with no deduplication: a
+/// value both regions compute gets a slot each.
 void FuncSplitter::computeSlots() {
   for (int phase = phaseMin + 1; phase <= phaseMax; ++phase) {
     auto &list = slots[phase];
-    auto &index = slotIndex[phase];
     for (auto *phases : {&sigPhase, &bodyPhase}) {
       auto it = phases->find(phase - 1);
       if (it == phases->end())
         continue;
-      auto ret =
-          cast<PhaseReturnOp>(it->second.getBody().front().getTerminator());
-      for (auto yield : ret.getYields()) {
-        auto key = canonKey(yield);
-        if (index.count(key))
-          continue;
-        index[key] = list.size();
-        list.push_back({key, yield});
+      PhaseOp phaseOp = it->second;
+      auto ret = cast<PhaseReturnOp>(phaseOp.getBody().front().getTerminator());
+      // A phase op's results and its yields correspond one to one, so the slot
+      // a value is packed into is also the slot the next phase reads the
+      // corresponding result from.
+      for (auto [result, yield] :
+           llvm::zip(phaseOp.getResults(), ret.getYields())) {
+        slotIndex[result] = list.size();
+        list.push_back(yield);
       }
     }
   }
@@ -473,16 +420,16 @@ LogicalResult FuncSplitter::buildPhaseBody(int phase, hir::FuncOp func) {
   };
 
   // Unpack the incoming context lazily: the unpack exposes every slot entering
-  // this phase, and `getIncoming` returns the one carrying a given key.
+  // this phase, and `getIncoming` returns the one at a given index.
   hir::OpaqueUnpackOp inUnpack;
-  auto getIncoming = [&](const std::string &key) -> Value {
+  auto getIncoming = [&](unsigned index) -> Value {
     if (!inUnpack) {
       OpBuilder b(&block, block.begin());
       inUnpack = hir::OpaqueUnpackOp::create(
           b, loc, SmallVector<Type>(slots.at(phase).size(), anyTy),
           block.getArgument(argIdx));
     }
-    return inUnpack.getResult(slotIndex.at(phase).at(key));
+    return inUnpack.getResult(index);
   };
 
   OpBuilder builder(&block, block.end());
@@ -495,7 +442,7 @@ LogicalResult FuncSplitter::buildPhaseBody(int phase, hir::FuncOp func) {
       auto it = phases->find(phase - 1);
       if (it != phases->end())
         for (auto result : it->second.getResults())
-          map.map(result, getIncoming(canonKey(result)));
+          map.map(result, getIncoming(slotOf(result)));
     }
 
   // Clone one phase op's content in order. A `uir.phase_call` becomes an
@@ -571,8 +518,8 @@ LogicalResult FuncSplitter::buildPhaseBody(int phase, hir::FuncOp func) {
   }
   if (phase != phaseMax) {
     SmallVector<Value> outgoing;
-    for (auto &slot : slots.at(phase + 1)) {
-      Value value = map.lookup(slot.source);
+    for (auto source : slots.at(phase + 1)) {
+      Value value = map.lookup(source);
       assert(value && "context slot is not produced by its own phase");
       outgoing.push_back(value);
     }
@@ -635,10 +582,7 @@ LogicalResult FuncSplitter::buildPhaseSignature(int phase, hir::FuncOp func) {
              "incoming context";
       return {};
     }
-    auto &index = slotIndex.at(phase);
-    auto it = index.find(canonKey(sigValue));
-    assert(it != index.end() && "signature crossing has no context slot");
-    return getUnpack().getResult(it->second);
+    return getUnpack().getResult(slotOf(result));
   };
 
   SmallVector<Value> typeOfArgs, typeOfResults;

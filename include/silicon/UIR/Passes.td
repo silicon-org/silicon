@@ -284,10 +284,14 @@ def SplitFuncsPass : Pass<"split-funcs", "mlir::ModuleOp"> {
       with its context threading like any other crossing.
 
     - **Reconstructs per-phase signatures** for each per-phase func. A phase
-      boundary's opaque context carries the deduplicated union of what both
-      regions' phase ops yield, so a type the signature and the body both
-      compute occupies one slot. A type ascribing a phase-P argument or result
-      is phase P-1 content, so a per-phase signature region holds nothing but
+      boundary's opaque context carries what both regions' phase ops yield,
+      concatenated signature first and assigned slots positionally. Nothing is
+      deduplicated: a type the signature and the body both compute occupies one
+      slot each, so a per-phase func declares its arguments with the
+      signature's slots while its body reads the body's. Reconstructing that
+      two computations are "the same" is not the splitter's job, and cannot be
+      done for calls at all. A type ascribing a phase-P argument or result is
+      phase P-1 content, so a per-phase signature region holds nothing but
       `hir.opaque_type` and one `hir.opaque_unpack` of the incoming context: it
       never reads the func's own arguments, which is what makes the per-phase
       MIR signature constructible after monomorphization and folding without
