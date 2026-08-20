@@ -24,7 +24,9 @@
 // - **Merges** the two regions phase by phase. Splitting never relocates and
 //   never clones: the private `hir.func` for phase P holds the signature
 //   region's phase-P content followed by the body region's phase-P content,
-//   with either side absent counting as empty. Values crossing a phase
+//   with either side absent counting as empty: content is cloned into the func
+//   of the phase it already sits at, never moved to a different one and never
+//   recomputed elsewhere. Values crossing a phase
 //   boundary ride an opaque context: each non-last func packs its outgoing
 //   crossings with `hir.opaque_pack` into one trailing context result, and
 //   each non-first func unpacks its incoming context. Declared arguments enter
@@ -32,7 +34,8 @@
 //   phase's func. Each `uir.phase_call` becomes an `hir.call` to the callee's
 //   concrete per-phase func, resolved through the callee `uir.split_func`'s
 //   phase list; its context threads like any other crossing. Signature phase
-//   calls need no special handling — they are ordinary phase content.
+//   calls need no special handling — they are ordinary phase content, cloned
+//   in place like the rest.
 // - **Reconstructs signatures** for each per-phase func. A type ascribing a
 //   phase-P argument or result is phase P-1 content, so a per-phase signature
 //   region holds nothing but `hir.opaque_type` and one `hir.opaque_unpack` of
@@ -149,9 +152,12 @@ private:
   std::map<int, llvm::StringMap<unsigned>> slotIndex;
 
   DenseMap<Value, std::string> keyMemo;
+  /// Interned structural keys, giving every distinct key a small integer id.
+  llvm::StringMap<unsigned> keyIds;
 
   std::string phaseName(int phase);
   std::string canonKey(Value value);
+  unsigned canonId(Value value);
   static Value underlying(Value value);
 
   LogicalResult diagnose();
@@ -193,18 +199,27 @@ Value FuncSplitter::underlying(Value value) {
 /// A structural key identifying a value across the body and signature regions.
 /// Declared arguments key by index; pure computations key by op name,
 /// attributes, and operand keys; everything else keys by identity.
+///
+/// Operands enter the key as interned ids (`canonId`), not as their own key
+/// strings: a shared subexpression then costs one token per use instead of an
+/// inlined copy of its whole tree. Spelling operands out would make the key of
+/// a chain like `%b = add %a, %a` double in length at every level, so a few
+/// dozen ops suffice to exhaust memory.
 std::string FuncSplitter::canonKey(Value value) {
   if (auto it = keyMemo.find(value); it != keyMemo.end())
     return it->second;
+  Value canon = underlying(value);
+  if (auto it = keyMemo.find(canon); it != keyMemo.end())
+    return keyMemo[value] = it->second;
+
   std::string key;
-  value = underlying(value);
-  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+  if (auto blockArg = dyn_cast<BlockArgument>(canon)) {
     if (blockArg.getOwner()->getParentOp() == funcOp)
       key = ("arg#" + Twine(blockArg.getArgNumber())).str();
     else
-      key = ("blk#" + Twine((intptr_t)value.getAsOpaquePointer())).str();
+      key = ("blk#" + Twine((intptr_t)canon.getAsOpaquePointer())).str();
   } else {
-    Operation *defOp = value.getDefiningOp();
+    Operation *defOp = canon.getDefiningOp();
     if (defOp->getNumRegions() == 0 && isMemoryEffectFree(defOp)) {
       llvm::raw_string_ostream os(key);
       os << defOp->getName().getStringRef() << "[";
@@ -213,14 +228,22 @@ std::string FuncSplitter::canonKey(Value value) {
       });
       os << "](";
       llvm::interleaveComma(defOp->getOperands(), os,
-                            [&](Value v) { os << canonKey(v); });
-      os << ")#" << cast<OpResult>(value).getResultNumber();
+                            [&](Value v) { os << canonId(v); });
+      os << ")#" << cast<OpResult>(canon).getResultNumber();
     } else {
-      key = ("id#" + Twine((intptr_t)value.getAsOpaquePointer())).str();
+      key = ("id#" + Twine((intptr_t)canon.getAsOpaquePointer())).str();
     }
   }
+  keyMemo[canon] = key;
   keyMemo[value] = key;
   return key;
+}
+
+/// The interned id of a value's structural key: equal ids mean equal keys, so
+/// an id stands in for a whole subtree when building an enclosing key.
+unsigned FuncSplitter::canonId(Value value) {
+  auto key = canonKey(value);
+  return keyIds.insert({key, (unsigned)keyIds.size()}).first->second;
 }
 
 //===----------------------------------------------------------------------===//
@@ -418,10 +441,10 @@ FailureOr<FlatSymbolRefAttr> FuncSplitter::resolvePhaseEntry(PhaseCallOp call) {
 /// Fill in a per-phase func's body: unpack the incoming context, clone the
 /// signature region's phase content followed by the body region's (rewriting
 /// `uir.phase_call` to `hir.call`), and terminate with an `hir.return` carrying
-/// the declared results plus the packed outgoing context. Nothing is relocated
-/// or recomputed here: both regions' content is moved to the phase it already
-/// sits at, and everything crossing to the next phase is already yielded by one
-/// of the two phase ops.
+/// the declared results plus the packed outgoing context. Nothing moves between
+/// phases and nothing is recomputed: each op lands in the func of the phase it
+/// already sits at, and everything crossing to the next phase is already
+/// yielded by one of the two phase ops.
 LogicalResult FuncSplitter::buildPhaseBody(int phase, hir::FuncOp func) {
   Block &block = func.getBody().front();
   auto loc = func.getLoc();

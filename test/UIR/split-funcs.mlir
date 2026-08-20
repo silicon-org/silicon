@@ -811,3 +811,64 @@ uir.func @Bare.impl() -> () {
   }
   uir.unreachable
 }
+//===----------------------------------------------------------------------===//
+// Case 12: a deep chain of shared subexpressions crossing a phase boundary.
+// The structural key that deduplicates the two regions' crossings must intern
+// its operands rather than spell them out: with `%a{i} = add %a{i-1}, %a{i-1}`
+// the spelled-out key doubles in length at every level, so a couple of dozen
+// ops are enough to exhaust memory.
+
+// CHECK-LABEL: hir.func private @"Deep.-1.tail"(%a, %ctx) -> (ctx) {
+// CHECK:         hir.opaque_pack({{%.+}})
+// CHECK-LABEL: hir.func private @Deep.0(%x, %ctx) -> (result) {
+uir.split_func @Deep(%a: -1, %x: 0) -> (result: 0) {
+  %int = hir.int_type
+  uir.signature (%int, %int) -> (%int)
+} impl @Deep.impl []
+
+uir.func @Deep.impl(%a: -1, %x: 0) -> (result: 0) {
+  %sm2 = uir.phase -2 {
+    %int = hir.int_type
+    uir.phase_return yield %int
+  }
+  %sm1 = uir.phase -1 {
+    %int = hir.int_type
+    uir.phase_return yield %int
+  }
+  uir.signature (%sm2, %sm1) -> (%sm1)
+} {
+  %p = uir.phase -1 {
+    %int = hir.int_type
+    %a0 = hir.add %a, %a : %int
+    %a1 = hir.add %a0, %a0 : %int
+    %a2 = hir.add %a1, %a1 : %int
+    %a3 = hir.add %a2, %a2 : %int
+    %a4 = hir.add %a3, %a3 : %int
+    %a5 = hir.add %a4, %a4 : %int
+    %a6 = hir.add %a5, %a5 : %int
+    %a7 = hir.add %a6, %a6 : %int
+    %a8 = hir.add %a7, %a7 : %int
+    %a9 = hir.add %a8, %a8 : %int
+    %a10 = hir.add %a9, %a9 : %int
+    %a11 = hir.add %a10, %a10 : %int
+    %a12 = hir.add %a11, %a11 : %int
+    %a13 = hir.add %a12, %a12 : %int
+    %a14 = hir.add %a13, %a13 : %int
+    %a15 = hir.add %a14, %a14 : %int
+    %a16 = hir.add %a15, %a15 : %int
+    %a17 = hir.add %a16, %a16 : %int
+    %a18 = hir.add %a17, %a17 : %int
+    %a19 = hir.add %a18, %a18 : %int
+    %a20 = hir.add %a19, %a19 : %int
+    %a21 = hir.add %a20, %a20 : %int
+    %a22 = hir.add %a21, %a21 : %int
+    %a23 = hir.add %a22, %a22 : %int
+    uir.phase_return yield %a23
+  }
+  uir.phase 0 {
+    %int = hir.int_type
+    %r = hir.add %x, %p : %int
+    uir.phase_return %r : %int
+  }
+  uir.unreachable
+}

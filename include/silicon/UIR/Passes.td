@@ -270,9 +270,10 @@ def SplitFuncsPass : Pass<"split-funcs", "mlir::ModuleOp"> {
       `hir.func @f.<phase>` per phase present in either region (negative phases
       quote the symbol; the names are cosmetic and uniquified against the
       module). The func's body is the signature region's phase-P content
-      followed by the body region's; the pass never relocates or clones
-      computation and never looks inside a phase region, so a `uir.phase_call`
-      in the signature needs no special handling. A func takes its phase's
+      followed by the body region's, cloned op for op into the func of the
+      phase each op already sits at; nothing moves between phases and nothing
+      is recomputed, so a `uir.phase_call` in the signature is ordinary phase
+      content needing no special handling. A func takes its phase's
       declared arguments plus a trailing opaque context argument for every phase
       but the first, and returns its phase's declared results plus a trailing
       opaque context result for every phase but the last. Values crossing a
