@@ -86,10 +86,13 @@ Five stages, each owning a single concern:
   Sinking floats into the phase regions that use them is exclusively threading normalization's job.
 - **Body and signature regions follow one set of rules.** The same control flow and exit arrangements are legal in both, phase ops and their verifiers do not distinguish the regions, and sorting looks at op phases and moves ops around without caring which region it rewrites.
   In particular, which function result values a `uir.phase_return` must carry is part of the splitting contract (diagnosed there), not an op verifier rule, since no single verifier rule covers both regions.
-- **Signature region.** The signature undergoes the same phase sorting and contains its own `uir.phase` ops.
-  At function-splitting time, values the signature carries between phases must be computed in the function *body* of the previous phase (so they can be passed into the next phase call as specialization parameters), not in the signature.
-  That relocation is purely a function-splitting concern; PhaseAnalysis and sorting do not know about it.
-  Consequence: signature computations (including `uir.phase_call`s) must be re-evaluable, since they are cloned between signature and body — already the status quo assumption, now stated.
+- **Signature region** (revised 2026-08-20; supersedes the relocate-at-split model).
+  The signature undergoes the same phase sorting and contains its own `uir.phase` ops.
+  A type ascribing a phase-P argument or result is phase P-1 content by definition: the per-phase function's MIR signature must be constructible after monomorphization and folding without evaluating anything, so a per-phase `hir.func` signature region can only unpack the incoming context and use `hir.opaque_type`; it never touches the function's own arguments.
+  Contract after threading: every `uir.signature` operand typing a phase-P argument or result is a result of `uir.phase P-1`, without exception — floating ops (`hir.int_type` typing a phase -1 argument) sink into P-1, creating phase -2 if needed; leaving trivially foldable floats in the phase-P signature for post-specialization folding is a later optimization, not a rule.
+  Phases before the declared span that arise this way are ordinary pre-span phases: arg-free by construction, evaluated eagerly via the `hir.eager_func` chain, after which the receiving signature's unpack folds and the per-phase function is self-describing.
+  Splitting merges, never relocates: the phase-P function body is the signature region's phase-P content followed by the body region's phase-P content (either may be absent and counts as empty), its outgoing context is the union of both yields, and its signature region is built solely from unpacks of the slots the `uir.signature` operands name.
+  The splitter never looks inside a phase region and never clones computation, so signature `uir.phase_call` chains need no special handling.
 - **No canonicalization between the passes** for now; sorting and splitting run back-to-back.
   Effect modeling and canonicalization interactions (CSE across phase regions, constant hoisting out of them) are deferred until a canonicalizer needs to run in between.
 - **The phase-op-only contract is not verifier-enforced.**
