@@ -7,6 +7,12 @@
 // op, and no floating ops left at the region top level. Body checks are
 // anchored past the `} {` region separator so they do not match the
 // signature region, which threads by the same rules.
+//
+// The one asymmetry is where the two regions' phase ranges land: a type
+// ascribing a phase-P argument or result is phase P-1 content, so the
+// signature's range is the declared span shifted one phase earlier. Every
+// function whose arguments start at phase P therefore grows a signature phase
+// P-1, below its declared span, that computes their types.
 
 //===----------------------------------------------------------------------===//
 // Gap phase materialized between two content phases, and a distance-2 crossing
@@ -15,6 +21,21 @@
 
 // CHECK-LABEL: uir.func @Gap
 uir.func @Gap(%a: -2, %x: 0) -> (result: 0) {
+  // The signature's float is sunk once per delivery phase: phase -3 types the
+  // phase -2 argument %a, phase -1 types the phase 0 argument %x and result.
+  // The gap phase -2 in between is materialized empty like any other.
+  // CHECK: [[S3:%.+]] = uir.phase -3 {
+  // CHECK-NEXT: [[I3:%.+]] = hir.int_type
+  // CHECK-NEXT: uir.phase_return yield [[I3]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.phase -2 {
+  // CHECK-NEXT: uir.phase_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[S1:%.+]] = uir.phase -1 {
+  // CHECK-NEXT: [[I1:%.+]] = hir.int_type
+  // CHECK-NEXT: uir.phase_return yield [[I1]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: uir.signature ([[S3]], [[S1]]) -> ([[S1]])
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
 } {
@@ -126,22 +147,22 @@ uir.func @Contentless(%a: -1) -> (c: -1) {
 
 //===----------------------------------------------------------------------===//
 // Signature region: the dependent signature threads its own phase result and
-// sinks its float, delivering each type value as a result of the phase op at
-// its argument's or result's declared phase.
+// sinks its float, delivering each type value as a result of the phase op one
+// before the argument or result it ascribes.
 
 // CHECK-LABEL: uir.func @DepSig
 uir.func @DepSig(%N: -1, %x: 0) -> (result: 0) {
-  // The phase -1 signature op yields the uint type (for %x and the result) and
-  // the sunk int type (for %N).
-  // CHECK: [[S0:%.+]]:2 = uir.phase -1 {
+  // %N's type is a plain int computed at phase -2, one before %N's own phase;
+  // %x's and the result's dependent uint type is computed at phase -1 from %N.
+  // CHECK: [[S0:%.+]] = uir.phase -2 {
   // CHECK-NEXT: [[INT:%.+]] = hir.int_type
+  // CHECK-NEXT: uir.phase_return yield [[INT]]
+  // CHECK-NEXT: }
+  // CHECK-NEXT: [[S1:%.+]] = uir.phase -1 {
   // CHECK-NEXT: [[UI:%.+]] = hir.uint_type %N
-  // CHECK-NEXT: uir.phase_return yield [[UI]], [[INT]]
+  // CHECK-NEXT: uir.phase_return yield [[UI]]
   // CHECK-NEXT: }
-  // CHECK: [[S1:%.+]] = uir.phase 0 {
-  // CHECK-NEXT: uir.phase_return yield [[S0]]#0
-  // CHECK-NEXT: }
-  // CHECK-NEXT: uir.signature ([[S0]]#1, [[S1]]) -> ([[S1]])
+  // CHECK-NEXT: uir.signature ([[S0]], [[S1]]) -> ([[S1]])
   %int = hir.int_type
   %p = uir.phase -1 {
     %ty = hir.uint_type %N
@@ -280,16 +301,18 @@ uir.func @Callee(%a: -1, %b: 0) -> (result: 0) {
 //===----------------------------------------------------------------------===//
 // A multi-result float sunk into the signature keeps each result distinct: its
 // op is cloned once, and each referenced result rides its own phase result
-// rather than collapsing to result #0.
+// rather than collapsing to result #0. Both arguments are declared at phase 0,
+// so their types are delivered by a signature phase -1 below the span.
 
 // CHECK-LABEL: uir.func @MultiResultFloatSig
 uir.func @MultiResultFloatSig(%a: 0, %b: 0) -> (result: 0) {
-  // CHECK: [[S:%.+]]:2 = uir.phase 0 {
+  // CHECK: [[S:%.+]]:2 = uir.phase -1 {
   // CHECK:   [[U:%.+]]:2 = hir.opaque_unpack
   // CHECK:   uir.phase_return yield [[U]]#1, [[U]]#0
   // CHECK: }
   // CHECK: uir.signature ([[S]]#0, [[S]]#1) -> ([[S]]#1)
-  %pack = hir.opaque_pack(%a, %b)
+  %t = hir.int_type
+  %pack = hir.opaque_pack(%t, %t)
   %u:2 = hir.opaque_unpack %pack : !hir.any, !hir.any
   uir.signature (%u#1, %u#0) -> (%u#0)
 } {

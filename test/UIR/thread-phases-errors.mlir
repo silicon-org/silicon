@@ -134,3 +134,38 @@ uir.func @result_count_mismatch(%a: 0) -> (r0: 0, r1: 0) {
   }
   uir.unreachable
 }
+
+// -----
+
+// A signature type value produced by the same phase as the argument it
+// ascribes. A phase-P argument's type is phase P-1 content: the per-phase
+// function's signature must be constructible without evaluating anything, so a
+// value the phase itself computes can never describe that phase's interface.
+uir.func @sig_type_same_phase(%x: 0) -> () {
+  // expected-error @below {{result at phase 0 types a phase 0 value, whose type must be phase -1 content}}
+  %p = uir.phase 0 {
+    %ty = hir.int_type
+    uir.phase_return yield %ty
+  }
+  uir.signature (%p) -> ()
+} {
+  uir.phase 0 {
+    uir.phase_return
+  }
+  uir.unreachable
+}
+
+// -----
+
+// The argument variant of the same rule: an argument declared at phase P
+// cannot ascribe a phase-P value either.
+// expected-error @below {{argument declared at phase 0 types a phase 0 value, whose type must be phase -1 content}}
+uir.func @sig_type_same_phase_arg(%T: 0, %x: 0) -> () {
+  %t = hir.int_type
+  uir.signature (%t, %T) -> ()
+} {
+  uir.phase 0 {
+    uir.phase_return
+  }
+  uir.unreachable
+}

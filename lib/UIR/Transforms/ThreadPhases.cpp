@@ -40,9 +40,15 @@
 //   op survives at the region top level.
 //
 // - **Signature interface**: the `uir.signature` terminator's operands are the
-//   argument and result type values; each is delivered as a result of the
-//   phase op at its declared phase, so a phase-P argument's type is available
-//   at phase P. Floating type values sink into that phase and thread as above.
+//   argument and result type values. A type ascribing a phase-P argument or
+//   result is phase P-1 content by definition — the per-phase function's
+//   signature must be constructible without evaluating anything — so each
+//   operand is delivered as a result of the phase op at P-1, without
+//   exception. Floating type values sink into P-1 and thread as above, which
+//   is what creates a phase -2 op for the type of a phase -1 argument. The
+//   signature's phase range is therefore the declared span shifted one phase
+//   earlier, and may reach below the body's range; the two regions are
+//   threaded independently and their ranges need not agree.
 //
 // Function results already ride the `uir.phase_return` of their declared phase
 // in sorted form; the pass asserts this and does not fix violations.
@@ -68,6 +74,7 @@
 #include "silicon/UIR/Passes.h"
 #include "mlir/IR/IRMapping.h"
 #include "llvm/ADT/MapVector.h"
+#include <limits>
 #include <map>
 
 using namespace mlir;
@@ -144,6 +151,7 @@ private:
 
   Block *rootBlock = nullptr;
   Operation *terminator = nullptr;
+  bool isSignature = false;
   SmallVector<Operation *> floats;
 
   int minPhase = 0;
@@ -249,6 +257,7 @@ bool RegionThreader::isExternal(Value value, PhaseOp phaseOp) {
 LogicalResult RegionThreader::collect() {
   rootBlock = &region.front();
   terminator = rootBlock->getTerminator();
+  isSignature = isa<SignatureOp>(terminator);
   if (!isa<UnreachableOp, SignatureOp>(terminator))
     return terminator->emitOpError()
            << "cannot terminate a threaded region; expected 'uir.unreachable' "
@@ -309,18 +318,29 @@ LogicalResult RegionThreader::validateResults() {
   return success();
 }
 
-/// Compute the contiguous phase range: the declared span (argument and result
-/// phases plus phase 0) widened to cover every existing phase op.
+/// Compute the contiguous phase range the region's phase ops span. The body
+/// covers the declared span — the argument and result phases plus phase 0 —
+/// while the signature covers that span shifted one phase earlier, since the
+/// type of a phase-P argument or result is phase P-1 content. Either range is
+/// then widened to cover every phase op the region already has. A signature
+/// range is empty when the function declares no arguments or results and the
+/// region holds no phase op.
 void RegionThreader::computeRange() {
-  minPhase = 0;
-  maxPhase = 0;
+  int shift = isSignature ? 1 : 0;
+  if (isSignature) {
+    minPhase = std::numeric_limits<int>::max();
+    maxPhase = std::numeric_limits<int>::min();
+  } else {
+    minPhase = 0;
+    maxPhase = 0;
+  }
   for (auto phase : argPhases) {
-    minPhase = std::min<int>(minPhase, phase);
-    maxPhase = std::max<int>(maxPhase, phase);
+    minPhase = std::min<int>(minPhase, phase - shift);
+    maxPhase = std::max<int>(maxPhase, phase - shift);
   }
   for (auto phase : resultPhases) {
-    minPhase = std::min<int>(minPhase, phase);
-    maxPhase = std::max<int>(maxPhase, phase);
+    minPhase = std::min<int>(minPhase, phase - shift);
+    maxPhase = std::max<int>(maxPhase, phase - shift);
   }
   for (auto &[phase, op] : oldPhase) {
     minPhase = std::min(minPhase, phase);
@@ -420,24 +440,26 @@ LogicalResult RegionThreader::planInside(int phase, Value value,
   llvm_unreachable("all origins handled");
 }
 
-/// Register the demand that `value` be a result of phase `phase` (a signature
-/// type value at its declared phase). A float is sunk into the phase as an
-/// extra result; a crossing or argument is threaded up to the phase.
+/// Register the demand that `value` be a result of phase `phase` — the phase
+/// one before the argument or result it ascribes. A float is sunk into the
+/// phase as an extra result; a crossing or argument is threaded up to it.
 LogicalResult RegionThreader::planAsResult(int phase, Value value) {
   auto c = classify(value);
   switch (c.origin) {
   case Origin::Arg:
     if (c.argPhase > phase)
       return funcOp.emitOpError()
-             << "argument declared at phase " << c.argPhase
-             << " types a value at earlier phase " << phase;
+             << "argument declared at phase " << c.argPhase << " types a phase "
+             << (phase + 1) << " value, whose type must be phase " << phase
+             << " content";
     ensureThreaded(phase, 'a', c.argIndex, 0);
     return success();
   case Origin::PhaseResult:
     if (c.phaseOp.getPhase() > phase)
       return c.phaseOp.emitOpError()
-             << "result at phase " << c.phaseOp.getPhase()
-             << " types a value at earlier phase " << phase;
+             << "result at phase " << c.phaseOp.getPhase() << " types a phase "
+             << (phase + 1) << " value, whose type must be phase " << phase
+             << " content";
     ensureThreaded(phase, 'p', c.phaseOp.getPhase(), c.resultIndex);
     return success();
   case Origin::Float: {
@@ -480,12 +502,14 @@ LogicalResult RegionThreader::plan() {
       return failure();
   }
 
+  // A type ascribing a phase-P argument or result is phase P-1 content, so
+  // each signature operand is demanded as a result of the phase op at P-1.
   if (auto sigOp = dyn_cast<SignatureOp>(terminator)) {
     for (auto [i, value] : llvm::enumerate(sigOp.getTypeOfArgs()))
-      if (failed(planAsResult(argPhases[i], value)))
+      if (failed(planAsResult(argPhases[i] - 1, value)))
         return failure();
     for (auto [j, value] : llvm::enumerate(sigOp.getTypeOfResults()))
-      if (failed(planAsResult(resultPhases[j], value)))
+      if (failed(planAsResult(resultPhases[j] - 1, value)))
         return failure();
   }
   return success();
@@ -644,16 +668,16 @@ void RegionThreader::build() {
       llvm_unreachable("phase build failed after successful planning");
 }
 
-/// Wire the `uir.signature` terminator's operands to their declared phase's
-/// results.
+/// Wire the `uir.signature` terminator's operands to the results of the phase
+/// one before the argument or result each of them ascribes.
 LogicalResult RegionThreader::remapSignature() {
   auto sigOp = dyn_cast<SignatureOp>(terminator);
   if (!sigOp)
     return success();
   for (auto [i, operand] : llvm::enumerate(sigOp.getTypeOfArgsMutable()))
-    operand.set(resolveAsResult(argPhases[i], operand.get()));
+    operand.set(resolveAsResult(argPhases[i] - 1, operand.get()));
   for (auto [j, operand] : llvm::enumerate(sigOp.getTypeOfResultsMutable()))
-    operand.set(resolveAsResult(resultPhases[j], operand.get()));
+    operand.set(resolveAsResult(resultPhases[j] - 1, operand.get()));
   return success();
 }
 

@@ -189,11 +189,13 @@ def ThreadPhasesPass : Pass<"thread-phases", "mlir::ModuleOp"> {
 
     - **Materialize missing phase ops.** After normalization there is exactly
       one `uir.phase` op for every phase in the contiguous range from the
-      function's earliest phase to its latest, in increasing order. The range
-      spans the function's declared argument and result phases (always
-      including phase 0), every existing `uir.phase` op (pre-span phases
+      region's earliest phase to its latest, in increasing order. The body's
+      range spans the function's declared argument and result phases (always
+      including phase 0); the signature's range spans that same span shifted
+      one phase earlier (see below) and may thus reach below the body's. Both
+      are widened to cover every existing `uir.phase` op — pre-span phases
       earlier than the declared span and internal phases later than it
-      included), and all phases in between. Gap phases and contentless span
+      included — and all phases in between. Gap phases and contentless span
       phases become empty `uir.phase` ops holding just a `uir.phase_return`.
 
     - **Thread crossings hop-by-hop.** Every value a `uir.phase` op at phase Q
@@ -212,10 +214,15 @@ def ThreadPhasesPass : Pass<"thread-phases", "mlir::ModuleOp"> {
       top level.
 
     - **Signature interface.** The `uir.signature` terminator's operands are
-      the type-level values of the function's arguments and results. Each is
-      delivered as a result of the `uir.phase` op at that argument's or
-      result's declared phase, so a phase-P argument's type is available at
-      phase P; floating type values sink into that phase and thread as above.
+      the type-level values of the function's arguments and results. A type
+      ascribing a phase-P argument or result is phase P-1 content by
+      definition: the per-phase function's signature must be constructible
+      without evaluating anything, so it can only unpack the incoming context.
+      Each operand is therefore delivered as a result of the `uir.phase` op at
+      P-1, without exception; floating type values sink into P-1 and thread as
+      above, which is what gives the type of a phase -1 argument a phase -2 op
+      below the function's declared span. Such phases are ordinary pre-span
+      phases: argument-free by construction and eagerly evaluated.
 
     Every function result already rides the `uir.phase_return` of its declared
     phase in sorted form; the pass asserts this rather than fixing it.
