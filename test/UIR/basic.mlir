@@ -252,12 +252,12 @@ hir.func private @split_witness.1() -> () {
 uir.split_func @split_witness(%a: -1, %b: 0) -> (result: 0) {
   uir.signature (%a, %b) -> (%b)
 // CHECK: } [
-// CHECK-NEXT: -1: @split_witness.0,
-// CHECK-NEXT: 0: @split_witness.1
+// CHECK-NEXT: @split_witness.0,
+// CHECK-NEXT: @split_witness.1
 // CHECK-NEXT: ]
 } [
-  -1: @split_witness.0,
-  0: @split_witness.1
+  @split_witness.0,
+  @split_witness.1
 ]
 
 // Module-ness is a property of the declaration and thus lives on the

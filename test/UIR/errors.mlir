@@ -357,7 +357,7 @@ uir.split_func @split_sig_nested_arity(%a: 0) -> () {
   }
   uir.signature (%a) -> ()
 } [
-  0: @split_sig_nested_arity.0
+  @split_sig_nested_arity.0
 ]
 
 // -----
@@ -368,7 +368,7 @@ uir.split_func @split_sig_nested_arity(%a: 0) -> () {
 uir.split_func @impl_and_phases(%a: 0) -> () {
   uir.signature (%a) -> ()
 } impl @impl_and_phases.impl [
-  0: @impl_and_phases.0
+  @impl_and_phases.0
 ]
 uir.func @impl_and_phases.impl(%a: 0) -> () {
   uir.signature (%a) -> ()
@@ -384,73 +384,42 @@ uir.func @impl_and_phases.impl(%a: 0) -> () {
 uir.split_func @dangling_phase_func(%a: 0) -> () {
   uir.signature (%a) -> ()
 } [
-  0: @no_such_phase_func
-]
-
-// -----
-
-// Verify that the phase list is in increasing order, so a phase maps to at
-// most one function.
-hir.func private @unordered.0() -> () {
-  hir.signature () -> ()
-} {
-  hir.return
-}
-// expected-error @below {{maps phase 0 as entry 0, where its declared span [-1, 0] requires phase -1; the phase list must cover the span exactly, in increasing order}}
-uir.split_func @unordered(%a: -1, %b: 0) -> () {
-  uir.signature (%a, %b) -> ()
-} [
-  0: @unordered.0,
-  -1: @unordered.0
+  @no_such_phase_func
 ]
 
 // -----
 
 // Verify that the phase list lists every phase of the declared span: a caller
-// asks for every span phase, so a gap leaves a legal phase call unresolvable.
+// asks for every span phase, so a short list leaves a legal phase call
+// unresolvable.
 hir.func private @missing_phase.0() -> () {
   hir.signature () -> ()
 } {
   hir.return
 }
-// expected-error @below {{has 1 phase list entries but its declared span [0, 1] has 2 phases; the phase list must cover the span exactly, in increasing order}}
+// expected-error @below {{has 1 phase list entries but its declared span [0, 1] has 2 phases; the phase list maps the span's phases positionally, one entry each}}
 uir.split_func @missing_phase(%a: 0) -> (r: 1) {
   uir.signature (%a) -> (%a)
 } [
-  0: @missing_phase.0
+  @missing_phase.0
 ]
 
 // -----
 
-// Verify that the phase list maps each span phase exactly once.
-hir.func private @duplicate_phase.0() -> () {
-  hir.signature () -> ()
-} {
-  hir.return
-}
-// expected-error @below {{maps phase 0 as entry 1, where its declared span [0, 1] requires phase 1; the phase list must cover the span exactly, in increasing order}}
-uir.split_func @duplicate_phase(%a: 0) -> (r: 1) {
-  uir.signature (%a) -> (%a)
-} [
-  0: @duplicate_phase.0,
-  0: @duplicate_phase.0
-]
-
-// -----
-
-// Verify that the phase list holds no phase outside the declared span: callers
+// Verify that the phase list holds no entry beyond the declared span: callers
 // never ask for one, and pre-span phases run eagerly instead of being called.
 hir.func private @outside_span.0() -> () {
   hir.signature () -> ()
 } {
   hir.return
 }
-// expected-error @below {{maps phase 2 as entry 1, where its declared span [0, 1] requires phase 1; the phase list must cover the span exactly, in increasing order}}
+// expected-error @below {{has 3 phase list entries but its declared span [0, 1] has 2 phases; the phase list maps the span's phases positionally, one entry each}}
 uir.split_func @outside_span(%a: 0) -> (r: 1) {
   uir.signature (%a) -> (%a)
 } [
-  0: @outside_span.0,
-  2: @outside_span.0
+  @outside_span.0,
+  @outside_span.0,
+  @outside_span.0
 ]
 
 // -----

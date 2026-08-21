@@ -856,25 +856,21 @@ ParseResult SplitFuncOp::parse(OpAsmParser &parser, OperationState &result) {
     props.impl = implAttr;
   }
 
-  // Parse phase map: [phase: @sym, ...].
-  SmallVector<int32_t> phaseNumbers;
+  // Parse the phase list: [@sym, ...]. It is positional — the phases it maps
+  // are the declared span's, spelled out by the signature above.
   SmallVector<Attribute> phaseFuncs;
   if (parser.parseLSquare())
     return failure();
   if (failed(parser.parseOptionalRSquare())) {
     do {
-      int32_t phase;
       FlatSymbolRefAttr sym;
-      if (parser.parseInteger(phase) || parser.parseColon() ||
-          parser.parseAttribute(sym))
+      if (parser.parseAttribute(sym))
         return failure();
-      phaseNumbers.push_back(phase);
       phaseFuncs.push_back(sym);
     } while (succeeded(parser.parseOptionalComma()));
     if (parser.parseRSquare())
       return failure();
   }
-  props.phaseNumbers = builder.getDenseI32ArrayAttr(phaseNumbers);
   props.phaseFuncs = builder.getArrayAttr(phaseFuncs);
 
   return success();
@@ -916,8 +912,7 @@ void SplitFuncOp::print(OpAsmPrinter &p) {
       (*this)->getAttrs(),
       {getSymNameAttrName(), getSymVisibilityAttrName(), getArgNamesAttrName(),
        getArgPhasesAttrName(), getResultNamesAttrName(),
-       getResultPhasesAttrName(), getImplAttrName(), getPhaseNumbersAttrName(),
-       getPhaseFuncsAttrName()});
+       getResultPhasesAttrName(), getImplAttrName(), getPhaseFuncsAttrName()});
 
   // Print signature region without entry block arguments.
   p << ' ';
@@ -929,20 +924,34 @@ void SplitFuncOp::print(OpAsmPrinter &p) {
     p.printAttribute(impl);
   }
 
-  // Print phase map.
+  // Print the phase list.
   p << " [";
-  auto phaseNumbers = getPhaseNumbers();
   auto phaseFuncs = getPhaseFuncs();
-  for (size_t i = 0, e = phaseNumbers.size(); i < e; ++i) {
+  for (size_t i = 0, e = phaseFuncs.size(); i < e; ++i) {
     if (i)
       p << ',';
     p.printNewline();
-    p << "  " << phaseNumbers[i] << ": ";
+    p << "  ";
     p.printAttribute(phaseFuncs[i]);
   }
-  if (!phaseNumbers.empty())
+  if (!phaseFuncs.empty())
     p.printNewline();
   p << ']';
+}
+
+std::pair<int32_t, int32_t> SplitFuncOp::getPhaseSpan() {
+  return DeclaredPhases{getArgPhases(), getResultPhases()}.span();
+}
+
+FlatSymbolRefAttr SplitFuncOp::getPhaseFunc(int32_t phase) {
+  auto phaseFuncs = getPhaseFuncs();
+  if (phaseFuncs.empty())
+    return {};
+  auto [lo, hi] = getPhaseSpan();
+  assert(phase >= lo && phase <= hi && "phase outside the declared span");
+  assert(phaseFuncs.size() == static_cast<size_t>(hi - lo + 1) &&
+         "phase list does not cover the declared span");
+  return cast<FlatSymbolRefAttr>(phaseFuncs[phase - lo]);
 }
 
 LogicalResult SplitFuncOp::verify() {
@@ -956,48 +965,29 @@ LogicalResult SplitFuncOp::verify() {
                          << " entries but function has "
                          << getResultNames().size() << " results";
 
-  if (getPhaseNumbers().size() != getPhaseFuncs().size())
-    return emitOpError() << "phaseNumbers has " << getPhaseNumbers().size()
-                         << " entries but phaseFuncs has "
-                         << getPhaseFuncs().size() << " entries";
-
   // The three states are exclusive: an implementation reference means the
   // function has been sorted but not yet split into per-phase functions, so no
   // phase list exists yet; a phase list means splitting has consumed the
   // implementation.
-  if (getImplAttr() && !getPhaseNumbers().empty())
+  if (getImplAttr() && !getPhaseFuncs().empty())
     return emitOpError() << "has both an implementation reference and a phase "
                             "list; a split function has no implementation left";
 
   // The phase list is either absent — the declared and sorted states, where
   // there are no per-phase functions yet — or it is the split state's complete
-  // map from the declared span to the functions implementing it. Callers ask
-  // for exactly the phases of that span (`uir.phase_call` derives them from the
-  // same declaration), so covering the span exactly is what makes every legal
-  // phase call resolvable, and the strictly increasing order makes the mapping
-  // unique. Pre-span phases have no entry: they run eagerly, chained into the
-  // span's first entry.
-  if (!getPhaseNumbers().empty()) {
-    auto [lo, hi] = DeclaredPhases{getArgPhases(), getResultPhases()}.span();
-    for (auto [index, phase] : llvm::enumerate(getPhaseNumbers())) {
-      int32_t expected = lo + static_cast<int32_t>(index);
-      if (expected > hi)
-        break;
-      if (phase != expected)
-        return emitOpError()
-               << "maps phase " << phase << " as entry " << index
-               << ", where its declared span [" << lo << ", " << hi
-               << "] requires phase " << expected
-               << "; the phase list must cover the span exactly, in increasing "
-                  "order";
-    }
+  // map from the declared span to the functions implementing it, one entry per
+  // span phase in order. Callers ask for exactly the phases of that span
+  // (`uir.phase_call` derives them from the same declaration), so a
+  // full-length list is what makes every legal phase call resolvable.
+  if (!getPhaseFuncs().empty()) {
+    auto [lo, hi] = getPhaseSpan();
     auto spanSize = static_cast<int64_t>(hi) - lo + 1;
-    if (static_cast<int64_t>(getPhaseNumbers().size()) != spanSize)
-      return emitOpError() << "has " << getPhaseNumbers().size()
+    if (static_cast<int64_t>(getPhaseFuncs().size()) != spanSize)
+      return emitOpError() << "has " << getPhaseFuncs().size()
                            << " phase list entries but its declared span ["
                            << lo << ", " << hi << "] has " << spanSize
-                           << " phases; the phase list must cover the span "
-                              "exactly, in increasing order";
+                           << " phases; the phase list maps the span's phases "
+                              "positionally, one entry each";
   }
 
   // Check block arguments in signature region.

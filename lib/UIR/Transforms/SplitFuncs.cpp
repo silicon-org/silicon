@@ -373,21 +373,17 @@ FailureOr<FlatSymbolRefAttr> FuncSplitter::resolvePhaseEntry(PhaseCallOp call) {
   assert(calleeSplit && "callee of a verified 'uir.phase_call' must resolve to "
                         "a 'uir.split_func'");
 
-  // A filled phase list covers the callee's declared span exactly, and a phase
-  // call only ever names a phase in that span; both are verifier invariants. So
-  // the only callee a phase call cannot bind to is one that has not been split
-  // at all — a declaration whose implementation was never compiled.
-  if (calleeSplit.getPhaseNumbers().empty())
+  // A filled phase list has one entry per phase of the callee's declared span,
+  // and a phase call only ever names a phase in that span; both are verifier
+  // invariants, so the lookup is positional and always hits. The only callee a
+  // phase call cannot bind to is one that has not been split at all — a
+  // declaration whose implementation was never compiled.
+  auto entry = calleeSplit.getPhaseFunc(call.getCalleePhase());
+  if (!entry)
     return call.emitOpError()
            << "callee @" << call.getCallee()
            << " has no phase list; its implementation is not available";
-
-  for (auto [phase, entry] :
-       llvm::zip(calleeSplit.getPhaseNumbers(), calleeSplit.getPhaseFuncs()))
-    if (phase == call.getCalleePhase())
-      return cast<FlatSymbolRefAttr>(entry);
-  llvm_unreachable("phase call names a phase in the callee's declared span, "
-                   "which a filled phase list covers entirely");
+  return entry;
 }
 
 /// Fill in a per-phase func's body: unpack the incoming context, clone the
@@ -621,7 +617,7 @@ LogicalResult FuncSplitter::buildPhaseSignature(int phase, hir::FuncOp func) {
 //===----------------------------------------------------------------------===//
 
 /// Fold any pre-span phases into an `hir.eager_func` and fill the
-/// `uir.split_func`'s phase list, mapping each span phase to its entry.
+/// `uir.split_func`'s phase list: one entry per span phase, in order.
 void FuncSplitter::buildEagerFuncAndLinks() {
   OpBuilder builder(splitFunc);
   auto loc = funcOp.getLoc();
@@ -629,12 +625,9 @@ void FuncSplitter::buildEagerFuncAndLinks() {
   // The span entry for phase `spanMin` is normally its per-phase func. When
   // pre-span phases precede it, they and the (renamed) span-entry func become
   // the links of an `hir.eager_func` that takes over the span-entry name.
-  SmallVector<int32_t> phaseNumbers;
   SmallVector<Attribute> phaseFuncs;
-  for (int phase = spanMin; phase <= spanMax; ++phase) {
-    phaseNumbers.push_back(phase);
+  for (int phase = spanMin; phase <= spanMax; ++phase)
     phaseFuncs.push_back(FlatSymbolRefAttr::get(phaseFunc.at(phase)));
-  }
 
   if (phaseMin < spanMin) {
     hir::FuncOp entry = phaseFunc.at(spanMin);
@@ -659,7 +652,6 @@ void FuncSplitter::buildEagerFuncAndLinks() {
     phaseFuncs.front() = FlatSymbolRefAttr::get(eager);
   }
 
-  splitFunc.setPhaseNumbers(phaseNumbers);
   splitFunc.setPhaseFuncsAttr(ArrayAttr::get(ctx, phaseFuncs));
 }
 

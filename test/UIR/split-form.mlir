@@ -129,8 +129,8 @@ uir.split_func @Id(%N: -1, %x: 0) -> (result: 0) {
   %ty = hir.uint_type %N
   uir.signature (%int, %ty) -> (%ty)
 } [
-  -1: @"Id.-1",
-  0: @"Id.0"
+  @"Id.-1",
+  @"Id.0"
 ]
 
 //===----------------------------------------------------------------------===//
@@ -203,8 +203,8 @@ uir.split_func @Pre(%N: -1, %x: 0) -> (result: 0) {
   %int = hir.int_type
   uir.signature (%int, %int) -> (%int)
 } [
-  -1: @"Pre.-1",
-  0: @"Pre.0"
+  @"Pre.-1",
+  @"Pre.0"
 ]
 
 //===----------------------------------------------------------------------===//
@@ -277,9 +277,9 @@ uir.split_func @Gap(%a: -2, %x: 0) -> (result: 0) {
   %int = hir.int_type
   uir.signature (%int, %int) -> (%int)
 } [
-  -2: @"Gap.-2",
-  -1: @"Gap.-1",
-  0: @"Gap.0"
+  @"Gap.-2",
+  @"Gap.-1",
+  @"Gap.0"
 ]
 
 //===----------------------------------------------------------------------===//
@@ -349,8 +349,8 @@ uir.split_func @MultiPhase(%a: -1, %b: 0) -> (result: 0) {
   %int = hir.int_type
   uir.signature (%int, %int) -> (%int)
 } [
-  -1: @"MultiPhase.-1",
-  0: @"MultiPhase.0"
+  @"MultiPhase.-1",
+  @"MultiPhase.0"
 ]
 
 // The caller, split into per-phase funcs whose bodies hold the decomposed calls.
@@ -406,8 +406,8 @@ uir.split_func @Caller(%x: -1, %y: 0) -> (result: 0) {
   %int = hir.int_type
   uir.signature (%int, %int) -> (%int)
 } [
-  -1: @"Caller.-1",
-  0: @"Caller.0"
+  @"Caller.-1",
+  @"Caller.0"
 ]
 
 //===----------------------------------------------------------------------===//
@@ -493,6 +493,6 @@ uir.split_func @Use(%N: -1, %x: 0) -> (r: 0) {
   %xty = hir.uint_type %N
   uir.signature (%int, %xty) -> (%xty)
 } [
-  -1: @"Use.-1",
-  0: @"Use.0"
+  @"Use.-1",
+  @"Use.0"
 ]

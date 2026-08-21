@@ -75,8 +75,8 @@
 // CHECK-NEXT:    [[TY:%.+]] = hir.uint_type %N
 // CHECK-NEXT:    uir.signature ([[INT]], [[TY]]) -> ([[TY]])
 // CHECK-NEXT:  } [
-// CHECK-NEXT:    -1: @"Id.-1",
-// CHECK-NEXT:    0: @Id.0
+// CHECK-NEXT:    @"Id.-1",
+// CHECK-NEXT:    @Id.0
 // CHECK-NEXT:  ]
 uir.split_func @Id(%N: -1, %x: 0) -> (result: 0) {
   %int = hir.int_type
@@ -158,8 +158,8 @@ uir.func @Id.impl(%N: -1, %x: 0) -> (result: 0) {
 
 // CHECK-LABEL: uir.split_func @Pre(%N: -1, %x: 0) -> (result: 0) {
 // CHECK:       } [
-// CHECK-NEXT:    -1: @"Pre.-1",
-// CHECK-NEXT:    0: @Pre.0
+// CHECK-NEXT:    @"Pre.-1",
+// CHECK-NEXT:    @Pre.0
 // CHECK-NEXT:  ]
 uir.split_func @Pre(%N: -1, %x: 0) -> (result: 0) {
   %int = hir.int_type
@@ -254,9 +254,9 @@ uir.func @Pre.impl(%N: -1, %x: 0) -> (result: 0) {
 
 // CHECK-LABEL: uir.split_func @Gap(%a: -2, %x: 0) -> (result: 0) {
 // CHECK:       } [
-// CHECK-NEXT:    -2: @"Gap.-2",
-// CHECK-NEXT:    -1: @"Gap.-1",
-// CHECK-NEXT:    0: @Gap.0
+// CHECK-NEXT:    @"Gap.-2",
+// CHECK-NEXT:    @"Gap.-1",
+// CHECK-NEXT:    @Gap.0
 // CHECK-NEXT:  ]
 uir.split_func @Gap(%a: -2, %x: 0) -> (result: 0) {
   %int = hir.int_type
@@ -420,8 +420,8 @@ uir.func @Caller.impl(%x: -1, %y: 0) -> (result: 0) {
 // CHECK-NEXT:    [[XTY:%.+]] = hir.uint_type %N
 // CHECK-NEXT:    uir.signature ([[INT]], [[XTY]]) -> ([[XTY]])
 // CHECK-NEXT:  } [
-// CHECK-NEXT:    -1: @"Use.-1",
-// CHECK-NEXT:    0: @Use.0
+// CHECK-NEXT:    @"Use.-1",
+// CHECK-NEXT:    @Use.0
 // CHECK-NEXT:  ]
 uir.split_func @Use(%N: -1, %x: 0) -> (r: 0) {
   %int = hir.int_type
@@ -527,8 +527,8 @@ hir.func private @"Cosmetic.-1"(%a) -> (r) {
 // CHECK-LABEL: hir.eager_func @"Cosmetic.-1_1"(a) -> (ctx) [
 // CHECK-LABEL: uir.split_func @Cosmetic(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:       } [
-// CHECK-NEXT:    -1: @"Cosmetic.-1_1",
-// CHECK-NEXT:    0: @Cosmetic.0
+// CHECK-NEXT:    @"Cosmetic.-1_1",
+// CHECK-NEXT:    @Cosmetic.0
 // CHECK-NEXT:  ]
 uir.split_func @Cosmetic(%a: -1, %b: 0) -> (result: 0) {
   %int = hir.int_type
@@ -665,8 +665,8 @@ uir.split_func @Declared(%a: -1, %b: 0) -> (result: 0) {
 // CHECK-NEXT:    [[W:%.+]] = uir.call @Width
 // CHECK-NEXT:    hir.uint_type [[W]]
 // CHECK:       } [
-// CHECK-NEXT:    -1: @"sig_call.-1",
-// CHECK-NEXT:    0: @sig_call.0
+// CHECK-NEXT:    @"sig_call.-1",
+// CHECK-NEXT:    @sig_call.0
 // CHECK-NEXT:  ]
 uir.split_func @sig_call(%N: -1, %x: 0) -> (result: 0) {
   %int = hir.int_type
@@ -716,13 +716,13 @@ hir.func private @Width.0(%i) -> (w) {
 
 // CHECK-LABEL: uir.split_func @Width(%i: 0) -> (w: 0) {
 // CHECK:       } [
-// CHECK-NEXT:    0: @Width.0
+// CHECK-NEXT:    @Width.0
 // CHECK-NEXT:  ]
 uir.split_func @Width(%i: 0) -> (w: 0) {
   %int = hir.int_type
   uir.signature (%int) -> (%int)
 } [
-  0: @Width.0
+  @Width.0
 ]
 
 //===----------------------------------------------------------------------===//
@@ -762,8 +762,8 @@ uir.split_func @Width(%i: 0) -> (w: 0) {
 
 // CHECK-LABEL: uir.split_func @sig_call_multi(%N: -1, %x: 0) -> (result: 0) {
 // CHECK:       } [
-// CHECK-NEXT:    -1: @"sig_call_multi.-1",
-// CHECK-NEXT:    0: @sig_call_multi.0
+// CHECK-NEXT:    @"sig_call_multi.-1",
+// CHECK-NEXT:    @sig_call_multi.0
 // CHECK-NEXT:  ]
 uir.split_func @sig_call_multi(%N: -1, %x: 0) -> (result: 0) {
   %int = hir.int_type
@@ -839,7 +839,7 @@ uir.func @Spanning.impl(%N: -1) -> (w: -1) {
 // CHECK-LABEL: uir.split_func @Bare() -> () {
 // CHECK-NEXT:    uir.signature () -> ()
 // CHECK-NEXT:  } [
-// CHECK-NEXT:    0: @Bare.0
+// CHECK-NEXT:    @Bare.0
 // CHECK-NEXT:  ]
 uir.split_func @Bare() -> () {
   uir.signature () -> ()
@@ -869,7 +869,7 @@ uir.func @Bare.impl() -> () {
 // CHECK-LABEL: uir.split_func @Mod() -> () attributes {isModule} {
 // CHECK-NEXT:    uir.signature () -> ()
 // CHECK-NEXT:  } [
-// CHECK-NEXT:    0: @Mod.0
+// CHECK-NEXT:    @Mod.0
 // CHECK-NEXT:  ]
 uir.split_func @Mod() -> () attributes {isModule} {
   uir.signature () -> ()
@@ -912,15 +912,15 @@ hir.func private @Lib.0(%b, %ctx) -> (result) {
 
 // CHECK-LABEL: uir.split_func @Lib(%a: -1, %b: 0) -> (result: 0) {
 // CHECK:       } [
-// CHECK-NEXT:    -1: @"Lib.-1",
-// CHECK-NEXT:    0: @Lib.0
+// CHECK-NEXT:    @"Lib.-1",
+// CHECK-NEXT:    @Lib.0
 // CHECK-NEXT:  ]
 uir.split_func @Lib(%a: -1, %b: 0) -> (result: 0) {
   %int = hir.int_type
   uir.signature (%int, %int) -> (%int)
 } [
-  -1: @"Lib.-1",
-  0: @Lib.0
+  @"Lib.-1",
+  @Lib.0
 ]
 
 // CHECK-LABEL: hir.func private @"LibCaller.-1.tail"(%x, %ctx) -> (ctx) {

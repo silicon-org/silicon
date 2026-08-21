@@ -505,9 +505,7 @@ static SmallVector<int32_t> calleeSpanPhases(Operation *calleeOp) {
   auto calleeSplit = dyn_cast<SplitFuncOp>(calleeOp);
   assert(calleeSplit && "callee of a verified 'uir.call' must resolve to a "
                         "'uir.split_func' once declarations are snapshotted");
-  auto [lo, hi] =
-      DeclaredPhases{calleeSplit.getArgPhases(), calleeSplit.getResultPhases()}
-          .span();
+  auto [lo, hi] = calleeSplit.getPhaseSpan();
   SmallVector<int32_t> span;
   for (int32_t phase = lo; phase <= hi; ++phase)
     span.push_back(phase);
@@ -3146,7 +3144,6 @@ LogicalResult PhaseSorter::run() {
 /// resolves to the split_func, which declares the same argument and result
 /// phases.
 static void snapshotDeclaration(FuncOp funcOp, SymbolTable &symbolTable) {
-  auto *ctx = funcOp.getContext();
   auto name = funcOp.getSymNameAttr();
 
   // Move the implementation aside. `SymbolTable::insert` uniquifies the name
@@ -3165,9 +3162,8 @@ static void snapshotDeclaration(FuncOp funcOp, SymbolTable &symbolTable) {
       builder, funcOp.getLoc(), name, funcOp.getSymVisibilityAttr(),
       funcOp.getArgNamesAttr(), funcOp.getArgPhasesAttr(),
       funcOp.getResultNamesAttr(), funcOp.getResultPhasesAttr(),
-      FlatSymbolRefAttr::get(funcOp),
-      DenseI32ArrayAttr::get(ctx, ArrayRef<int32_t>{}),
-      builder.getArrayAttr({}), funcOp.getIsModuleAttr());
+      FlatSymbolRefAttr::get(funcOp), builder.getArrayAttr({}),
+      funcOp.getIsModuleAttr());
   funcOp.removeIsModuleAttr();
   IRMapping mapping;
   funcOp.getSignature().cloneInto(&splitFunc.getSignature(), mapping);

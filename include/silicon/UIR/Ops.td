@@ -476,13 +476,13 @@ def SplitFuncOp : UIROp<"split_func", [
     - *split*: the phase list maps each phase of the declared span to the
       function implementing it, and no `impl` remains.
 
-    A non-empty phase list covers the declared span exactly: every phase from
-    the span minimum to the span maximum, once each, in increasing order.
-    Callers ask for exactly those phases — a `uir.phase_call` derives its
-    legal phases from the same declaration — so a complete list is what makes
-    every legal phase call resolvable, and the order makes the mapping unique.
-    Pre-span phases have no entry of their own: they run eagerly, chained into
-    the span's first entry by an `hir.eager_func`.
+    The phase list is positional: entry `i` implements phase `spanMin + i`, so
+    a non-empty list has exactly one entry per phase of the declared span. It
+    carries no phase numbers of its own — callers ask for exactly the span's
+    phases, since a `uir.phase_call` derives its legal phases from the same
+    declaration, so a full-length list is what makes every legal phase call
+    resolvable. Pre-span phases have no entry of their own: they run eagerly,
+    chained into the span's first entry by an `hir.eager_func`.
 
     Call decomposition never consults this op — it is derived from the
     callee's declared phases alone — so this op carries no decomposition
@@ -503,11 +503,19 @@ def SplitFuncOp : UIROp<"split_func", [
     ArrayAttr:$resultNames,
     DenseI32ArrayAttr:$resultPhases,
     OptionalAttr<FlatSymbolRefAttr>:$impl,
-    DenseI32ArrayAttr:$phaseNumbers,
     ArrayAttr:$phaseFuncs,
     OptionalAttr<UnitAttr>:$isModule
   );
   let regions = (region MinSizedRegion<1>:$signature);
+  let extraClassDeclaration = [{
+    /// The declared phase span: the contiguous range from the earliest to the
+    /// latest declared argument or result phase, always including phase 0.
+    std::pair<int32_t, int32_t> getPhaseSpan();
+
+    /// The per-phase function implementing `phase`, or null if this function
+    /// has no phase list yet. `phase` must lie within the declared span.
+    mlir::FlatSymbolRefAttr getPhaseFunc(int32_t phase);
+  }];
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
   let hasRegionVerifier = 1;

@@ -42,9 +42,9 @@
 
 // CHECK-LABEL: uir.split_func @Chain(%a: -2, %x: 0) -> (result: 0) {
 // CHECK:       } [
-// CHECK-NEXT:    -2: @"Chain.-2",
-// CHECK-NEXT:    -1: @"Chain.-1",
-// CHECK-NEXT:    0: @Chain.0
+// CHECK-NEXT:    @"Chain.-2",
+// CHECK-NEXT:    @"Chain.-1",
+// CHECK-NEXT:    @Chain.0
 // CHECK-NEXT:  ]
 uir.func @Chain(%a: -2, %x: 0) -> (result: 0) {
   %0 = hir.int_type
@@ -96,4 +96,68 @@ uir.func @Chain2(%a: -1, %b: 0) -> (result: 0) {
   %sq = hir.mul %a, %a : %t
   %r = hir.add %sq, %b : %t
   uir.return %r : %t
+}
+
+//===----------------------------------------------------------------------===//
+// A precompiled callee: `@Lib` is already split, so only its `uir.split_func`
+// interface and per-phase funcs exist, with no `uir.func` implementation for
+// sorting to take custody of. Decomposition reads the declared span off that
+// interface exactly as it does off a freshly snapshotted one, and splitting
+// binds each entry through its existing phase list.
+
+// CHECK-LABEL: hir.func private @"LibCaller.-1.tail"(%x, %ctx) -> (ctx) {
+// CHECK:       } {
+// CHECK:         [[CC:%.+]] = hir.call @"Lib.-1"(%x)
+// CHECK:         hir.opaque_pack({{%.+}}, [[CC]])
+
+// CHECK-LABEL: hir.func private @LibCaller.0(%y, %ctx) -> (result) {
+// CHECK:       } {
+// CHECK:         [[CC:%.+]]:2 = hir.opaque_unpack %ctx
+// CHECK:         hir.call @Lib.0(%y, [[CC]]#1)
+
+// CHECK-LABEL: uir.split_func @LibCaller(%x: -1, %y: 0) -> (result: 0) {
+uir.func @LibCaller(%x: -1, %y: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} {
+  %t = hir.int_type
+  %r = uir.call @Lib(%x, %y) : (%t, %t) -> (%t) [-1, 0] -> [0]
+  uir.return %r : %t
+}
+
+// The precompiled library, left untouched by all three passes.
+// CHECK-LABEL: uir.split_func @Lib(%a: -1, %b: 0) -> (result: 0) {
+// CHECK:       } [
+// CHECK-NEXT:    @"Lib.-1",
+// CHECK-NEXT:    @Lib.0
+// CHECK-NEXT:  ]
+uir.split_func @Lib(%a: -1, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} [
+  @"Lib.-1",
+  @Lib.0
+]
+
+hir.func private @"Lib.-1"(%a) -> (ctx) {
+  %0 = hir.opaque_type
+  %1 = hir.int_type
+  hir.signature (%1) -> (%0)
+} {
+  %0 = hir.opaque_type
+  %1 = hir.int_type
+  %2 = hir.mul %a, %a : %1
+  %3 = hir.opaque_pack(%1, %2)
+  hir.return %3 : %0
+}
+
+hir.func private @Lib.0(%b, %ctx) -> (result) {
+  %0 = hir.opaque_type
+  %1:2 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  hir.signature (%1#0, %0) -> (%1#0)
+} {
+  %0:2 = hir.opaque_unpack %ctx : !hir.any, !hir.any
+  %1 = hir.int_type
+  %2 = hir.add %0#1, %b : %1
+  hir.return %2 : %1
 }
