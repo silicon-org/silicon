@@ -128,3 +128,51 @@ uir.func @Caller(%x: 0) -> () {
 uir.split_func @UnusableCallee(%a: 0) -> (result: 0) {
   uir.unreachable
 } []
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Call checking rewrites the regions of declared functions. A call anywhere
+// else is never walked, and would silently keep the unconstrained types the
+// caller wrote.
+
+uir.func private @Callee(%a: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.type_of %a
+  uir.return %a : %t
+}
+
+func.func @Stray(%v: !hir.any) {
+  %i0 = hir.inferrable
+  %i1 = hir.inferrable
+  // expected-error @below {{compiler bug: call is not inside a 'uir.func' or 'uir.split_func', so nothing checks it against the function it calls}}
+  // expected-note @below {{on line}}
+  %r = uir.call @Callee(%v) : (%i0) -> (%i1) [0] -> [0]
+  return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Checking runs before sorting, and produces the types sorting consumes.
+// Sorted input has nothing left to check.
+
+uir.func @Sorted(%a: -1) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0) -> (%0)
+} {
+  %t = hir.int_type
+  // expected-error @below {{compiler bug: phases have already been sorted; calls are checked before sorting, whose input the checked types are part of}}
+  // expected-note @below {{on line}}
+  %p:2 = uir.phase -1 {
+    %prod = hir.mul %a, %a : %t
+    uir.phase_return yield %prod, %t
+  }
+  uir.phase 0 {
+    %sum = hir.add %p#0, %p#0 : %p#1
+    uir.phase_return %sum : %p#1
+  }
+  uir.unreachable
+}

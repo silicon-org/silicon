@@ -23,8 +23,6 @@ Resume: drive `hir.eager_func` from PhaseEvalLoop.
 - `check-calls` copies a signature per consumer and shares nothing, so a signature-call DAG expands into a tree: eight nested functions whose signatures call the next twice produce 2008 `uir.call` ops from 90 input lines.
   Decide whether copying stays unbounded.
 - `check-calls` coerces body arguments to their declared types but leaves signature-region arguments unconstrained; state why the two consumers of one declaration differ, or make them symmetric.
-- `check-calls` silently ignores a `uir.call` outside a module-level `uir.func` (inside a `func.func`, say) and silently accepts already-sorted input holding `uir.phase` ops, where `thread-phases` then blames the wrong op.
-  Both want a loud rejection once the checkable-region rule above is settled.
 - Record extraction hard-errors on a `hir.pick` that carries a loop exit ("carries a loop exit but is not a branch", `scanBlock` in lib/UIR/Transforms/SortPhases2.cpp), while the same shape on `uir.if` sorts; `extractBranches` already treats pick as a divergence and the sorter itself emits picks.
   Either generalize the scan over divergences or record why picks are excluded.
 - `hir.replicate`'s ODS description still sanctions `uir.return` in a receiving body, `hir.pick`'s says function exits never appear in alternatives, and neither op verifies it; state the rule once and enforce it before the M4 expander is written.

@@ -69,6 +69,13 @@ def CheckCallsPass : Pass<"check-calls", "mlir::ModuleOp"> {
     flat CFG (post FlattenCF) nor unnormalized multi-exit signatures can
     be inlined at a use, and both are rejected.
 
+    Every `uir.call` must sit inside the signature or body region of a
+    declared function, since those are the regions the pass walks, and
+    the module must still be unsorted -- a `uir.phase` op means sorting
+    has already consumed the types this pass produces. Both are the
+    compiler running its passes out of order and are reported as
+    compiler bugs.
+
     **Produces:** `hir.unify` and `hir.coerce_type` ops linking declared
     types to actual usage, and calls whose type operands name both sides.
   }];

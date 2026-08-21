@@ -201,6 +201,61 @@ static LogicalResult checkBody(uir::FuncOp funcOp,
 }
 
 //===----------------------------------------------------------------------===//
+// Rejecting Unexpected Input
+//===----------------------------------------------------------------------===//
+//
+// The checker rewrites the regions of the declared functions a module holds,
+// before phases are sorted. Input that does not fit that shape would otherwise
+// pass through untouched, since a pass sees only what it walks: a call outside
+// any declared function is never visited, and a module whose calls have already
+// been decomposed into phases holds nothing left for the checker to constrain,
+// while the types it would have added are exactly what the later stages assume
+// are there. Both are the compiler running its own passes in a shape they do
+// not describe, and are reported as such.
+
+/// Check that a call sits in a region call checking rewrites.
+///
+/// The nearest ancestor of a call that closes off its enclosing values must be
+/// the declared function whose signature or body region holds it. Any other one
+/// -- a `func.func`, or the module itself -- means the call is in a region the
+/// checker never walks.
+static LogicalResult checkCallLocation(uir::CallOp callOp) {
+  for (auto *parent = callOp->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    if (isa<uir::DeclaredFuncOpInterface>(parent))
+      return success();
+    if (parent->hasTrait<OpTrait::IsIsolatedFromAbove>())
+      break;
+  }
+  return emitBug(callOp.getLoc())
+         << "call is not inside a 'uir.func' or 'uir.split_func', so nothing "
+            "checks it against the function it calls";
+}
+
+/// Check that the module has not been through phase sorting yet.
+///
+/// Sorting distributes a function's content into `uir.phase` ops and decomposes
+/// its calls, which is precisely what consumes the types this pass establishes.
+static LogicalResult checkNotSorted(uir::PhaseOp phaseOp) {
+  return emitBug(phaseOp.getLoc())
+         << "phases have already been sorted; calls are checked before "
+            "sorting, whose input the checked types are part of";
+}
+
+/// Check that the whole module is input the checker can work on.
+static LogicalResult checkInput(ModuleOp module) {
+  auto result = module.walk([](Operation *op) {
+    auto ok = success();
+    if (auto callOp = dyn_cast<uir::CallOp>(op))
+      ok = checkCallLocation(callOp);
+    else if (auto phaseOp = dyn_cast<uir::PhaseOp>(op))
+      ok = checkNotSorted(phaseOp);
+    return failed(ok) ? WalkResult::interrupt() : WalkResult::advance();
+  });
+  return failure(result.wasInterrupted());
+}
+
+//===----------------------------------------------------------------------===//
 // Pass Infrastructure
 //===----------------------------------------------------------------------===//
 //
@@ -231,6 +286,8 @@ struct CheckCallsPass
 } // namespace
 
 void CheckCallsPass::runOnOperation() {
+  if (failed(checkInput(getOperation())))
+    return signalPassFailure();
   auto &symbolTable = getAnalysis<SymbolTable>();
 
   /// A function on the traversal stack, together with the signature calls that
