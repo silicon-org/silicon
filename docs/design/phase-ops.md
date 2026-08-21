@@ -76,7 +76,8 @@ Five stages, each owning a single concern:
   The `check-calls` pass implements this, between exit normalization and sorting: it copies the declared computation into every consumer — ahead of each `uir.call`, and into the declaring function's own body, where the arguments are additionally constrained by `hir.coerce_type` — and ties each copy to the local types with `hir.unify`.
   Signatures are copied whole, control flow included, and are therefore consumed in the single-exit shape exit normalization leaves behind; a signature with several blocks or exits has no single computation to copy and is rejected.
   Every signature region is checked alike, a `uir.split_func`'s as much as a `uir.func`'s: a declaration's signature is the interface every caller copies, so a call left unchecked in one lands unchecked in user code.
-  Nothing in the IR marks a signature as checked, and nothing needs to: re-checking an already-checked declaration inlines its types a second time, which is pure computation and a repeated constraint that CSE and unification absorb.
+  Nothing in the IR marks a signature as checked, and checking is not idempotent: `hir.unify` folds only when both operands are the same value, so every re-check lengthens the unify chain on each call in the declaration, and a signature that itself calls is re-inlined whole.
+  Where checked-ness lives is unsettled, and `uir.split_func` is precisely the form that gets re-checked on every downstream compile.
   Bodies belong to `uir.func` alone.
   Checking is ordered post-order over the call graph restricted to signature calls, so a callee's signature is resolved before it is copied; recursion through signatures is a user error.
 - **Phase boundaries pack uniformly.**
@@ -114,10 +115,11 @@ Five stages, each owning a single concern:
   `uir.call` is the late-binding vocabulary and resolves to `uir.func` or `uir.split_func` interchangeably; sorting snapshots every declaration in the module before decomposing any call, so a decomposed entry always names the interface, whether the callee is fresh user code or already-split library code.
   A `uir.phase_call` naming a `uir.func` would bypass the interface and call an implementation directly, so the verifier rejects it.
 - **Pass order.**
-  Exit normalization, `check-calls`, canonicalize + CSE, `sort-phases`, `thread-phases`, `split-funcs`.
-  The canonicalization stage between checking and sorting is load-bearing, not cosmetic: checking coerces every body argument to its declared type, so an `hir.type_of %x` the user wrote about an argument becomes `hir.type_of` of the coercion's result, a phase-P value whose type the sorter would have to place at phase P-1 — a backward crossing it rejects.
-  Folding `type_of(coerce_type(_, %ty))` to `%ty`, and the identity `hir.unify` that leaves behind, replaces the query with the declared type the signature copy already computes, which is available one phase earlier by construction.
-  The identity function `fn f(x: int) -> int { x }` is the smallest program that needs it.
+  Exit normalization, `check-calls`, canonicalize, CSE, canonicalize, `sort-phases`, `thread-phases`, `split-funcs`.
+  The second canonicalization is not redundant: where a body computes its declared type itself, the two computations stay distinct values until CSE merges them, and only then is the `hir.unify` between them an identity the canonicalizer folds.
+  The stage is load-bearing, not cosmetic: checking coerces every body argument to its declared type, so an `hir.type_of %x` the user wrote about an argument becomes `hir.type_of` of the coercion's result, a phase-P value whose type the sorter would have to place at phase P-1 — a backward crossing it rejects.
+  Folding `type_of(coerce_type(_, %ty))` to `%ty` answers the query with the declared type the signature copy already computes, one phase earlier.
+  The identity function `fn f(x: int) -> int { x }` is the smallest program that needs it, and the largest one this settles: the fold only reaches queries whose answer is recoverable in the same region, so `hir.type_of` in a branch arm or of a call result still reaches sorting, where a phase-P value's type demanded at phase P-1 stays unresolved.
   Sorting and splitting still run back-to-back: effect modeling and canonicalization interactions there (CSE across phase regions, constant hoisting out of them) are deferred until a canonicalizer needs to run in between.
 - **The phase-op-only contract is not verifier-enforced.**
   The function-splitting pass errors out with a diagnostic when it encounters content that violates the expectation.

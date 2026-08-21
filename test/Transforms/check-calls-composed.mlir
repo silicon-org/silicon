@@ -1,5 +1,5 @@
-// RUN: silicon-opt --check-calls --canonicalize --cse --sort-phases --thread-phases --split-funcs %s | FileCheck %s
-// RUN: silicon-opt --check-calls --canonicalize --cse --sort-phases --thread-phases --split-funcs %s | silicon-opt --verify-roundtrip
+// RUN: silicon-opt --check-calls --canonicalize --cse --canonicalize --sort-phases --thread-phases --split-funcs %s | FileCheck %s
+// RUN: silicon-opt --check-calls --canonicalize --cse --canonicalize --sort-phases --thread-phases --split-funcs %s | silicon-opt --verify-roundtrip
 
 // Call checking composes with the phase split, with a canonicalize and CSE
 // stage in between. That stage is part of the pipeline, not a convenience:
@@ -9,7 +9,7 @@
 
 //===----------------------------------------------------------------------===//
 // The identity function `fn f(x: int) -> int { x }`, whose body returns its
-// argument typed by `hir.type_of %x`. Canonicalization folds that query into
+// argument typed by `hir.type_of %x`. Canonicalization answers that query with
 // the declared `hir.int_type` the body's copy of the signature computes, so
 // nothing asks for the type of a phase-0 value one phase earlier.
 
@@ -28,9 +28,9 @@ uir.func @Identity(%x: 0) -> (result: 0) {
 // CHECK-NEXT:    [[P:%.+]] = hir.opaque_pack([[T]])
 // CHECK-NEXT:    hir.return [[P]]
 
-// Phase 0 types its argument and result from that context slot. Its body
-// recomputes the same type from the float the sorter delivers directly, which
-// CSE cannot collapse into the slot.
+// Phase 0 types its argument and result from that context slot, while its body
+// recomputes the same type locally: the signature and body regions each compute
+// one, and CSE collapses the computations, not the context slots.
 // CHECK-LABEL: hir.func private @Identity.0.tail(%x, %ctx)
 // CHECK:         [[U:%.+]] = hir.opaque_unpack %ctx
 // CHECK-NEXT:    hir.signature ([[U]], {{%.+}}) -> ([[U]])

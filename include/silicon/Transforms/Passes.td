@@ -57,12 +57,14 @@ def CheckCallsPass : Pass<"check-calls", "mlir::ModuleOp"> {
     Every signature region takes part in that traversal, a
     `uir.split_func`'s as much as a `uir.func`'s: a declaration's
     signature is the interface every caller copies, so a call left
-    unchecked in one would land unchecked in user code. Nothing marks a
-    signature as already checked, so a declaration a previous run checked
-    is checked again, which leaves a duplicate of its inlined types --
-    pure computation and a repeated constraint that CSE and unification
-    absorb. Bodies belong to `uir.func` alone; a `uir.split_func` is the
-    declaration by itself.
+    unchecked in one would land unchecked in user code. Bodies belong to
+    `uir.func` alone; a `uir.split_func` is the declaration by itself.
+
+    Nothing in the IR records that a signature has been checked, and
+    checking is not idempotent: `hir.unify` folds only when both its
+    operands are the same value, so a call checked twice carries a longer
+    unify chain, and a signature that itself calls is inlined afresh on
+    every run.
 
     **Expects:** structured, exit-normalized input -- a signature region
     that is a single block exiting through one `uir.signature`. Neither
@@ -80,17 +82,24 @@ def CheckCallsPass : Pass<"check-calls", "mlir::ModuleOp"> {
     types to actual usage, and calls whose type operands name both sides.
 
     **Pipeline position:** after exit normalization, and before phase
-    sorting with a canonicalize + CSE stage in between:
-    `check-calls`, `canonicalize`, `cse`, `sort-phases`,
-    `thread-phases`, `split-funcs`. That stage is load-bearing.
-    Coercing a body argument to its declared type turns an
-    `hir.type_of` of the argument into an `hir.type_of` of the
-    coercion's result, whose type sorting would have to place one phase
-    before a value of the same phase -- a backward crossing it rejects.
-    Folding `type_of(coerce_type(_, %ty))` to `%ty`, and the identity
-    `hir.unify` left behind, replaces the query with the declared type
-    the signature copy computes anyway, which is available one phase
-    earlier by construction.
+    sorting with a canonicalization stage in between: `check-calls`,
+    `canonicalize`, `cse`, `canonicalize`, `sort-phases`,
+    `thread-phases`, `split-funcs`. The second `canonicalize` is not
+    redundant: where a body computes its declared type itself, the two
+    computations are distinct values until CSE merges them, and only
+    then does the `hir.unify` between them become an identity the
+    canonicalizer can fold.
+
+    That stage is load-bearing. Coercing a body argument to its declared
+    type turns an `hir.type_of` of the argument into an `hir.type_of` of
+    the coercion's result, whose type sorting would have to place one
+    phase before a value of the same phase -- a backward crossing it
+    rejects. Folding `type_of(coerce_type(_, %ty))` to `%ty` answers the
+    query with the declared type the signature copy computes, which is
+    one phase earlier. The fold reaches only queries whose answer is
+    recoverable in the same region, so an `hir.type_of` inside a branch
+    arm or of a call result still reaches sorting, where the type of a
+    phase-P value demanded at phase P-1 remains unresolved.
   }];
   let dependentDialects = [
     "hir::HIRDialect",

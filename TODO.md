@@ -12,11 +12,17 @@ Resume: drive `hir.eager_func` from PhaseEvalLoop.
 5. `RegionThreader::ensureThreaded` (lib/UIR/Transforms/ThreadPhases.cpp) recurses once per phase, so a wide declared span such as `uir.func @W(%a: -1000000)` blows the stack; nothing bounds a declared span.
 6. `RegionThreader::computeRange` encodes the signature P-1 rule a second time behind an `isSignature` flag; it should fall out of the demand set `plan` already walks.
 7. `hir.type_of %x` of a function argument sorts to phase p(x)-1, where `%x` is not available, and HIRToMIR papers over it with a dummy type constant; needs a real resolution once per-phase funcs flow through HIRToMIR.
+   The canonicalize stage after `check-calls` only removes the query where `getTypeOf` recovers the answer in the same region, so `fn f(x: int, c: bool) -> int { if c { x + x } else { x } }` (what `hir::getOrCreateTypeOf` emits for an argument used inside an `if`) and `hir.type_of` of a `uir.call` result survive it.
+   `sort-phases` then aborts on the "backward crossing survived analysis and extraction" assertion instead of diagnosing; the abort predates `check-calls` and reproduces without it.
 8. `uir.phase`/`uir.phase_return` tablegen docs claim the function-result-to-phase correspondence is "diagnosed by function splitting"; it is enforced by the thread-phases contract plus the `hir.func` verifier.
 9. `CallOp::verifySymbolUses`'s `if (!callee)` branch in lib/UIR/Ops.cpp is dead: `callee` is a non-optional ODS attribute.
 
 ### Open questions and hazards
 
+- `check-calls` has no checked/unchecked state and checking is not idempotent: `hir.unify` folds only `unify %a, %a`, so re-checking a declaration lengthens the unify chain on each of its calls (2, 5, 7 unify ops over three runs of one signature call) and re-inlines any signature it calls, which compounds along a chain of declarations.
+  `uir.split_func` is the persisted interface for libraries and incremental compilation, so re-checking is the normal path, not a corner; decide where checked-ness is represented.
+- `check-calls` validates a signature's single-block single-exit shape only from `inlineSignature`, i.e. per consumer: an unusable `uir.split_func` signature with no caller passes silently, while the identical declaration with one caller errors.
+  The shape belongs to the declaration, so the check wants to run once in the traversal that already visits every signature region.
 - `check-calls` copies a signature per consumer and shares nothing, so a signature-call DAG expands into a tree: eight nested functions whose signatures call the next twice produce 2008 `uir.call` ops from 90 input lines.
   Decide whether copying stays unbounded.
 - `check-calls` coerces body arguments to their declared types but leaves signature-region arguments unconstrained; state why the two consumers of one declaration differ, or make them symmetric.

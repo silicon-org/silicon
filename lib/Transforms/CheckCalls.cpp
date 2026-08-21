@@ -216,9 +216,9 @@ static LogicalResult checkBody(uir::FuncOp funcOp,
 /// Check that a call sits in a region call checking rewrites.
 ///
 /// The nearest ancestor of a call that closes off its enclosing values must be
-/// the declared function whose signature or body region holds it. Any other one
-/// -- a `func.func`, or the module itself -- means the call is in a region the
-/// checker never walks.
+/// a declared function, whose signature or body region the checker walks. Any
+/// other one -- a `func.func`, or the module itself -- means the call belongs
+/// to a function this pass knows nothing about.
 static LogicalResult checkCallLocation(uir::CallOp callOp) {
   for (auto *parent = callOp->getParentOp(); parent;
        parent = parent->getParentOp()) {
