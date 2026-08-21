@@ -19,6 +19,12 @@ Resume: port call checking to `uir.call` as a cross-dialect pass in lib/Transfor
 
 ### Open questions and hazards
 
+- Record extraction hard-errors on a `hir.pick` that carries a loop exit ("carries a loop exit but is not a branch", `scanBlock` in lib/UIR/Transforms/SortPhases2.cpp), while the same shape on `uir.if` sorts; `extractBranches` already treats pick as a divergence and the sorter itself emits picks.
+  Either generalize the scan over divergences or record why picks are excluded.
+- `hir.replicate`'s ODS description still sanctions `uir.return` in a receiving body, `hir.pick`'s says function exits never appear in alternatives, and neither op verifies it; state the rule once and enforce it before the M4 expander is written.
+- Every function whose arguments start at phase P grows a signature phase P-1 computing their types, so even a plain phase-0 function splits into a pre-span `hir.eager_func` chain with an opaque context round-trip.
+  Decide whether that cost is accepted or peepholed away; until item 2 lands nothing splits to a directly callable phase-0 function.
+- `opaque_pack(opaque_unpack(x))` → `x` exists only as `OpaquePackOp::canonicalize`, so `createOrFold` in the splitter cannot use it; decide whether it should also be a folder.
 - Candidate verifier invariant: all `uir.phase_call` entries of one decomposed call share one offset.
   Nothing relates a `uir.phase_call`'s callee phase to its enclosing `uir.phase`, so an inconsistently shifted decomposition is accepted silently.
 - `SplitFuncOp::verifySymbolUses` cannot catch a swapped pair of link entries whose phases have identical arity; closing that needs a phase marker on per-phase funcs, i.e. a second source of truth. Producer obligation for now.
@@ -68,6 +74,7 @@ Resume: port call checking to `uir.call` as a cross-dialect pass in lib/Transfor
 - Interpret: `arith.select`, `UnrealizedConversionCastOp` forwarding, `cond_br` condition error, module function skip.
 - PhaseEvalLoop: "still pending" multiphase_func note, sub-pipeline failure propagation.
 - SpecializeFuncs: void-result evaluated func chaining. InferTypes: no error test file at all.
+- Old HIR SplitPhases: no test for the "op uses value from later phase" `emitBug`; dies with the old stack.
 - Add a positive test/HIR/check-types.mlir (only error tests exist), a `hir.if` → `mir.if` case in test/Conversion/hir-to-mir.mlir if the op still exists, and a codegen test for `const { expr }` producing `hir.expr` with `phaseShift=-1`.
 - Add `isModule` cases to test/MIR/interpret.mlir, test/HIR/specialize-funcs.mlir, and test/Transforms/phase-eval-loop.mlir.
 

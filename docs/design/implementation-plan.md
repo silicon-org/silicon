@@ -7,19 +7,15 @@ Ground truth this plan works from: the `uir` stack (`uir.func`, PhaseAnalysis, e
 
 ## Op changes
 
-**New (HIR dialect):**
+**New (MIR dialect):**
 
-- `hir.choice_type`: constant type-constructor op mirroring `hir.opaque_type`.
-  Choice values stay `!hir.any` at the HIR/UIR level; `hir.choice_type` provides the type operand for rebuilt CF-op choice results and their yields, and `!si.choice` materializes at MIR lowering, exactly like opaque.
 - MIR twins for choice ops (construction op + constant attr) so the interpreter can produce them, and MIR twins for var ops (`mir.var`/`read_var`/`write_var`) plus interpreter mutable-cell support: compile-time phases contain vars (replicate bodies communicate through them), so they must be executable long before mem2reg exists.
   Interpreter reference values are `(cell, home)` pairs; the interpreter enforces write@home, read@home-or-later, and errors on deref of not-yet-materialized cells (sampling-model §11).
   HIRToMIR conversion patterns for all new ops (var, choice construction; pick/replicate never lower — they are expanded by SpecializeFuncs; unexpanded ones reaching HIRToMIR are a hard error).
 
 **Changed:**
 
-- `hir.pick` verifier: alternatives may terminate in `uir.return` instead of `hir.yield` (exit paths); pick results simply never materialize on such paths.
-  Same for `hir.replicate` bodies.
-- `uir.if`/`uir.loop`: rebuilt by the sorting stage with an extra choice result whose type operand is an `hir.choice_type` value; no verifier exemptions needed — the choice result is an ordinary result with an ordinary type operand.
+- `hir.replicate`'s op documentation still sanctions exit terminators in a receiving body; receiving phases hold no exit terminators, so it must be brought in line and the rule enforced by a verifier.
 
 ## Pass architecture
 

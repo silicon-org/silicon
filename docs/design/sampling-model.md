@@ -178,8 +178,9 @@ substitute phase-p results as constants; expand every `replicate`/`pick` whose l
 
 - A **frame** is a region-carrying op — `if`, `loop`, an expression carrier, a receiving `replicate`/`pick` — together with the control-flow skeleton it owns.
   Terminators are locked to their frame's phase, `break`/`continue` are phase-equal to their target loop, calls and pinned expressions sit at their declared offsets, and effectful ops sit at their block's phase.
-- A frame anchors **only** through the channels it consumes: conditions, loop inits, continue values, effects, exits targeting out of it, and type operands.
-  Values it merely *delivers* — yield values, break values, results — never bind it; a result's phase obeys `p(result) >= max(p(frame), p(providing values))` and nothing more.
+- A frame anchors **only** through the channels it consumes: conditions, loop inits, continue values, effects, and type operands.
+  A `break` or `continue` targeting out of the frame contributes no bound of its own — the frame is nested in the loop it targets, so the frame's block phase already carries it.
+  Values the frame merely *delivers* — yield values, break values, results — never bind it either; a result's phase obeys `p(result) >= max(p(frame), p(providing values))` and nothing more.
 - Everything else **floats**: region-free pure ops and constants have no phase of their own.
   A floating value is a phase-compatible provider at every phase, so it may be cloned wherever dominance demands, and no lowering step ever assigns it one.
   A floating frame that no bound constrains defaults to its block's phase.

@@ -24,7 +24,8 @@ Five stages, each owning a single concern:
    Values computed inside a phase and consumed in a later one cross as phase-op results: yielded by `uir.phase_return`, consumed by any later phase, at any distance.
    Values already visible at the region top level — function arguments and floating ops — are consumed directly wherever needed, without routing through a phase op.
    Calls are decomposed into `uir.phase_call` ops targeting a specific phase of the callee.
-   Hoisting, single-provider forwarding, and branch/record extraction run to a joint fixpoint over both regions, so a rule that emits a receiving pick or replicate re-extracts it at the next boundary and a crossing of any width sorts in one sweep.
+   Hoisting and single-provider forwarding run to a joint fixpoint first, since each can expose work for the other; branch and record extraction then run to a joint fixpoint of their own, so a rule that emits a receiving pick or replicate re-extracts it at the next boundary and a crossing of any width sorts in one sweep.
+   Both fixpoints cover the body and the signature region alike.
    This is the only pass that runs or consumes PhaseAnalysis.
 4. **Threading normalization** is a cheap structural pre-pass, run inside the function splitter or as a small pass immediately before it.
    It brings the sorted form into a fully threaded shape: it materializes `uir.phase` ops for externally visible phases that have no content and for intermediate hops of skipping crossings, threads every crossing through adjacent phase ops (function arguments starting at their declared phase), and sinks floating ops into the phase regions that use them.
@@ -75,7 +76,7 @@ Five stages, each owning a single concern:
 - **Phase boundaries pack uniformly.**
   Every phase boundary packs exactly one fresh opaque context bundling all its crossings: no special case for a single crossing, for a crossing that is already an opaque context, or for a contentless gap phase (whose func unpacks and repacks unchanged).
   Packing must stay symmetric with the receiving phase's unpacking, so skipping a "redundant" pack is not a local decision.
-  Collapsing degenerate transcodes is folding (`opaque_pack(opaque_unpack(x))` → `x`, usable via `createOrFold`) or plain canonicalization, never splitter logic.
+  Collapsing degenerate transcodes is canonicalization — `OpaquePackOp::canonicalize` rewrites `opaque_pack(opaque_unpack(x))` to `x` — never splitter logic.
 - **Per-phase function names are cosmetic.**
   Split_func link lists, eager_func chains, and the implementation-reference attribute are the authoritative connections; nothing resolves by name convention, and names may be uniquified freely.
   A link list is positional: entry *k* is the function implementing the *k*-th phase of the declared span, so an entry's meaning is a pure function of the declaration and the verifier can cross-check each entry's arity against the declared per-phase interface.
