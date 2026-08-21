@@ -1,5 +1,9 @@
 # Phase Inference
 
+> [!WARNING]
+> The transparent-yield model for values crossing a phase boundary is replaced by choice-ification and the record/replay machinery of {{< page-link "/design/sampling-model" >}} and {{< page-link "/design/record-replay" >}}; the pass structure described here is replaced by {{< page-link "/design/phase-ops" >}}.
+> The phase-assignment rules below still describe what PhaseAnalysis computes, except where sampling-model §12 revises them for frames, floats, and demand-blindness.
+
 ## Rules
 
 ### Phase Assignment

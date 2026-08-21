@@ -1,10 +1,9 @@
-# The Sampling Model (v6, 2026-07-19)
+# The Sampling Model
 
-Semantic model for phased execution and phase splitting, distilled from the design interview and hardened by three adversarial review rounds.
-v4 adds §11 (references are opaque; home phases are evaluation-time data), settled in the ref-opacity interview on 2026-07-09.
-v5 revised the early-exit mechanism per `function-exit-choices.md` (2026-07-10: exit chains at return sites, multiple returns in receiving phases).
-v6 follows the 2026-07-19 revision of that document: early returns normalize to single-exit choice/pick value form before phase analysis, receiving phases are single-exit, and the split cf/reach record model of `record-replay.md` covers function exits with no exit-specific mechanism; where §6/§7 below conflict with those documents, they win.
-Status: reviewed draft; supersedes control-flow.md, phase-inference.md, and unified-dialect.md where they conflict (docs rewrite scheduled as milestone M6 in `implementation-plan.md`).
+Semantic model for phased execution and phase splitting.
+It is the authority on what a phased program means; {{< page-link "/design/control-flow" >}}, {{< page-link "/design/phase-inference" >}}, and {{< page-link "/design/unified-dialect" >}} lose to it where they conflict.
+Two documents refine it in turn: {{< page-link "/design/record-replay" >}} fixes the exact record shape and replay form of §6, and {{< page-link "/design/function-exit-choices" >}} the treatment of function-level exits.
+{{< page-link "/design/phase-ops" >}} describes the passes that implement the model.
 
 ## 1. Execution model
 
@@ -63,7 +62,7 @@ Receiving-phase constructs:
 
 Conceptually, lowering **sorts ops by phase** while preserving program order within each phase: earlier-phase content moves *up* across the `---`, later-phase content moves *down*, until everything is phase-ordered. Phase 0 is not special — it is only the default starting point of a function. The values crossing boundaries as a result of these moves *are* the records, contexts, and specialization parameters. Two directions:
 
-**Upward (hoisting).** Earlier-phase content inside a later-phase CF region hoists to immediately before the enclosing CF op (in program order when several ops hoist). Per the D-rule it executes unconditionally, so the hoist needs no record; its results reach back into the region as ordinary downward samples. This includes the earlier-phase halves of calls sitting under later-phase CF.
+**Upward (hoisting).** Earlier-phase content inside a later-phase CF region hoists out to immediately before the *outermost* enclosing later-phase region op (in program order when several ops hoist), so one hoist crosses as many nesting levels as it must. Floating operands (region-free pure trees, constants) are cloned across the boundary rather than moved, since the region may still use them. Per the D-rule the hoisted content executes unconditionally, so the hoist needs no record; its results reach back into the region as ordinary downward samples. This includes the earlier-phase halves of calls sitting under later-phase CF.
 
 **Ordering (normative).** At each boundary, hoisting runs to a fixpoint **before** extraction, and extraction asserts that its regions transitively contain no earlier-phase content. Extract-first is wrong: it would drag earlier-phase ops into the replicate body and then hoist them to *after* the CF op, changing their multiplicity — a D-rule violation (e.g. a `const` increment under a dyn `if` inside a `for const` must run once per iteration, before the if; extract-first would run it once, after the loop).
 
@@ -73,10 +72,11 @@ Conceptually, lowering **sorts ops by phase** while preserving program order wit
   - NOT one list per dyn block: per-block lists replay A0 A1 B0 instead of A0 B0 A1 and break the Unrolling Law when sibling blocks share receiving-phase state.
   - Sample fields are read at their original program-order positions within the iteration (e.g. `k` sampled before a `const { k = k + 1; }` between two dyn statements), then bundled into the record at region exit.
 - The new list/choice is an ordinary phase-p value. If the CF op is itself nested in more phase-p CF (or in a `replicate`/`pick` — **these count as CF regions for the next boundary**), the enclosing region's record captures it like any other snapshot. This is where nested lists come from, with no special casing.
+- **Every boundary records afresh.** A receiving `replicate`/`pick` is an ordinary producing region at the next boundary: it pushes its own hit list for the content one phase beyond it, and samples ferry hop by hop rather than skipping ahead. Replay is consequently blind — a phase only ever reads the records its immediate predecessor pushed. A phase whose replicate does nothing but re-pack one hit list into the next is correct output; collapsing such a pass-through transcoder is a peephole optimization, never a rule of the lowering.
 - **Branch regions get choices uniformly**, value-carrying or not: tag per arm (payloads may be empty). The choice is **constructed per arm** (each arm yields its own tag+payload) and comes out of the CF op as an additional SSA result — the op is rebuilt with the extra result; an else-less `if` gets a materialized else region yielding the not-taken tag. `pick` is valued: variadic results with per-alternative yields. A `replicate`/`pick` is deleted only when **all** its bodies/alternatives are empty (materialize-then-DCE).
-- **Early exits in the producing-phase portion of a region** (`break`/`continue`/`return` at phase p, with later-phase content after the exit point): the record ends in an **exit-path choice** recorded per activation, and the post-exit content lands in a **nested pick** in the receiving phase, driven by that choice. A partial activation's record thus ends in an inner choice whose taken payload carries the post-exit samples: for content A, exit₁, B, exit₂, C the record is `(A_samples, c₁)` with `c₁ ∈ {exited(), continued(B_samples, c₂)}`, `c₂ ∈ {exited(), continued(C_samples)}`. Construction follows `function-exit-choices.md`: each exit terminator builds its chain link in place from statically-known path dispositions; arms with later-phase content that fall back out yield a sub-choice covering the arm-local divergence. Exits that do not terminate the receiving phase (`continue`/`break`) nest their post-exit content in the `continued` alternative; a `return` terminates the receiving phase's function, so its skipped continuation stays in program order.
-- **Function bodies are regions like any other**, and since the 2026-07-19 revision of `function-exit-choices.md` their exits are too: exit normalization rewrites early returns into choice/pick value form before analysis, extraction applies its ordinary rules to the result, and the function's later-phase result is a demanded later result consumed by the single final return.
-- **Later-phase `return` under earlier-phase CF** extracts like any later-phase content; `return`-style terminators are legal inside replicate/pick bodies of the receiving phase. Source-level **definite-return checking** guarantees a trailing return exists, so a zero-activation replicate falls through to it. A `pick` whose choice value was never produced during phase evaluation is an internal hard error at specialization time (defensive; unreachable from definite-return-checked source).
+- **Early exits in the producing-phase portion of a region** (`break`/`continue` at phase p, with later-phase content after the exit point) are *recorded*, never replayed. Each divergence contributes two independent slots: a cf choice tagging which arm ran, carrying that arm's own record body, and a binary reach link that gates everything after the divergence — `NOT_REACHED` ends the record at an exit, `REACHED` carries the following segment. A partial activation therefore simply produces a shorter record, and content shared between an exit path and the fall-through is recorded and replayed exactly once. {{< page-link "/design/record-replay" >}} gives the exact shape.
+- **Function bodies are regions like any other**, and so are their exits: exit normalization rewrites early returns into choice/pick value form before analysis ({{< page-link "/design/function-exit-choices" >}}), extraction applies its ordinary rules to the result, and the function's later-phase result is a demanded later result consumed by the single final return.
+- **Receiving phases contain no exit terminators.** Every exit decision for phase-p control flow is made and recorded at phase p, so the tags alone determine what replays; a receiving phase reads records and picks, and returns from a single exit. Source-level **definite-return checking** guarantees a trailing return exists, so a zero-activation replicate falls through to it. A `pick` whose choice value was never produced during phase evaluation is an internal hard error at specialization time (defensive; unreachable from definite-return-checked source).
 - After processing a boundary (both directions), no content at phases > p remains inside phase-p CF and none at phases < p inside phase-p regions; phase splitting proper reduces to distributing straight-line ops and threading straight-line samples (context).
 
 Worked example — content two phases away (`for const` at -1, var at 0, `dyn` block at +1):
@@ -112,29 +112,38 @@ replicate exit in hits {
 // A0 B0  A1 B1  A2  A3 B3
 ```
 
-Worked example — loop result at a later phase (break value choice-ified):
+Worked example — loop result at a later phase (delivered through a receiving-phase var):
 
 ```
 // let y = const { var k = 0; loop { if k*k >= n { break dyn { x + k }; } k = k + 1; } };
+var y                                        // home phase 0, read after the loop
 k = 0
-choice = loop {
-  if k * k >= n { break choice0(sample k) }   // tag + payload record
+loop {
+  if k * k >= n { record(k); break }         // the store is content on this path
   k = k + 1
 }
 ---
-y = pick choice [ 0(k): { x + k } ]
+replicate rec in hits { y = x + rec.k }      // replayed once, on the break's path
+// uses of the former loop result read y
 ```
+
+A later-phase loop result is not a mechanism of its own. The loop drops the result; each `break` stores its later-phase operand into a var homed in the receiving phase and drops the operand; a read after the loop feeds the former result's uses. The store is then ordinary later-phase content sitting on the break's record path, delivered by the record machinery like anything else, and replayed exactly once per activation.
 
 ## 7. Value selection across phases (floor rule)
 
 A CF op at phase p that selects between values cannot deliver the selection at a phase earlier than p (causality):
 
-- A result provided by more than one terminator site (`return`/`break`/yield) is a **selection**, regardless of the values' identity — no SSA-identity exemption and no semantic-equality analysis; an identity exemption would not compose anyway (nested ifs providing the same value fail SSA identity, so it would have to grow into a CFG traversal).
+- **Providers are a control-flow property, not a property of the values.** A CF-result slot is provided by exactly those arms whose terminator is reachable. Non-provision is only *provable divergence*: an arm ending in `unreachable`, or in a loop with no reachable break. `uir.unreachable_value` is an ordinary poison value, not a non-provision marker — a reachable arm yielding it still provides, and evaluating one is a loud trap — so non-providing arms spell out one poison per slot and yield/break arity stays exact.
+- A result provided by more than one terminator site (`return`/`break`/yield) is a **selection**, regardless of the values' identity — no SSA-identity exemption and no semantic-equality analysis; an identity exemption would not compose anyway (nested ifs providing the same value fail SSA identity, so it would have to grow into a CFG traversal). Providers that coincide are still two providers.
+- A result with **exactly one** provider is not a selection. When that provider is defined outside the op — or floats — it is iteration- and path-invariant, and the result is a transparent forward: uses are rewritten to the provider (cloning a floating tree where dominance demands it) and the slot disappears, in either phase direction and at any phase distance. A single provider defined *inside* the op is a genuine per-activation value and is delivered like a selection. A result with **no** reachable provider gets the bottom phase `never`; its uses forward to fresh poison at the consumer's phase, and the producing op stays where it is.
+- Forwarding runs before extraction, so extraction only ever sees genuine selections and no op ever mixes the two treatments.
+- **Reachability decides what arrives at a slot, never what compiles.** Divergence may change which values reach a result, but never whether surrounding code is analyzed, phase-checked, or sorted: a diverging arm's later-phase content extracts into an ordinary receiving alternative that happens to be dead at runtime. Diagnostics therefore do not move when an optimization proves something unreachable.
 - The result phase of a selection floors at the op phase: earlier-phase values provided by multiple sites deliver at the op phase, and a demand below the op phase is an **error**.
 - In particular, multiple `return` sites providing a phase<0 (const) result are always an error, even when all sites return the same SSA value. A future surface rule may require a single return for functions with phase<0 results.
 - The check runs pre-split, in PhaseAnalysis (the implemented floor rule already matches this).
 - A CF op at phase p yielding a **later**-phase value is legal: the value is replaced by a choice crossing the boundary; the receiving phase reconstructs the selection with `pick` (§6).
 - Same-phase CF is untouched: `if`/`loop` keep SSA results and value-carrying yields when everything is at one phase. Splitting must decay gracefully — single-phase functions pass through the same general algorithm unchanged, never a special case.
+- A block's result phase is the phase of the value it yields, and causality does the rest: `const { dyn { e } }` produces a phase-0 value that the enclosing phase -1 code cannot consume, while `dyn { const { e } }` is fine. The asymmetry is the causality rule showing through, not a special case.
 
 ## 8. Types
 
@@ -156,8 +165,6 @@ substitute phase-p results as constants; expand every `replicate`/`pick` whose l
 
 ## 11. References are opaque; home phases are evaluation-time data
 
-Settled in the ref-opacity interview (2026-07-09); replaces the earlier parking-lot stance that references need their own design before use.
-
 - A reference is an ordinary, **opaque** SSA value. Its **value phase** p obeys all the usual value rules: it floats, freezes into later phases, and floor-bumps at CF selections. Decoupled from p, every reference targets storage with a **home phase** — but home is *runtime data*, not a static property: at evaluation time a reference is a `(cell, home)` pair.
 - **Phase analysis knows nothing about home.** `hir.var`/`hir.read_var`/`hir.write_var` are plain side-effecting ops anchored at their block phase; the only static rule is ordinary causality on the reference operand (a reference cannot be consumed before it exists). Reads and writes must never require tracing a reference back to its `hir.var`: a function taking a list of references as arguments must be indistinguishable from locally declared vars.
 - Home checks are **evaluation-time checks** (a deliberate stopgap; more static checking may be layered on later): write legal iff the executing phase equals the cell's home; read legal iff executing phase ≥ home; deref of a not-yet-materialized cell is an eval error. Diagnostics are consequently lazy — only executed paths error.
@@ -166,6 +173,19 @@ Settled in the ref-opacity interview (2026-07-09); replaces the earlier parking-
 - CF selection of references is legal and type-blind. A cross-phase floor-bump naturally demotes the result to read-only: a later write finds the cell frozen at eval. Same-phase selection keeps writability — the selection resolves during that phase's evaluation. This enables the routing-table pattern (e.g. an array of references indexed by a phase-local value).
 - Aggregates containing references are evaluation values like any other; contained references carry home at runtime. Per-phase SROA-style destructuring (structs/tuples, function args) is a normal form/optimization where indices are structural — dynamic indexing (routing tables) makes it impossible in general, so it is *not* the semantic foundation.
 - The hardware phase is never interpreted, so its writes get no eval check — but by then every surviving reference is a specialization-time constant: writes to frozen cells are caught when the second-to-last phase specializes, and what remains are writes to hardware-phase cells, i.e. drives, handled by MIRToCIRCT. A writable reference to a dyn value is an output port; probes/drives and compile-time vars are one mechanism instantiated at different phases.
+
+## 12. Frames, floats, and phase assignment
+
+- A **frame** is a region-carrying op — `if`, `loop`, an expression carrier, a receiving `replicate`/`pick` — together with the control-flow skeleton it owns.
+  Terminators are locked to their frame's phase, `break`/`continue` are phase-equal to their target loop, calls and pinned expressions sit at their declared offsets, and effectful ops sit at their block's phase.
+- A frame anchors **only** through the channels it consumes: conditions, loop inits, continue values, effects, exits targeting out of it, and type operands.
+  Values it merely *delivers* — yield values, break values, results — never bind it; a result's phase obeys `p(result) >= max(p(frame), p(providing values))` and nothing more.
+- Everything else **floats**: region-free pure ops and constants have no phase of their own.
+  A floating value is a phase-compatible provider at every phase, so it may be cloned wherever dominance demands, and no lowering step ever assigns it one.
+  A floating frame that no bound constrains defaults to its block's phase.
+- The real-phase interior of a floating frame is therefore loop-invariant — an iteration-varying value would need a real-phase decision or an iteration argument, and either anchors the frame — so the interior distributes per op into its own phases while the frame keeps only its skeleton at the default phase.
+- **Phase assignment is demand-blind.** Content with no consumers derives its phase and sorts exactly like live content, and a dead diverging loop executes at compile time exactly like its live twin.
+  Removing an expression's only consumer consequently moves the expression to its block phase rather than deleting it.
 
 ## Parking lot (deliberately deferred)
 

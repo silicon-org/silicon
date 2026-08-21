@@ -3,13 +3,16 @@
 This document describes the **Unified IR dialect** (`uir`), which captures the high-level, structured representation of Silicon programs before phase splitting and CFG flattening.
 The `uir` dialect holds all ops that represent the code "as the user wrote it": unified (cross-phase) functions, structured control flow with nested regions, expression grouping for phase inference, and the witness ops that bridge the unified and split representations.
 
-All `uir` ops are lowered away by two passes:
+> [!WARNING]
+> The pipeline description and op inventory below predate the phase ops (`uir.phase`, `uir.phase_return`, `uir.phase_call`, `uir.signature`, `uir.unreachable_value`) and the split of phase sorting from function splitting; see {{< page-link "/design/phase-ops" >}}.
+> In particular `uir.split_func` is the stable late-binding call interface, not a decomposition witness.
 
-- **SplitPhases** consumes unified function ops (`uir.func`, `uir.call`) and phase grouping ops (`uir.expr`, `uir.pin`), producing per-phase `hir.func` and `hir.call` ops.
-  It also produces `uir.split_func` witness ops that record how a unified function was decomposed.
+All `uir` ops are lowered away by two groups of passes:
+
+- **Phase sorting and function splitting** consume unified function ops (`uir.func`, `uir.call`) and phase grouping ops (`uir.expr`, `uir.pin`), producing per-phase `hir.func` and `hir.call` ops behind a `uir.split_func` interface.
 - **FlattenCF** consumes structured control flow ops (`uir.if`, `uir.loop`, etc.) and their terminators (`uir.yield`, `uir.break`, `uir.continue`, `uir.return`, `uir.unreachable`), producing block-based `cf.br`/`cf.cond_br` and `hir.return`.
 
-After both passes, only `uir.split_func` witnesses may remain (for external linking).
+After both, only `uir.split_func` remains, as the symbol callers link against.
 Everything else from `uir` is gone.
 
 The ops that are *not* in `uir` — pure ops like `hir.add`, type constructors like `hir.uint_type`, type inference utilities like `hir.unify` and `hir.inferrable`, and the flat per-phase function/call/return ops — stay in the `hir` dialect.

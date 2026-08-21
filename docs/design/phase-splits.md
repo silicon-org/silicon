@@ -3,6 +3,9 @@
 This document describes how the Silicon language intends to implement metaprogramming, function specialization, and phased compile-time execution.
 It is aspirational and does not reflect the current state of the code base.
 
+> [!WARNING]
+> Its splitting mechanics are superseded by {{< page-link "/design/sampling-model" >}} and {{< page-link "/design/phase-ops" >}}: the opaque context *is* the straight-line record, and hit lists and choices are additional record fields rather than a parallel mechanism.
+
 ## Unified IR
 
 After parsing and an initial set of optimizations, value inference, and call checking, the IR is in its unified form.

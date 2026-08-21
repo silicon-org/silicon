@@ -4,9 +4,8 @@ This document describes the design of control flow in Silicon: how `if`, `for`, 
 It builds on the phased execution model described in {{< page-link "/design/phase-splits" >}}.
 
 > [!WARNING]
-> This document is a work in progress.
-> It captures the current state of design discussions and has not been fully validated against the implementation.
-> Details may change as we prototype the individual pieces.
+> Everything from "Const Control Flow and Phase Splitting" through "Hits vector ops" describes an earlier replicate-and-hits design that {{< page-link "/design/sampling-model" >}} and {{< page-link "/design/record-replay" >}} replace; read those for how content actually crosses a phase boundary.
+> The language-surface sections before it and the FlattenCF and CFG-to-dataflow sections after it still stand, but have not been fully validated against the implementation.
 
 ## Overview
 

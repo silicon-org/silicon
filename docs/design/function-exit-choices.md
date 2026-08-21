@@ -1,13 +1,12 @@
 # Early Exits: Normalization to Single-Exit Form
 
-Result of the design interviews on function-level early returns (2026-07-10) and exit normalization (2026-07-19).
-The 2026-07-19 session replaced the original exit-chain machinery of this document with a phase-blind normalization pre-pass; the superseded decisions are recorded at the end.
 Extends {{< page-link "/design/sampling-model" >}} §6/§7 and composes with the split cf/reach record model of {{< page-link "/design/record-replay" >}}.
 
 ## The model
 
 1. **Early exits are normalized away before phase analysis.**
-   A phase-blind structural pre-pass rewrites every `uir.return` that is not the function body's terminator into value form, bottom-up per region.
+   A phase-blind structural pre-pass rewrites every exit that is not its region's terminator into value form, bottom-up per region.
+   It runs once per function region, on the body and the signature alike: `uir.signature` is the signature region's return-like exit and is normalized exactly like `uir.return`, except that a signature site has no type operands and so contributes nothing to unification.
    An exit-carrying divergence is rebuilt with extra trailing results — one slot per function result carrying the exit path's returned value, plus a payload-free tag choice (`#exit()` / `#thru`) — and a real pick on the tag dispatches: the exit alternative consumes the value slots directly, the single fall-through alternative holds the continuation.
    Slots a path does not provide are filled with `uir.unreachable_value`, never omitted, per the exact-arity yield/break invariant.
    The slot types are one shared `hir.inferrable` per function result, created at the body top: every rebuilt op uses them as its exit-slot types, every exit site's own type operands unify into them, and the final return is typed by them directly — floating, they satisfy the type operand rule's one-phase-earlier demand at any phase, where a pinned recovery like `hir.type_of` would manufacture backward crossings for earliest-phase values.
@@ -77,15 +76,14 @@ uir.return %r : %st
 This is plain value CF, and every value has a single phase: the tag `%if#1` stays at phase 0 (where `%e` decides), the value slot `%if#0` floors to phase 1 (its provider), the pick anchors at the tag's phase 0 with only its result floored to 1, and the return's type operand is the floating `%st`.
 The existing branch extraction then lifts the phase-1 arm content out with a cf choice, yielding the split-model records, and choice-ifies the phase-1 value slot; the phase-1 function replays picks in program order and returns from its single `uir.phase_return`.
 
-## Superseded: the 2026-07-10 exit-chain model
+## Why exits are not kept in the IR
 
-The original design kept early exits in the IR through sorting and discovered them at distribution time: nested choice chains constructed at each return site from the path's statically-known dispositions, an arm-local `ran`/`not_ran` sub-choice accumulator for rejoining arms, and receiving phases that kept multiple `uir.return`s (exit alternatives returned, rejoining alternatives yielded), with yield-plus-single-return normalization declared "never necessary, so never done".
+The alternative is to carry early exits through sorting and discover them at distribution time, building a nested choice chain at each return site from the path's statically-known dispositions and letting receiving phases hold several `uir.return`s.
+It loses on every count against the split cf/reach model of {{< page-link "/design/record-replay" >}}:
 
-It fell to the split cf/reach model of {{< page-link "/design/record-replay" >}}:
+- A chain that dispatches on exit dispositions first duplicates the replay of a *preceding* rejoining divergence into every chain alternative — the same cloning that rules out fused loop records.
+- Multi-returns in receiving phases require non-local exits (a `return` inside a pick alternative, or inside a replicate body for returns under loops), reintroducing exactly the terminator-scoping complexity the split model eliminates for break/continue.
+- With returns in replay, an exit divergence's reach slot is structurally present but never read on the exit path — a latent unread-slot invariant nothing machine-checks.
+- Value threading through picks is machinery that has to exist anyway; multi-returns are an extra rule on top of it.
 
-- The fused chains dispatched on exit dispositions first, so the replay of a *preceding* rejoining divergence duplicated into every chain alternative — the same cloning that sank the fused loop records.
-- Multi-returns in receiving phases required non-local exits (a `return` inside a pick alternative, or inside a replicate body for returns under loops), reintroducing the terminator-scoping complexity the split model had just eliminated for break/continue.
-- With returns in replay, an exit divergence's reach slot was structurally present but never read on the exit path — a latent unread-slot invariant nothing machine-checks.
-- The "normalization is never necessary" rationale inverted: under the split model, value threading through picks is the machinery that already exists, and multi-returns were the extra rule.
-
-Taken to its fixed point, the same reasoning moved the exits out of the sorted IR entirely: normalizing them to value form *before* analysis makes every downstream stage single-exit and dissolves the exit machinery into the general extraction rules.
+Normalizing exits to value form *before* analysis makes every downstream stage single-exit and dissolves the exit machinery into the general extraction rules.

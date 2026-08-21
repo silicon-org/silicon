@@ -1,14 +1,13 @@
 # Loop Records and Data-Only Replay
 
-Result of the design interview on the 7b-ii sorting walls (2026-07-17).
-Refines {{< page-link "/design/sampling-model" >}} §6 (the record shape for loop activations) and the loop-record parts of {{< page-link "/design/phase-ops" >}}.
-Function-level exits join the same model through exit normalization ({{< page-link "/design/function-exit-choices" >}}, revised 2026-07-19): early returns rewrite to choice/pick value form before analysis, so the machinery below covers them with no exit-specific rules.
+Fixes the record shape and replay form of {{< page-link "/design/sampling-model" >}} §6, and the loop-record parts of {{< page-link "/design/phase-ops" >}}.
+Function-level exits join the same model through exit normalization ({{< page-link "/design/function-exit-choices" >}}): early returns rewrite to choice/pick value form before analysis, so the machinery below covers them with no exit-specific rules.
 
-## The problem this settles
+## Why two slots per divergence
 
-The previous record shape fused two independent facts into one choice per divergence: *which arm ran* and *did control reconverge afterwards*.
-The fused exit-vs-continued link forced arm content shared between an exit path and the fall-through (content before a nested exit in a rejoining arm) to be cloned into several receiving pick alternatives, which surfaced as the two hard rejections in phase sorting (`RejoinSharedPrefix`, `RejoinNestedFallthrough`).
-Splitting the two facts into separate record slots removes the cloning entirely.
+A record must answer two independent questions about each divergence it crosses: *which arm ran*, and *did control reconverge afterwards*.
+Fusing them into a single exit-vs-continued choice forces arm content shared between an exit path and the fall-through — content before a nested exit in a rejoining arm — to be cloned into several receiving pick alternatives.
+Keeping the two facts in separate record slots removes the cloning entirely, and is the reason the model below is shaped the way it is.
 
 ## The model
 
@@ -30,13 +29,24 @@ Splitting the two facts into separate record slots removes the cloning entirely.
 
 4. **Every piece of content replays in exactly one place.**
    Content shared between an exit path and the fall-through sits in the arm's first segment and replays in the cf pick's arm alternative, before the arm's own reach pick — once, whichever way the activation ended.
-   This is what dissolves the former shared-prefix and nested-fall-through walls.
+   This is what makes shared prefixes and nested fall-through work without cloning content into several alternatives.
 
 5. **Safety is SSA dominance.**
    A value is recorded exactly on the paths that compute it, and the replay preserves the source's path structure, so each field is read exactly on the paths that replay its consumers.
    A consumer that could run without its operand cannot exist: it would not have been dominated by the operand's definition in the source.
 
-6. **Demanded later-phase results ride the cf pick's yields.**
+6. **Every phase boundary records afresh.**
+   The producing region for boundary p is the original control flow at the earliest boundary and the receiving `hir.replicate` at every later one; a replicate is an ordinary producing frame, with its layered phase-p control flow, and pushes its own hit list for the content one phase beyond it.
+   Per-phase samples therefore ferry hop by hop instead of skipping ahead, and replay is blind: phase p+1 sees only the records phase p pushed, never a record from further back.
+   Iteration-invariant values still cross directly, since they are not per-activation data.
+   A phase whose replicate does nothing but re-pack one hit list into the next is correct output; collapsing such a pass-through transcoder is a peephole optimization, never part of the lowering.
+
+7. **A later-phase loop result is delivered, not selected.**
+   Break values are not a delivery concept of their own.
+   A loop result whose providers are later than the loop is lowered onto a var homed in the receiving phase: each `break` stores its later-phase operand into the var and drops it, the loop drops the result, and a read after the loop feeds the result's uses.
+   The store is then ordinary later-phase content sitting on the break's record path, replayed once per activation by the machinery above, so no content is sliced per break site and several breaks sharing content need no special treatment.
+
+8. **Demanded later-phase results ride the cf pick's yields.**
    The rebuilt phase-p branch cannot deliver a later value, so the cf pick is valued: each arm alternative yields that arm's operand for the result (its own replayed content, or a value from outside the arm).
    This covers only genuine selections: a result with more than one providing arm.
    A single-provider result whose sole provider is a value defined outside the op — or a floating pure value, materializable anywhere by cloning its tree — is not a selection and never reaches the cf pick: it is a transparent forward, rewritten to its provider operand (or the clone) before extraction runs, in either phase direction (see the phase-sorting `forwardSingleProviderResults` step).
@@ -50,8 +60,7 @@ Multi-arm dispatch — the actual duplication hazard — lives exclusively in th
 
 ## Consequences
 
-- Loop-exit tags disappeared from records: a content-free divergence records only reach, so which of several exits fired is not recorded when nothing downstream depends on it.
+- A content-free divergence records only its reach link, so which of several exits fired is not recorded when nothing downstream depends on it.
 - The interpreter (M4) must trap on evaluating `uir.unreachable_value` during replay; reaching one means the record invariant was violated.
-- Still rejected as scaffolding, not design walls: short yields ahead of the cf choice, and content more than one phase later.
-  Function-level exits (including returns under loops) stopped being scaffolding: exit normalization turns them into ordinary value CF before analysis, covered by the rules above.
+- Function-level exits, including returns under loops, are covered by the rules above: exit normalization turns them into ordinary value CF before analysis.
 - A demanded later result the rejoining arm provides is reconstructed at whichever level defines it: a value produced on the arm's spine after a nested exit threads up through valued reach picks, and a value that is itself a nested divergence's result surfaces as that divergence's own valued cf pick result and threads up identically — one recursion of the valued-carrier mechanism, no new record content.
