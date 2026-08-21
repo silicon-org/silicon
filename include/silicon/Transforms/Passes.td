@@ -54,8 +54,15 @@ def CheckCallsPass : Pass<"check-calls", "mlir::ModuleOp"> {
     transitively calls itself has no such order and is reported as a user
     error. Bodies are then checked in parallel.
 
-    Only `uir.func` ops are rewritten. A `uir.split_func` is a
-    declaration that callers read; its signature region is final.
+    Every signature region takes part in that traversal, a
+    `uir.split_func`'s as much as a `uir.func`'s: a declaration's
+    signature is the interface every caller copies, so a call left
+    unchecked in one would land unchecked in user code. Nothing marks a
+    signature as already checked, so a declaration a previous run checked
+    is checked again, which leaves a duplicate of its inlined types --
+    pure computation and a repeated constraint that CSE and unification
+    absorb. Bodies belong to `uir.func` alone; a `uir.split_func` is the
+    declaration by itself.
 
     **Expects:** structured, exit-normalized input -- a signature region
     that is a single block exiting through one `uir.signature`. Neither

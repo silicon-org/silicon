@@ -130,10 +130,10 @@ static LogicalResult checkCall(uir::CallOp callOp,
 }
 
 /// Check all calls in a function's signature region.
-static LogicalResult checkSignature(uir::FuncOp funcOp,
+static LogicalResult checkSignature(uir::DeclaredFuncOpInterface funcOp,
                                     const SymbolTable &symbolTable) {
-  LLVM_DEBUG(llvm::dbgs() << "Checking signature of " << funcOp.getSymNameAttr()
-                          << "\n");
+  LLVM_DEBUG(llvm::dbgs() << "Checking signature of "
+                          << SymbolTable::getSymbolName(funcOp) << "\n");
   SmallVector<uir::CallOp> calls;
   funcOp.getSignature().walk([&](uir::CallOp op) { calls.push_back(op); });
   for (auto callOp : calls)
@@ -211,9 +211,17 @@ static LogicalResult checkBody(uir::FuncOp funcOp,
 // call graph restricted to signature calls, and a cycle in it is a user error:
 // a signature that transitively calls itself has no order that satisfies it.
 //
-// Only `uir.func` ops are traversed and rewritten. A `uir.split_func` is a
-// declaration a caller reads: whether it comes from a precompiled library or
-// from a function this module already sorted, its signature region is final.
+// Every signature region is checked the same way, whether it belongs to a
+// `uir.func` or to a `uir.split_func`: a declaration's signature is the
+// interface every caller copies, so an unchecked call in one lands unchecked in
+// user code. Nothing marks a signature as already checked, so a declaration
+// checked by an earlier run is checked again; the second copy of its inlined
+// types is pure computation and a duplicate constraint, which CSE and
+// unification absorb.
+//
+// Bodies belong to `uir.func` alone. A `uir.split_func` has no body: it is the
+// interface of a function whose implementation is compiled elsewhere, already
+// split into per-phase functions, or not present at all.
 
 namespace {
 struct CheckCallsPass
@@ -228,28 +236,35 @@ void CheckCallsPass::runOnOperation() {
   /// A function on the traversal stack, together with the signature calls that
   /// still have to be visited before it can be checked itself.
   struct WorklistItem {
-    uir::FuncOp funcOp;
+    uir::DeclaredFuncOpInterface funcOp;
     Location callLoc;
     SmallVector<uir::CallOp, 1> calls;
   };
   SmallVector<WorklistItem> worklist;
-  SmallDenseSet<uir::FuncOp> callStack;
-  DenseSet<uir::FuncOp> checkedFuncs;
+  SmallPtrSet<Operation *, 4> callStack;
+  DenseSet<Operation *> checkedFuncs;
 
-  auto addToWorklist = [&](uir::FuncOp funcOp, Location callLoc) {
-    SmallDenseSet<uir::FuncOp, 1> seenCallees;
+  auto lookupCallee = [&](uir::CallOp callOp) {
+    auto callee =
+        symbolTable.lookup<uir::DeclaredFuncOpInterface>(callOp.getCallee());
+    assert(callee && "callee resolved by uir.call verifier");
+    return callee;
+  };
+
+  auto addToWorklist = [&](uir::DeclaredFuncOpInterface funcOp,
+                           Location callLoc) {
+    SmallPtrSet<Operation *, 4> seenCallees;
     SmallVector<uir::CallOp, 1> calls;
     funcOp.getSignature().walk([&](uir::CallOp op) {
-      auto callee = symbolTable.lookup<uir::FuncOp>(op.getCallee());
-      if (callee && !checkedFuncs.contains(callee))
-        if (seenCallees.insert(callee).second)
-          calls.push_back(op);
+      auto callee = lookupCallee(op);
+      if (!checkedFuncs.contains(callee) && seenCallees.insert(callee).second)
+        calls.push_back(op);
     });
     worklist.push_back({funcOp, callLoc, std::move(calls)});
   };
 
   bool anyErrors = false;
-  for (auto funcOp : getOperation().getOps<uir::FuncOp>()) {
+  for (auto funcOp : getOperation().getOps<uir::DeclaredFuncOpInterface>()) {
     if (checkedFuncs.contains(funcOp))
       continue;
     addToWorklist(funcOp, funcOp.getLoc());
@@ -272,8 +287,8 @@ void CheckCallsPass::runOnOperation() {
       // Descend into the next call in the function's signature, using the call
       // stack to detect recursion.
       auto callOp = item.calls.pop_back_val();
-      auto callee = symbolTable.lookup<uir::FuncOp>(callOp.getCallee());
-      if (!callee || checkedFuncs.contains(callee))
+      auto callee = lookupCallee(callOp);
+      if (checkedFuncs.contains(callee))
         continue;
       if (callStack.insert(callee).second) {
         addToWorklist(callee, callOp.getLoc());
@@ -284,8 +299,9 @@ void CheckCallsPass::runOnOperation() {
       // recursive call chain through function signatures. Report the cycle
       // along the frames that lead back to the callee.
       anyErrors = true;
+      auto calleeName = SymbolTable::getSymbolName(callee).getValue();
       emitError(callee.getLoc())
-          << "signature of `" << callee.getSymName() << "` cannot call itself";
+          << "signature of `" << calleeName << "` cannot call itself";
       bool selfSeen = false;
       for (auto &frame : worklist) {
         if (!selfSeen) {
@@ -293,10 +309,11 @@ void CheckCallsPass::runOnOperation() {
           continue;
         }
         emitRemark(frame.callLoc)
-            << "called through `" << frame.funcOp.getSymName() << "`";
+            << "called through `"
+            << SymbolTable::getSymbolName(frame.funcOp).getValue() << "`";
       }
       emitRemark(callOp.getLoc())
-          << "calling `" << callee.getSymName() << "` itself here";
+          << "calling `" << calleeName << "` itself here";
     }
   }
 

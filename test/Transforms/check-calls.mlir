@@ -159,8 +159,7 @@ uir.func @SigCaller(%x: 0) -> (result: 0) {
 //===----------------------------------------------------------------------===//
 // A `uir.split_func` callee. Its signature region is the whole interface, in
 // the declared state of a precompiled or not-yet-compiled function as much as
-// in the split state; nothing but that region is read, and the op itself is
-// left untouched.
+// in the split state; nothing but that region is read.
 
 // CHECK-LABEL: uir.split_func @DeclaredOnly
 // CHECK-NOT:   hir.unify
@@ -238,6 +237,46 @@ uir.func @CallSplit(%n: -1, %v: 0) -> () {
   %i1 = hir.inferrable
   %i2 = hir.inferrable
   %r = uir.call @Split(%n, %v) : (%i0, %i1) -> (%i2) [-1, 0] -> [0]
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// A call in the signature region of a `uir.split_func` is checked in place,
+// like one in a `uir.func` signature. The declared signature is the interface
+// every caller copies, so a call left unchecked here would land unchecked in
+// each of them.
+
+// CHECK-LABEL: uir.split_func @DeclaredSigCall
+uir.split_func @DeclaredSigCall(%x: 0) -> (result: 0) {
+  // CHECK:      [[T:%.+]] = hir.int_type
+  // CHECK-NEXT: [[UA:%.+]] = hir.unify [[T]], {{%.+}}
+  // CHECK-NEXT: [[UR:%.+]] = hir.unify [[T]], {{%.+}}
+  // CHECK-NEXT: [[R:%.+]] = uir.call @Callee({{%.+}}) : ([[UA]]) -> ([[UR]])
+  // CHECK-NEXT: uir.signature ([[R]]) -> ([[R]])
+  %i0 = hir.inferrable
+  %i1 = hir.inferrable
+  %u = hir.constant_unit
+  %t = uir.call @Callee(%u) : (%i0) -> (%i1) [0] -> [0]
+  uir.signature (%t) -> (%t)
+} []
+
+// The caller's copy of that signature carries the checked call along.
+// CHECK-LABEL: uir.func @CallDeclaredSigCall
+uir.func @CallDeclaredSigCall(%v: 0) -> () {
+  %0 = hir.int_type
+  uir.signature (%0) -> ()
+} {
+  // CHECK:      } {
+  // CHECK:      [[CV:%.+]] = hir.coerce_type %v
+  // CHECK:      [[UA:%.+]] = hir.unify {{%.+}}, {{%.+}}
+  // CHECK-NEXT: [[UR:%.+]] = hir.unify {{%.+}}, {{%.+}}
+  // CHECK-NEXT: [[R:%.+]] = uir.call @Callee({{%.+}}) : ([[UA]]) -> ([[UR]])
+  // CHECK-NEXT: [[UX:%.+]] = hir.unify [[R]], {{%.+}}
+  // CHECK-NEXT: [[URR:%.+]] = hir.unify [[R]], {{%.+}}
+  // CHECK-NEXT: uir.call @DeclaredSigCall([[CV]]) : ([[UX]]) -> ([[URR]]) [0] -> [0]
+  %i0 = hir.inferrable
+  %i1 = hir.inferrable
+  %r = uir.call @DeclaredSigCall(%v) : (%i0) -> (%i1) [0] -> [0]
   uir.return
 }
 

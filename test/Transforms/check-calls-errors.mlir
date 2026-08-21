@@ -45,6 +45,26 @@ uir.func @gux() -> () {
 // -----
 
 //===----------------------------------------------------------------------===//
+// The signature of a `uir.split_func` takes part in the same traversal, so a
+// cycle running through a declaration is reported like any other.
+
+// expected-error @below {{signature of `foo` cannot call itself}}
+uir.split_func @foo() -> () {
+  // expected-remark @below {{called through `bar`}}
+  uir.call @bar() : () -> () [] -> []
+  uir.signature () -> ()
+} []
+uir.func @bar() -> () {
+  // expected-remark @below {{calling `foo` itself here}}
+  uir.call @foo() : () -> () [] -> []
+  uir.signature () -> ()
+} {
+  uir.return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
 // A signature spread across multiple blocks has no single computation to copy
 // into a use. Call checking runs before control flow is flattened.
 

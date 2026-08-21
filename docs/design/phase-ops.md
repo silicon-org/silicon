@@ -75,7 +75,9 @@ Five stages, each owning a single concern:
   A type disagreement observed at evaluation time, when a per-phase func is specialized, is therefore an internal compiler error, and the evaluator must trap on it loudly.
   The `check-calls` pass implements this, between exit normalization and sorting: it copies the declared computation into every consumer — ahead of each `uir.call`, and into the declaring function's own body, where the arguments are additionally constrained by `hir.coerce_type` — and ties each copy to the local types with `hir.unify`.
   Signatures are copied whole, control flow included, and are therefore consumed in the single-exit shape exit normalization leaves behind; a signature with several blocks or exits has no single computation to copy and is rejected.
-  Only `uir.func` ops are rewritten: a `uir.split_func` is a declaration a caller reads, whether it comes from a precompiled library or from a function this module already sorted.
+  Every signature region is checked alike, a `uir.split_func`'s as much as a `uir.func`'s: a declaration's signature is the interface every caller copies, so a call left unchecked in one lands unchecked in user code.
+  Nothing in the IR marks a signature as checked, and nothing needs to: re-checking an already-checked declaration inlines its types a second time, which is pure computation and a repeated constraint that CSE and unification absorb.
+  Bodies belong to `uir.func` alone.
   Checking is ordered post-order over the call graph restricted to signature calls, so a callee's signature is resolved before it is copied; recursion through signatures is a user error.
 - **Phase boundaries pack uniformly.**
   Every phase boundary packs exactly one fresh opaque context bundling all its crossings: no special case for a single crossing, for a crossing that is already an opaque context, or for a contentless gap phase (whose func unpacks and repacks unchanged).

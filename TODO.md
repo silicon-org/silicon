@@ -20,8 +20,6 @@ Resume: drive `hir.eager_func` from PhaseEvalLoop.
 
 ### Open questions and hazards
 
-- `check-calls` never checks a `uir.call` inside a `uir.split_func` signature region, then copies it verbatim into every caller, so an unchecked call lands in user code and nothing downstream checks it.
-  Nothing in the IR distinguishes a checked signature from an unchecked one, while the declared state is meant to be an authoring form for libraries and incremental compilation; decide where checked-ness is represented.
 - `check-calls` copies a signature per consumer and shares nothing, so a signature-call DAG expands into a tree: eight nested functions whose signatures call the next twice produce 2008 `uir.call` ops from 90 input lines.
   Decide whether copying stays unbounded.
 - `check-calls` coerces body arguments to their declared types but leaves signature-region arguments unconstrained; state why the two consumers of one declaration differ, or make them symmetric.
