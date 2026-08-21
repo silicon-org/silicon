@@ -1,4 +1,5 @@
 add_silicon_library(SiliconTransforms
+  CheckCalls.cpp
   PhaseEvalLoop.cpp
 
   DEPENDS
@@ -12,4 +13,5 @@ add_silicon_library(SiliconTransforms
   SiliconHIRTransforms
   SiliconMIR
   SiliconMIRTransforms
+  SiliconUIR
 )

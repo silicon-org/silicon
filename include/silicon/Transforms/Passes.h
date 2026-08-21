@@ -10,6 +10,7 @@
 
 #include "silicon/HIR/Dialect.h"
 #include "silicon/MIR/Dialect.h"
+#include "silicon/UIR/Dialect.h"
 #include "mlir/Pass/Pass.h"
 #include <memory>
 #include <optional>

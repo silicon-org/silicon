@@ -3,27 +3,36 @@
 ## Phase-Op Rebuild
 
 Design: docs/design/phase-ops.md (passes), sampling-model.md (semantics), record-replay.md, function-exit-choices.md.
-Resume: port call checking to `uir.call` as a cross-dialect pass in lib/Transforms.
+Resume: drive `hir.eager_func` from PhaseEvalLoop.
 
-1. Port call checking to `uir.call` vocabulary as a cross-dialect pass in lib/Transforms, inlining callee signature computation into callers pre-sorting, from `uir.func` and `uir.split_func` signature regions identically.
-   Replaces the HIR-only CheckCalls, which cannot link UIR.
-2. Drive `hir.eager_func` from PhaseEvalLoop: evaluate the head link, specialize forward, and replace the op with the same-name `hir.func` shim when a single link remains.
-3. Switch `silc` from the HIR-level split (lib/HIR/Transforms/SplitPhases.cpp) to `sort-phases`/`thread-phases`/`split-funcs` at parity, then delete the old stack (`SplitPhases`, `TestPhaseAnalysis`, `hir.unified_func`/`unified_call`/`split_func`/`multiphase_func`/`expr`/`yield`).
-4. Move the never-compiled-callee diagnostic out of `split-funcs` into the `uir.call` checker; it currently names an op the user never wrote, for the first offending site only.
-5. Delete PhaseAnalysis step 3b (function-level multi-return result floor, lib/UIR/Analysis/PhaseAnalysis.cpp) and its multi-return coverage; assert single-exit input instead.
-6. `RegionThreader::ensureThreaded` (lib/UIR/Transforms/ThreadPhases.cpp) recurses once per phase, so a wide declared span such as `uir.func @W(%a: -1000000)` blows the stack; nothing bounds a declared span.
-7. `RegionThreader::computeRange` encodes the signature P-1 rule a second time behind an `isSignature` flag; it should fall out of the demand set `plan` already walks.
-8. `hir.type_of %x` of a function argument sorts to phase p(x)-1, where `%x` is not available, and HIRToMIR papers over it with a dummy type constant; needs a real resolution once per-phase funcs flow through HIRToMIR.
-9. `uir.phase`/`uir.phase_return` tablegen docs claim the function-result-to-phase correspondence is "diagnosed by function splitting"; it is enforced by the thread-phases contract plus the `hir.func` verifier.
-10. `CallOp::verifySymbolUses`'s `if (!callee)` branch in lib/UIR/Ops.cpp is dead: `callee` is a non-optional ODS attribute.
+1. Drive `hir.eager_func` from PhaseEvalLoop: evaluate the head link, specialize forward, and replace the op with the same-name `hir.func` shim when a single link remains.
+2. Switch `silc` from the HIR-level split (lib/HIR/Transforms/SplitPhases.cpp) to `sort-phases`/`thread-phases`/`split-funcs` at parity, then delete the old stack (`SplitPhases`, `TestPhaseAnalysis`, `hir.unified_func`/`unified_call`/`split_func`/`multiphase_func`/`expr`/`yield`).
+3. Move the never-compiled-callee diagnostic out of `split-funcs` into the `uir.call` checker; it currently names an op the user never wrote, for the first offending site only.
+4. Delete PhaseAnalysis step 3b (function-level multi-return result floor, lib/UIR/Analysis/PhaseAnalysis.cpp) and its multi-return coverage; assert single-exit input instead.
+5. `RegionThreader::ensureThreaded` (lib/UIR/Transforms/ThreadPhases.cpp) recurses once per phase, so a wide declared span such as `uir.func @W(%a: -1000000)` blows the stack; nothing bounds a declared span.
+6. `RegionThreader::computeRange` encodes the signature P-1 rule a second time behind an `isSignature` flag; it should fall out of the demand set `plan` already walks.
+7. `hir.type_of %x` of a function argument sorts to phase p(x)-1, where `%x` is not available, and HIRToMIR papers over it with a dummy type constant; needs a real resolution once per-phase funcs flow through HIRToMIR.
+   `check-calls` makes this fatal: coercing an argument turns a block argument into an op result, which `sort-phases` asserts on ("backward crossing survived analysis and extraction") where it tolerated the block argument, so the identity function `fn f(x: int) -> int { x }` crashes under `--check-calls --sort-phases`.
+   `--canonicalize` in between folds the redundant `hir.type_of`/`hir.unify` and hides it; decide what runs between checking and sorting, since phase-ops.md names no stage there.
+   test/Transforms/check-calls-composed.mlir dodges the shape by declaring its result type as `hir.uint_type %N`.
+8. `uir.phase`/`uir.phase_return` tablegen docs claim the function-result-to-phase correspondence is "diagnosed by function splitting"; it is enforced by the thread-phases contract plus the `hir.func` verifier.
+9. `CallOp::verifySymbolUses`'s `if (!callee)` branch in lib/UIR/Ops.cpp is dead: `callee` is a non-optional ODS attribute.
 
 ### Open questions and hazards
 
+- `check-calls` never checks a `uir.call` inside a `uir.split_func` signature region, then copies it verbatim into every caller, so an unchecked call lands in user code and nothing downstream checks it.
+  Nothing in the IR distinguishes a checked signature from an unchecked one, while the declared state is meant to be an authoring form for libraries and incremental compilation; decide where checked-ness is represented.
+- `check-calls` copies a signature per consumer and shares nothing, so a signature-call DAG expands into a tree: eight nested functions whose signatures call the next twice produce 2008 `uir.call` ops from 90 input lines.
+  Decide whether copying stays unbounded.
+- `check-calls` coerces body arguments to their declared types but leaves signature-region arguments unconstrained; state why the two consumers of one declaration differ, or make them symmetric.
+- `check-calls` silently ignores a `uir.call` outside a module-level `uir.func` (inside a `func.func`, say) and silently accepts already-sorted input holding `uir.phase` ops, where `thread-phases` then blames the wrong op.
+  Both want a loud rejection once the checkable-region rule above is settled.
+- "Declares a signature region and phases" wants an op interface: `getDeclaredPhases`, `SignatureOp::verify`, and `check-calls` each hand-roll the `uir.func`/`uir.split_func` switch.
 - Record extraction hard-errors on a `hir.pick` that carries a loop exit ("carries a loop exit but is not a branch", `scanBlock` in lib/UIR/Transforms/SortPhases2.cpp), while the same shape on `uir.if` sorts; `extractBranches` already treats pick as a divergence and the sorter itself emits picks.
   Either generalize the scan over divergences or record why picks are excluded.
 - `hir.replicate`'s ODS description still sanctions `uir.return` in a receiving body, `hir.pick`'s says function exits never appear in alternatives, and neither op verifies it; state the rule once and enforce it before the M4 expander is written.
 - Every function whose arguments start at phase P grows a signature phase P-1 computing their types, so even a plain phase-0 function splits into a pre-span `hir.eager_func` chain with an opaque context round-trip.
-  Decide whether that cost is accepted or peepholed away; until item 2 lands nothing splits to a directly callable phase-0 function.
+  Decide whether that cost is accepted or peepholed away; until item 1 lands nothing splits to a directly callable phase-0 function.
 - `opaque_pack(opaque_unpack(x))` → `x` exists only as `OpaquePackOp::canonicalize`, so `createOrFold` in the splitter cannot use it; decide whether it should also be a folder.
 - Candidate verifier invariant: all `uir.phase_call` entries of one decomposed call share one offset.
   Nothing relates a `uir.phase_call`'s callee phase to its enclosing `uir.phase`, so an inconsistently shifted decomposition is accepted silently.

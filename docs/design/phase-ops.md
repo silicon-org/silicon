@@ -73,6 +73,10 @@ Five stages, each owning a single concern:
   A split caller thus recomputes a dependent callee type from arguments it already holds and threads it through its *own* opaque context; the callee's context is private plumbing, never read for types, and the caller supplies call type operands independently.
   Agreement between the caller-side and callee-side type computation is structural: checking either rejects the program with a user diagnostic or guarantees both sides pick the same types.
   A type disagreement observed at evaluation time, when a per-phase func is specialized, is therefore an internal compiler error, and the evaluator must trap on it loudly.
+  The `check-calls` pass implements this, between exit normalization and sorting: it copies the declared computation into every consumer — ahead of each `uir.call`, and into the declaring function's own body, where the arguments are additionally constrained by `hir.coerce_type` — and ties each copy to the local types with `hir.unify`.
+  Signatures are copied whole, control flow included, and are therefore consumed in the single-exit shape exit normalization leaves behind; a signature with several blocks or exits has no single computation to copy and is rejected.
+  Only `uir.func` ops are rewritten: a `uir.split_func` is a declaration a caller reads, whether it comes from a precompiled library or from a function this module already sorted.
+  Checking is ordered post-order over the call graph restricted to signature calls, so a callee's signature is resolved before it is copied; recursion through signatures is a user error.
 - **Phase boundaries pack uniformly.**
   Every phase boundary packs exactly one fresh opaque context bundling all its crossings: no special case for a single crossing, for a crossing that is already an opaque context, or for a contentless gap phase (whose func unpacks and repacks unchanged).
   Packing must stay symmetric with the receiving phase's unpacking, so skipping a "redundant" pack is not a local decision.
