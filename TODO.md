@@ -12,9 +12,6 @@ Resume: drive `hir.eager_func` from PhaseEvalLoop.
 5. `RegionThreader::ensureThreaded` (lib/UIR/Transforms/ThreadPhases.cpp) recurses once per phase, so a wide declared span such as `uir.func @W(%a: -1000000)` blows the stack; nothing bounds a declared span.
 6. `RegionThreader::computeRange` encodes the signature P-1 rule a second time behind an `isSignature` flag; it should fall out of the demand set `plan` already walks.
 7. `hir.type_of %x` of a function argument sorts to phase p(x)-1, where `%x` is not available, and HIRToMIR papers over it with a dummy type constant; needs a real resolution once per-phase funcs flow through HIRToMIR.
-   `check-calls` makes this fatal: coercing an argument turns a block argument into an op result, which `sort-phases` asserts on ("backward crossing survived analysis and extraction") where it tolerated the block argument, so the identity function `fn f(x: int) -> int { x }` crashes under `--check-calls --sort-phases`.
-   `--canonicalize` in between folds the redundant `hir.type_of`/`hir.unify` and hides it; decide what runs between checking and sorting, since phase-ops.md names no stage there.
-   test/Transforms/check-calls-composed.mlir dodges the shape by declaring its result type as `hir.uint_type %N`.
 8. `uir.phase`/`uir.phase_return` tablegen docs claim the function-result-to-phase correspondence is "diagnosed by function splitting"; it is enforced by the thread-phases contract plus the `hir.func` verifier.
 9. `CallOp::verifySymbolUses`'s `if (!callee)` branch in lib/UIR/Ops.cpp is dead: `callee` is a non-optional ODS attribute.
 

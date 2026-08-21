@@ -113,8 +113,12 @@ Five stages, each owning a single concern:
 - **`uir.phase_call` targets only `uir.split_func`.**
   `uir.call` is the late-binding vocabulary and resolves to `uir.func` or `uir.split_func` interchangeably; sorting snapshots every declaration in the module before decomposing any call, so a decomposed entry always names the interface, whether the callee is fresh user code or already-split library code.
   A `uir.phase_call` naming a `uir.func` would bypass the interface and call an implementation directly, so the verifier rejects it.
-- **No canonicalization between the passes** for now; sorting and splitting run back-to-back.
-  Effect modeling and canonicalization interactions (CSE across phase regions, constant hoisting out of them) are deferred until a canonicalizer needs to run in between.
+- **Pass order.**
+  Exit normalization, `check-calls`, canonicalize + CSE, `sort-phases`, `thread-phases`, `split-funcs`.
+  The canonicalization stage between checking and sorting is load-bearing, not cosmetic: checking coerces every body argument to its declared type, so an `hir.type_of %x` the user wrote about an argument becomes `hir.type_of` of the coercion's result, a phase-P value whose type the sorter would have to place at phase P-1 — a backward crossing it rejects.
+  Folding `type_of(coerce_type(_, %ty))` to `%ty`, and the identity `hir.unify` that leaves behind, replaces the query with the declared type the signature copy already computes, which is available one phase earlier by construction.
+  The identity function `fn f(x: int) -> int { x }` is the smallest program that needs it.
+  Sorting and splitting still run back-to-back: effect modeling and canonicalization interactions there (CSE across phase regions, constant hoisting out of them) are deferred until a canonicalizer needs to run in between.
 - **The phase-op-only contract is not verifier-enforced.**
   The function-splitting pass errors out with a diagnostic when it encounters content that violates the expectation.
 - **Function-level exits** ({{< page-link "/design/function-exit-choices" >}}) never reach sorting: exit normalization rewrites them to value form up front, so there are no exit chains to surface, and the splitter sees exactly one `uir.phase_return` per phase region.

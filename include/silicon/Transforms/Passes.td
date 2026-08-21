@@ -78,6 +78,19 @@ def CheckCallsPass : Pass<"check-calls", "mlir::ModuleOp"> {
 
     **Produces:** `hir.unify` and `hir.coerce_type` ops linking declared
     types to actual usage, and calls whose type operands name both sides.
+
+    **Pipeline position:** after exit normalization, and before phase
+    sorting with a canonicalize + CSE stage in between:
+    `check-calls`, `canonicalize`, `cse`, `sort-phases`,
+    `thread-phases`, `split-funcs`. That stage is load-bearing.
+    Coercing a body argument to its declared type turns an
+    `hir.type_of` of the argument into an `hir.type_of` of the
+    coercion's result, whose type sorting would have to place one phase
+    before a value of the same phase -- a backward crossing it rejects.
+    Folding `type_of(coerce_type(_, %ty))` to `%ty`, and the identity
+    `hir.unify` left behind, replaces the query with the declared type
+    the signature copy computes anyway, which is available one phase
+    earlier by construction.
   }];
   let dependentDialects = [
     "hir::HIRDialect",

@@ -37,6 +37,20 @@ func.func @TypeOfConstantInt() -> !hir.any {
   return %1 : !hir.any
 }
 
+// The type of a coerced value is the type it was coerced to. Call checking
+// leans on this: it coerces function arguments to their declared types, and
+// without the fold an `hir.type_of` of an argument would end up asking for the
+// type of the coercion's result.
+// CHECK-LABEL: @TypeOfCoerceType
+func.func @TypeOfCoerceType(%arg: !hir.any) -> !hir.any {
+  // CHECK: [[TY:%.+]] = hir.int_type
+  %t = hir.int_type
+  %0 = hir.coerce_type %arg, %t
+  %1 = hir.type_of %0
+  // CHECK: return [[TY]]
+  return %1 : !hir.any
+}
+
 // CHECK-LABEL: @CoerceTypeIdentity
 func.func @CoerceTypeIdentity() -> !hir.any {
   %t = hir.int_type
