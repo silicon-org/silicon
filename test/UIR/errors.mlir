@@ -348,17 +348,34 @@ uir.func @sig_nested_arity(%a: 0) -> () {
 
 // -----
 
-// Verify that a uir.signature nested under control flow in a split_func
-// signature region checks its operand arity against the enclosing function.
-uir.split_func @split_sig_nested_arity(%a: 0) -> () {
+// Verify that a split_func signature declaring its types on more than one path
+// is rejected. The op is the interface every caller copies into its own
+// context, so it must hold one computation to copy.
+// expected-error @below {{signature region must be a single block exiting through one 'uir.signature'}}
+uir.split_func @split_sig_multi_exit(%a: 0) -> () {
   uir.if %a {
-    // expected-error @below {{has 0 argument types but parent function has 1 arguments}}
-    uir.signature () -> ()
+    uir.signature (%a) -> ()
   }
   uir.signature (%a) -> ()
-} [
-  @split_sig_nested_arity.0
-]
+} []
+
+// -----
+
+// Verify that a split_func signature that declares no types at all is rejected.
+// expected-error @below {{signature region must be a single block exiting through one 'uir.signature'}}
+uir.split_func @split_sig_no_exit(%a: 0) -> () {
+  uir.unreachable
+} []
+
+// -----
+
+// Verify that a split_func signature spread across several blocks is rejected.
+// expected-error @below {{signature region must be a single block exiting through one 'uir.signature'}}
+uir.split_func @split_sig_multi_block(%a: 0) -> () {
+  uir.signature (%a) -> ()
+^dead:
+  uir.unreachable
+} []
 
 // -----
 

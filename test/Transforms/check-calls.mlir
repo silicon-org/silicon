@@ -241,13 +241,16 @@ uir.func @CallSplit(%n: -1, %v: 0) -> () {
 }
 
 //===----------------------------------------------------------------------===//
-// A call in the signature region of a `uir.split_func` is checked in place,
-// like one in a `uir.func` signature. The declared signature is the interface
-// every caller copies, so a call left unchecked here would land unchecked in
-// each of them.
+// A `uir.split_func` signature is already-checked output, so nothing in it is
+// rewritten: phase sorting snapshots the declaration downstream of this pass,
+// and a precompiled library ships an interface checked when the library was
+// compiled. The call below is in checked form -- its type operands are the
+// unify results a check produced -- and comes out of this run unchanged. A
+// second check would stack another unify on each of them, since `hir.unify`
+// folds only two identical values.
 
-// CHECK-LABEL: uir.split_func @DeclaredSigCall
-uir.split_func @DeclaredSigCall(%x: 0) -> (result: 0) {
+// CHECK-LABEL: uir.split_func @CheckedSigCall
+uir.split_func @CheckedSigCall(%x: 0) -> (result: 0) {
   // CHECK:      [[T:%.+]] = hir.int_type
   // CHECK-NEXT: [[UA:%.+]] = hir.unify [[T]], {{%.+}}
   // CHECK-NEXT: [[UR:%.+]] = hir.unify [[T]], {{%.+}}
@@ -256,13 +259,17 @@ uir.split_func @DeclaredSigCall(%x: 0) -> (result: 0) {
   %i0 = hir.inferrable
   %i1 = hir.inferrable
   %u = hir.constant_unit
-  %t = uir.call @Callee(%u) : (%i0) -> (%i1) [0] -> [0]
+  %t0 = hir.int_type
+  %ua = hir.unify %t0, %i0
+  %ur = hir.unify %t0, %i1
+  %t = uir.call @Callee(%u) : (%ua) -> (%ur) [0] -> [0]
   uir.signature (%t) -> (%t)
 } []
 
-// The caller's copy of that signature carries the checked call along.
-// CHECK-LABEL: uir.func @CallDeclaredSigCall
-uir.func @CallDeclaredSigCall(%v: 0) -> () {
+// The caller's copy of that signature carries the checked call along, and the
+// call to the split function itself is checked against the copy.
+// CHECK-LABEL: uir.func @CallCheckedSigCall
+uir.func @CallCheckedSigCall(%v: 0) -> () {
   %0 = hir.int_type
   uir.signature (%0) -> ()
 } {
@@ -273,10 +280,38 @@ uir.func @CallDeclaredSigCall(%v: 0) -> () {
   // CHECK-NEXT: [[R:%.+]] = uir.call @Callee({{%.+}}) : ([[UA]]) -> ([[UR]])
   // CHECK-NEXT: [[UX:%.+]] = hir.unify [[R]], {{%.+}}
   // CHECK-NEXT: [[URR:%.+]] = hir.unify [[R]], {{%.+}}
-  // CHECK-NEXT: uir.call @DeclaredSigCall([[CV]]) : ([[UX]]) -> ([[URR]]) [0] -> [0]
+  // CHECK-NEXT: uir.call @CheckedSigCall([[CV]]) : ([[UX]]) -> ([[URR]]) [0] -> [0]
   %i0 = hir.inferrable
   %i1 = hir.inferrable
-  %r = uir.call @DeclaredSigCall(%v) : (%i0) -> (%i1) [0] -> [0]
+  %r = uir.call @CheckedSigCall(%v) : (%i0) -> (%i1) [0] -> [0]
+  uir.return
+}
+
+//===----------------------------------------------------------------------===//
+// A split function's signature calling back into the module is a leaf of the
+// checking order, since its own types are resolved before this run begins. The
+// caller inlines it like any other declaration, self-call included; there is no
+// order to violate and nothing is reported.
+
+// CHECK-LABEL: uir.split_func @CallsBack
+// CHECK-NEXT:  uir.call @CallsIntoDeclaration()
+// CHECK-NEXT:  uir.signature () -> ()
+uir.split_func @CallsBack() -> () {
+  uir.call @CallsIntoDeclaration() : () -> () [] -> []
+  uir.signature () -> ()
+} []
+
+// CHECK-LABEL: uir.func @CallsIntoDeclaration
+uir.func @CallsIntoDeclaration() -> () {
+  // CHECK:      uir.call @CallsIntoDeclaration()
+  // CHECK-NEXT: uir.call @CallsBack()
+  // CHECK-NEXT: uir.signature () -> ()
+  uir.call @CallsBack() : () -> () [] -> []
+  uir.signature () -> ()
+} {
+  // CHECK:      uir.call @CallsIntoDeclaration()
+  // CHECK-NEXT: uir.call @CallsBack()
+  // CHECK-NEXT: uir.return
   uir.return
 }
 

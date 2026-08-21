@@ -496,6 +496,18 @@ LogicalResult PinOp::verify() {
 // SignatureOp
 //===----------------------------------------------------------------------===//
 
+SignatureOp silicon::uir::getSignatureExit(Region &signature) {
+  if (!signature.hasOneBlock())
+    return {};
+  auto signatureOp = dyn_cast<SignatureOp>(signature.front().getTerminator());
+  if (!signatureOp)
+    return {};
+  auto result = signature.walk([&](SignatureOp op) {
+    return op == signatureOp ? WalkResult::advance() : WalkResult::interrupt();
+  });
+  return result.wasInterrupted() ? SignatureOp{} : signatureOp;
+}
+
 LogicalResult SignatureOp::verify() {
   // Climb to the enclosing function, remembering which of its regions holds
   // this op. `uir.signature` is the signature region's return-like exit and
@@ -987,15 +999,16 @@ LogicalResult SplitFuncOp::verify() {
 }
 
 LogicalResult SplitFuncOp::verifyRegions() {
-  if (getSignature().empty())
-    return success();
-
-  // Signature must end with uir.signature or uir.unreachable.
-  auto *sigTerm = getSignature().front().getTerminator();
-  if (!isa<SignatureOp, UnreachableOp>(sigTerm))
-    return sigTerm->emitOpError()
-           << "expected 'uir.signature' or 'uir.unreachable' terminator "
-              "in signature region";
+  // The interface is a normalized declaration: every consumer copies its
+  // signature computation into its own context, so the region must hold one
+  // such computation, on one path. Unlike a `uir.func`, whose signature is
+  // user-written and normalized by later passes, this op is only ever produced
+  // from an already normalized and checked declaration, or written by hand to
+  // stand in for one.
+  if (!getSignatureExit(getSignature()))
+    return emitOpError() << "signature region must be a single block exiting "
+                            "through one 'uir.signature'; the declared "
+                            "interface computes its types on one path";
 
   // Signature must not contain uir.return anywhere (even nested).
   auto walkResult = getSignature().walk([](ReturnOp op) {

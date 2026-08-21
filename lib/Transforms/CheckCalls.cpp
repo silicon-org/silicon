@@ -53,28 +53,16 @@ struct DeclaredTypes {
 /// The signature's block arguments stand for the function's arguments and are
 /// substituted by `args`, so the copy computes the declared types in terms of
 /// the values the consumer holds. Returns the copied type values.
-static FailureOr<DeclaredTypes>
-inlineSignature(uir::DeclaredFuncOpInterface funcOp, ValueRange args,
-                OpBuilder &builder) {
-  auto &signature = funcOp.getSignature();
-
+static DeclaredTypes inlineSignature(uir::DeclaredFuncOpInterface funcOp,
+                                     ValueRange args, OpBuilder &builder) {
   // The declared types are the operands of the `uir.signature` terminating the
-  // signature region. Call checking runs on structured, exit-normalized input:
-  // a signature spread across multiple blocks, exiting through more than one
-  // `uir.signature`, or not exiting at all has no single computation to copy.
+  // signature region. That the region has one such exit to copy is established
+  // before anything is inlined: for a `uir.func` by the input check below, for
+  // a `uir.split_func` by its own verifier.
+  auto &signature = funcOp.getSignature();
+  auto signatureOp = uir::getSignatureExit(signature);
+  assert(signatureOp && "signature shape established before inlining");
   auto &entry = signature.front();
-  auto signatureOp = dyn_cast<uir::SignatureOp>(entry.getTerminator());
-  bool singleExit = signature.hasOneBlock() && signatureOp;
-  if (singleExit)
-    signature.walk([&](uir::SignatureOp op) {
-      if (op != signatureOp)
-        singleExit = false;
-    });
-  if (!singleExit)
-    return funcOp->emitOpError()
-           << "signature region must be a single block exiting through one "
-              "'uir.signature' for its declared types to be inlined at a use; "
-              "call checking expects structured, exit-normalized input";
 
   // Snapshot the ops before cloning any: a recursive call in a signature clones
   // the very block it inserts into.
@@ -103,8 +91,7 @@ inlineSignature(uir::DeclaredFuncOpInterface funcOp, ValueRange args,
 /// to the call's arguments, and unified with the types the call carries. The
 /// unify results become the call's type operands, so consumers of the call see
 /// a type value that stands for both sides.
-static LogicalResult checkCall(uir::CallOp callOp,
-                               const SymbolTable &symbolTable) {
+static void checkCall(uir::CallOp callOp, const SymbolTable &symbolTable) {
   LLVM_DEBUG(llvm::dbgs() << "- " << callOp << "\n");
   auto calleeOp =
       symbolTable.lookup<uir::DeclaredFuncOpInterface>(callOp.getCallee());
@@ -112,34 +99,28 @@ static LogicalResult checkCall(uir::CallOp callOp,
 
   OpBuilder builder(callOp);
   auto declared = inlineSignature(calleeOp, callOp.getArguments(), builder);
-  if (failed(declared))
-    return failure();
 
   SmallVector<Value> argTypes, resultTypes;
   for (auto [declaredType, callType] :
-       llvm::zip_equal(declared->args, callOp.getTypeOfArgs()))
+       llvm::zip_equal(declared.args, callOp.getTypeOfArgs()))
     argTypes.push_back(
         hir::UnifyOp::create(builder, callOp.getLoc(), declaredType, callType));
   for (auto [declaredType, callType] :
-       llvm::zip_equal(declared->results, callOp.getTypeOfResults()))
+       llvm::zip_equal(declared.results, callOp.getTypeOfResults()))
     resultTypes.push_back(
         hir::UnifyOp::create(builder, callOp.getLoc(), declaredType, callType));
   callOp.getTypeOfArgsMutable().assign(argTypes);
   callOp.getTypeOfResultsMutable().assign(resultTypes);
-  return success();
 }
 
 /// Check all calls in a function's signature region.
-static LogicalResult checkSignature(uir::DeclaredFuncOpInterface funcOp,
-                                    const SymbolTable &symbolTable) {
-  LLVM_DEBUG(llvm::dbgs() << "Checking signature of "
-                          << SymbolTable::getSymbolName(funcOp) << "\n");
+static void checkSignature(uir::FuncOp funcOp, const SymbolTable &symbolTable) {
+  LLVM_DEBUG(llvm::dbgs() << "Checking signature of " << funcOp.getSymNameAttr()
+                          << "\n");
   SmallVector<uir::CallOp> calls;
   funcOp.getSignature().walk([&](uir::CallOp op) { calls.push_back(op); });
   for (auto callOp : calls)
-    if (failed(checkCall(callOp, symbolTable)))
-      return failure();
-  return success();
+    checkCall(callOp, symbolTable);
 }
 
 /// Constrain a function body with its own declared types and check its calls.
@@ -149,8 +130,7 @@ static LogicalResult checkSignature(uir::DeclaredFuncOpInterface funcOp,
 /// its declared type through a `hir.coerce_type` that takes over the argument's
 /// uses, and every return's type operands are unified with the declared result
 /// types.
-static LogicalResult checkBody(uir::FuncOp funcOp,
-                               const SymbolTable &symbolTable) {
+static void checkBody(uir::FuncOp funcOp, const SymbolTable &symbolTable) {
   LLVM_DEBUG(llvm::dbgs() << "Checking body of " << funcOp.getSymNameAttr()
                           << "\n");
   auto &bodyBlock = funcOp.getBody().front();
@@ -173,11 +153,9 @@ static LogicalResult checkBody(uir::FuncOp funcOp,
 
   OpBuilder builder(&bodyBlock, bodyBlock.begin());
   auto declared = inlineSignature(funcOp, bodyBlock.getArguments(), builder);
-  if (failed(declared))
-    return failure();
 
   for (auto [arg, declaredType, uses] :
-       llvm::zip_equal(bodyBlock.getArguments(), declared->args, argUses)) {
+       llvm::zip_equal(bodyBlock.getArguments(), declared.args, argUses)) {
     auto coerced =
         hir::CoerceTypeOp::create(builder, arg.getLoc(), arg, declaredType);
     for (auto *use : uses)
@@ -188,37 +166,53 @@ static LogicalResult checkBody(uir::FuncOp funcOp,
     OpBuilder returnBuilder(returnOp);
     SmallVector<Value> valueTypes;
     for (auto [valueType, declaredType] :
-         llvm::zip_equal(returnOp.getTypeOfValues(), declared->results))
+         llvm::zip_equal(returnOp.getTypeOfValues(), declared.results))
       valueTypes.push_back(hir::UnifyOp::create(
           returnBuilder, returnOp.getLoc(), valueType, declaredType));
     returnOp.getTypeOfValuesMutable().assign(valueTypes);
   });
 
   for (auto callOp : calls)
-    if (failed(checkCall(callOp, symbolTable)))
-      return failure();
-  return success();
+    checkCall(callOp, symbolTable);
 }
 
 //===----------------------------------------------------------------------===//
 // Rejecting Unexpected Input
 //===----------------------------------------------------------------------===//
 //
-// The checker rewrites the regions of the declared functions a module holds,
-// before phases are sorted. Input that does not fit that shape would otherwise
-// pass through untouched, since a pass sees only what it walks: a call outside
+// The checker rewrites the regions of the `uir.func` ops a module holds, before
+// phases are sorted, and every one of them must hold a signature it can copy.
+// Input that does not fit that shape would otherwise pass through untouched,
+// since a pass sees only what it walks: a call outside
 // any declared function is never visited, and a module whose calls have already
 // been decomposed into phases holds nothing left for the checker to constrain,
 // while the types it would have added are exactly what the later stages assume
 // are there. Both are the compiler running its own passes in a shape they do
 // not describe, and are reported as such.
 
+/// Check that a function's signature declares its types on a single path.
+///
+/// The signature computation is copied into every consumer, so it must be one
+/// computation: a signature spread across multiple blocks, exiting through more
+/// than one `uir.signature`, or not exiting at all has nothing to copy. The
+/// shape belongs to the declaration rather than to any one of its uses, so it
+/// is checked for every `uir.func`, called or not.
+static LogicalResult checkSignatureShape(uir::FuncOp funcOp) {
+  if (uir::getSignatureExit(funcOp.getSignature()))
+    return success();
+  return funcOp->emitOpError()
+         << "signature region must be a single block exiting through one "
+            "'uir.signature' for its declared types to be inlined at a use; "
+            "call checking expects structured, exit-normalized input";
+}
+
 /// Check that a call sits in a region call checking rewrites.
 ///
 /// The nearest ancestor of a call that closes off its enclosing values must be
-/// a declared function, whose signature or body region the checker walks. Any
-/// other one -- a `func.func`, or the module itself -- means the call belongs
-/// to a function this pass knows nothing about.
+/// a declared function, whose signature or body region the checker walks -- or,
+/// for a `uir.split_func`, has already walked before that op came to be. Any
+/// other ancestor -- a `func.func`, or the module itself -- means the call
+/// belongs to a function this pass knows nothing about.
 static LogicalResult checkCallLocation(uir::CallOp callOp) {
   for (auto *parent = callOp->getParentOp(); parent;
        parent = parent->getParentOp()) {
@@ -244,6 +238,18 @@ static LogicalResult checkNotSorted(uir::PhaseOp phaseOp) {
 
 /// Check that the whole module is input the checker can work on.
 static LogicalResult checkInput(ModuleOp module) {
+  // Every malformed signature is reported, not just the first: the shape is a
+  // property of one declaration, so a module holding several of them has
+  // several separate things to fix.
+  bool anyShapeErrors = false;
+  module.walk([&](uir::FuncOp funcOp) {
+    if (failed(checkSignatureShape(funcOp)))
+      anyShapeErrors = true;
+  });
+
+  // The remaining two are compiler-bug traps rather than diagnostics about the
+  // input program: the first one that fires already says the compiler is
+  // running its passes out of order, and the rest add nothing to that.
   auto result = module.walk([](Operation *op) {
     auto ok = success();
     if (auto callOp = dyn_cast<uir::CallOp>(op))
@@ -252,7 +258,7 @@ static LogicalResult checkInput(ModuleOp module) {
       ok = checkNotSorted(phaseOp);
     return failed(ok) ? WalkResult::interrupt() : WalkResult::advance();
   });
-  return failure(result.wasInterrupted());
+  return failure(anyShapeErrors || result.wasInterrupted());
 }
 
 //===----------------------------------------------------------------------===//
@@ -264,15 +270,21 @@ static LogicalResult checkInput(ModuleOp module) {
 // copies whatever it holds, so the callee's own calls must already be resolved
 // against their declarations. That ordering is a post-order traversal of the
 // call graph restricted to signature calls, and a cycle in it is a user error:
-// a signature that transitively calls itself has no order that satisfies it.
+// a signature that transitively calls itself has no order that satisfies it. A
+// cycle closing through a split function is not such a case: nothing about it
+// has to be resolved first, so the inlining terminates and nothing is reported.
 //
-// Every signature region is checked the same way, whether it belongs to a
-// `uir.func` or to a `uir.split_func`: a declaration's signature is the
-// interface every caller copies, so an unchecked call in one lands unchecked in
-// user code. Nothing marks a signature as already checked, so a declaration
-// checked by an earlier run is checked again; the second copy of its inlined
-// types is pure computation and a duplicate constraint, which CSE and
-// unification absorb.
+// Only `uir.func` ops are checked; a `uir.split_func` is read, never rewritten.
+// A split function is born from a checked declaration -- phase sorting
+// snapshots it, downstream of this pass -- so its signature already holds
+// checked calls and inlined types, and so does one shipped by a precompiled
+// library, which was checked when the library was compiled. Re-checking it
+// would not be a no-op: `hir.unify` folds only two identical values, so a
+// second run stacks another unify on every call in the signature and copies
+// the signatures it calls afresh, compounding along a chain of declarations.
+// The persisted interface is therefore checked exactly once, where it is
+// written. That also makes a split function a leaf of the traversal: it
+// constrains no order, since its types are resolved before this run begins.
 //
 // Bodies belong to `uir.func` alone. A `uir.split_func` has no body: it is the
 // interface of a function whose implementation is compiled elsewhere, already
@@ -293,7 +305,7 @@ void CheckCallsPass::runOnOperation() {
   /// A function on the traversal stack, together with the signature calls that
   /// still have to be visited before it can be checked itself.
   struct WorklistItem {
-    uir::DeclaredFuncOpInterface funcOp;
+    uir::FuncOp funcOp;
     Location callLoc;
     SmallVector<uir::CallOp, 1> calls;
   };
@@ -301,27 +313,29 @@ void CheckCallsPass::runOnOperation() {
   SmallPtrSet<Operation *, 4> callStack;
   DenseSet<Operation *> checkedFuncs;
 
+  /// The `uir.func` a call names, or null if it names a `uir.split_func`, which
+  /// is not checked and therefore not a node of the traversal.
   auto lookupCallee = [&](uir::CallOp callOp) {
     auto callee =
         symbolTable.lookup<uir::DeclaredFuncOpInterface>(callOp.getCallee());
     assert(callee && "callee resolved by uir.call verifier");
-    return callee;
+    return dyn_cast<uir::FuncOp>(callee.getOperation());
   };
 
-  auto addToWorklist = [&](uir::DeclaredFuncOpInterface funcOp,
-                           Location callLoc) {
+  auto addToWorklist = [&](uir::FuncOp funcOp, Location callLoc) {
     SmallPtrSet<Operation *, 4> seenCallees;
     SmallVector<uir::CallOp, 1> calls;
     funcOp.getSignature().walk([&](uir::CallOp op) {
       auto callee = lookupCallee(op);
-      if (!checkedFuncs.contains(callee) && seenCallees.insert(callee).second)
+      if (callee && !checkedFuncs.contains(callee) &&
+          seenCallees.insert(callee).second)
         calls.push_back(op);
     });
     worklist.push_back({funcOp, callLoc, std::move(calls)});
   };
 
   bool anyErrors = false;
-  for (auto funcOp : getOperation().getOps<uir::DeclaredFuncOpInterface>()) {
+  for (auto funcOp : getOperation().getOps<uir::FuncOp>()) {
     if (checkedFuncs.contains(funcOp))
       continue;
     addToWorklist(funcOp, funcOp.getLoc());
@@ -333,8 +347,7 @@ void CheckCallsPass::runOnOperation() {
       // If all calls in the function's signature have been visited, check the
       // signature itself and pop the function off the worklist.
       if (item.calls.empty()) {
-        if (failed(checkSignature(item.funcOp, symbolTable)))
-          anyErrors = true;
+        checkSignature(item.funcOp, symbolTable);
         checkedFuncs.insert(item.funcOp);
         callStack.erase(item.funcOp);
         worklist.pop_back();
@@ -344,7 +357,7 @@ void CheckCallsPass::runOnOperation() {
       // Descend into the next call in the function's signature, using the call
       // stack to detect recursion.
       auto callOp = item.calls.pop_back_val();
-      auto callee = lookupCallee(callOp);
+      uir::FuncOp callee = lookupCallee(callOp);
       if (checkedFuncs.contains(callee))
         continue;
       if (callStack.insert(callee).second) {
@@ -356,7 +369,7 @@ void CheckCallsPass::runOnOperation() {
       // recursive call chain through function signatures. Report the cycle
       // along the frames that lead back to the callee.
       anyErrors = true;
-      auto calleeName = SymbolTable::getSymbolName(callee).getValue();
+      auto calleeName = callee.getSymName();
       emitError(callee.getLoc())
           << "signature of `" << calleeName << "` cannot call itself";
       bool selfSeen = false;
@@ -366,8 +379,7 @@ void CheckCallsPass::runOnOperation() {
           continue;
         }
         emitRemark(frame.callLoc)
-            << "called through `"
-            << SymbolTable::getSymbolName(frame.funcOp).getValue() << "`";
+            << "called through `" << frame.funcOp.getSymName() << "`";
       }
       emitRemark(callOp.getLoc())
           << "calling `" << calleeName << "` itself here";
@@ -378,13 +390,6 @@ void CheckCallsPass::runOnOperation() {
   // its own signature and inlines the signatures it calls.
   if (anyErrors)
     return signalPassFailure();
-
-  // Bodies are independent of each other, but checking them in module order
-  // keeps the diagnostics a malformed declaration produces in a fixed order.
-  bool anyBodyErrors = false;
   for (auto funcOp : getOperation().getOps<uir::FuncOp>())
-    if (failed(checkBody(funcOp, symbolTable)))
-      anyBodyErrors = true;
-  if (anyBodyErrors)
-    signalPassFailure();
+    checkBody(funcOp, symbolTable);
 }

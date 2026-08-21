@@ -3,7 +3,7 @@
 ## Phase-Op Rebuild
 
 Design: docs/design/phase-ops.md (passes), sampling-model.md (semantics), record-replay.md, function-exit-choices.md.
-Resume: drive `hir.eager_func` from PhaseEvalLoop.
+Resume: make `check-calls` recursion detection walk through `uir.split_func` signatures (read-only ordering nodes, never rewritten) so a cycle closing through a declaration is a user error again; `@CallsBack` in test/Transforms/check-calls.mlir currently pins the bad output (a call inlined into its own declaring signature). Then item 1.
 
 1. Drive `hir.eager_func` from PhaseEvalLoop: evaluate the head link, specialize forward, and replace the op with the same-name `hir.func` shim when a single link remains.
 2. Switch `silc` from the HIR-level split (lib/HIR/Transforms/SplitPhases.cpp) to `sort-phases`/`thread-phases`/`split-funcs` at parity, then delete the old stack (`SplitPhases`, `TestPhaseAnalysis`, `hir.unified_func`/`unified_call`/`split_func`/`multiphase_func`/`expr`/`yield`).
@@ -19,10 +19,14 @@ Resume: drive `hir.eager_func` from PhaseEvalLoop.
 
 ### Open questions and hazards
 
-- `check-calls` has no checked/unchecked state and checking is not idempotent: `hir.unify` folds only `unify %a, %a`, so re-checking a declaration lengthens the unify chain on each of its calls (2, 5, 7 unify ops over three runs of one signature call) and re-inlines any signature it calls, which compounds along a chain of declarations.
-  `uir.split_func` is the persisted interface for libraries and incremental compilation, so re-checking is the normal path, not a corner; decide where checked-ness is represented.
-- `check-calls` validates a signature's single-block single-exit shape only from `inlineSignature`, i.e. per consumer: an unusable `uir.split_func` signature with no caller passes silently, while the identical declaration with one caller errors.
-  The shape belongs to the declaration, so the check wants to run once in the traversal that already visits every signature region.
+- `check-calls` treats a `uir.split_func` as a leaf of the checking order, so a signature-computation cycle closing through a declaration goes unreported and is *materialized*: inlining puts a self-call into the caller's own signature, output the pass's own input check rejects and `sort-phases` snapshots into the persisted interface (@CallsBack in test/Transforms/check-calls.mlir pins this behaviour).
+  Detection and rewriting are separable: walk split_func signatures for ordering while rewriting only `uir.func`.
+- `check-calls` rests on "a `uir.split_func` signature holds checked calls", which is load-bearing but represented nowhere: a declaration-state split_func with `hir.inferrable` type operands is copied into user code with its constraints silently dropped.
+  Rule-minimizing alternative: make checking idempotent (`unify(a, unify(a, b))` → `unify(a, b)` folder plus CSE), which would dissolve the leaf carve-out, the run-exactly-once pipeline constraint, and this unverifiable invariant together.
+- `SplitFuncOp::verifyRegions` now requires a single-block single-`uir.signature` region, but `FlattenCF` walks the module and flattens any `uir.if`, signature regions of surviving `uir.split_func` interfaces included, which breaks that invariant (and already breaks the old terminator rule).
+  Decide: FlattenCF skips declaration signatures, or the shape is a stage precondition rather than an op invariant, or split_func signatures may hold no control flow at all.
+- The single-exit signature shape is now spelled three times: `checkSignatureShape` (pass error), `SplitFuncOp::verifyRegions` (verifier), and the `expected normalized single-exit input` assert in `PhaseSorter`.
+  The `check-calls` message also blames pass ordering for a user-written diverging signature that `normalize-exits` legitimately leaves alone.
 - `check-calls` copies a signature per consumer and shares nothing, so a signature-call DAG expands into a tree: eight nested functions whose signatures call the next twice produce 2008 `uir.call` ops from 90 input lines.
   Decide whether copying stays unbounded.
 - `check-calls` coerces body arguments to their declared types but leaves signature-region arguments unconstrained; state why the two consumers of one declaration differ, or make them symmetric.

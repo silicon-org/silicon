@@ -36,3 +36,17 @@ computePhaseSpan(llvm::ArrayRef<int32_t> argPhases,
 // Pull in the generated op definitions.
 #define GET_OP_CLASSES
 #include "silicon/UIR/Ops.h.inc"
+
+namespace silicon {
+namespace uir {
+
+/// The single `uir.signature` a normalized signature region exits through.
+///
+/// Returns null if the region does not have that shape -- if it spreads across
+/// several blocks, does not end in `uir.signature`, or holds more than one of
+/// them. Such a region declares its types on no single path, so there is no one
+/// computation a consumer could copy.
+SignatureOp getSignatureExit(mlir::Region &signature);
+
+} // namespace uir
+} // namespace silicon

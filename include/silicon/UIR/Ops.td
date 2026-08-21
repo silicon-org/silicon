@@ -471,6 +471,14 @@ def SplitFuncOp : UIROp<"split_func", [
     aside under a fresh name recorded in `impl`. Signature computations may
     therefore contain arbitrary content, calls included.
 
+    That region declares its types on one path -- a single block exiting
+    through one `uir.signature` -- which the verifier enforces: every
+    consumer copies the computation into its own context, so there must be
+    one computation to copy. It is also already-checked: this op is only
+    ever created downstream of call checking, which reads it at a call site
+    but never rewrites it, so the calls it holds carry the types the check
+    established and a caller copying them checks nothing anew.
+
     The op has three states:
 
     - *declared*: no `impl`, no phase list. The interface is known but no

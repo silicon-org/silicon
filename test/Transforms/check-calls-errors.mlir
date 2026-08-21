@@ -45,26 +45,6 @@ uir.func @gux() -> () {
 // -----
 
 //===----------------------------------------------------------------------===//
-// The signature of a `uir.split_func` takes part in the same traversal, so a
-// cycle running through a declaration is reported like any other.
-
-// expected-error @below {{signature of `foo` cannot call itself}}
-uir.split_func @foo() -> () {
-  // expected-remark @below {{called through `bar`}}
-  uir.call @bar() : () -> () [] -> []
-  uir.signature () -> ()
-} []
-uir.func @bar() -> () {
-  // expected-remark @below {{calling `foo` itself here}}
-  uir.call @foo() : () -> () [] -> []
-  uir.signature () -> ()
-} {
-  uir.return
-}
-
-// -----
-
-//===----------------------------------------------------------------------===//
 // A signature spread across multiple blocks has no single computation to copy
 // into a use. Call checking runs before control flow is flattened.
 
@@ -111,8 +91,29 @@ uir.func @NoSigExit(%x: 0) -> (result: 0) {
 // -----
 
 //===----------------------------------------------------------------------===//
-// The callee's signature is read the same way, so an unusable one is reported
-// where it is declared, at the call site's expense.
+// Each malformed signature is a separate thing to fix, so each is reported.
+
+// expected-error @below {{signature region must be a single block exiting through one 'uir.signature'}}
+uir.func @FirstBadSig(%x: 0) -> (result: 0) {
+  uir.unreachable
+} {
+  uir.return %x : %x
+}
+
+// expected-error @below {{signature region must be a single block exiting through one 'uir.signature'}}
+uir.func @SecondBadSig(%x: 0) -> (result: 0) {
+  uir.unreachable
+} {
+  uir.return %x : %x
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// The shape belongs to the declaration, not to any one use of it: an unusable
+// signature is reported where it is declared, once, however many callers copy
+// it. A `uir.split_func`'s shape is enforced by its own verifier, since it is
+// a declaration this pass never rewrites; see test/UIR/errors.mlir.
 
 uir.func @Caller(%x: 0) -> () {
   %0 = hir.int_type
@@ -125,9 +126,11 @@ uir.func @Caller(%x: 0) -> () {
 }
 
 // expected-error @below {{signature region must be a single block exiting through one 'uir.signature'}}
-uir.split_func @UnusableCallee(%a: 0) -> (result: 0) {
+uir.func @UnusableCallee(%a: 0) -> (result: 0) {
   uir.unreachable
-} []
+} {
+  uir.return %a : %a
+}
 
 // -----
 

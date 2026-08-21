@@ -23,11 +23,12 @@ def CheckCallsPass : Pass<"check-calls", "mlir::ModuleOp"> {
     depending on the function's own arguments. This pass copies that
     computation to each consumer and ties the copy to the local types:
 
-    - For every `uir.call`, the callee's signature computation is cloned
-      in front of the call with the signature's block arguments
-      substituted by the call's arguments, and each declared type is
-      unified with the call's corresponding type operand through
-      `hir.unify`. The unify results replace the call's type operands.
+    - For every `uir.call` in a `uir.func`, the callee's signature
+      computation is cloned in front of the call with the signature's
+      block arguments substituted by the call's arguments, and each
+      declared type is unified with the call's corresponding type
+      operand through `hir.unify`. The unify results replace the call's
+      type operands.
       The callee symbol may resolve to a `uir.func` or to a
       `uir.split_func` -- the late-binding interface of a function that
       has already been sorted or split, including a declaration-only one
@@ -48,32 +49,44 @@ def CheckCallsPass : Pass<"check-calls", "mlir::ModuleOp"> {
     Agreement between the two computations is structural, since both are
     copies of one region.
 
-    Signatures are checked before bodies, in post-order over the call
-    graph restricted to signature calls, so a callee's signature is fully
-    resolved before it is copied into a caller. A signature that
-    transitively calls itself has no such order and is reported as a user
-    error. Bodies are then checked in parallel.
-
-    Every signature region takes part in that traversal, a
-    `uir.split_func`'s as much as a `uir.func`'s: a declaration's
-    signature is the interface every caller copies, so a call left
-    unchecked in one would land unchecked in user code. Bodies belong to
+    Only `uir.func` ops are checked; a `uir.split_func` is read, never
+    rewritten. A split function is born from a checked declaration --
+    phase sorting snapshots one downstream of this pass -- and a
+    precompiled library ships one checked when the library was compiled,
+    so its signature already holds checked calls, and a call copied out
+    of it into a caller carries that check along. Bodies belong to
     `uir.func` alone; a `uir.split_func` is the declaration by itself.
 
-    Nothing in the IR records that a signature has been checked, and
-    checking is not idempotent: `hir.unify` folds only when both its
-    operands are the same value, so a call checked twice carries a longer
-    unify chain, and a signature that itself calls is inlined afresh on
-    every run.
+    Checking is therefore not idempotent and must run exactly once, on
+    its own module, before sorting. `hir.unify` folds only when both its
+    operands are the same value, so a second run stacks another unify on
+    every checked call and copies the signatures it calls afresh, which
+    compounds along a chain of declarations. Leaving the persisted
+    interface alone is what keeps that from happening across compiles;
+    nothing else records that a signature has been checked.
+
+    Signatures are checked before bodies, in post-order over the call
+    graph restricted to signature calls, so a callee's signature is fully
+    resolved before it is copied into a caller. A `uir.func` signature
+    that transitively calls itself has no such order and is reported as a
+    user error. A `uir.split_func` is a leaf of that traversal: its types
+    are resolved before this run begins, so it constrains no order, and a
+    cycle running through one is not an ordering problem and is not
+    reported. Bodies are then checked in parallel.
 
     **Expects:** structured, exit-normalized input -- a signature region
     that is a single block exiting through one `uir.signature`. Neither
     flat CFG (post FlattenCF) nor unnormalized multi-exit signatures can
-    be inlined at a use, and both are rejected.
+    be inlined at a use, and both are rejected. The shape belongs to the
+    declaration rather than to any one use of it, so it is checked once
+    per `uir.func`, whether that function is called or not, before
+    anything is rewritten; for a `uir.split_func` its own verifier
+    enforces the same shape.
 
     Every `uir.call` must sit inside the signature or body region of a
-    declared function, since those are the regions the pass walks, and
-    the module must still be unsorted -- a `uir.phase` op means sorting
+    declared function, since those are the regions the pass walks or has
+    walked before the declaration came to be, and the module must still
+    be unsorted -- a `uir.phase` op means sorting
     has already consumed the types this pass produces. Both are the
     compiler running its passes out of order and are reported as
     compiler bugs.

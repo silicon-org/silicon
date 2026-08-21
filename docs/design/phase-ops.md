@@ -75,11 +75,14 @@ Five stages, each owning a single concern:
   A type disagreement observed at evaluation time, when a per-phase func is specialized, is therefore an internal compiler error, and the evaluator must trap on it loudly.
   The `check-calls` pass implements this, between exit normalization and sorting: it copies the declared computation into every consumer — ahead of each `uir.call`, and into the declaring function's own body, where the arguments are additionally constrained by `hir.coerce_type` — and ties each copy to the local types with `hir.unify`.
   Signatures are copied whole, control flow included, and are therefore consumed in the single-exit shape exit normalization leaves behind; a signature with several blocks or exits has no single computation to copy and is rejected.
-  Every signature region is checked alike, a `uir.split_func`'s as much as a `uir.func`'s: a declaration's signature is the interface every caller copies, so a call left unchecked in one lands unchecked in user code.
-  Nothing in the IR marks a signature as checked, and checking is not idempotent: `hir.unify` folds only when both operands are the same value, so every re-check lengthens the unify chain on each call in the declaration, and a signature that itself calls is re-inlined whole.
-  Where checked-ness lives is unsettled, and `uir.split_func` is precisely the form that gets re-checked on every downstream compile.
+  That shape belongs to the declaration, not to any one use of it: it is checked once per `uir.func`, called or not, and is a `uir.split_func` verifier invariant.
+  Checking rewrites `uir.func` signatures and bodies only; a `uir.split_func` is read at a call site, never rewritten.
+  A split_func is checked output by construction — sorting snapshots the declaration downstream of checking, and a precompiled library's interface was checked when the library was compiled — so a call copied out of one carries its check along, and no checked/unchecked state has to be represented anywhere.
+  This is what keeps checking's non-idempotence harmless: `hir.unify` folds only when both operands are the same value, so a second check stacks another unify on every call in the signature and re-inlines the signatures it calls, compounding along a chain of declarations (240 → 3636 → 22392 `uir.call` ops over three runs).
+  The pass therefore runs exactly once per module, before sorting; a hand-written unchecked split_func is a malformed artifact like any other hand-written IR.
   Bodies belong to `uir.func` alone.
-  Checking is ordered post-order over the call graph restricted to signature calls, so a callee's signature is resolved before it is copied; recursion through signatures is a user error.
+  Checking is ordered post-order over the call graph restricted to signature calls, so a callee's signature is resolved before it is copied; recursion through `uir.func` signatures is a user error.
+  A split_func is a leaf of that order — its types are resolved before the run begins — so a cycle running through a declaration is not an ordering problem and goes unreported; it surfaces when the types are evaluated.
 - **Phase boundaries pack uniformly.**
   Every phase boundary packs exactly one fresh opaque context bundling all its crossings: no special case for a single crossing, for a crossing that is already an opaque context, or for a contentless gap phase (whose func unpacks and repacks unchanged).
   Packing must stay symmetric with the receiving phase's unpacking, so skipping a "redundant" pack is not a local decision.
@@ -116,6 +119,7 @@ Five stages, each owning a single concern:
   A `uir.phase_call` naming a `uir.func` would bypass the interface and call an implementation directly, so the verifier rejects it.
 - **Pass order.**
   Exit normalization, `check-calls`, canonicalize, CSE, canonicalize, `sort-phases`, `thread-phases`, `split-funcs`.
+  `check-calls` runs exactly once, and its position ahead of sorting is what makes the `uir.split_func` interface already-checked output: every declaration snapshot is taken downstream of it, so nothing checked is ever checked again.
   The second canonicalization is not redundant: where a body computes its declared type itself, the two computations stay distinct values until CSE merges them, and only then is the `hir.unify` between them an identity the canonicalizer folds.
   The stage is load-bearing, not cosmetic: checking coerces every body argument to its declared type, so an `hir.type_of %x` the user wrote about an argument becomes `hir.type_of` of the coercion's result, a phase-P value whose type the sorter would have to place at phase P-1 — a backward crossing it rejects.
   Folding `type_of(coerce_type(_, %ty))` to `%ty` answers the query with the declared type the signature copy already computes, one phase earlier.
