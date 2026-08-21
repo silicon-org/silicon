@@ -182,7 +182,7 @@ uir.func @declared_caller.impl(%x: 0) -> () {
 } {
   uir.phase 0 {
     %t = hir.int_type
-    // expected-error @below {{callee @declared_only has no function for phase 0; its implementation is not available}}
+    // expected-error @below {{callee @declared_only has no phase list; its implementation is not available}}
     %r = uir.phase_call @declared_only[0] (%x) : (%t) -> (%t)
     uir.phase_return
   }

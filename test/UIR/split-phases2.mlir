@@ -489,66 +489,6 @@ uir.func @SixPhase(%a: -3, %b: -1, %c: 1) -> (r1: -2, r2: 0, r3: 2) {
 }
 
 //===----------------------------------------------------------------------===//
-// Caller of @SixPhase: exercises full call decomposition across 6 entries.
-// The caller provides 3 args and receives 3 results.
-// With callOpPhase=0, the split entries map to absolute caller phases
-// -3, -2, -1, 0, 1, 2. Since the caller has no external phases besides 0,
-// groups are: {-3, -2, -1, 0} (multiphase), {1, 2} (trailing multiphase).
-
-// Phase -3 entry: %a (tagged {arg_a}) is passed to @SixPhase.0.
-// CHECK-LABEL: hir.func private @CallSixPhase.0a() -> (ctx)
-// CHECK:         %[[A:.+]] = hir.int_type {arg_a}
-// CHECK:         hir.call @SixPhase.0(%[[A]])
-// CHECK:         hir.opaque_pack(
-// CHECK:         hir.return
-
-// Phase -2 entry: no user args, just context from previous.
-// CHECK-LABEL: hir.func private @CallSixPhase.0b(%ctx) -> (ctx)
-// CHECK:         hir.opaque_unpack %ctx
-// CHECK:         hir.call @SixPhase.1(
-// CHECK:         hir.opaque_pack(
-// CHECK:         hir.return
-
-// Phase -1 entry: %b (tagged {arg_b}) is passed to @SixPhase.2.
-// CHECK-LABEL: hir.func private @CallSixPhase.0c(%ctx) -> (ctx)
-// CHECK:         hir.opaque_unpack %ctx
-// CHECK:         %[[B:.+]] = hir.int_type {arg_b}
-// CHECK:         hir.call @SixPhase.2(%[[B]],
-// CHECK:         hir.opaque_pack(
-// CHECK:         hir.return
-
-// Phase 0 entry: no user args, just context.
-// CHECK-LABEL: hir.func private @CallSixPhase.0d(%ctx) -> (ctx)
-// CHECK:         hir.opaque_unpack %ctx
-// CHECK:         hir.call @SixPhase.3(
-// CHECK:         hir.opaque_pack(
-// CHECK:         hir.return
-
-// Phase 1 entry: %c (tagged {arg_c}) is passed to @SixPhase.4.
-// CHECK-LABEL: hir.func private @CallSixPhase.1a(%ctx) -> (ctx)
-// CHECK:         hir.opaque_unpack %ctx
-// CHECK:         %[[C:.+]] = hir.int_type {arg_c}
-// CHECK:         hir.call @SixPhase.4(%[[C]],
-// CHECK:         hir.opaque_pack(
-// CHECK:         hir.return
-
-// Phase 2 entry: no user args, receives last result.
-// CHECK-LABEL: hir.func private @CallSixPhase.1b(%ctx) -> ()
-// CHECK:         hir.opaque_unpack %ctx
-// CHECK:         hir.call @SixPhase.5(
-// CHECK:         hir.return
-uir.func @CallSixPhase() -> () {
-  uir.signature () -> ()
-} {
-  %tt = hir.type_type
-  %a = hir.int_type {arg_a}
-  %b = hir.int_type {arg_b}
-  %c = hir.int_type {arg_c}
-  %r1, %r2, %r3 = uir.call @SixPhase(%a, %b, %c) : (%tt, %tt, %tt) -> (%tt, %tt, %tt) [-3, -1, 1] -> [-2, 0, 2]
-  uir.return
-}
-
-//===----------------------------------------------------------------------===//
 // Structured CF survival: uir.if at phase 0 moves as a whole into the
 // per-phase function. Then/else regions and yield are preserved.
 

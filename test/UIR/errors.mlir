@@ -105,6 +105,25 @@ uir.func @call_bad_callee(%a: 0) -> (result: 0) {
 
 // -----
 
+// Verify that uir.call rejects a callee that declares no phases: decomposition
+// derives the callee's phase span from its declaration alone, so a callee that
+// is neither a uir.func nor a uir.split_func cannot be called.
+hir.func @call_not_a_uir_func() -> () {
+  hir.signature () -> ()
+} {
+  hir.return
+}
+
+uir.func @call_bad_callee_kind(%a: 0) -> () {
+  uir.signature (%a) -> ()
+} {
+  // expected-error @below {{'call_not_a_uir_func' does not reference a 'uir.func' or 'uir.split_func'}}
+  uir.call @call_not_a_uir_func() : () -> () [] -> []
+  uir.return
+}
+
+// -----
+
 // Verify that uir.call rejects mismatched arguments/typeOfArgs.
 func.func @call_type_of_args_mismatch(%a: !hir.any) {
   // expected-error @below {{failed to verify that typeOfArgs must match arguments size}}
@@ -377,12 +396,61 @@ hir.func private @unordered.0() -> () {
 } {
   hir.return
 }
-// expected-error @below {{maps phase -1 after phase 0; phases must be listed in increasing order}}
+// expected-error @below {{maps phase 0 as entry 0, where its declared span [-1, 0] requires phase -1; the phase list must cover the span exactly, in increasing order}}
 uir.split_func @unordered(%a: -1, %b: 0) -> () {
   uir.signature (%a, %b) -> ()
 } [
   0: @unordered.0,
   -1: @unordered.0
+]
+
+// -----
+
+// Verify that the phase list lists every phase of the declared span: a caller
+// asks for every span phase, so a gap leaves a legal phase call unresolvable.
+hir.func private @missing_phase.0() -> () {
+  hir.signature () -> ()
+} {
+  hir.return
+}
+// expected-error @below {{has 1 phase list entries but its declared span [0, 1] has 2 phases; the phase list must cover the span exactly, in increasing order}}
+uir.split_func @missing_phase(%a: 0) -> (r: 1) {
+  uir.signature (%a) -> (%a)
+} [
+  0: @missing_phase.0
+]
+
+// -----
+
+// Verify that the phase list maps each span phase exactly once.
+hir.func private @duplicate_phase.0() -> () {
+  hir.signature () -> ()
+} {
+  hir.return
+}
+// expected-error @below {{maps phase 0 as entry 1, where its declared span [0, 1] requires phase 1; the phase list must cover the span exactly, in increasing order}}
+uir.split_func @duplicate_phase(%a: 0) -> (r: 1) {
+  uir.signature (%a) -> (%a)
+} [
+  0: @duplicate_phase.0,
+  0: @duplicate_phase.0
+]
+
+// -----
+
+// Verify that the phase list holds no phase outside the declared span: callers
+// never ask for one, and pre-span phases run eagerly instead of being called.
+hir.func private @outside_span.0() -> () {
+  hir.signature () -> ()
+} {
+  hir.return
+}
+// expected-error @below {{maps phase 2 as entry 1, where its declared span [0, 1] requires phase 1; the phase list must cover the span exactly, in increasing order}}
+uir.split_func @outside_span(%a: 0) -> (r: 1) {
+  uir.signature (%a) -> (%a)
+} [
+  0: @outside_span.0,
+  2: @outside_span.0
 ]
 
 // -----

@@ -372,13 +372,22 @@ FailureOr<FlatSymbolRefAttr> FuncSplitter::resolvePhaseEntry(PhaseCallOp call) {
       dyn_cast_or_null<SplitFuncOp>(symbolTable.lookup(call.getCallee()));
   assert(calleeSplit && "callee of a verified 'uir.phase_call' must resolve to "
                         "a 'uir.split_func'");
+
+  // A filled phase list covers the callee's declared span exactly, and a phase
+  // call only ever names a phase in that span; both are verifier invariants. So
+  // the only callee a phase call cannot bind to is one that has not been split
+  // at all — a declaration whose implementation was never compiled.
+  if (calleeSplit.getPhaseNumbers().empty())
+    return call.emitOpError()
+           << "callee @" << call.getCallee()
+           << " has no phase list; its implementation is not available";
+
   for (auto [phase, entry] :
        llvm::zip(calleeSplit.getPhaseNumbers(), calleeSplit.getPhaseFuncs()))
     if (phase == call.getCalleePhase())
       return cast<FlatSymbolRefAttr>(entry);
-  return call.emitOpError()
-         << "callee @" << call.getCallee() << " has no function for phase "
-         << call.getCalleePhase() << "; its implementation is not available";
+  llvm_unreachable("phase call names a phase in the callee's declared span, "
+                   "which a filled phase list covers entirely");
 }
 
 /// Fill in a per-phase func's body: unpack the incoming context, clone the

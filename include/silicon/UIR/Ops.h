@@ -39,7 +39,9 @@ struct DeclaredPhases {
 ///
 /// Both ops declare a phase for every argument and result, and `uir.call`
 /// targets them interchangeably: a callee may already be split when its callers
-/// are verified or sorted.
+/// are verified. Sorting is stricter — it takes custody of every declaration
+/// first, so a callee is a `uir.split_func` by the time any call is
+/// decomposed.
 std::optional<DeclaredPhases> getDeclaredPhases(mlir::Operation *op);
 
 } // namespace uir

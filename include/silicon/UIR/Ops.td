@@ -418,15 +418,18 @@ def CallOp : UIROp<"call", [
 ]> {
   let summary = "call to a unified function";
   let description = [{
-    A call not yet split into phases. Mirrors `hir.unified_call` in the
-    UIR dialect. Carries the full set of arguments for all phases, each
-    with a corresponding type operand.
+    A call not yet split into phases. Carries the full set of arguments for
+    all phases, each with a corresponding type operand.
 
     All operands and results carry the implied `!hir.any` type, so no
     types are printed; the result count is the type-of-result count.
 
-    SplitPhases decomposes this into per-phase `hir.call` ops using the
-    callee's `uir.split_func` witness.
+    The callee is a function whose phases are declared: a `uir.func` awaiting
+    sorting, or the `uir.split_func` interface of a function already sorted or
+    split. Both are legal callees interchangeably, and the call's `argPhases`
+    and `resultPhases` must equal the phases the callee declares. Phase
+    sorting decomposes the call into one `uir.phase_call` per phase of the
+    callee's declared span, derived from that declaration alone.
   }];
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
@@ -472,6 +475,14 @@ def SplitFuncOp : UIROp<"split_func", [
       whose phases have not been split into per-phase functions yet.
     - *split*: the phase list maps each phase of the declared span to the
       function implementing it, and no `impl` remains.
+
+    A non-empty phase list covers the declared span exactly: every phase from
+    the span minimum to the span maximum, once each, in increasing order.
+    Callers ask for exactly those phases — a `uir.phase_call` derives its
+    legal phases from the same declaration — so a complete list is what makes
+    every legal phase call resolvable, and the order makes the mapping unique.
+    Pre-span phases have no entry of their own: they run eagerly, chained into
+    the span's first entry by an `hir.eager_func`.
 
     Call decomposition never consults this op — it is derived from the
     callee's declared phases alone — so this op carries no decomposition

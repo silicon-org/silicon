@@ -969,6 +969,37 @@ LogicalResult SplitFuncOp::verify() {
     return emitOpError() << "has both an implementation reference and a phase "
                             "list; a split function has no implementation left";
 
+  // The phase list is either absent — the declared and sorted states, where
+  // there are no per-phase functions yet — or it is the split state's complete
+  // map from the declared span to the functions implementing it. Callers ask
+  // for exactly the phases of that span (`uir.phase_call` derives them from the
+  // same declaration), so covering the span exactly is what makes every legal
+  // phase call resolvable, and the strictly increasing order makes the mapping
+  // unique. Pre-span phases have no entry: they run eagerly, chained into the
+  // span's first entry.
+  if (!getPhaseNumbers().empty()) {
+    auto [lo, hi] = DeclaredPhases{getArgPhases(), getResultPhases()}.span();
+    for (auto [index, phase] : llvm::enumerate(getPhaseNumbers())) {
+      int32_t expected = lo + static_cast<int32_t>(index);
+      if (expected > hi)
+        break;
+      if (phase != expected)
+        return emitOpError()
+               << "maps phase " << phase << " as entry " << index
+               << ", where its declared span [" << lo << ", " << hi
+               << "] requires phase " << expected
+               << "; the phase list must cover the span exactly, in increasing "
+                  "order";
+    }
+    auto spanSize = static_cast<int64_t>(hi) - lo + 1;
+    if (static_cast<int64_t>(getPhaseNumbers().size()) != spanSize)
+      return emitOpError() << "has " << getPhaseNumbers().size()
+                           << " phase list entries but its declared span ["
+                           << lo << ", " << hi << "] has " << spanSize
+                           << " phases; the phase list must cover the span "
+                              "exactly, in increasing order";
+  }
+
   // Check block arguments in signature region.
   if (!getSignature().empty()) {
     auto numArgs = getArgPhases().size();
@@ -1007,17 +1038,10 @@ LogicalResult SplitFuncOp::verifyRegions() {
 LogicalResult
 SplitFuncOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // The phase list is the authoritative mapping callers resolve a
-  // `uir.phase_call` through: every entry must name a function that exists, and
-  // the phases must be listed in increasing order so a phase maps to at most
-  // one function.
-  int32_t previous = 0;
-  for (auto [index, phase] : llvm::enumerate(getPhaseNumbers())) {
-    if (index != 0 && phase <= previous)
-      return emitOpError() << "maps phase " << phase << " after phase "
-                           << previous
-                           << "; phases must be listed in increasing order";
-    previous = phase;
-    auto entry = cast<FlatSymbolRefAttr>(getPhaseFuncs()[index]);
+  // `uir.phase_call` through, so every entry must name a function that exists.
+  // Which phases the list covers is checked in `verify`.
+  for (auto entryAttr : getPhaseFuncs()) {
+    auto entry = cast<FlatSymbolRefAttr>(entryAttr);
     if (!symbolTable.lookupNearestSymbolFrom(getOperation(), entry))
       return emitOpError() << "'" << entry.getValue()
                            << "' does not reference a valid function";
@@ -1456,9 +1480,6 @@ void CallOp::print(OpAsmPrinter &p) {
 }
 
 LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
-  // Verify that the callee exists. We accept both uir.func and uir.split_func
-  // as callees, since a callee may already be split when the caller is
-  // verified.
   auto callee = (*this)->getAttrOfType<FlatSymbolRefAttr>("callee");
   if (!callee)
     return emitOpError("requires a 'callee' symbol reference attribute");
@@ -1468,15 +1489,22 @@ LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
     return emitOpError() << "'" << callee.getValue()
                          << "' does not reference a valid function";
 
-  // When the callee is a unified function (or an already-split witness), the
-  // call's per-argument and per-result phase offsets are the callee's declared
-  // phases, so they must line up one-to-one. Call decomposition relies on this
-  // to derive the phase entries from the callee declaration alone; without the
-  // check a phase present on the call but not the callee would silently drop
-  // an argument or result.
+  // A call names a function whose phases are declared: a `uir.func` awaiting
+  // sorting, or the `uir.split_func` interface of a function already sorted or
+  // split. Call decomposition derives the callee's phase span from that
+  // declaration alone, so a callee without declared phases is a call nothing
+  // downstream can decompose.
   auto declared = getDeclaredPhases(calleeOp);
   if (!declared)
-    return success();
+    return emitOpError() << "'" << callee.getValue()
+                         << "' does not reference a 'uir.func' or "
+                            "'uir.split_func'";
+
+  // The call's per-argument and per-result phase offsets are the callee's
+  // declared phases, so they must line up one-to-one. Call decomposition relies
+  // on this to derive the phase entries from the callee declaration alone;
+  // without the check a phase present on the call but not the callee would
+  // silently drop an argument or result.
   auto calleeArgPhases = declared->argPhases;
   auto calleeResultPhases = declared->resultPhases;
 

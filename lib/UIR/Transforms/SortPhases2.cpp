@@ -497,20 +497,21 @@ LogicalResult PhaseSorter::dissolveExprsAndPins() {
 /// including phase 0, in the callee's own frame. This mirrors the
 /// `uir.phase_call` verifier, so every entry the decomposition emits — one per
 /// phase in the span, including gap phases carrying no arguments or results —
-/// validates against the same range. A callee may be a `uir.func` (the common
-/// case at sort time) or a `uir.split_func` (an already-split callee); both
-/// carry the declared phases.
-static LogicalResult calleeSpanPhases(CallOp callOp, Operation *calleeOp,
-                                      SmallVectorImpl<int32_t> &span) {
-  auto declared = getDeclaredPhases(calleeOp);
-  if (!declared)
-    return callOp.emitOpError()
-           << "callee @" << callOp.getCallee()
-           << " is neither a 'uir.func' nor a 'uir.split_func'";
-  auto [lo, hi] = declared->span();
+/// validates against the same range. The callee is always a `uir.split_func`:
+/// the pass takes custody of every declaration in the module before it sorts
+/// any function, so a call resolves to the callee's interface, not to its
+/// implementation.
+static SmallVector<int32_t> calleeSpanPhases(Operation *calleeOp) {
+  auto calleeSplit = dyn_cast<SplitFuncOp>(calleeOp);
+  assert(calleeSplit && "callee of a verified 'uir.call' must resolve to a "
+                        "'uir.split_func' once declarations are snapshotted");
+  auto [lo, hi] =
+      DeclaredPhases{calleeSplit.getArgPhases(), calleeSplit.getResultPhases()}
+          .span();
+  SmallVector<int32_t> span;
   for (int32_t phase = lo; phase <= hi; ++phase)
     span.push_back(phase);
-  return success();
+  return span;
 }
 
 /// Decompose every `uir.call` in the function into `uir.phase_call` entries.
@@ -551,9 +552,7 @@ LogicalResult PhaseSorter::decomposeCall(CallOp callOp) {
 
   auto *calleeOp = symbolTable.lookup(callOp.getCallee());
   assert(calleeOp && "call to undeclared callee survived verification");
-  SmallVector<int32_t> span;
-  if (failed(calleeSpanPhases(callOp, calleeOp, span)))
-    return failure();
+  auto span = calleeSpanPhases(calleeOp);
   assert(!span.empty() && "phase span always contains phase 0");
 
   // Partition the call's arguments and results by their callee-frame phase.

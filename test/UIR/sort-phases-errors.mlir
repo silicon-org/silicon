@@ -36,25 +36,6 @@ uir.func @BreakCarrier(%n: 0, %x: 0) -> (result: 0) {
 
 // -----
 
-// A uir.call whose callee resolves to something other than a uir.func or
-// uir.split_func cannot be decomposed: its phase entries are undefined.
-hir.func @NotUnified() -> () {
-  hir.signature () -> ()
-} {
-  hir.return
-}
-
-uir.func @CallsNonFunc(%x: 0) -> () {
-  %0 = hir.int_type
-  uir.signature (%0) -> ()
-} {
-  // expected-error @below {{callee @NotUnified is neither a 'uir.func' nor a 'uir.split_func'}}
-  uir.call @NotUnified() : () -> () [] -> []
-  uir.return
-}
-
-// -----
-
 // The sorted-phase ops are sorting's output vocabulary; feeding them back
 // into sorting means the pipeline is out of order.
 uir.func @PhaseInInput(%x: 0) -> () {
