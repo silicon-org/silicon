@@ -253,6 +253,9 @@ Re-visits skip when phases haven't tightened, ensuring termination.
 
 ## Implementation Structure
 
+The pass architecture below is superseded by {{< page-link "/design/phase-ops" >}}: the single merged inference-and-splitting pass was replaced by phase sorting, threading normalization, and a phase-blind function splitter connected through explicit phase ops.
+The analysis itself is unchanged, and the rest of this section is corrected in place; the full rewrite of this document to the sampling model waits for M6.
+
 ### Components
 
 - **`PhaseAnalysis` struct** (`UIR/Analysis/PhaseAnalysis.h`, `.cpp`): takes a `uir.func` op, has a `LogicalResult run()` method that runs the DFS and populates phase maps (`opPhases: DenseMap<Operation*, int16_t>`, `actualPhase: DenseMap<Value, int16_t>`).
@@ -261,16 +264,16 @@ Re-visits skip when phases haven't tightened, ensuring termination.
   On success, returns `success()` and the phase maps are ready for consumption.
   This is not a formal MLIR analysis (not cached, not invalidated) — just factored-out C++ code.
 
-- **`SplitPhases` pass**: constructs `PhaseAnalysis` for each `uir.func`, calls `run()`.
+- **`sort-phases` pass**: constructs `PhaseAnalysis` for each `uir.func`, calls `run()`.
   If failure: signals pass failure (diagnostics already emitted by the analysis).
-  If success: uses the phase map to split the function into per-phase `hir.func` ops.
-  Single pass that does inference + error reporting + splitting.
+  If success: uses the phase map to rewrite the function into sorted-phase form, where each region holds at most one `uir.phase` op per phase.
+  It is the only consumer of the analysis; `thread-phases` and `split-funcs` are phase-blind and work off the phase ops alone.
 
-- **`AnnotatePhases` test pass**: constructs `PhaseAnalysis`, calls `run()`, writes the phase map back as attributes on ops (e.g., `{phase = -1}`).
-  This allows lit tests to check phase assignment independently of splitting:
+- **`test-phase-analysis2` test pass**: constructs `PhaseAnalysis`, calls `run()`, writes the phase map back as attributes on ops (e.g., `{phase = -1}`).
+  This allows lit tests to check phase assignment independently of sorting:
 
   ```mlir
-  // RUN: silicon-opt %s --annotate-phases | FileCheck %s
+  // RUN: silicon-opt %s --test-phase-analysis2 | FileCheck %s
   // CHECK: {phase = -1}
   %0 = hir.add %x, %c42
   ```
@@ -285,7 +288,7 @@ Key aspects (see `docs/design/phase-splits.md` for full details):
 - Ops are placed into the split function for their assigned phase.
 - Trivially materializable ops (phase `-∞`) are cloned into each phase that needs them.
 - Cross-phase values are threaded via opaque context: if a value is defined at phase P and used at phase Q, it is carried through the context boundaries at P/P+1, P+1/P+2, ..., Q-1/Q. The context for each split function can be computed in a post-processing step.
-- `uir.call` ops are decomposed into per-phase `hir.call` ops using the callee's `uir.split_func` witness. Each split call is placed into the caller's split function for the corresponding phase, not kept together — this distributes the calls across distinct per-phase programs. Each call is extended with opaque context arguments and results. Call sites don't see the individual values flowing between phases — only the opaque context structure.
+- `uir.call` ops are decomposed into per-phase calls from the callee's declared phases alone, with no witness. Each split call is placed into the caller's split function for the corresponding phase, not kept together — this distributes the calls across distinct per-phase programs. Each call is extended with opaque context arguments and results. Call sites don't see the individual values flowing between phases — only the opaque context structure.
 - Structured CF ops (`uir.if`, `uir.loop`, etc.) survive splitting — they are moved into the appropriate phase function as a whole. The **FlattenCF** pass lowers them to `cf.br`/`cf.cond_br` after splitting.
 
 ### Pipeline placement
@@ -296,12 +299,11 @@ Phase inference and splitting run once, after type checking and call checking, b
 2. **Canonicalize / CSE** — fold constants, simplify.
 3. **InferTypes** — resolves type unifications. Required so that type expressions have concrete phases.
 4. **CheckTypes** — verifies type consistency.
-5. **SplitPhases** — internally runs `PhaseAnalysis` (DFS on `uir.func` ops), emits phase errors if any, then splits unified functions into per-phase `hir.func` ops using the phase map. Produces `uir.split_func` witnesses.
-6. **FlattenCF** — converts `uir.if`/`uir.loop`/etc. to `cf.br`/`cf.cond_br` + `hir.return`. After this, no `uir` ops remain except `uir.split_func` witnesses.
+5. **sort-phases / thread-phases / split-funcs** — sorting runs `PhaseAnalysis` (DFS on `uir.func` ops), emits phase errors if any, then rewrites each function into sorted-phase form; threading densifies that form; splitting turns it into per-phase `hir.func` ops behind the `uir.split_func` interface.
+6. **FlattenCF** — converts `uir.if`/`uir.loop`/etc. to `cf.br`/`cf.cond_br` + `hir.return`. After this, no `uir` ops remain except the `uir.split_func` interfaces.
 7. **PhaseEvalLoop** — iteratively compiles and evaluates split functions. Does not re-run phase inference.
 
-The phase map is ephemeral — computed, checked, used for splitting within the single `SplitPhases` pass, then discarded.
-No pipeline restructuring is needed compared to the current structure; only the internals of step 5 change (new DFS-based analysis replacing the old three-stage approach), and step 6 is a new pass.
+The phase map is ephemeral — computed, checked, and consumed within `sort-phases`, then discarded; it never crosses a pass boundary.
 
 ## IR Representation
 

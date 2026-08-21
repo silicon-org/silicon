@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "silicon/HIR/Ops.h"
 #include "silicon/HIR/Types.h"
 #include "silicon/Support/AsmParser.h"
 #include "silicon/UIR/Ops.h"
@@ -1025,16 +1026,67 @@ LogicalResult SplitFuncOp::verifyRegions() {
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+// Verifying a `uir.split_func`'s Phase List Against Its Declaration
+//===----------------------------------------------------------------------===//
+//
+// The phase list is the authoritative mapping a `uir.phase_call` resolves
+// through, and it is positional: entry `i` implements phase `spanMin + i`. So
+// each entry must not merely exist — it must have the interface the
+// declaration prescribes at its phase, or a phase call that verifies against
+// the declaration would bind to a function that cannot accept it.
+//
+// That interface is the same one `PhaseCallOp::verify` derives on the use
+// side: the arguments and results the declaration places at the phase, plus a
+// context argument for every entry but the first and a context result for
+// every entry but the last, which chain the entries across the span.
+
+/// The number of arguments and results of a function a phase list may name.
+static std::optional<std::pair<size_t, size_t>>
+getPhaseFuncInterface(Operation *op) {
+  if (auto funcOp = dyn_cast<silicon::hir::FuncOp>(op))
+    return std::make_pair(funcOp.getArgNames().size(),
+                          funcOp.getResultNames().size());
+  if (auto eagerOp = dyn_cast<silicon::hir::EagerFuncOp>(op))
+    return std::make_pair(eagerOp.getArgNames().size(),
+                          eagerOp.getResultNames().size());
+  return std::nullopt;
+}
+
 LogicalResult
 SplitFuncOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
-  // The phase list is the authoritative mapping callers resolve a
-  // `uir.phase_call` through, so every entry must name a function that exists.
-  // Which phases the list covers is checked in `verify`.
-  for (auto entryAttr : getPhaseFuncs()) {
+  auto phaseFuncs = getPhaseFuncs();
+  auto [lo, hi] = getPhaseSpan();
+  for (auto [index, entryAttr] : llvm::enumerate(phaseFuncs)) {
     auto entry = cast<FlatSymbolRefAttr>(entryAttr);
-    if (!symbolTable.lookupNearestSymbolFrom(getOperation(), entry))
+    auto *entryOp = symbolTable.lookupNearestSymbolFrom(getOperation(), entry);
+    if (!entryOp)
       return emitOpError() << "'" << entry.getValue()
                            << "' does not reference a valid function";
+    auto interface = getPhaseFuncInterface(entryOp);
+    if (!interface)
+      return emitOpError() << "'" << entry.getValue()
+                           << "' does not reference an 'hir.func' or "
+                              "'hir.eager_func'";
+
+    // `verify` has already established that a non-empty list has one entry per
+    // span phase, so the index maps into the span.
+    int32_t phase = lo + static_cast<int32_t>(index);
+    auto expectedArgs = llvm::count(getArgPhases(), phase) + (phase != lo);
+    auto expectedResults =
+        llvm::count(getResultPhases(), phase) + (phase != hi);
+    if (static_cast<int64_t>(interface->first) != expectedArgs)
+      return emitOpError() << "maps phase " << phase << " to '"
+                           << entry.getValue() << "', which has "
+                           << interface->first << " arguments but phase "
+                           << phase << " of this declaration takes "
+                           << expectedArgs;
+    if (static_cast<int64_t>(interface->second) != expectedResults)
+      return emitOpError() << "maps phase " << phase << " to '"
+                           << entry.getValue() << "', which has "
+                           << interface->second << " results but phase "
+                           << phase << " of this declaration produces "
+                           << expectedResults;
   }
 
   auto impl = getImplAttr();

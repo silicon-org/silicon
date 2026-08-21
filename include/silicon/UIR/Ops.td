@@ -45,7 +45,8 @@ def PhaseGrouping : OpDocGroup {
   let summary = "Phase grouping";
   let description = [{
     Ops for grouping expressions and pinning phases during phase
-    inference. Consumed by SplitPhases.
+    inference. Dissolved by phase sorting, which makes the phase map the
+    single source of truth.
   }];
 }
 
@@ -53,8 +54,9 @@ def UnifiedFunctions : OpDocGroup {
   let summary = "Unified functions";
   let description = [{
     Ops for representing functions that span multiple phases and their
-    call sites. Consumed by SplitPhases, which decomposes them into
-    per-phase `hir.func` and `hir.call` ops.
+    call sites. Phase sorting rewrites them into sorted-phase form, and
+    function splitting turns that into per-phase `hir.func` and `hir.call`
+    ops behind the surviving `uir.split_func` interface.
   }];
 }
 
@@ -503,7 +505,7 @@ def SplitFuncOp : UIROp<"split_func", [
     ArrayAttr:$resultNames,
     DenseI32ArrayAttr:$resultPhases,
     OptionalAttr<FlatSymbolRefAttr>:$impl,
-    ArrayAttr:$phaseFuncs,
+    FlatSymbolRefArrayAttr:$phaseFuncs,
     OptionalAttr<UnitAttr>:$isModule
   );
   let regions = (region MinSizedRegion<1>:$signature);

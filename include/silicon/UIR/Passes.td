@@ -24,9 +24,9 @@ def FlattenCFPass : Pass<"flatten-cf", "mlir::ModuleOp"> {
     - **Phase grouping:** `uir.expr` is inlined into the parent block,
       and `uir.pin` is replaced by its inputs (identity removal).
 
-    This pass runs after SplitPhases and before PhaseEvalLoop. After
-    this pass, no UIR ops remain in the IR (except `uir.split_func`
-    witnesses).
+    This pass runs after function splitting and before PhaseEvalLoop. After
+    this pass, no UIR ops remain in the IR except the `uir.split_func`
+    interfaces callers bind against.
   }];
   let dependentDialects = [
     "mlir::cf::ControlFlowDialect",

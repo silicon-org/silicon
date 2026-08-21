@@ -424,6 +424,74 @@ uir.split_func @outside_span(%a: 0) -> (r: 1) {
 
 // -----
 
+// Verify that a phase list entry has the interface the declaration prescribes
+// at its phase: a caller's `uir.phase_call` verifies against the declaration,
+// so an entry that takes something else could never accept it.
+hir.func private @wrong_args.0() -> (ctx) {
+  %opaque = hir.opaque_type
+  hir.signature () -> (%opaque)
+} {
+  %opaque = hir.opaque_type
+  %packed = hir.opaque_pack()
+  hir.return %packed : %opaque
+}
+// expected-error @below {{maps phase 0 to 'wrong_args.0', which has 0 arguments but phase 0 of this declaration takes 1}}
+uir.split_func @wrong_args(%a: 0) -> (r: 1) {
+  %int = hir.int_type
+  uir.signature (%int) -> (%int)
+} [
+  @wrong_args.0,
+  @wrong_args.0
+]
+
+// -----
+
+// The result side likewise: the entry's results are the declaration's results
+// at that phase plus the context handed to the next entry.
+hir.func private @wrong_results.0(%a) -> () {
+  %int = hir.int_type
+  hir.signature (%int) -> ()
+} {
+  hir.return
+}
+// expected-error @below {{maps phase 0 to 'wrong_results.0', which has 0 results but phase 0 of this declaration produces 1}}
+uir.split_func @wrong_results(%a: 0) -> (r: 1) {
+  %int = hir.int_type
+  uir.signature (%int) -> (%int)
+} [
+  @wrong_results.0,
+  @wrong_results.0
+]
+
+// -----
+
+// Verify that phase list entries are symbol references at all, so the verifier
+// diagnoses malformed generic-form IR instead of casting into it.
+// expected-error @below {{attribute 'phaseFuncs' failed to satisfy constraint: flat symbol ref array attribute}}
+"uir.split_func"() <{argNames = ["a"], argPhases = array<i32: 0>, phaseFuncs = [42 : i64], resultNames = ["r"], resultPhases = array<i32: 0>, sym_name = "not_a_symbol"}> ({
+^bb0(%arg0: !hir.any):
+  %0 = "hir.int_type"() : () -> !hir.any
+  "uir.signature"(%0) <{operandSegmentSizes = array<i32: 1, 0>}> : (!hir.any) -> ()
+}) : () -> ()
+
+// -----
+
+// Verify that a phase list entry is a function at all: the list binds phase
+// calls to executable per-phase code, not to arbitrary symbols.
+uir.split_func @not_a_phase_func(%a: 0) -> (result: 0) {
+  %int = hir.int_type
+  uir.signature (%int) -> (%int)
+} []
+// expected-error @below {{'not_a_phase_func' does not reference an 'hir.func' or 'hir.eager_func'}}
+uir.split_func @entry_not_a_func(%a: 0) -> (result: 0) {
+  %int = hir.int_type
+  uir.signature (%int) -> (%int)
+} [
+  @not_a_phase_func
+]
+
+// -----
+
 // Verify that a uir.split_func implementation reference must resolve.
 // expected-error @below {{'missing_impl' does not reference a valid function}}
 uir.split_func @unresolved_impl(%a: 0) -> () {

@@ -282,15 +282,9 @@ LogicalResult FuncSplitter::diagnose() {
 /// function; `diagnose` has already established that it has no gaps and does
 /// not run past the span.
 void FuncSplitter::computeRanges() {
-  spanMin = spanMax = 0;
-  for (auto p : argPhases) {
-    spanMin = std::min<int>(spanMin, p);
-    spanMax = std::max<int>(spanMax, p);
-  }
-  for (auto p : resultPhases) {
-    spanMin = std::min<int>(spanMin, p);
-    spanMax = std::max<int>(spanMax, p);
-  }
+  auto [spanLo, spanHi] = DeclaredPhases{argPhases, resultPhases}.span();
+  spanMin = spanLo;
+  spanMax = spanHi;
   phaseMin = spanMin;
   phaseMax = spanMax;
   for (auto *phases : {&bodyPhase, &sigPhase})

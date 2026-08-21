@@ -233,17 +233,25 @@ uir.func @with_module(%x: 0) -> (result: 0) attributes {isModule} {
   uir.return %x : %x
 }
 
-// Stub per-phase functions for the phase list below, which must name functions
-// that exist.
-hir.func private @split_witness.0() -> () {
-  hir.signature () -> ()
+// The per-phase functions for the phase list below. Each carries the interface
+// the declaration prescribes at its phase: the arguments and results declared
+// there, plus the context that chains it to the neighbouring entry.
+hir.func private @split_witness.0(%a) -> (ctx) {
+  %int = hir.int_type
+  %opaque = hir.opaque_type
+  hir.signature (%int) -> (%opaque)
 } {
-  hir.return
+  %opaque = hir.opaque_type
+  %packed = hir.opaque_pack()
+  hir.return %packed : %opaque
 }
-hir.func private @split_witness.1() -> () {
-  hir.signature () -> ()
+hir.func private @split_witness.1(%b, %ctx) -> (result) {
+  %int = hir.int_type
+  %opaque = hir.opaque_type
+  hir.signature (%int, %opaque) -> (%int)
 } {
-  hir.return
+  %int = hir.int_type
+  hir.return %b : %int
 }
 
 // A uir.split_func in the split state maps each span phase to the function

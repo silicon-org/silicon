@@ -20,11 +20,14 @@ def UIRDialect : Dialect {
     The UIR dialect captures the high-level, structured representation of
     Silicon programs before phase splitting and CFG flattening. It holds
     unified (cross-phase) functions, structured control flow with nested
-    regions, expression grouping for phase inference, and witness ops that
-    bridge the unified and split representations.
+    regions, expression grouping for phase inference, and the sorted-phase
+    ops that bridge the unified and split representations.
 
-    All UIR ops are lowered away by two passes:
-    - **SplitPhases** consumes unified function ops and phase grouping ops.
+    All UIR ops are lowered away by two pass groups:
+    - **Phase sorting and function splitting** (`sort-phases`, `thread-phases`,
+      `split-funcs`) consume phase grouping ops, unified function ops, and the
+      sorted-phase ops they produce in between. The `uir.split_func` interface
+      survives as the late-binding declaration callers resolve against.
     - **FlattenCF** consumes structured control flow ops and their terminators.
   }];
 
