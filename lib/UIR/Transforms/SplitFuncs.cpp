@@ -246,7 +246,7 @@ LogicalResult FuncSplitter::diagnose() {
   // the range over the declared argument and result phases, always including
   // phase 0; this uniformly catches call-implied late phases, since calls are
   // already decomposed into `uir.phase_call` entries living in phase ops.
-  auto [spanLo, spanHi] = DeclaredPhases{argPhases, resultPhases}.span();
+  auto [spanLo, spanHi] = computePhaseSpan(argPhases, resultPhases);
   for (auto *phases : {&bodyPhase, &sigPhase})
     for (auto &[phase, phaseOp] : *phases)
       if (phase > spanHi)
@@ -282,7 +282,7 @@ LogicalResult FuncSplitter::diagnose() {
 /// function; `diagnose` has already established that it has no gaps and does
 /// not run past the span.
 void FuncSplitter::computeRanges() {
-  auto [spanLo, spanHi] = DeclaredPhases{argPhases, resultPhases}.span();
+  auto [spanLo, spanHi] = computePhaseSpan(argPhases, resultPhases);
   spanMin = spanLo;
   spanMax = spanHi;
   phaseMin = spanMin;

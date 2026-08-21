@@ -17,32 +17,22 @@
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
-// Pull in the generated op definitions.
-#define GET_OP_CLASSES
-#include "silicon/UIR/Ops.h.inc"
-
 namespace silicon {
 namespace uir {
 
-/// The declared argument and result phases of a UIR function symbol.
-struct DeclaredPhases {
-  llvm::ArrayRef<int32_t> argPhases;
-  llvm::ArrayRef<int32_t> resultPhases;
-
-  /// The declared phase span: the contiguous range from the earliest to the
-  /// latest declared argument or result phase, always including phase 0.
-  std::pair<int32_t, int32_t> span() const;
-};
-
-/// Get the declared phases of a `uir.func` or `uir.split_func`, or `nullopt`
-/// for any other operation.
-///
-/// Both ops declare a phase for every argument and result, and `uir.call`
-/// targets them interchangeably: a callee may already be split when its callers
-/// are verified. Sorting is stricter — it takes custody of every declaration
-/// first, so a callee is a `uir.split_func` by the time any call is
-/// decomposed.
-std::optional<DeclaredPhases> getDeclaredPhases(mlir::Operation *op);
+/// The phase span covered by a set of declared argument and result phases: the
+/// contiguous range from the earliest to the latest of them, always including
+/// phase 0.
+std::pair<int32_t, int32_t>
+computePhaseSpan(llvm::ArrayRef<int32_t> argPhases,
+                 llvm::ArrayRef<int32_t> resultPhases);
 
 } // namespace uir
 } // namespace silicon
+
+// Pull in the generated op interface declarations.
+#include "silicon/UIR/Interfaces.h.inc"
+
+// Pull in the generated op definitions.
+#define GET_OP_CLASSES
+#include "silicon/UIR/Ops.h.inc"

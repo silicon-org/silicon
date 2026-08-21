@@ -37,7 +37,9 @@ static LoopOp getEnclosingLoop(Operation *op) {
   return {};
 }
 
-std::pair<int32_t, int32_t> silicon::uir::DeclaredPhases::span() const {
+std::pair<int32_t, int32_t>
+silicon::uir::computePhaseSpan(ArrayRef<int32_t> argPhases,
+                               ArrayRef<int32_t> resultPhases) {
   int32_t lo = 0, hi = 0;
   for (auto phase : argPhases) {
     lo = std::min(lo, phase);
@@ -50,14 +52,8 @@ std::pair<int32_t, int32_t> silicon::uir::DeclaredPhases::span() const {
   return {lo, hi};
 }
 
-std::optional<silicon::uir::DeclaredPhases>
-silicon::uir::getDeclaredPhases(Operation *op) {
-  if (auto funcOp = dyn_cast_or_null<FuncOp>(op))
-    return DeclaredPhases{funcOp.getArgPhases(), funcOp.getResultPhases()};
-  if (auto funcOp = dyn_cast_or_null<SplitFuncOp>(op))
-    return DeclaredPhases{funcOp.getArgPhases(), funcOp.getResultPhases()};
-  return std::nullopt;
-}
+// Pull in the generated op interface definitions.
+#include "silicon/UIR/Interfaces.cpp.inc"
 
 //===----------------------------------------------------------------------===//
 // YieldOp
@@ -506,26 +502,16 @@ LogicalResult SignatureOp::verify() {
   // may sit under structured control flow at any nesting depth, but only
   // inside the signature region.
   Operation *op = getOperation();
-  while (op->getParentOp() && !isa<FuncOp, SplitFuncOp>(op->getParentOp()))
+  while (op->getParentOp() && !isa<DeclaredFuncOpInterface>(op->getParentOp()))
     op = op->getParentOp();
-  auto *funcLike = op->getParentOp();
+  auto funcLike = dyn_cast_or_null<DeclaredFuncOpInterface>(op->getParentOp());
   if (!funcLike)
     return emitOpError() << "must be nested in the signature region of a "
                             "'uir.func' or 'uir.split_func'";
 
-  unsigned numArgs, numResults;
-  Region *sigRegion;
-  if (auto func = dyn_cast<FuncOp>(funcLike)) {
-    numArgs = func.getArgNames().size();
-    numResults = func.getResultNames().size();
-    sigRegion = &func.getSignature();
-  } else {
-    auto splitFunc = cast<SplitFuncOp>(funcLike);
-    numArgs = splitFunc.getArgNames().size();
-    numResults = splitFunc.getResultNames().size();
-    sigRegion = &splitFunc.getSignature();
-  }
-  if (op->getParentRegion() != sigRegion)
+  auto numArgs = funcLike.getArgNames().size();
+  auto numResults = funcLike.getResultNames().size();
+  if (op->getParentRegion() != &funcLike.getSignature())
     return emitOpError() << "must be nested in the signature region of the "
                             "enclosing function";
 
@@ -938,10 +924,6 @@ void SplitFuncOp::print(OpAsmPrinter &p) {
   if (!phaseFuncs.empty())
     p.printNewline();
   p << ']';
-}
-
-std::pair<int32_t, int32_t> SplitFuncOp::getPhaseSpan() {
-  return DeclaredPhases{getArgPhases(), getResultPhases()}.span();
 }
 
 FlatSymbolRefAttr SplitFuncOp::getPhaseFunc(int32_t phase) {
@@ -1383,7 +1365,7 @@ PhaseCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // Callers thread one entry per phase in the span, so every phase in the
   // range — including gap phases carrying no arguments or results — is a legal
   // entry, derivable from the declaration alone.
-  auto [lo, hi] = DeclaredPhases{argPhases, resultPhases}.span();
+  auto [lo, hi] = calleeSplit.getPhaseSpan();
 
   auto phase = getCalleePhase();
   if (phase < lo || phase > hi)
@@ -1536,7 +1518,7 @@ LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // split. Call decomposition derives the callee's phase span from that
   // declaration alone, so a callee without declared phases is a call nothing
   // downstream can decompose.
-  auto declared = getDeclaredPhases(calleeOp);
+  auto declared = dyn_cast<DeclaredFuncOpInterface>(calleeOp);
   if (!declared)
     return emitOpError() << "'" << callee.getValue()
                          << "' does not reference a 'uir.func' or "
@@ -1547,8 +1529,8 @@ LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // on this to derive the phase entries from the callee declaration alone;
   // without the check a phase present on the call but not the callee would
   // silently drop an argument or result.
-  auto calleeArgPhases = declared->argPhases;
-  auto calleeResultPhases = declared->resultPhases;
+  auto calleeArgPhases = declared.getArgPhases();
+  auto calleeResultPhases = declared.getResultPhases();
 
   if (getArgPhases() != calleeArgPhases)
     return emitOpError() << "argument phases " << getArgPhases()

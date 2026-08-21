@@ -15,6 +15,7 @@ include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "silicon/HIR/Types.td"
 include "silicon/UIR/Dialect.td"
+include "silicon/UIR/OpInterfaces.td"
 
 // Base class for the operations in this dialect.
 class UIROp<string mnemonic, list<Trait> traits = []> :
@@ -376,6 +377,7 @@ def SignatureOp : UIROp<"signature", [
 }
 
 def FuncOp : UIROp<"func", [
+  DeclaredFuncOpInterface,
   IsolatedFromAbove,
   Symbol,
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
@@ -446,6 +448,7 @@ def CallOp : UIROp<"call", [
 }
 
 def SplitFuncOp : UIROp<"split_func", [
+  DeclaredFuncOpInterface,
   IsolatedFromAbove,
   Symbol,
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
@@ -510,10 +513,6 @@ def SplitFuncOp : UIROp<"split_func", [
   );
   let regions = (region MinSizedRegion<1>:$signature);
   let extraClassDeclaration = [{
-    /// The declared phase span: the contiguous range from the earliest to the
-    /// latest declared argument or result phase, always including phase 0.
-    std::pair<int32_t, int32_t> getPhaseSpan();
-
     /// The per-phase function implementing `phase`, or null if this function
     /// has no phase list yet. `phase` must lie within the declared span.
     mlir::FlatSymbolRefAttr getPhaseFunc(int32_t phase);

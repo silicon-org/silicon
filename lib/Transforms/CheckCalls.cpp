@@ -48,24 +48,15 @@ struct DeclaredTypes {
 };
 } // namespace
 
-/// The signature region of a `uir.func` or `uir.split_func`.
-///
-/// Both ops declare their types the same way and are interchangeable callees,
-/// so the checker never distinguishes them.
-static Region &getSignatureRegion(Operation *op) {
-  if (auto funcOp = dyn_cast<uir::FuncOp>(op))
-    return funcOp.getSignature();
-  return cast<uir::SplitFuncOp>(op).getSignature();
-}
-
 /// Copy a function's signature computation to a builder's insertion point.
 ///
 /// The signature's block arguments stand for the function's arguments and are
 /// substituted by `args`, so the copy computes the declared types in terms of
 /// the values the consumer holds. Returns the copied type values.
 static FailureOr<DeclaredTypes>
-inlineSignature(Operation *funcOp, ValueRange args, OpBuilder &builder) {
-  auto &signature = getSignatureRegion(funcOp);
+inlineSignature(uir::DeclaredFuncOpInterface funcOp, ValueRange args,
+                OpBuilder &builder) {
+  auto &signature = funcOp.getSignature();
 
   // The declared types are the operands of the `uir.signature` terminating the
   // signature region. Call checking runs on structured, exit-normalized input:
@@ -115,7 +106,8 @@ inlineSignature(Operation *funcOp, ValueRange args, OpBuilder &builder) {
 static LogicalResult checkCall(uir::CallOp callOp,
                                const SymbolTable &symbolTable) {
   LLVM_DEBUG(llvm::dbgs() << "- " << callOp << "\n");
-  auto *calleeOp = symbolTable.lookup(callOp.getCallee());
+  auto calleeOp =
+      symbolTable.lookup<uir::DeclaredFuncOpInterface>(callOp.getCallee());
   assert(calleeOp && "callee resolved by uir.call verifier");
 
   OpBuilder builder(callOp);
