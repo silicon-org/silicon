@@ -97,7 +97,8 @@ Five stages, each owning a single concern:
   A `uir.phase_call` whose callee phase differs from its enclosing phase is an offset call (offsets live on the enclosing block, not on the call) and lowers to the callee's phase-relative function like any other entry.
 - **Module-ness lives on the declaration** (settled 2026-08-20).
   `isModule` is a declaration attribute: sorting's declaration snapshot copies it onto `uir.split_func`, and the single-link collapse shim inherits it, so after evaluation the consumer still finds it on the resulting function.
-  A module's hardware is its phase-0 link, resolved through the link list like any other callee resolution; the splitter never stamps per-phase functions and knows nothing about modules.
+  A module's hardware is the link at the maximum phase of its span (settled 2026-08-20 as the starting point; entry points and what exactly evaluates to hardware may refine this), resolved through the link list like any other callee resolution; the splitter never stamps per-phase functions and knows nothing about modules.
+  A `dyn` module is therefore legal: its earlier links are type computations, its span-maximum link the hardware.
 - **`uir.phase_call` targets only `uir.split_func`** (settled 2026-08-20).
   `uir.call` is the late-binding vocabulary and resolves to `uir.func` or `uir.split_func` interchangeably; sorting snapshots every declaration in the module before decomposing any call, so a decomposed entry always names the interface, whether the callee is fresh user code or already-split library code.
   A `uir.phase_call` naming a `uir.func` would bypass the interface and call an implementation directly, so the verifier rejects it.
