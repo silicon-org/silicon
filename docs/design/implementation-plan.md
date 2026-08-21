@@ -1,7 +1,7 @@
 # Implementation Plan: Sampling Model (2026-07-10)
 
 Companion to `sampling-model.md` and `function-exit-choices.md`. Maps the model onto the existing codebase.
-Ground truth from the code inventory: the new UIR stack (`uir.func`, PhaseAnalysis, SplitPhases2) is silicon-opt-only; codegen still targets the old HIR stack; assignment and loops do not exist in the language surface at all; the interpreter cannot evaluate opaque lists.
+Ground truth from the code inventory: the new UIR stack (`uir.func`, PhaseAnalysis, phase sorting and splitting) is silicon-opt-only; codegen still targets the old HIR stack; assignment and loops do not exist in the language surface at all; the interpreter cannot evaluate opaque lists.
 Two later revisions apply: the merged-pass architecture of stages 5–6 was replaced on 2026-07-11 by the explicit phase-op contract of `phase-ops.md`, and the early-exit mechanism on 2026-07-19 by the exit normalization of the revised `function-exit-choices.md`; the affected statements below are corrected in place.
 
 ## Op changes
@@ -51,7 +51,7 @@ Per function, the merged pass runs these stages:
 6. **Signatures and witness**: reconstruct per-phase signatures, emit `uir.split_func` and `hir.multiphase_func` structural ops.
    Prefer threading return/signature scaffolding through explicit IR over side tables of tracked `Value`s that must be manually RAUW'd (a known fragility of the current implementation).
 
-A `sort-only` pass option stops after stage 4 so lit tests can check the sorted unified IR in isolation.
+Superseded by `phase-ops.md`: the sorted form is a first-class, verifiable IR that lit tests check directly, so there is no `sort-only` pass option.
 
 FlattenCF skips replicate/pick regions (their bodies keep structured CF — replicate/pick are single-block; lowering nested `uir.if` to `cf.cond_br` inside them would break that).
 Expansion in SpecializeFuncs re-introduces structured CF into flat functions, so FlattenCF joins PhaseEvalLoop's per-iteration sub-pipeline after SpecializeFuncs.
@@ -71,7 +71,7 @@ Expansion in SpecializeFuncs re-introduces structured CF into flat functions, so
 - **M1 — PhaseAnalysis.** Done 2026-07-10 (var ops anchored via the generic side-effecting path, choice-ification obligations recorded in the phase map, causality diagnostics, never/bottom phase, floating-frame block-phase default).
   The block-phase default was generalized 2026-07-15 from the original effectful-only fallback: every undemanded floating `uir.expr` frame defaults to its block phase, rising only for the frame-consumed bounds its anchored content imposes (conditions, inits, continue values, effects, out-targeting exits, type operands).
   The frame's control-flow skeleton anchors at that phase while its pure interior distributes per op, so a dead frame resolves exactly like its live twin; only region-free pure ops and constants still float.
-- **M2 — sorting stage.** `hir.choice_type`; stages 1–4 of the merged pass (dissolve, call decomposition, hoist, extract) behind a `sort-only` option; pick/replicate verifier updates.
+- **M2 — sorting stage.** `hir.choice_type`; stages 1–4 of the merged pass (dissolve, call decomposition, hoist, extract) as their own pass; pick/replicate verifier updates.
   Lit tests, one per model scenario: sum-over-index, sibling regions with interleaving, distance-2 chaining, nested loops, if/match choice (valued and value-less, else-less), break-value choice, filtering (if-const in for-const), partial activation (continue/break mid-region, incl. multi-exit chain), later-phase return under earlier CF (return inside replicate), hoisting (const write and call-earlier-half under dyn if; hoist-before-extract ordering, e.g. const increment under dyn if inside for-const), all-empty deletion, error cases.
 - **M3 — distribution.** Stages 5–6 rewritten on sorted IR: straight-line distribution, signatures, witness; delete the old cross-phase fixup machinery that sorting obsoletes.
   Exit chains dropped out of this milestone: exit normalization (`function-exit-choices.md`, revised 2026-07-19) handles early returns before analysis.

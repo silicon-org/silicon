@@ -6,9 +6,9 @@ The sorting algorithm itself (stages 1–4: dissolve, call decomposition, hoist,
 
 ## Problem
 
-The current implementation (`SortPhases.cpp` + `SplitPhases2.cpp`) tangles several concerns in each stage, and the interface between them is invisible: it lives in the PhaseAnalysis side tables, in manually tracked `Value` handles that must be patched at every RAUW, and in `uir.split_func` witnesses that sorting needs before it can decompose a caller's calls.
-The witness dependency forces callee-before-caller topological processing and structurally rejects recursion.
-Because the intermediate state between "sorted" and "split" cannot be expressed in IR, both stages duplicate machinery (call decomposition, expr/pin dissolution), the interface cannot be lit-tested, and the splitter must re-consult phase information everywhere.
+The implementation this design replaces (a merged sort-and-split pass over the UIR dialect, since deleted) tangled several concerns in each stage, and the interface between them was invisible: it lived in the PhaseAnalysis side tables, in manually tracked `Value` handles that had to be patched at every RAUW, and in `uir.split_func` witnesses that sorting needed before it could decompose a caller's calls.
+The witness dependency forced callee-before-caller topological processing and structurally rejected recursion.
+Because the intermediate state between "sorted" and "split" could not be expressed in IR, both stages duplicated machinery (call decomposition, expr/pin dissolution), the interface could not be lit-tested, and the splitter had to re-consult phase information everywhere.
 
 ## The design
 
@@ -113,10 +113,11 @@ Five stages, each owning a single concern:
 
 Dissolved: the cross-phase fixup machinery (`fixupCrossPhaseRefs`, hop-by-hop value mappings), the tracked-`Value` handle patching at every RAUW site, the duplicated call decomposition, the topological order and its cycle error, and the `sort-only` test flag (the sorted form is now a first-class, verifiable IR that lit tests check directly).
 
-Not dissolved: the extraction machinery (hoisting, branch/loop extraction, records, break-value choices, partial activations) is intrinsic to the semantics and ports nearly verbatim from `SortPhases.cpp`; only its packaging changes (`uir.phase_call` instead of witness-based calls, output wrapped in `uir.phase` ops, `uir.phase_return` terminators).
+Not dissolved: the extraction machinery (hoisting, branch/loop extraction, records, break-value choices, partial activations) is intrinsic to the semantics and ported nearly verbatim from the old sorter; only its packaging changes (`uir.phase_call` instead of witness-based calls, output wrapped in `uir.phase` ops, `uir.phase_return` terminators).
 
 ## Migration strategy
 
 Ops and hand-written target IR come first: the expected phase-op form of the canonical examples is written by hand before any pass code, forcing the `uir.phase_return` design decision while it is cheap, and doubling as the lit-test contract between the passes.
-Sorting is then rebuilt case-by-case (one PR per case, porting from `SortPhases.cpp`), followed by the new exit-chain territory, and the phase-blind splitter last — sorting output is inspectable on its own, and looking at it feeds back into the earlier transform before the splitter exists.
-The old `SortPhases`/`SplitPhases2` stack stays intact and green throughout as the porting source and behavioral reference; `silc` switches over at parity, and the old passes are deleted in one removal PR.
+Sorting is then rebuilt case-by-case (one PR per case, porting from the old sorter), followed by the new exit-chain territory, and the phase-blind splitter last — sorting output is inspectable on its own, and looking at it feeds back into the earlier transform before the splitter exists.
+The old UIR-level stack stayed intact and green as the porting source and behavioral reference until the new sorter and splitter covered its ground, and was then deleted.
+`silc` still runs the separate, older HIR-level split, and switches over to this pipeline at parity.

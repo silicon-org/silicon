@@ -319,41 +319,4 @@ def SplitFuncsPass : Pass<"split-funcs", "mlir::ModuleOp"> {
   let dependentDialects = ["silicon::hir::HIRDialect"];
 }
 
-def SplitPhases2Pass : Pass<"split-phases2", "mlir::ModuleOp"> {
-  let summary = "Split UIR unified functions into per-phase HIR functions";
-  let description = [{
-    Runs phase analysis on each `uir.func`, then splits it into per-phase
-    `hir.func` ops using the phase map. Produces `uir.split_func` witnesses
-    recording how each unified function was split, and `hir.multiphase_func`
-    ops for groups of consecutive internal phases.
-
-    The pass processes functions in topological order (callees before callers)
-    so that `uir.split_func` witnesses are available when decomposing
-    `uir.call` ops in callers.
-
-    After this pass, `uir.func` and `uir.call` ops are gone. Structured CF
-    ops (`uir.if`, `uir.loop`) survive in the per-phase `hir.func` bodies
-    and are lowered by FlattenCF.
-
-    With the `sort-only` option, the pass stops after the sorting stage:
-    each `uir.func` is rewritten in place such that no control flow region
-    contains content of a phase different from the region's own phase
-    (phase grouping dissolved, calls decomposed, earlier-phase content
-    hoisted, later-phase content extracted into replicate/pick receiving
-    constructs), without creating any per-phase functions. The
-    `annotate-phases` option additionally annotates all ops with the
-    maintained phase map, for testing.
-  }];
-  let options = [
-    Option<"sortOnly", "sort-only", "bool", "false",
-           "Stop after the sorting stage, leaving rewritten uir.func ops">,
-    Option<"annotatePhases", "annotate-phases", "bool", "false",
-           "Annotate ops with the maintained phase map (testing)">,
-  ];
-  let dependentDialects = [
-    "silicon::hir::HIRDialect",
-    "mlir::cf::ControlFlowDialect",
-  ];
-}
-
 #endif // SILICON_UIR_PASSES_TD
