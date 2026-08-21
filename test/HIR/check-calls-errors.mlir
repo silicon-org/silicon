@@ -1,4 +1,4 @@
-// RUN: silicon-opt --check-calls --split-input-file --verify-diagnostics %s
+// RUN: silicon-opt --hir-check-calls --split-input-file --verify-diagnostics %s
 
 // Trivial recursion
 // expected-error @below {{signature of `foo` cannot call itself}}

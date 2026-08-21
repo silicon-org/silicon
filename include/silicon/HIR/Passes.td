@@ -48,7 +48,7 @@ def InferTypesPass : Pass<"infer-types"> {
   }];
 }
 
-def CheckCallsPass : Pass<"check-calls", "mlir::ModuleOp"> {
+def CheckCallsPass : Pass<"hir-check-calls", "mlir::ModuleOp"> {
   let summary = "Move function signature constraints to call sites";
   let description = [{
     Inlines function signature type constraints into call sites and

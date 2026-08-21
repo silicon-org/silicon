@@ -1,4 +1,4 @@
-// RUN: silicon-opt --check-calls %s | FileCheck %s
+// RUN: silicon-opt --hir-check-calls %s | FileCheck %s
 
 //===----------------------------------------------------------------------===//
 // Multi-block signature: the entry block computes the type in a separate block

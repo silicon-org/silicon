@@ -1,4 +1,4 @@
-// RUN: silicon-opt --check-calls %s | FileCheck %s
+// RUN: silicon-opt --hir-check-calls %s | FileCheck %s
 
 // Test that CheckCalls correctly handles dependent uint<N> types in
 // signatures. This exercises the fix for the dominance violation where
