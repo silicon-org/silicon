@@ -368,14 +368,10 @@ hir::FuncOp FuncSplitter::buildPhaseFunc(int phase) {
 /// resolves by name convention: the list is the authoritative mapping, and it
 /// is filled for every function being split before any call is lowered.
 FailureOr<FlatSymbolRefAttr> FuncSplitter::resolvePhaseEntry(PhaseCallOp call) {
-  auto *calleeOp = symbolTable.lookup(call.getCallee());
-  assert(calleeOp && "callee of a verified 'uir.phase_call' must resolve");
-  auto calleeSplit = dyn_cast<SplitFuncOp>(calleeOp);
-  if (!calleeSplit)
-    return call.emitOpError()
-           << "callee @" << call.getCallee()
-           << " is not a 'uir.split_func'; a phase call must name the "
-              "function's late-binding interface, not its implementation";
+  auto calleeSplit =
+      dyn_cast_or_null<SplitFuncOp>(symbolTable.lookup(call.getCallee()));
+  assert(calleeSplit && "callee of a verified 'uir.phase_call' must resolve to "
+                        "a 'uir.split_func'");
   for (auto [phase, entry] :
        llvm::zip(calleeSplit.getPhaseNumbers(), calleeSplit.getPhaseFuncs()))
     if (phase == call.getCalleePhase())

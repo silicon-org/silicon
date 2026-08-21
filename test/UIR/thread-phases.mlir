@@ -282,21 +282,12 @@ uir.func @NonAdjacentCall(%x: -2, %y: 0) -> (result: 0) {
   uir.unreachable
 }
 
-uir.func @Callee(%a: -1, %b: 0) -> (result: 0) {
+// The callee the entries above bind to: a phase call names the late-binding
+// interface, so this is a uir.split_func declaration rather than a uir.func.
+uir.split_func @Callee(%a: -1, %b: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %p = uir.phase -1 {
-    %sq = hir.mul %a, %a : %t
-    uir.phase_return yield %sq
-  }
-  uir.phase 0 {
-    %r = hir.add %p, %b : %t
-    uir.phase_return %r : %t
-  }
-  uir.unreachable
-}
+} []
 
 //===----------------------------------------------------------------------===//
 // A multi-result float sunk into the signature keeps each result distinct: its

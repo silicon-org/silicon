@@ -883,3 +883,75 @@ uir.func @Mod.impl() -> () {
   }
   uir.unreachable
 }
+
+//===----------------------------------------------------------------------===//
+// Case 13: a callee that is already split — a precompiled library interface in
+// the split state, with a phase list and no implementation anywhere in the
+// module. It is the reason a `uir.phase_call` names the interface rather than a
+// `uir.func`: there is no implementation symbol to name. The caller's entries
+// resolve through the list like any other callee.
+
+hir.func private @"Lib.-1"(%a) -> (ctx) {
+  %int = hir.int_type
+  %opaque = hir.opaque_type
+  hir.signature (%int) -> (%opaque)
+} {
+  %int = hir.int_type
+  %opaque = hir.opaque_type
+  %pack = hir.opaque_pack(%int)
+  hir.return %pack : %opaque
+}
+
+hir.func private @Lib.0(%b, %ctx) -> (result) {
+  %int = hir.int_type
+  %opaque = hir.opaque_type
+  hir.signature (%int, %opaque) -> (%int)
+} {
+  hir.return %b : %b
+}
+
+// CHECK-LABEL: uir.split_func @Lib(%a: -1, %b: 0) -> (result: 0) {
+// CHECK:       } [
+// CHECK-NEXT:    -1: @"Lib.-1",
+// CHECK-NEXT:    0: @Lib.0
+// CHECK-NEXT:  ]
+uir.split_func @Lib(%a: -1, %b: 0) -> (result: 0) {
+  %int = hir.int_type
+  uir.signature (%int, %int) -> (%int)
+} [
+  -1: @"Lib.-1",
+  0: @Lib.0
+]
+
+// CHECK-LABEL: hir.func private @"LibCaller.-1.tail"(%x, %ctx) -> (ctx) {
+// CHECK:         hir.call @"Lib.-1"(%x)
+// CHECK-LABEL: hir.func private @LibCaller.0(%y, %ctx) -> (result) {
+// CHECK:         hir.call @Lib.0(%y,
+uir.split_func @LibCaller(%x: -1, %y: 0) -> (result: 0) {
+  %int = hir.int_type
+  uir.signature (%int, %int) -> (%int)
+} impl @LibCaller.impl []
+
+uir.func @LibCaller.impl(%x: -1, %y: 0) -> (result: 0) {
+  %sm2 = uir.phase -2 {
+    %int = hir.int_type
+    uir.phase_return yield %int
+  }
+  %sm1 = uir.phase -1 {
+    %int = hir.int_type
+    uir.phase_return yield %int
+  }
+  uir.signature (%sm2, %sm1) -> (%sm1)
+} {
+  %ctx = uir.phase -1 {
+    %t = hir.int_type
+    %c = uir.phase_call @Lib[-1] (%x) : (%t) -> () context
+    uir.phase_return yield %c
+  }
+  uir.phase 0 {
+    %t = hir.int_type
+    %r = uir.phase_call @Lib[0] (%y) context %ctx : (%t) -> (%t)
+    uir.phase_return %r : %t
+  }
+  uir.unreachable
+}

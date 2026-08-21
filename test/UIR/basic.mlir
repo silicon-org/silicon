@@ -405,6 +405,18 @@ uir.func @phase_return_in_loop(%x: 0) -> (result: 0) {
   uir.unreachable
 }
 
+// A uir.phase_call names its callee's late-binding interface, so the callees
+// below are uir.split_func declarations rather than uir.func implementations.
+// CHECK-LABEL: uir.split_func @pc_single
+uir.split_func @pc_single(%x: 0, %y: 0) -> (result: 0) {
+  uir.signature (%x, %y) -> (%x)
+} []
+
+// CHECK-LABEL: uir.split_func @pc_chain
+uir.split_func @pc_chain(%N: -1, %x: 0) -> (result: 0) {
+  uir.signature (%N, %x) -> (%x)
+} []
+
 // A call to a single-phase callee decomposes into one uir.phase_call with
 // no context values. A uir.phase_call is sorted-output vocabulary and must
 // live inside a uir.phase region.
@@ -413,7 +425,7 @@ uir.func @phase_call_single(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
   uir.phase 0 {
-    %r = uir.phase_call @simple_func[0] (%a, %a) : (%a, %a) -> (%a)
+    %r = uir.phase_call @pc_single[0] (%a, %a) : (%a, %a) -> (%a)
     uir.phase_return %r : %a
   }
   uir.unreachable
@@ -430,11 +442,11 @@ uir.func @phase_call_chain(%n: -1, %x: 0) -> (result: 0) {
 } {
   %t = hir.int_type
   %ctx = uir.phase -1 {
-    %c = uir.phase_call @const_arg[-1] (%n) : (%t) -> () context
+    %c = uir.phase_call @pc_chain[-1] (%n) : (%t) -> () context
     uir.phase_return yield %c
   }
   uir.phase 0 {
-    %r = uir.phase_call @const_arg[0] (%x) context %ctx : (%t) -> (%t)
+    %r = uir.phase_call @pc_chain[0] (%x) context %ctx : (%t) -> (%t)
     uir.phase_return %r : %t
   }
   uir.unreachable
@@ -464,8 +476,8 @@ uir.func @phase_call_under_cf(%c: 0, %a: 0) -> (result: 0) {
 } {
   uir.phase 0 {
     uir.if %c {
-      // CHECK: uir.phase_call @simple_func[0]
-      %r = uir.phase_call @simple_func[0] (%a, %a) : (%a, %a) -> (%a)
+      // CHECK: uir.phase_call @pc_single[0]
+      %r = uir.phase_call @pc_single[0] (%a, %a) : (%a, %a) -> (%a)
       uir.phase_return %r : %a
     } else {
       uir.phase_return %a : %a
@@ -478,15 +490,11 @@ uir.func @phase_call_under_cf(%c: 0, %a: 0) -> (result: 0) {
 // A callee whose declared phases have a gap (arguments at -2 and 0, none at
 // -1) exposes an internal span phase as a pass-through uir.phase_call: no
 // arguments or results, threading only context.
-// CHECK-LABEL: uir.func @gap_callee
-uir.func @gap_callee(%a: -2, %b: 0) -> (result: 0) {
+// CHECK-LABEL: uir.split_func @gap_callee
+uir.split_func @gap_callee(%a: -2, %b: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %r = hir.add %a, %b : %t
-  uir.return %r : %t
-}
+} []
 
 // CHECK-LABEL: uir.func @phase_call_gap
 uir.func @phase_call_gap(%n: -2, %x: 0) -> (result: 0) {

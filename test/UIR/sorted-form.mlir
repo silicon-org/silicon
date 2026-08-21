@@ -201,7 +201,14 @@ uir.func @ArgCrossing(%a: -1, %x: 0) -> (result: 0) {
 // Call decomposition: a call to a two-phase callee becomes one
 // uir.phase_call per phase in the callee's declared span, each inside the
 // caller's phase where that entry executes. The context value chaining the
-// entries crosses phases like any other value.
+// entries crosses phases like any other value. The entries name the callee's
+// late-binding interface, the uir.split_func declaring the same phases as
+// @MultiPhase above, never the implementation itself.
+
+uir.split_func @MultiPhaseDecl(%a: -1, %b: 0) -> (result: 0) {
+  %0 = hir.int_type
+  uir.signature (%0, %0) -> (%0)
+} []
 
 uir.func @Caller(%x: -1, %y: 0) -> (result: 0) {
   %0 = hir.int_type
@@ -209,11 +216,11 @@ uir.func @Caller(%x: -1, %y: 0) -> (result: 0) {
 } {
   %t = hir.int_type
   %ctx = uir.phase -1 {
-    %c = uir.phase_call @MultiPhase[-1] (%x) : (%t) -> () context
+    %c = uir.phase_call @MultiPhaseDecl[-1] (%x) : (%t) -> () context
     uir.phase_return yield %c
   }
   uir.phase 0 {
-    %r = uir.phase_call @MultiPhase[0] (%y) context %ctx : (%t) -> (%t)
+    %r = uir.phase_call @MultiPhaseDecl[0] (%y) context %ctx : (%t) -> (%t)
     uir.phase_return %r : %t
   }
   uir.unreachable
@@ -231,11 +238,11 @@ uir.func @ShiftedCall(%k: 0, %x: 1) -> (result: 1) {
 } {
   %t = hir.int_type
   %ctx = uir.phase 0 {
-    %c = uir.phase_call @MultiPhase[-1] (%k) : (%t) -> () context
+    %c = uir.phase_call @MultiPhaseDecl[-1] (%k) : (%t) -> () context
     uir.phase_return yield %c
   }
   uir.phase 1 {
-    %r = uir.phase_call @MultiPhase[0] (%x) context %ctx : (%t) -> (%t)
+    %r = uir.phase_call @MultiPhaseDecl[0] (%x) context %ctx : (%t) -> (%t)
     uir.phase_return %r : %t
   }
   uir.unreachable

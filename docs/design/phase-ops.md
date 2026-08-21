@@ -42,7 +42,7 @@ Five stages, each owning a single concern:
 - `uir.phase_return`: terminator of a `uir.phase` region.
   It carries both the function results belonging to that phase and the values yielded as the phase op's results.
   Exactly one `uir.phase_return` terminates each phase region: early exits are normalized to value form before analysis, so exit values arrive threaded through picks rather than on extra returns.
-- `uir.phase_call`: calls one specific phase of a `uir.func`, with the callee's args and results filtered down to that phase, plus an opaque context value chaining consecutive phase calls.
+- `uir.phase_call`: calls one specific phase of a `uir.split_func`, with the callee's args and results filtered down to that phase, plus an opaque context value chaining consecutive phase calls.
   The caller-visible phase entries are one per phase in the callee's *declared span* — the range from the earliest to the latest declared argument/result phase, always including phase 0 — with pass-through entries for phases that carry no arguments or results.
   The span is derivable from the callee's declaration alone: no split witness is needed at sort time, so there is no callee-before-caller processing order, and recursion is no longer structurally rejected.
 

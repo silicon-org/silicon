@@ -531,11 +531,14 @@ uir.func @phase_yield_mismatch(%c: 0, %x: 0) -> () {
 // Verify that uir.phase_call requires a uir.phase ancestor: it is
 // sorted-output vocabulary that names a specific callee phase and only ever
 // legitimately appears inside a phase region.
+uir.split_func @pc_callee(%x: 0) -> (result: 0) {
+  uir.signature (%x) -> (%x)
+} []
 uir.func @phase_call_no_phase_ancestor(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
   // expected-error @below {{'uir.phase_call' op must be nested inside a 'uir.phase'}}
-  %r = uir.phase_call @phase_call_no_phase_ancestor[0] (%a) : (%a) -> (%a)
+  %r = uir.phase_call @pc_callee[0] (%a) : (%a) -> (%a)
   uir.return %r : %a
 }
 
@@ -555,8 +558,7 @@ uir.func @phase_call_bad_callee(%a: 0) -> (result: 0) {
 
 // -----
 
-// Verify that uir.phase_call rejects callees that are not unified or split
-// functions.
+// Verify that uir.phase_call rejects callees that are not functions at all.
 func.func private @not_a_uir_func() {
   func.return
 }
@@ -564,7 +566,7 @@ uir.func @phase_call_wrong_callee_kind(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
   uir.phase 0 {
-    // expected-error @below {{'not_a_uir_func' does not reference a 'uir.func' or 'uir.split_func'}}
+    // expected-error @below {{'not_a_uir_func' does not reference a 'uir.split_func'}}
     %r = uir.phase_call @not_a_uir_func[0] (%a) : (%a) -> (%a)
     uir.phase_return
   }
@@ -573,12 +575,30 @@ uir.func @phase_call_wrong_callee_kind(%a: 0) -> (result: 0) {
 
 // -----
 
-// Verify that uir.phase_call rejects phases the callee does not expose.
-uir.func @pc_callee(%x: 0) -> (result: 0) {
+// Verify that uir.phase_call rejects a uir.func callee: a phase call names the
+// callee's late-binding interface, never the implementation behind it.
+uir.func @an_implementation(%x: 0) -> (result: 0) {
   uir.signature (%x) -> (%x)
 } {
   uir.return %x : %x
 }
+uir.func @phase_call_implementation_callee(%a: 0) -> (result: 0) {
+  uir.signature (%a) -> (%a)
+} {
+  uir.phase 0 {
+    // expected-error @below {{'an_implementation' does not reference a 'uir.split_func'}}
+    %r = uir.phase_call @an_implementation[0] (%a) : (%a) -> (%a)
+    uir.phase_return
+  }
+  uir.unreachable
+}
+
+// -----
+
+// Verify that uir.phase_call rejects phases the callee does not expose.
+uir.split_func @pc_callee(%x: 0) -> (result: 0) {
+  uir.signature (%x) -> (%x)
+} []
 uir.func @phase_call_bad_phase(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
@@ -594,11 +614,9 @@ uir.func @phase_call_bad_phase(%a: 0) -> (result: 0) {
 
 // Verify that uir.phase_call checks the argument count against the callee's
 // arguments declared at the called phase.
-uir.func @pc_callee(%x: 0) -> (result: 0) {
+uir.split_func @pc_callee(%x: 0) -> (result: 0) {
   uir.signature (%x) -> (%x)
-} {
-  uir.return %x : %x
-}
+} []
 uir.func @phase_call_arg_count(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
@@ -614,11 +632,9 @@ uir.func @phase_call_arg_count(%a: 0) -> (result: 0) {
 
 // Verify that uir.phase_call checks the result count against the callee's
 // results declared at the called phase.
-uir.func @pc_callee(%x: 0) -> (result: 0) {
+uir.split_func @pc_callee(%x: 0) -> (result: 0) {
   uir.signature (%x) -> (%x)
-} {
-  uir.return %x : %x
-}
+} []
 uir.func @phase_call_result_count(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
@@ -633,11 +649,9 @@ uir.func @phase_call_result_count(%a: 0) -> (result: 0) {
 // -----
 
 // Verify that non-first phase entries require a context operand.
-uir.func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
+uir.split_func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
   uir.signature (%n, %x) -> (%x)
-} {
-  uir.return %x : %x
-}
+} []
 uir.func @phase_call_missing_context(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
@@ -652,11 +666,9 @@ uir.func @phase_call_missing_context(%a: 0) -> (result: 0) {
 // -----
 
 // Verify that first phase entries reject a context operand.
-uir.func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
+uir.split_func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
   uir.signature (%n, %x) -> (%x)
-} {
-  uir.return %x : %x
-}
+} []
 uir.func @phase_call_spurious_context(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
@@ -671,11 +683,9 @@ uir.func @phase_call_spurious_context(%a: 0) -> (result: 0) {
 // -----
 
 // Verify that non-last phase entries require a context result.
-uir.func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
+uir.split_func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
   uir.signature (%n, %x) -> (%x)
-} {
-  uir.return %x : %x
-}
+} []
 uir.func @phase_call_missing_context_out(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
@@ -690,11 +700,9 @@ uir.func @phase_call_missing_context_out(%a: 0) -> (result: 0) {
 // -----
 
 // Verify that last phase entries reject a context result.
-uir.func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
+uir.split_func @pc_callee2(%n: -1, %x: 0) -> (result: 0) {
   uir.signature (%n, %x) -> (%x)
-} {
-  uir.return %x : %x
-}
+} []
 uir.func @phase_call_spurious_context_out(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
@@ -710,14 +718,10 @@ uir.func @phase_call_spurious_context_out(%a: 0) -> (result: 0) {
 
 // Verify that a mid-span pass-through entry (a gap phase with no arguments or
 // results) still requires a context operand.
-uir.func @pc_gap_callee(%m: -2, %x: 0) -> (result: 0) {
+uir.split_func @pc_gap_callee(%m: -2, %x: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %r = hir.add %m, %x : %t
-  uir.return %r : %t
-}
+} []
 uir.func @phase_call_gap_missing_context(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {
@@ -732,14 +736,10 @@ uir.func @phase_call_gap_missing_context(%a: 0) -> (result: 0) {
 // -----
 
 // Verify that uir.phase_call rejects an entry phase below the declared span.
-uir.func @pc_gap_callee(%m: -2, %x: 0) -> (result: 0) {
+uir.split_func @pc_gap_callee(%m: -2, %x: 0) -> (result: 0) {
   %0 = hir.int_type
   uir.signature (%0, %0) -> (%0)
-} {
-  %t = hir.int_type
-  %r = hir.add %m, %x : %t
-  uir.return %r : %t
-}
+} []
 uir.func @phase_call_below_span(%a: 0) -> (result: 0) {
   uir.signature (%a) -> (%a)
 } {

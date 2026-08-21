@@ -605,13 +605,20 @@ def PhaseCallOp : UIROp<"phase_call", [
 ]> {
   let summary = "call one phase of a function";
   let description = [{
-    Calls one phase in a `uir.func`'s declared span, produced by
+    Calls one phase in a `uir.split_func`'s declared span, produced by
     decomposing a `uir.call` during phase sorting. The `calleePhase`
     attribute is the phase number in the callee's own frame. Decomposing a
     call emits one entry per phase in the callee's span — the contiguous
     integer range from its earliest to its latest declared argument or
     result phase, always including phase 0 — so the set of valid entries is
     derivable from the callee's declaration alone, without a split witness.
+
+    The callee must be a `uir.split_func`, the function's late-binding
+    interface, never the `uir.func` implementing it: sorting takes custody of
+    every declaration in the module before it decomposes any call, and an
+    already-split library callee exposes nothing but its interface, so a
+    decomposed entry always names the interface. `uir.call`, in contrast,
+    targets either kind interchangeably.
 
     The `arguments` and `results` are the callee's arguments and results
     declared at that phase, each with a corresponding type operand. A gap

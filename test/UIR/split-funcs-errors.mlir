@@ -161,50 +161,6 @@ uir.func @unsnapshotted(%a: 0) -> (result: 0) {
 
 // -----
 
-// A phase call must name the callee's late-binding interface, whose phase list
-// resolves the entry; the implementation function has no phase list.
-uir.split_func @named_impl(%a: 0) -> (result: 0) {
-  %int = hir.int_type
-  uir.signature (%int) -> (%int)
-} impl @named_impl.impl []
-
-uir.func @named_impl.impl(%a: 0) -> (result: 0) {
-  %s = uir.phase -1 {
-    %int = hir.int_type
-    uir.phase_return yield %int
-  }
-  uir.signature (%s) -> (%s)
-} {
-  uir.phase 0 {
-    %int = hir.int_type
-    uir.phase_return %a : %int
-  }
-  uir.unreachable
-}
-
-uir.split_func @impl_caller(%x: 0) -> () {
-  %int = hir.int_type
-  uir.signature (%int) -> ()
-} impl @impl_caller.impl []
-
-uir.func @impl_caller.impl(%x: 0) -> () {
-  %s = uir.phase -1 {
-    %int = hir.int_type
-    uir.phase_return yield %int
-  }
-  uir.signature (%s) -> ()
-} {
-  uir.phase 0 {
-    %t = hir.int_type
-    // expected-error @below {{callee @named_impl.impl is not a 'uir.split_func'}}
-    %r = uir.phase_call @named_impl.impl[0] (%x) : (%t) -> (%t)
-    uir.phase_return
-  }
-  uir.unreachable
-}
-
-// -----
-
 // A callee in the declared state has no implementation to call into: its phase
 // list is empty, so no entry resolves.
 uir.split_func @declared_only(%a: 0) -> (result: 0) {

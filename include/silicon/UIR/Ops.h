@@ -37,9 +37,9 @@ struct DeclaredPhases {
 /// Get the declared phases of a `uir.func` or `uir.split_func`, or `nullopt`
 /// for any other operation.
 ///
-/// Both ops declare a phase for every argument and result, and callers treat
-/// them interchangeably: a callee may already be split when its callers are
-/// verified, sorted, or split.
+/// Both ops declare a phase for every argument and result, and `uir.call`
+/// targets them interchangeably: a callee may already be split when its callers
+/// are verified or sorted.
 std::optional<DeclaredPhases> getDeclaredPhases(mlir::Operation *op);
 
 } // namespace uir

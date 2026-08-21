@@ -1300,23 +1300,24 @@ PhaseCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
     return emitOpError() << "'" << callee.getValue()
                          << "' does not reference a valid function";
 
-  // Accept both uir.func and uir.split_func as callees, since a callee may
-  // already be split when the caller is verified. Both carry the declared
-  // arg and result phases this op is checked against.
-  auto declared = getDeclaredPhases(calleeOp);
-  if (!declared)
+  // A phase call names the callee's late-binding interface, never its
+  // implementation: sorting snapshots every declaration in the module before it
+  // decomposes any call, and already-split library code exposes nothing but its
+  // interface, so a `uir.func` callee here would call an implementation
+  // directly and bypass the interface.
+  auto calleeSplit = dyn_cast<SplitFuncOp>(calleeOp);
+  if (!calleeSplit)
     return emitOpError() << "'" << callee.getValue()
-                         << "' does not reference a 'uir.func' or "
-                            "'uir.split_func'";
-  auto argPhases = declared->argPhases;
-  auto resultPhases = declared->resultPhases;
+                         << "' does not reference a 'uir.split_func'";
+  auto argPhases = calleeSplit.getArgPhases();
+  auto resultPhases = calleeSplit.getResultPhases();
 
   // The callee's phase span is the contiguous integer range from its earliest
   // to its latest declared argument or result phase, always including phase 0.
   // Callers thread one entry per phase in the span, so every phase in the
   // range — including gap phases carrying no arguments or results — is a legal
   // entry, derivable from the declaration alone.
-  auto [lo, hi] = declared->span();
+  auto [lo, hi] = DeclaredPhases{argPhases, resultPhases}.span();
 
   auto phase = getCalleePhase();
   if (phase < lo || phase > hi)
